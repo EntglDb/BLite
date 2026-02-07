@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/DocumentDb.Benchmark/DocumentDb.Benchmark.csproj" />
     <Project Path="src/DocumentDb.Bson/DocumentDb.Bson.csproj" />
     <Project Path="src/DocumentDb.Core/DocumentDb.Core.csproj" />
     <Project Path="src/DocumentDb.Debug/DocumentDb.Debug.csproj" />

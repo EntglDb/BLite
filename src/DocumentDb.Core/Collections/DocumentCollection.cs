@@ -89,11 +89,24 @@ public class DocumentCollection<T> where T : class
 
     private void LoadIdMap()
     {
+        uint currentPage = _metadataPageId;
+        
+        while (currentPage != 0)
+        {
+            uint nextPage = LoadIdMapChunk(currentPage);
+            currentPage = nextPage;
+        }
+    }
+    
+    private uint LoadIdMapChunk(uint pageId)
+    {
         Span<byte> buffer = stackalloc byte[_pageFile.PageSize];
-        _pageFile.ReadPage(_metadataPageId, buffer);
+        _pageFile.ReadPage(pageId, buffer);
         
         var reader = new BsonSpanReader(buffer);
         reader.ReadDocumentSize(); // Skip size
+        
+        uint nextPage = 0;
         
         // Read until we find "locations" array
         while (reader.Position < buffer.Length)
@@ -104,7 +117,11 @@ public class DocumentCollection<T> where T : class
             
             var name = reader.ReadCString();
             
-            if (name == "locations" && type == BsonType.Array)
+            if (name == "nextMetadataPage" && type == BsonType.Int32)
+            {
+                nextPage = (uint)reader.ReadInt32();
+            }
+            else if (name == "locations" && type == BsonType.Array)
             {
                 reader.ReadDocumentSize(); // Array size
                 
@@ -122,7 +139,7 @@ public class DocumentCollection<T> where T : class
                         reader.ReadDocumentSize();
                         
                         ObjectId id = ObjectId.Empty;
-                        uint pageId = 0;
+                        uint entryPageId = 0;
                         ushort slotIndex = 0;
                         
                         // Read document fields
@@ -137,41 +154,80 @@ public class DocumentCollection<T> where T : class
                             if (fieldName == "_id" && fieldType == BsonType.ObjectId)
                                 id = reader.ReadObjectId();
                             else if (fieldName == "page" && fieldType == BsonType.Int32)
-                                pageId = (uint)reader.ReadInt32();
+                                entryPageId = (uint)reader.ReadInt32();
                             else if (fieldName == "slot" && fieldType == BsonType.Int32)
                                 slotIndex = (ushort)reader.ReadInt32();
                             else
                                 reader.SkipValue(fieldType);
                         }
                         
-                        if (id != ObjectId.Empty && pageId != 0)
+                        if (id != ObjectId.Empty && entryPageId != 0)
                         {
-                            _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
+                            _idToLocationMap[id] = new DocumentLocation(entryPageId, slotIndex);
                         }
                     }
                 }
-                break;
             }
             else
             {
                 reader.SkipValue(type);
             }
         }
+        
+        return nextPage;
     }
 
     private void SaveIdMap()
     {
+        // Conservative estimate: each entry ~60 bytes (ObjectId + page + slot + overhead)
+        // For 16KB page: ~200 entries per page safely
+        const int ENTRIES_PER_PAGE = 200;
+        
+        var entries = _idToLocationMap.ToList();
+        uint currentMetadataPage = _metadataPageId;
+        
+        for (int offset = 0; offset < entries.Count; offset += ENTRIES_PER_PAGE)
+        {
+            var chunk = entries.Skip(offset).Take(ENTRIES_PER_PAGE);
+            bool isFirstChunk = (offset == 0);
+            bool isLastChunk = (offset + ENTRIES_PER_PAGE >= entries.Count);
+            
+            uint nextPage = 0;
+            if (!isLastChunk)
+            {
+                nextPage = _pageFile.AllocatePage();
+            }
+            
+            SaveIdMapChunk(currentMetadataPage, chunk, nextPage, isFirstChunk);
+            currentMetadataPage = nextPage;
+        }
+    }
+    
+    private void SaveIdMapChunk(
+        uint pageId,
+        IEnumerable<KeyValuePair<ObjectId, DocumentLocation>> entries,
+        uint nextPage,
+        bool isFirst)
+    {
         var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
         try
         {
+            Array.Clear(buffer, 0, _pageFile.PageSize); // Clear buffer
+            
             var writer = new BsonSpanWriter(buffer);
             var sizePos = writer.BeginDocument();
-            writer.WriteString("collection", _mapper.CollectionName);
-            writer.WriteInt32("version", 1);
+            
+            if (isFirst)
+            {
+                writer.WriteString("collection", _mapper.CollectionName);
+                writer.WriteInt32("version", 1);
+            }
+            
+            writer.WriteInt32("nextMetadataPage", (int)nextPage);
             
             var arrayPos = writer.BeginArray("locations");
             int index = 0;
-            foreach (var kvp in _idToLocationMap)
+            foreach (var kvp in entries)
             {
                 var entryPos = writer.BeginDocument(index.ToString());
                 writer.WriteObjectId("_id", kvp.Key);
@@ -183,7 +239,7 @@ public class DocumentCollection<T> where T : class
             writer.EndArray(arrayPos);
             writer.EndDocument(sizePos);
             
-            _pageFile.WritePage(_metadataPageId, buffer);
+            _pageFile.WritePage(pageId, buffer);
         }
         finally
         {
@@ -193,7 +249,29 @@ public class DocumentCollection<T> where T : class
 
     #endregion
 
-    #region Slotted Page Operations
+    #region Public Transaction API
+
+    /// <summary>
+    /// Begins a new transaction. Multiple operations can be performed
+    /// within the same transaction for better performance.
+    /// </summary>
+    /// <returns>A transaction object that must be committed or rolled back</returns>
+    /// <example>
+    /// using (var txn = collection.BeginTransaction())
+    /// {
+    ///     collection.Insert(entity1, txn);
+    ///     collection.Insert(entity2, txn);
+    ///     txn.Commit();
+    /// }
+    /// </example>
+    public ITransaction BeginTransaction()
+    {
+        return _txnManager.BeginTransaction();
+    }
+
+    #endregion
+
+    #region Data Page Management
 
     private uint FindPageWithSpace(int requiredBytes)
     {
@@ -467,11 +545,19 @@ public class DocumentCollection<T> where T : class
 
     #region Insert
 
-    public ObjectId Insert(T entity)
+    /// <summary>
+    /// Inserts a new document into the collection
+    /// </summary>
+    /// <param name="entity">Entity to insert</param>
+    /// <param name="transaction">Optional transaction to batch multiple operations. If null, auto-commits.</param>
+    /// <returns>The ObjectId of the inserted document</returns>
+    public ObjectId Insert(T entity, ITransaction? transaction = null)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
         
-        var txn = _txnManager.BeginTransaction();
+        var txn = transaction ?? _txnManager.BeginTransaction();
+        bool isInternalTxn = (transaction == null);
+        
         try
         {
             // Get or generate ID
@@ -523,17 +609,58 @@ public class DocumentCollection<T> where T : class
                 _primaryIndex.Insert(key, id);
             }
             
-            // Persist mapping
-            SaveIdMap();
+            // Only commit if we created the transaction
+            if (isInternalTxn)
+            {
+                // Persist mapping before commit (only for auto-commit)
+                SaveIdMap();
+                txn.Commit();
+            }
             
-            txn.Commit();
             return id;
         }
         catch
         {
-            txn.Rollback();
+            // Only rollback if we created the transaction
+            if (isInternalTxn)
+            {
+                txn.Rollback();
+            }
             throw;
         }
+    }
+
+    /// <summary>
+    /// Inserts multiple documents in a single transaction for optimal performance.
+    /// This is the recommended way to insert many documents at once.
+    /// </summary>
+    /// <param name="entities">Collection of entities to insert</param>
+    /// <returns>List of ObjectIds for the inserted documents</returns>
+    /// <example>
+    /// var people = new List&lt;Person&gt; { person1, person2, person3 };
+    /// var ids = collection.InsertBulk(people);
+    /// </example>
+    public List<ObjectId> InsertBulk(IEnumerable<T> entities)
+    {
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+        
+        var ids = new List<ObjectId>();
+        
+        using (var txn = BeginTransaction())
+        {
+            foreach (var entity in entities)
+            {
+                var id = Insert(entity, txn);
+                ids.Add(id);
+            }
+            
+            // Persist all ID mappings once at the end
+            SaveIdMap();
+            
+            txn.Commit();
+        }
+        
+        return ids;
     }
 
     #endregion
@@ -829,20 +956,6 @@ public class DocumentCollection<T> where T : class
     /// Find entities matching predicate (alias for FindAll with predicate)
     /// </summary>
     public IEnumerable<T> Find(Func<T, bool> predicate) => FindAll(predicate);
-
-    /// <summary>
-    /// Insert multiple entities in bulk and return count
-    /// </summary>
-    public int InsertBulk(IEnumerable<T> entities)
-    {
-        int count = 0;
-        foreach (var entity in entities)
-        {
-            Insert(entity);
-            count++;
-        }
-        return count;
-    }
 
     #endregion
 }

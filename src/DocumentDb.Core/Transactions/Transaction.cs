@@ -7,7 +7,7 @@ namespace DocumentDb.Core.Transactions;
 /// Represents a transaction with ACID properties.
 /// Uses MVCC (Multi-Version Concurrency Control) for isolation.
 /// </summary>
-public sealed class Transaction : IDisposable
+public sealed class Transaction : ITransaction
 {
     private readonly ulong _transactionId;
     private readonly IsolationLevel _isolationLevel;
