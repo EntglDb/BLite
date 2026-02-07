@@ -22,7 +22,7 @@ public struct PageHeader
     [FieldOffset(5)]
     public ushort FreeBytes;
     
-    /// <summary>ID of next page in linked list (0 if none)</summary>
+    /// <summary>ID of next page in linked list (0 if none). For Page 0 (Header), this points to the First Free Page.</summary>
     [FieldOffset(7)]
     public uint NextPageId;
     

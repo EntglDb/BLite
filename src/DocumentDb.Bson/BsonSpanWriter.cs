@@ -182,4 +182,22 @@ public ref struct BsonSpanWriter
         WriteEndOfDocument();
         PatchDocumentSize(sizePosition);
     }
+
+    /// <summary>
+    /// Begins writing a BSON array and returns the size position to patch later
+    /// </summary>
+    public int BeginArray(string name)
+    {
+        WriteElementHeader(BsonType.Array, name);
+        return WriteDocumentSizePlaceholder();
+    }
+
+    /// <summary>
+    /// Ends the current BSON array
+    /// </summary>
+    public void EndArray(int sizePosition)
+    {
+        WriteEndOfDocument();
+        PatchDocumentSize(sizePosition);
+    }
 }

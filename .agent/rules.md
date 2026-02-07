@@ -2,6 +2,13 @@
 
 ## Performance Constraints
 
+### Tool Usage
+- **NEVER** use the `&` operator to combine commands in PowerShell (not supported). Use `;` or separate `run_command` calls instead.
+
+### Development
+- **ALWAYS** involve the user for refactoring tasks on sample and test files to focus on the core logic
+- Ask the user for build or test to get stack trace
+
 ### Zero-Reflection Policy
 - **NEVER** use reflection in hot paths or runtime code
 - Source generators are preferred for code generation

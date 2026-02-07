@@ -21,5 +21,11 @@ public enum PageType : byte
     Index = 4,
     
     /// <summary>Free page list</summary>
-    FreeList = 5
+    FreeList = 5,
+    
+    /// <summary>Overflow page for large documents</summary>
+    Overflow = 6,
+
+    /// <summary>Page marked as free/reusable</summary>
+    Free = 10
 }

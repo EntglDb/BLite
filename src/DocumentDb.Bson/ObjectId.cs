@@ -12,6 +12,11 @@ public readonly struct ObjectId : IEquatable<ObjectId>
     [FieldOffset(0)] private readonly int _timestamp;
     [FieldOffset(4)] private readonly long _randomAndCounter;
 
+    /// <summary>
+    /// Empty ObjectId (all zeros)
+    /// </summary>
+    public static readonly ObjectId Empty = new ObjectId(0, 0);
+
     public ObjectId(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 12)
@@ -47,6 +52,16 @@ public readonly struct ObjectId : IEquatable<ObjectId>
 
         BitConverter.TryWriteBytes(destination[..4], _timestamp);
         BitConverter.TryWriteBytes(destination[4..12], _randomAndCounter);
+    }
+
+    /// <summary>
+    /// Converts ObjectId to byte array
+    /// </summary>
+    public byte[] ToByteArray()
+    {
+        var bytes = new byte[12];
+        WriteTo(bytes);
+        return bytes;
     }
 
     /// <summary>

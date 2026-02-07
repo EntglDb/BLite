@@ -11,10 +11,33 @@ public readonly struct PageFileConfig
     public long InitialFileSize { get; init; }
     public MemoryMappedFileAccess Access { get; init; }
 
-    public static PageFileConfig Default => new()
+    /// <summary>
+    /// Small pages for embedded scenarios with many tiny documents
+    /// </summary>
+    public static PageFileConfig Small => new()
     {
         PageSize = 8192, // 8KB pages
-        InitialFileSize = 1024 * 1024, // 1MB initial size
+        InitialFileSize = 1024 * 1024, // 1MB initial
+        Access = MemoryMappedFileAccess.ReadWrite
+    };
+
+    /// <summary>
+    /// Default balanced configuration for document databases (16KB like MySQL InnoDB)
+    /// </summary>
+    public static PageFileConfig Default => new()
+    {
+        PageSize = 16384, // 16KB pages
+        InitialFileSize = 2 * 1024 * 1024, // 2MB initial
+        Access = MemoryMappedFileAccess.ReadWrite
+    };
+
+    /// <summary>
+    /// Large pages for databases with big documents (32KB like MongoDB WiredTiger)
+    /// </summary>
+    public static PageFileConfig Large => new()
+    {
+        PageSize = 32768, // 32KB pages
+        InitialFileSize = 4 * 1024 * 1024, // 4MB initial
         Access = MemoryMappedFileAccess.ReadWrite
     };
 }
@@ -32,6 +55,7 @@ public sealed class PageFile : IDisposable
     private readonly object _lock = new();
     private bool _disposed;
     private uint _nextPageId;
+    private uint _firstFreePageId;
 
     public PageFile(string filePath, PageFileConfig config)
     {
@@ -78,6 +102,16 @@ public sealed class PageFile : IDisposable
                 _config.Access,
                 HandleInheritability.None,
                 leaveOpen: true);
+                
+            // Read free list head from Page 0
+            if (_fileStream.Length >= _config.PageSize)
+            {
+                var headerSpan = new byte[32]; // PageHeader.Size
+                using var accessor = _mappedFile.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read);
+                accessor.ReadArray(0, headerSpan, 0, 32);
+                var header = PageHeader.ReadFrom(headerSpan);
+                _firstFreePageId = header.NextPageId;
+            }
         }
     }
 
@@ -91,7 +125,7 @@ public sealed class PageFile : IDisposable
             PageId = 0,
             PageType = PageType.Header,
             FreeBytes = (ushort)(_config.PageSize - 32),
-            NextPageId = 0,
+            NextPageId = 0, // No free pages initially
             TransactionId = 0,
             Checksum = 0
         };
@@ -104,6 +138,7 @@ public sealed class PageFile : IDisposable
         _fileStream.Flush();
     }
 
+    // ... (ReadPage / WritePage unchanged) ...
     /// <summary>
     /// Reads a page by ID into the provided span
     /// </summary>
@@ -164,7 +199,7 @@ public sealed class PageFile : IDisposable
     }
 
     /// <summary>
-    /// Allocates a new page and returns its ID
+    /// Allocates a new page (reuses free page if available) and returns its ID
     /// </summary>
     public uint AllocatePage()
     {
@@ -173,6 +208,26 @@ public sealed class PageFile : IDisposable
             if (_fileStream == null)
                 throw new InvalidOperationException("File not open");
 
+            // 1. Try to reuse a free page
+            if (_firstFreePageId != 0)
+            {
+                var recycledPageId = _firstFreePageId;
+                
+                // Read the recycled page to update the free list head
+                var buffer = new byte[_config.PageSize];
+                ReadPage(recycledPageId, buffer);
+                var header = PageHeader.ReadFrom(buffer);
+                
+                // The new head is what the recycled page pointed to
+                _firstFreePageId = header.NextPageId;
+                
+                // Update file header (Page 0) to point to new head
+                UpdateFileHeaderFreePtr(_firstFreePageId);
+                
+                return recycledPageId;
+            }
+
+            // 2. No free pages, append new one
             var pageId = _nextPageId++;
             
             // Extend file if necessary
@@ -195,6 +250,55 @@ public sealed class PageFile : IDisposable
             
             return pageId;
         }
+    }
+    
+    /// <summary>
+    /// Marks a page as free and adds it to the free list
+    /// </summary>
+    public void FreePage(uint pageId)
+    {
+        lock (_lock)
+        {
+            if (_fileStream == null) throw new InvalidOperationException("File not open");
+            if (pageId == 0) throw new InvalidOperationException("Cannot free header page 0");
+            
+            // 1. Create a free page header pointing to current head
+            var header = new PageHeader
+            {
+                PageId = pageId,
+                PageType = PageType.Free,
+                NextPageId = _firstFreePageId, // Point to previous head
+                TransactionId = 0,
+                Checksum = 0
+            };
+            
+            var buffer = new byte[_config.PageSize];
+            header.WriteTo(buffer);
+            
+            // 2. Write the freed page
+            WritePage(pageId, buffer);
+            
+            // 3. Update head to point to this page
+            _firstFreePageId = pageId;
+            
+            // 4. Update file header (Page 0)
+            UpdateFileHeaderFreePtr(_firstFreePageId);
+        }
+    }
+    
+    private void UpdateFileHeaderFreePtr(uint newHead)
+    {
+        // Read Page 0
+        var buffer = new byte[_config.PageSize];
+        ReadPage(0, buffer);
+        var header = PageHeader.ReadFrom(buffer);
+        
+        // Update NextPageId (which we use as FirstFreePageId)
+        header.NextPageId = newHead;
+        
+        // Write back
+        header.WriteTo(buffer);
+        WritePage(0, buffer);
     }
 
     public void Dispose()
