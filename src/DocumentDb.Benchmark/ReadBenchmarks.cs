@@ -17,6 +17,8 @@ namespace DocumentDb.Benchmark;
 [InProcess]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[HtmlExporter]
+[JsonExporterAttribute.Full]
 public class ReadBenchmarks
 {
     private const int DocCount = 1000;
@@ -100,15 +102,36 @@ public class ReadBenchmarks
 
     private Person CreatePerson(int i)
     {
-        return new Person
+        var p = new Person
         {
-            // Id set by Insert or manually
-            FirstName =($"First_{i}"),
-            LastName = ($"Last_{i}"),
+            Id = ObjectId.NewObjectId(),
+            FirstName = $"First_{i}",
+            LastName = $"Last_{i}",
             Age = 20 + (i % 50),
-            Bio = new string('A', 500),
-            CreatedAt = DateTime.UtcNow
+            Bio = null,
+            CreatedAt = DateTime.UtcNow,
+            Balance = 1000.50m * (i + 1),
+            HomeAddress = new Address 
+            {
+                Street = $"{i} Main St",
+                City = "Tech City",
+                ZipCode = "12345"
+            }
         };
+
+        // Add 10 work history items
+        for(int j=0; j<10; j++)
+        {
+            p.EmploymentHistory.Add(new WorkHistory
+            {
+                CompanyName = $"TechCorp_{i}_{j}",
+                Title = "Developer",
+                DurationYears = j,
+                Tags = new List<string> { "C#", "BSON", "Performance", "Database", "Complex" }
+            });
+        }
+
+        return p;
     }
 
     [Benchmark(Baseline = true, Description = "SQLite FindById (Deserialize)")]

@@ -174,7 +174,7 @@ public class DocumentCollectionTests : IDisposable
         var count = _collection.InsertBulk(users);
         
         // Assert
-        Assert.Equal(3, count);
+        Assert.Equal(3, count.Count);
         Assert.Equal(3, _collection.Count());
     }
 

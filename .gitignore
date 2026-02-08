@@ -3,3 +3,5 @@ obj/
 *.user
 .vs/
 .vscode/
+BenchmarkDotNet.Artifacts/
+

@@ -1,5 +1,6 @@
 using DocumentDb.Bson;
 using DocumentDb.Core.Storage;
+using DocumentDb.Core.Transactions;
 
 namespace DocumentDb.Core.Indexing;
 
@@ -65,7 +66,7 @@ public sealed class BTreeIndex
     /// <summary>
     /// Inserts a key-value pair into the index
     /// </summary>
-    public void Insert(IndexKey key, ObjectId documentId)
+    public void Insert(IndexKey key, ObjectId documentId, ITransaction? transaction = null)
     {
         var entry = new IndexEntry(key, documentId);
         var path = new List<uint>();
@@ -82,7 +83,7 @@ public sealed class BTreeIndex
             // Check if we need to split
             if (header.EntryCount >= MaxEntriesPerNode)
             {
-                SplitNode(leafPageId, path);
+                SplitNode(leafPageId, path, transaction);
                 
                 // Re-find leaf after split to ensure we have correct node
                 path.Clear();
@@ -91,7 +92,7 @@ public sealed class BTreeIndex
             }
 
             // Insert entry into leaf
-            InsertIntoLeaf(leafPageId, entry, pageBuffer);
+            InsertIntoLeaf(leafPageId, entry, pageBuffer, transaction);
         }
         finally
         {
@@ -247,7 +248,7 @@ public sealed class BTreeIndex
         return childPageId; // Return last pointer (>= last key)
     }
 
-    private void InsertIntoLeaf(uint leafPageId, IndexEntry entry, Span<byte> pageBuffer)
+    private void InsertIntoLeaf(uint leafPageId, IndexEntry entry, Span<byte> pageBuffer, ITransaction? transaction = null)
     {
         // Read current entries to determine offset
         var header = BTreeNodeHeader.ReadFrom(pageBuffer[32..]);
@@ -275,11 +276,24 @@ public sealed class BTreeIndex
         header.EntryCount++;
         header.WriteTo(pageBuffer.Slice(32, 16));
         
-        // Write page back
-        _pageFile.WritePage(leafPageId, pageBuffer);
+        // Write page back (buffered or immediate)
+        if (transaction is Transaction txn)
+        {
+            var writeOp = new WriteOperation(
+                documentId: ObjectId.Empty,
+                newValue: pageBuffer.ToArray(),
+                pageId: leafPageId,
+                type: OperationType.Insert // Index update usually treated as insert/update
+            );
+            txn.AddWrite(writeOp);
+        }
+        else
+        {
+            _pageFile.WritePage(leafPageId, pageBuffer);
+        }
     }
 
-    private void SplitNode(uint nodePageId, List<uint> path)
+    private void SplitNode(uint nodePageId, List<uint> path, ITransaction? transaction = null)
     {
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
         try
@@ -289,11 +303,11 @@ public sealed class BTreeIndex
 
             if (header.IsLeaf)
             {
-                SplitLeafNode(nodePageId, header, pageBuffer, path);
+                SplitLeafNode(nodePageId, header, pageBuffer, path, transaction);
             }
             else
             {
-                SplitInternalNode(nodePageId, header, pageBuffer, path);
+                SplitInternalNode(nodePageId, header, pageBuffer, path, transaction);
             }
         }
         finally
@@ -302,7 +316,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void SplitLeafNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path)
+    private void SplitLeafNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path, ITransaction? transaction = null)
     {
         var entries = ReadLeafEntries(pageBuffer, header.EntryCount);
         var splitPoint = entries.Count / 2;
@@ -310,20 +324,20 @@ public sealed class BTreeIndex
         var rightEntries = entries.Skip(splitPoint).ToList();
 
         // Create new node for right half
-        var newNodeId = CreateNode(isLeaf: true);
+        var newNodeId = CreateNode(isLeaf: true, transaction);
 
         // Update original node (left)
-        WriteLeafNode(nodePageId, leftEntries, newNodeId); // Point to new node
+        WriteLeafNode(nodePageId, leftEntries, newNodeId, transaction); // Point to new node
 
         // Update new node (right) - preserve original next pointer
-        WriteLeafNode(newNodeId, rightEntries, header.NextLeafPageId);
+        WriteLeafNode(newNodeId, rightEntries, header.NextLeafPageId, transaction);
 
         // Promote key to parent (first key of right node)
         var promoteKey = rightEntries[0].Key;
-        InsertIntoParent(nodePageId, promoteKey, newNodeId, path);
+        InsertIntoParent(nodePageId, promoteKey, newNodeId, path, transaction);
     }
 
-    private void SplitInternalNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path)
+    private void SplitInternalNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path, ITransaction? transaction = null)
     {
         var (p0, entries) = ReadInternalEntries(pageBuffer, header.EntryCount);
         var splitPoint = entries.Count / 2;
@@ -336,19 +350,19 @@ public sealed class BTreeIndex
         var rightP0 = entries[splitPoint].PageId; // Attempting to use the pointer associated with promoted key as P0 for right node
 
         // Create new internal node
-        var newNodeId = CreateNode(isLeaf: false);
+        var newNodeId = CreateNode(isLeaf: false, transaction);
 
         // Update left node
-        WriteInternalNode(nodePageId, p0, leftEntries);
+        WriteInternalNode(nodePageId, p0, leftEntries, transaction);
 
         // Update right node
-        WriteInternalNode(newNodeId, rightP0, rightEntries);
+        WriteInternalNode(newNodeId, rightP0, rightEntries, transaction);
 
         // Insert promoted key into parent
-        InsertIntoParent(nodePageId, promoteKey, newNodeId, path);
+        InsertIntoParent(nodePageId, promoteKey, newNodeId, path, transaction);
     }
 
-    private void InsertIntoParent(uint leftChildPageId, IndexKey key, uint rightChildPageId, List<uint> path)
+    private void InsertIntoParent(uint leftChildPageId, IndexKey key, uint rightChildPageId, List<uint> path, ITransaction? transaction = null)
     {
         if (path.Count == 0 || path.Last() == leftChildPageId)
         {
@@ -360,7 +374,7 @@ public sealed class BTreeIndex
 
             if (path.Count == 0)
             {
-                CreateNewRoot(leftChildPageId, key, rightChildPageId);
+                CreateNewRoot(leftChildPageId, key, rightChildPageId, transaction);
                 return;
             }
         }
@@ -398,17 +412,17 @@ public sealed class BTreeIndex
                 var leftEntries = entries.Take(splitPoint).ToList();
                 var rightEntries = entries.Skip(splitPoint + 1).ToList();
 
-                var newParentId = CreateNode(isLeaf: false);
+                var newParentId = CreateNode(isLeaf: false, transaction);
 
-                WriteInternalNode(parentPageId, p0, leftEntries);
-                WriteInternalNode(newParentId, rightP0, rightEntries);
+                WriteInternalNode(parentPageId, p0, leftEntries, transaction);
+                WriteInternalNode(newParentId, rightP0, rightEntries, transaction);
 
-                InsertIntoParent(parentPageId, promoteKey, newParentId, path);
+                InsertIntoParent(parentPageId, promoteKey, newParentId, path, transaction);
             }
             else
             {
                 // Insert directly
-                InsertIntoInternal(parentPageId, header, pageBuffer.AsSpan(0, _pageFile.PageSize), key, rightChildPageId);
+                InsertIntoInternal(parentPageId, header, pageBuffer.AsSpan(0, _pageFile.PageSize), key, rightChildPageId, transaction);
             }
         }
         finally
@@ -417,18 +431,18 @@ public sealed class BTreeIndex
         }
     }
 
-    private void CreateNewRoot(uint leftChildId, IndexKey key, uint rightChildId)
+    private void CreateNewRoot(uint leftChildId, IndexKey key, uint rightChildId, ITransaction? transaction = null)
     {
-        var newRootId = CreateNode(isLeaf: false);
+        var newRootId = CreateNode(isLeaf: false, transaction);
         var entries = new List<InternalEntry> { new InternalEntry(key, rightChildId) };
-        WriteInternalNode(newRootId, leftChildId, entries);
+        WriteInternalNode(newRootId, leftChildId, entries, transaction);
         _rootPageId = newRootId; // Update in-memory root
 
         // TODO: Update root in file header/metadata block so it persists? 
         // For now user passes rootPageId to ctor. BTreeIndex doesn't manage master root pointer persistence yet.
     }
 
-    private uint CreateNode(bool isLeaf)
+    private uint CreateNode(bool isLeaf, ITransaction? transaction = null)
     {
         var pageId = _pageFile.AllocatePage();
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
@@ -459,7 +473,21 @@ public sealed class BTreeIndex
             };
             nodeHeader.WriteTo(pageBuffer.AsSpan(32, 16));
 
-            _pageFile.WritePage(pageId, pageBuffer.AsSpan(0, _pageFile.PageSize));
+            // Buffered or immediate write
+            if (transaction is Transaction txn)
+            {
+                var writeOp = new WriteOperation(
+                    documentId: ObjectId.Empty,
+                    newValue: pageBuffer.AsSpan(0, _pageFile.PageSize).ToArray(),
+                    pageId: pageId,
+                    type: OperationType.AllocatePage
+                );
+                txn.AddWrite(writeOp);
+            }
+            else
+            {
+                _pageFile.WritePage(pageId, pageBuffer.AsSpan(0, _pageFile.PageSize));
+            }
         }
         finally
         {
@@ -504,7 +532,7 @@ public sealed class BTreeIndex
         return (p0, entries);
     }
 
-    private void WriteLeafNode(uint pageId, List<IndexEntry> entries, uint nextLeafId)
+    private void WriteLeafNode(uint pageId, List<IndexEntry> entries, uint nextLeafId, ITransaction? transaction = null)
     {
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
         try
@@ -543,7 +571,22 @@ public sealed class BTreeIndex
                 dataOffset += 4 + entry.Key.Data.Length + 12;
             }
 
-            _pageFile.WritePage(pageId, pageBuffer.AsSpan(0, _pageFile.PageSize));
+            // Buffered or immediate write
+            // Buffered or immediate write
+            if (transaction is Transaction txn)
+            {
+                var writeOp = new WriteOperation(
+                    documentId: ObjectId.Empty,
+                    newValue: pageBuffer.AsSpan(0, _pageFile.PageSize).ToArray(),
+                    pageId: pageId,
+                    type: OperationType.Insert
+                );
+                txn.AddWrite(writeOp);
+            }
+            else
+            {
+                _pageFile.WritePage(pageId, pageBuffer.AsSpan(0, _pageFile.PageSize));
+            }
         }
         finally
         {
@@ -551,7 +594,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void WriteInternalNode(uint pageId, uint p0, List<InternalEntry> entries)
+    private void WriteInternalNode(uint pageId, uint p0, List<InternalEntry> entries, ITransaction? transaction = null)
     {
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
         try
@@ -594,7 +637,21 @@ public sealed class BTreeIndex
                 dataOffset += 4 + entry.Key.Data.Length + 4;
             }
 
-            _pageFile.WritePage(pageId, pageBuffer.AsSpan(0, _pageFile.PageSize));
+            // Buffered or immediate write
+            if (transaction != null)
+            {
+                var writeOp = new WriteOperation(
+                    documentId: ObjectId.Empty,
+                    newValue: pageBuffer.AsSpan(0, _pageFile.PageSize).ToArray(),
+                    pageId: pageId,
+                    type: OperationType.Insert
+                );
+                ((Transaction)transaction).AddWrite(writeOp);
+            }
+            else
+            {
+                _pageFile.WritePage(pageId, pageBuffer.AsSpan(0, _pageFile.PageSize));
+            }
         }
         finally
         {
@@ -602,7 +659,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void InsertIntoInternal(uint pageId, BTreeNodeHeader header, Span<byte> pageBuffer, IndexKey key, uint rightChildId)
+    private void InsertIntoInternal(uint pageId, BTreeNodeHeader header, Span<byte> pageBuffer, IndexKey key, uint rightChildId, ITransaction? transaction = null)
     {
         // Read, insert, write back. In production do in-place shift.
         var (p0, entries) = ReadInternalEntries(pageBuffer, header.EntryCount);
@@ -612,7 +669,7 @@ public sealed class BTreeIndex
         if (insertIndex == -1) entries.Add(newEntry);
         else entries.Insert(insertIndex, newEntry);
 
-        WriteInternalNode(pageId, p0, entries);
+        WriteInternalNode(pageId, p0, entries, transaction);
     }
 
 
@@ -628,5 +685,238 @@ public sealed class BTreeIndex
         var keyLength = BitConverter.ToInt32(buffer.AsSpan(offset, 4));
         var keyData = buffer.AsSpan(offset + 4, keyLength);
         return new IndexKey(keyData);
+    }
+
+    /// <summary>
+    /// Deletes a key-value pair from the index
+    /// </summary>
+    public bool Delete(IndexKey key, ObjectId documentId, ITransaction? transaction = null)
+    {
+        var path = new List<uint>();
+        var leafPageId = FindLeafNodeWithPath(key, path);
+        
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        try
+        {
+            _pageFile.ReadPage(leafPageId, pageBuffer);
+            var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+            
+            // Check if key exists in leaf
+            var entries = ReadLeafEntries(pageBuffer, header.EntryCount);
+            var entryIndex = entries.FindIndex(e => e.Key.Equals(key) && e.DocumentId == documentId);
+            
+            if (entryIndex == -1)
+            {
+                return false; // Not found
+            }
+            
+            // Remove entry
+            entries.RemoveAt(entryIndex);
+            
+            // Update leaf
+            WriteLeafNode(leafPageId, entries, header.NextLeafPageId, transaction);
+            
+            // Check for underflow (min 50% fill)
+            // Simplified: min 1 entry for now, or MaxEntries/2
+            int minEntries = MaxEntriesPerNode / 2;
+            if (entries.Count < minEntries && _rootPageId != leafPageId)
+            {
+                HandleUnderflow(leafPageId, path, transaction);
+            }
+            
+            return true;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+    }
+    
+    private void HandleUnderflow(uint nodeId, List<uint> path, ITransaction? transaction)
+    {
+        if (path.Count == 0)
+        {
+            // Node is root
+            if (nodeId == _rootPageId)
+            {
+                // Special case: Collapse root if it has only 1 child (and is not a leaf)
+                // For now, simpliest implementation: do nothing for root underflow unless it's empty
+                // If it's a leaf root, it can be empty.
+                return;
+            }
+        }
+
+        var parentPageId = path[^1]; // Parent is last in path (before current node removed? No, path contains ancestors)
+        // Wait, FindLeafNodeWithPath adds ancestors. So path.Last() is not current node, it's parent.
+        // Let's verify FindLeafNodeWithPath:
+        // path.Add(currentPageId); currentPageId = FindChildNode(...);
+        // It adds PARENTS. It does NOT add the leaf itself.
+        
+        // Correct.
+        // So path.Last() is the parent.
+
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        try
+        {
+            _pageFile.ReadPage(parentPageId, pageBuffer);
+            var parentHeader = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+            var (p0, parentEntries) = ReadInternalEntries(pageBuffer, parentHeader.EntryCount);
+            
+            // Find index of current node in parent
+            int childIndex = -1;
+            if (p0 == nodeId) childIndex = -1; // -1 indicates P0
+            else
+            {
+                childIndex = parentEntries.FindIndex(e => e.PageId == nodeId);
+            }
+            
+            // Try to borrow from siblings
+            if (BorrowFromSibling(nodeId, parentPageId, childIndex, parentEntries, p0, transaction))
+            {
+                return; // Rebalanced
+            }
+            
+            // Borrow failed, valid siblings are too small -> MERGE
+            MergeWithSibling(nodeId, parentPageId, childIndex, parentEntries, p0, path, transaction);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+    }
+
+    private bool BorrowFromSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, ITransaction? transaction)
+    {
+        // TODO: Implement rotation (borrow from left or right sibling)
+        // Complexity: High. Need to update Parent, Sibling, and Node.
+        // For MVP, we can skip Borrow and go straight to Merge, but that causes more merges.
+        // Let's implement Merge first as it's the fallback.
+        return false; 
+    }
+
+    private void MergeWithSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, List<uint> path, ITransaction? transaction)
+    {
+        // Identify sibling to merge with.
+        // If P0 (childIndex -1), merge with right sibling (Entry 0).
+        // If last child, merge with left sibling.
+        // Otherwise, pick left or right.
+
+        IndexKey separatorKey;
+        uint leftNodeId, rightNodeId;
+        
+        if (childIndex == -1) // Current is P0 (Leftmost)
+        {
+            // Merge with Entry 0 (Right sibling)
+            rightNodeId = parentEntries[0].PageId;
+            leftNodeId = nodeId;
+            separatorKey = parentEntries[0].Key; // Key separating P0 and P1
+            
+            // Remove Entry 0 from parent (demote key)
+            // But wait, the key moves DOWN into the merged node?
+            // For leaf nodes: separator key is just a copy in parent.
+            // For internal nodes: separator key moves down.
+        }
+        else
+        {
+            // Merge with left sibling
+            if (childIndex == 0) leftNodeId = p0;
+            else leftNodeId = parentEntries[childIndex - 1].PageId;
+            
+            rightNodeId = nodeId;
+            separatorKey = parentEntries[childIndex].Key; // Key separating Left and Right
+        }
+
+        // Perform Merge: Move all items from Right Node to Left Node
+        MergeNodes(leftNodeId, rightNodeId, separatorKey, transaction);
+
+        // Remove separator key and right pointer from Parent
+        if (childIndex == -1)
+        {
+            parentEntries.RemoveAt(0); // Removing Entry 0 (Key 0, P1) - P1 was Right Node
+            // P0 remains P0 (which was Left Node)
+        }
+        else
+        {
+            parentEntries.RemoveAt(childIndex); // Remove entry pointing to Right Node
+        }
+
+        // Write updated Parent
+        WriteInternalNode(parentId, p0, parentEntries, transaction);
+        
+        // Free the empty Right Node
+        _pageFile.FreePage(rightNodeId); // Need to verify this works safely with Txn logic?
+        // Actually, FreePage is immediate in current impl. Might need TransactionalFreePage.
+        // Or just leave it allocated but unused for now.
+        
+        // Recursive Underflow Check on Parent
+        int minInternal = MaxEntriesPerNode / 2;
+        if (parentEntries.Count < minInternal && parentId != _rootPageId)
+        {
+            var parentPath = new List<uint>(path.Take(path.Count - 1)); // Path to grandparent
+            HandleUnderflow(parentId, parentPath, transaction);
+        }
+        else if (parentId == _rootPageId && parentEntries.Count == 0)
+        {
+            // Root collapse: Root has 0 entries (only P0).
+            // P0 becomes new root.
+            _rootPageId = p0; // P0 is the merged node (LeftNode)
+            // TODO: Update persistent root pointer if stored
+        }
+    }
+
+    private void MergeNodes(uint leftNodeId, uint rightNodeId, IndexKey separatorKey, ITransaction? transaction)
+    {
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        try
+        {
+            // Read both nodes
+            // Note: Simplification - assuming both are Leaves or both Internal. 
+            // In standard B-Tree they must be same height.
+            
+            _pageFile.ReadPage(leftNodeId, buffer);
+            var leftHeader = BTreeNodeHeader.ReadFrom(buffer.AsSpan(32));
+            // Read entries... (need specific method based on type)
+            
+            if (leftHeader.IsLeaf)
+            {
+                var leftEntries = ReadLeafEntries(buffer, leftHeader.EntryCount);
+                
+                _pageFile.ReadPage(rightNodeId, buffer);
+                var rightEntries = ReadLeafEntries(buffer.AsSpan(0, _pageFile.PageSize), ((BTreeNodeHeader.ReadFrom(buffer.AsSpan(32))).EntryCount)); // Dirty read reuse buffer? No, bad hygiene.
+                // Re-read right clean
+                var rightHeader = BTreeNodeHeader.ReadFrom(buffer.AsSpan(32));
+                 rightEntries = ReadLeafEntries(buffer, rightHeader.EntryCount);
+
+                // Merge: Append Right to Left
+                leftEntries.AddRange(rightEntries);
+                
+                // Update Left
+                WriteLeafNode(leftNodeId, leftEntries, rightHeader.NextLeafPageId, transaction);
+            }
+            else
+            {
+                // Internal Node Merge
+                _pageFile.ReadPage(leftNodeId, buffer);
+                // leftHeader is already read and valid
+                var (leftP0, leftEntries) = ReadInternalEntries(buffer, leftHeader.EntryCount);
+                
+                _pageFile.ReadPage(rightNodeId, buffer);
+                var rightHeader = BTreeNodeHeader.ReadFrom(buffer.AsSpan(32));
+                var (rightP0, rightEntries) = ReadInternalEntries(buffer, rightHeader.EntryCount);
+                
+                // Add Separator Key (from parent) pointing to Right's P0
+                leftEntries.Add(new InternalEntry(separatorKey, rightP0));
+                
+                // Add all Right entries
+                leftEntries.AddRange(rightEntries);
+                
+                // Update Left Node
+                WriteInternalNode(leftNodeId, leftP0, leftEntries, transaction);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 }

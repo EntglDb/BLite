@@ -68,6 +68,25 @@ public ref struct BsonBufferWriter
         // Note: Size patching must be done by caller after accessing WrittenSpan
         // from ArrayBufferWriter (or equivalent)
     }
+
+    public int BeginDocument(string name)
+    {
+        WriteByte((byte)BsonType.Document);
+        WriteCString(name);
+        return BeginDocument();
+    }
+
+    public int BeginArray(string name)
+    {
+        WriteByte((byte)BsonType.Array);
+        WriteCString(name);
+        return BeginDocument();
+    }
+
+    public void EndArray(int sizePosition)
+    {
+        EndDocument(sizePosition);
+    }
     
     // Private helper methods
 

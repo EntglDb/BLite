@@ -87,23 +87,21 @@ public sealed class WriteAheadLog : IDisposable
     /// <summary>
     /// Writes a data modification record
     /// </summary>
-    public void WriteDataRecord(ulong transactionId, uint pageId, ReadOnlySpan<byte> beforeImage, ReadOnlySpan<byte> afterImage)
+    public void WriteDataRecord(ulong transactionId, uint pageId, ReadOnlySpan<byte> afterImage)
     {
         lock (_lock)
         {
-            // Header: type(1) + txnId(8) + pageId(4) + beforeSize(4) + afterSize(4) = 21 bytes
-            var headerSize = 21;
-            var totalSize = headerSize + beforeImage.Length + afterImage.Length;
+            // Header: type(1) + txnId(8) + pageId(4) + afterSize(4) = 17 bytes
+            var headerSize = 17;
+            var totalSize = headerSize + afterImage.Length;
             
             var buffer = new byte[totalSize];
             buffer[0] = (byte)WalRecordType.Write;
             BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
             BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
-            BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), beforeImage.Length);
-            BitConverter.TryWriteBytes(buffer.AsSpan(17, 4), afterImage.Length);
+            BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
             
-            beforeImage.CopyTo(buffer.AsSpan(headerSize));
-            afterImage.CopyTo(buffer.AsSpan(headerSize + beforeImage.Length));
+            afterImage.CopyTo(buffer.AsSpan(headerSize));
             
             _walStream!.Write(buffer);
         }
@@ -175,26 +173,20 @@ public sealed class WriteAheadLog : IDisposable
                         break;
                         
                     case WalRecordType.Write:
-                        // Read data record specific fields (pageId + beforeSize + afterSize = 12 bytes)
-                        bytesRead = _walStream.Read(dataBuf);
-                        if (bytesRead < 12) 
+                        // Read data record specific fields (pageId + afterSize = 8 bytes)
+                        bytesRead = _walStream.Read(dataBuf.Slice(0, 8));
+                        if (bytesRead < 8) 
                         {
                             // Incomplete write record, stop reading
                             return records;
                         }
                         
                         var pageId = BitConverter.ToUInt32(dataBuf[0..4]);
-                        var beforeSize = BitConverter.ToInt32(dataBuf[4..8]);
-                        var afterSize = BitConverter.ToInt32(dataBuf[8..12]);
+                        var afterSize = BitConverter.ToInt32(dataBuf[4..8]);
                         
-                        var beforeImage = new byte[beforeSize];
                         var afterImage = new byte[afterSize];
                         
-                        if (_walStream.Read(beforeImage) < beforeSize)
-                        {
-                            // Incomplete before image, stop reading
-                            return records;
-                        }
+                        // Only read afterImage
                         if (_walStream.Read(afterImage) < afterSize)
                         {
                             // Incomplete after image, stop reading
@@ -207,7 +199,6 @@ public sealed class WriteAheadLog : IDisposable
                             TransactionId = txnId,
                             Timestamp = timestamp,
                             PageId = pageId,
-                            BeforeImage = beforeImage,
                             AfterImage = afterImage
                         };
                         break;
@@ -249,6 +240,5 @@ public struct WalRecord
     public ulong TransactionId { get; set; }
     public long Timestamp { get; set; }
     public uint PageId { get; set; }
-    public byte[]? BeforeImage { get; set; }
     public byte[]? AfterImage { get; set; }
 }

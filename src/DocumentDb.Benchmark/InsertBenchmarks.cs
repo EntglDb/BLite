@@ -14,13 +14,15 @@ using System.Text.Json;
 
 namespace DocumentDb.Benchmark;
 
-[SimpleJob]
+
 [InProcess]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[HtmlExporter]
+[JsonExporterAttribute.Full]
 public class InsertBenchmarks
 {
-    private const int BatchSize = 1000;
+    private const int BatchSize = 10000;
     
     // Paths
     private string _docDbPath = "";
@@ -32,12 +34,12 @@ public class InsertBenchmarks
     private PageFile? _pageFile = null;
     private TransactionManager? _txnMgr = null;
     private DocumentCollection<Person>? _collection = null;
-    private UserMapper? _mapper = null;
 
     // Data
     private Person[] _batchData = Array.Empty<Person>();
     private Person? _singlePerson = null;
 
+    [GlobalSetup]
     public void Setup()
     {
         var temp = AppContext.BaseDirectory;
@@ -58,15 +60,36 @@ public class InsertBenchmarks
 
     private Person CreatePerson(int i)
     {
-        return new Person
+        var p = new Person
         {
             Id = ObjectId.NewObjectId(),
             FirstName = $"First_{i}",
             LastName = $"Last_{i}",
             Age = 20 + (i % 50),
-            Bio = new string('A', 500), // 500 chars payload
-            CreatedAt = DateTime.UtcNow
+            Bio = null, // Removed large payload to focus on structure
+            CreatedAt = DateTime.UtcNow,
+            Balance = 1000.50m * (i + 1),
+            HomeAddress = new Address 
+            {
+                Street = $"{i} Main St",
+                City = "Tech City",
+                ZipCode = "12345"
+            }
         };
+
+        // Add 10 work history items to stress structure traversal
+        for(int j=0; j<10; j++)
+        {
+            p.EmploymentHistory.Add(new WorkHistory
+            {
+                CompanyName = $"TechCorp_{i}_{j}",
+                Title = "Developer",
+                DurationYears = j,
+                Tags = new List<string> { "C#", "BSON", "Performance", "Database", "Complex" }
+            });
+        }
+
+        return p;
     }
 
     [IterationSetup]
@@ -85,10 +108,6 @@ public class InsertBenchmarks
         _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
         _pageFile.Open();
         _txnMgr = new TransactionManager(_docDbWalPath, _pageFile);
-        _mapper = new UserMapper(); // We need a generic mapper, using UserMapper layout for now or adapting
-        // Wait, UserMapper is for User class. Person is compatible?
-        // UserMapper maps "Name", "Age". Person has "FirstName", "LastName".
-        // We need a PersonMapper.
         _collection = new DocumentCollection<Person>(new PersonMapper(), _pageFile, _txnMgr);
 
         // 2. Reset SQLite
@@ -133,6 +152,31 @@ public class InsertBenchmarks
         var json = JsonSerializer.Serialize(_singlePerson);
         conn.Execute("INSERT INTO Documents (Id, Payload) VALUES (@Id, @Payload)", 
             new { Id = _singlePerson?.Id.ToString(), Payload = json });
+    }
+
+    [Benchmark(Description = "SQLite Batch Insert (1000 items, Forced Checkpoint)")]
+    [BenchmarkCategory("Insert_Batch")]
+    public void Sqlite_Insert_Batch_ForcedCheckpoint()
+    {
+        using var conn = new SqliteConnection(_sqliteConnString);
+        conn.Open();
+        
+        // Ensure WAL mode
+        conn.Execute("PRAGMA journal_mode=WAL;");
+        
+        using (var txn = conn.BeginTransaction())
+        {
+            foreach (var p in _batchData)
+            {
+                var json = JsonSerializer.Serialize(p);
+                conn.Execute("INSERT INTO Documents (Id, Payload) VALUES (@Id, @Payload)", 
+                    new { Id = p.Id.ToString(), Payload = json }, txn);
+            }
+            txn.Commit();
+        }
+        
+        // Force checkpoint to flush WAL to main DB (simulate DocumentDb's immediate write)
+        conn.Execute("PRAGMA wal_checkpoint(FULL);");
     }
 
     [Benchmark(Description = "DocumentDb Single Insert")]

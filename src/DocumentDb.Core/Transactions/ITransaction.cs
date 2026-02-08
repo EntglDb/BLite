@@ -35,4 +35,15 @@ public interface ITransaction : IDisposable
     /// Called automatically on Dispose() if Commit() was not called.
     /// </summary>
     void Rollback();
+    /// <summary>
+    /// Event triggered when the transaction acts rollback.
+    /// Useful for restoring in-memory state (like ID maps).
+    /// </summary>
+    event Action? OnRollback;
+
+    /// <summary>
+    /// Gets a page from the transaction's write cache (if modified) or null.
+    /// Enables Read-Your-Own-Writes.
+    /// </summary>
+    byte[]? GetPage(uint pageId);
 }

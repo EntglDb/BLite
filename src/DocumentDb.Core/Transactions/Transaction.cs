@@ -15,7 +15,7 @@ public sealed class Transaction : ITransaction
     private readonly PageFile _pageFile;
     private readonly WriteAheadLog _wal;
     private TransactionState _state;
-    private readonly List<WriteOperation> _writeSet;
+    private readonly Dictionary<uint, WriteOperation> _writeSet;
     private bool _disposed;
 
     public Transaction(ulong transactionId, 
@@ -29,7 +29,7 @@ public sealed class Transaction : ITransaction
         _isolationLevel = isolationLevel;
         _startTime = DateTime.UtcNow;
         _state = TransactionState.Active;
-        _writeSet = new List<WriteOperation>();
+        _writeSet = new Dictionary<uint, WriteOperation>();
     }
 
     public ulong TransactionId => _transactionId;
@@ -45,7 +45,21 @@ public sealed class Transaction : ITransaction
         if (_state != TransactionState.Active)
             throw new InvalidOperationException($"Cannot add writes to transaction in state {_state}");
 
-        _writeSet.Add(operation);
+        // Coalesce writes: if we already have a write for this page, replace it
+        _writeSet[operation.PageId] = operation;
+    }
+
+    /// <summary>
+    /// Gets a page from the transaction's write cache (if modified) or null.
+    /// Enables Read-Your-Own-Writes.
+    /// </summary>
+    public byte[]? GetPage(uint pageId)
+    {
+        if (_writeSet.TryGetValue(pageId, out var op))
+        {
+            return op.NewValue;
+        }
+        return null;
     }
 
     /// <summary>
@@ -62,23 +76,12 @@ public sealed class Transaction : ITransaction
         _wal.WriteBeginRecord(_transactionId);
         
         // Write all data modifications to WAL
-        foreach (var write in _writeSet)
+        foreach (var write in _writeSet.Values)
         {
-            // Read current page state as "before image"
-            var beforeImage = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
-            try
-            {
-                _pageFile.ReadPage(write.PageId, beforeImage);
-                
-                // After image is the new value
-                _wal.WriteDataRecord(_transactionId, write.PageId, 
-                    beforeImage.AsSpan(0, _pageFile.PageSize), 
-                    write.NewValue);
-            }
-            finally
-            {
-                System.Buffers.ArrayPool<byte>.Shared.Return(beforeImage);
-            }
+            // Optimization: We only log the AfterImage (REDO log).
+            // UNDO is handled by discarding memory state, not by WAL rollback.
+            // Crash recovery only needs REDO to restore committed transactions.
+            _wal.WriteDataRecord(_transactionId, write.PageId, write.NewValue);
         }
         
         _wal.Flush(); // Ensure WAL is on disk
@@ -94,7 +97,7 @@ public sealed class Transaction : ITransaction
             throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
 
         // Apply all writes to actual pages
-        foreach (var write in _writeSet)
+        foreach (var write in _writeSet.Values)
         {
             var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
             try
@@ -121,6 +124,8 @@ public sealed class Transaction : ITransaction
     /// <summary>
     /// Rolls back the transaction (discards all writes)
     /// </summary>
+    public event Action? OnRollback;
+
     public void Rollback()
     {
         if (_state == TransactionState.Committed)
@@ -128,6 +133,8 @@ public sealed class Transaction : ITransaction
 
         _writeSet.Clear();
         _state = TransactionState.Aborted;
+        
+        OnRollback?.Invoke();
     }
 
     public void Dispose()
@@ -173,5 +180,6 @@ public enum OperationType : byte
 {
     Insert = 1,
     Update = 2,
-    Delete = 3
+    Delete = 3,
+    AllocatePage = 4
 }
