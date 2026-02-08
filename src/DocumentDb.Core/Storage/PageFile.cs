@@ -301,6 +301,18 @@ public sealed class PageFile : IDisposable
         WritePage(0, buffer);
     }
 
+    /// <summary>
+    /// Flushes all pending writes to disk.
+    /// Called by CheckpointManager after applying WAL changes.
+    /// </summary>
+    public void Flush()
+    {
+        lock (_lock)
+        {
+            _fileStream?.Flush(flushToDisk: true);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)

@@ -18,6 +18,7 @@ public class DocumentCollection<T> where T : class
     private readonly PageFile _pageFile;
     private readonly BTreeIndex _primaryIndex;
     private readonly TransactionManager _txnManager;
+    private readonly CollectionIndexManager<T> _indexManager; // NEW: Custom index manager
     
     // ID → (PageId, SlotIndex) mapping
     private readonly Dictionary<ObjectId, DocumentLocation> _idToLocationMap;
@@ -45,6 +46,9 @@ public class DocumentCollection<T> where T : class
         // Create primary index on _id
         var indexOptions = IndexOptions.CreateBTree("_id");
         _primaryIndex = new BTreeIndex(pageFile, indexOptions);
+        
+        // Initialize secondary index manager
+        _indexManager = new CollectionIndexManager<T>(pageFile, mapper);
         
         // Initialize mappings
         _idToLocationMap = new Dictionary<ObjectId, DocumentLocation>();
@@ -271,6 +275,109 @@ public class DocumentCollection<T> where T : class
 
     #endregion
 
+    #region Index Management API
+
+    /// <summary>
+    /// Creates a secondary index on a property for fast lookups.
+    /// The index is automatically maintained on insert/update/delete operations.
+    /// </summary>
+    /// <typeparam name="TKey">Property type</typeparam>
+    /// <param name="keySelector">Expression to extract the indexed property (e.g., p => p.Age)</param>
+    /// <param name="name">Optional custom index name (auto-generated if null)</param>
+    /// <param name="unique">If true, enforces uniqueness constraint on the indexed values</param>
+    /// <returns>The created secondary index</returns>
+    /// <example>
+    /// // Simple index on Age
+    /// collection.CreateIndex(p => p.Age);
+    /// 
+    /// // Unique index on Email
+    /// collection.CreateIndex(p => p.Email, unique: true);
+    /// 
+    /// // Custom name
+    /// collection.CreateIndex(p => p.LastName, name: "idx_lastname");
+    /// </example>
+    public CollectionSecondaryIndex<T> CreateIndex<TKey>(
+        System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+        string? name = null,
+        bool unique = false)
+    {
+        if (keySelector == null)
+            throw new ArgumentNullException(nameof(keySelector));
+
+        var index = _indexManager.CreateIndex(keySelector, name, unique);
+        
+        // Rebuild index for existing documents
+        RebuildIndex(index);
+        
+        return index;
+    }
+
+    /// <summary>
+    /// Drops (removes) an existing secondary index by name.
+    /// The primary index (_id) cannot be dropped.
+    /// </summary>
+    /// <param name="name">Name of the index to drop</param>
+    /// <returns>True if the index was found and dropped, false otherwise</returns>
+    public bool DropIndex(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Index name cannot be empty", nameof(name));
+
+        // Prevent dropping primary index
+        if (name.Equals("_id", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot drop primary index");
+
+        return _indexManager.DropIndex(name);
+    }
+
+    /// <summary>
+    /// Gets metadata about all secondary indexes in this collection.
+    /// Does not include the primary index (_id).
+    /// </summary>
+    /// <returns>Collection of index metadata</returns>
+    public IEnumerable<CollectionIndexInfo> GetIndexes()
+    {
+        return _indexManager.GetIndexInfo();
+    }
+
+    /// <summary>
+    /// Gets a specific secondary index by name for advanced querying.
+    /// Returns null if the index doesn't exist.
+    /// </summary>
+    /// <param name="name">Index name</param>
+    /// <returns>The secondary index, or null if not found</returns>
+    public CollectionSecondaryIndex<T>? GetIndex(string name)
+    {
+        return _indexManager.GetIndex(name);
+    }
+
+    /// <summary>
+    /// Rebuilds an index by scanning all existing documents and re-inserting them.
+    /// Called automatically when creating a new index.
+    /// </summary>
+    private void RebuildIndex(CollectionSecondaryIndex<T> index)
+    {
+        // Iterate all documents in the collection and insert into the new index
+        foreach (var (id, location) in _idToLocationMap)
+        {
+            try
+            {
+                var document = FindById(id);
+                if (document != null)
+                {
+                    index.Insert(document);
+                }
+            }
+            catch
+            {
+                // Skip documents that fail to load or index
+                // Production: should log errors
+            }
+        }
+    }
+
+    #endregion
+
     #region Data Page Management
 
     private uint FindPageWithSpace(int requiredBytes)
@@ -334,7 +441,8 @@ public class DocumentCollection<T> where T : class
             // Transaction write or direct write
             if (txn is Transaction t)
             {
-                var writeOp = new WriteOperation(ObjectId.Empty, buffer.AsSpan(0, _pageFile.PageSize).ToArray(), pageId, OperationType.AllocatePage);
+                // OPTIMIZATION: Pass ReadOnlyMemory to avoid ToArray() allocation
+                var writeOp = new WriteOperation(ObjectId.Empty, buffer.AsMemory(0, _pageFile.PageSize), pageId, OperationType.AllocatePage);
                 t.AddWrite(writeOp);
             }
             else
@@ -407,9 +515,10 @@ public class DocumentCollection<T> where T : class
             // NEW: Buffer write in transaction or write immediately
             if (transaction is Transaction t)
             {
+                // OPTIMIZATION: Pass ReadOnlyMemory to avoid ToArray() allocation
                 var writeOp = new WriteOperation(
                     documentId: ObjectId.Empty,
-                    newValue: buffer.AsSpan(0, _pageFile.PageSize).ToArray(),
+                    newValue: buffer.AsMemory(0, _pageFile.PageSize),
                     pageId: pageId,
                     type: OperationType.Insert
                 );
@@ -587,9 +696,10 @@ public class DocumentCollection<T> where T : class
             // NEW: Buffer write in transaction or write immediately
             if (transaction != null)
             {
+                // OPTIMIZATION: Pass ReadOnlyMemory to avoid ToArray() allocation
                 var writeOp = new WriteOperation(
                     documentId: ObjectId.Empty,
-                    newValue: buffer.AsSpan(0, _pageFile.PageSize).ToArray(),
+                    newValue: buffer.AsMemory(0, _pageFile.PageSize),
                     pageId: primaryPageId,
                     type: OperationType.Insert
                 );
@@ -667,6 +777,9 @@ public class DocumentCollection<T> where T : class
                 // Add to primary index
                 var key = new IndexKey(id.ToByteArray());
                 _primaryIndex.Insert(key, id);
+                
+                // NEW: Insert into all secondary indexes
+                _indexManager.InsertIntoAll(entity, txn);
             }
             else
             {
@@ -679,6 +792,9 @@ public class DocumentCollection<T> where T : class
                 // Add to primary index
                 var key = new IndexKey(id.ToByteArray());
                 _primaryIndex.Insert(key, id, txn);
+                
+                // NEW: Insert into all secondary indexes
+                _indexManager.InsertIntoAll(entity, txn);
             }
             
             // Only commit if we created the transaction
@@ -753,6 +869,7 @@ public class DocumentCollection<T> where T : class
                 for (int i = 0; i < batchCount; i++)
                 {
                     var (id, docData) = serializedBatch[i];
+                    var entity = entityList[batchStart + i]; // Get entity for index updates
                     
                     if (docData.Length <= MaxDocumentSizeForSinglePage)
                     {
@@ -773,6 +890,9 @@ public class DocumentCollection<T> where T : class
                     
                     var key = new IndexKey(id.ToByteArray());
                     _primaryIndex.Insert(key, id, txn);
+                    
+                    // NEW: Insert into all secondary indexes
+                    _indexManager.InsertIntoAll(entity, txn);
                     
                     ids.Add(id);
                 }

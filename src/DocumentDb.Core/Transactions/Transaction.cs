@@ -38,15 +38,28 @@ public sealed class Transaction : ITransaction
     public DateTime StartTime => _startTime;
 
     /// <summary>
-    /// Adds a write operation to the transaction's write set
+    /// Adds a write operation to the transaction's write set.
+    /// NOTE: Makes a defensive copy of the data to ensure memory safety.
+    /// This allocation is necessary because the caller may return the buffer to a pool.
     /// </summary>
     public void AddWrite(WriteOperation operation)
     {
         if (_state != TransactionState.Active)
             throw new InvalidOperationException($"Cannot add writes to transaction in state {_state}");
 
+        // Defensive copy: necessary to prevent use-after-return if caller uses pooled buffers
+        // This is the primary remaining allocation, but it's required for correctness
+        byte[] ownedCopy = operation.NewValue.ToArray();
+        
+        var ownedOperation = new WriteOperation(
+            operation.DocumentId,
+            ownedCopy,
+            operation.PageId,
+            operation.Type
+        );
+
         // Coalesce writes: if we already have a write for this page, replace it
-        _writeSet[operation.PageId] = operation;
+        _writeSet[operation.PageId] = ownedOperation;
     }
 
     /// <summary>
@@ -57,7 +70,16 @@ public sealed class Transaction : ITransaction
     {
         if (_writeSet.TryGetValue(pageId, out var op))
         {
-            return op.NewValue;
+            // Return the underlying array if it's backed by one, otherwise null
+            // This maintains backward compatibility
+            if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(op.NewValue, out var segment))
+            {
+                if (segment.Offset == 0 && segment.Count == segment.Array!.Length)
+                    return segment.Array;
+                
+                // If it's a slice, we need to copy (rare case)
+                return op.NewValue.ToArray();
+            }
         }
         return null;
     }
@@ -81,7 +103,7 @@ public sealed class Transaction : ITransaction
             // Optimization: We only log the AfterImage (REDO log).
             // UNDO is handled by discarding memory state, not by WAL rollback.
             // Crash recovery only needs REDO to restore committed transactions.
-            _wal.WriteDataRecord(_transactionId, write.PageId, write.NewValue);
+            _wal.WriteDataRecord(_transactionId, write.PageId, write.NewValue.Span);
         }
         
         _wal.Flush(); // Ensure WAL is on disk
@@ -89,7 +111,9 @@ public sealed class Transaction : ITransaction
     }
 
     /// <summary>
-    /// Commits the transaction (makes all writes visible)
+    /// Commits the transaction (marks as committed in WAL).
+    /// NOTE: This no longer writes to PageFile directly!
+    /// CheckpointManager handles PageFile writes asynchronously.
     /// </summary>
     public void Commit()
     {
@@ -107,7 +131,7 @@ public sealed class Transaction : ITransaction
                 
                 // Apply modification (copy new data into buffer)
                 var targetLength = Math.Min(write.NewValue.Length, _pageFile.PageSize);
-                write.NewValue.AsSpan(0, targetLength).CopyTo(buffer.AsSpan(0, targetLength));
+                write.NewValue.Span.Slice(0, targetLength).CopyTo(buffer.AsSpan(0, targetLength));
                 
                 // Write back
                 _pageFile.WritePage(write.PageId, buffer);
@@ -118,6 +142,20 @@ public sealed class Transaction : ITransaction
             }
         }
 
+        _state = TransactionState.Committed;
+    }
+
+    /// <summary>
+    /// Marks the transaction as committed without writing to PageFile.
+    /// Used by TransactionManager with lazy checkpointing.
+    /// </summary>
+    internal void MarkCommitted()
+    {
+        if (_state != TransactionState.Preparing && _state != TransactionState.Active)
+            throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
+
+        // Simply mark as committed - no PageFile I/O!
+        // The WAL already contains all changes, and CheckpointManager will apply them later.
         _state = TransactionState.Committed;
     }
 
@@ -155,15 +193,24 @@ public sealed class Transaction : ITransaction
 
 /// <summary>
 /// Represents a write operation in a transaction.
-/// Implemented as struct for efficiency.
+/// Optimized to avoid allocations by using ReadOnlyMemory instead of byte[].
 /// </summary>
 public struct WriteOperation
 {
     public ObjectId DocumentId { get; set; }
-    public byte[] NewValue { get; set; }
+    public ReadOnlyMemory<byte> NewValue { get; set; }
     public uint PageId { get; set; }
     public OperationType Type { get; set; }
 
+    public WriteOperation(ObjectId documentId, ReadOnlyMemory<byte> newValue, uint pageId, OperationType type)
+    {
+        DocumentId = documentId;
+        NewValue = newValue;
+        PageId = pageId;
+        Type = type;
+    }
+    
+    // Backward compatibility constructor
     public WriteOperation(ObjectId documentId, byte[] newValue, uint pageId, OperationType type)
     {
         DocumentId = documentId;

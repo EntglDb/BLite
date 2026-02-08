@@ -13,6 +13,7 @@ public sealed class TransactionManager : IDisposable
     private readonly Dictionary<ulong, Transaction> _activeTransactions;
     private readonly WriteAheadLog _wal;
     private readonly PageFile _pageFile;
+    private readonly CheckpointManager _checkpointManager;
     private bool _disposed;
 
     public TransactionManager(string walPath, PageFile pageFile)
@@ -21,7 +22,16 @@ public sealed class TransactionManager : IDisposable
         _activeTransactions = new Dictionary<ulong, Transaction>();
         _wal = new WriteAheadLog(walPath);
         _pageFile = pageFile ?? throw new ArgumentNullException(nameof(pageFile));
+        _checkpointManager = new CheckpointManager(_wal, _pageFile);
+        
+        // Start automatic background checkpointing (every 30s or 10MB threshold)
+        _checkpointManager.StartAutoCheckpoint();
     }
+
+    /// <summary>
+    /// Gets the checkpoint manager for manual checkpoint control
+    /// </summary>
+    public CheckpointManager CheckpointManager => _checkpointManager;
 
     /// <summary>
     /// Begins a new transaction
@@ -38,7 +48,8 @@ public sealed class TransactionManager : IDisposable
     }
 
     /// <summary>
-    /// Commits a transaction using 2PC (Two-Phase Commit)
+    /// Commits a transaction using 2PC (Two-Phase Commit).
+    /// Writes only to WAL for performance. CheckpointManager handles PageFile updates asynchronously.
     /// </summary>
     public void CommitTransaction(Transaction transaction)
     {
@@ -48,14 +59,19 @@ public sealed class TransactionManager : IDisposable
             if (!transaction.Prepare())
                 throw new InvalidOperationException("Transaction prepare failed");
 
-            // Write to WAL before committing
+            // Write commit record to WAL
             _wal.WriteCommitRecord(transaction.TransactionId);
             _wal.Flush();
 
-            // Phase 2: Commit
-            transaction.Commit();
+            // Phase 2: Mark as committed (no PageFile write here!)
+            // The transaction is now durable in WAL.
+            // CheckpointManager will apply changes to PageFile asynchronously.
+            transaction.MarkCommitted();
 
             _activeTransactions.Remove(transaction.TransactionId);
+            
+            // Note: CheckpointManager runs in background or can be triggered manually
+            // No immediate I/O to PageFile = SQLite-style performance!
         }
     }
 
@@ -123,6 +139,9 @@ public sealed class TransactionManager : IDisposable
             }
             _activeTransactions.Clear();
 
+            // Dispose CheckpointManager (performs final checkpoint)
+            _checkpointManager.Dispose();
+            
             _wal.Dispose();
             _disposed = true;
         }

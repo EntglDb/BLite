@@ -556,12 +556,12 @@ public sealed class BTreeIndex
                 PageId = pageId,
                 IsLeaf = true,
                 EntryCount = (ushort)entries.Count,
-                ParentPageId = 0, // TODO: Maintain parent pointers if needed for upstream traversal
+                ParentPageId = 0,
                 NextLeafPageId = nextLeafId
             };
             nodeHeader.WriteTo(pageBuffer.AsSpan(32, 16));
 
-            // Write entries
+            // Write entries in SINGLE-VALUE format (OLD)
             var dataOffset = 32 + 16;
             foreach (var entry in entries)
             {
@@ -571,7 +571,6 @@ public sealed class BTreeIndex
                 dataOffset += 4 + entry.Key.Data.Length + 12;
             }
 
-            // Buffered or immediate write
             // Buffered or immediate write
             if (transaction is Transaction txn)
             {

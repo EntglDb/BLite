@@ -22,7 +22,7 @@ namespace DocumentDb.Benchmark;
 [JsonExporterAttribute.Full]
 public class InsertBenchmarks
 {
-    private const int BatchSize = 10000;
+    private const int BatchSize = 1000;
     
     // Paths
     private string _docDbPath = "";

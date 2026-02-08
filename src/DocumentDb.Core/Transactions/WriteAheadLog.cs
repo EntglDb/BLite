@@ -32,8 +32,9 @@ public sealed class WriteAheadLog : IDisposable
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
             FileShare.None,  // Exclusive access like PageFile
-            bufferSize: 4096,
-            FileOptions.WriteThrough); // Ensures writes go to disk immediately
+            bufferSize: 64 * 1024); // 64KB buffer for better sequential write performance
+        // REMOVED FileOptions.WriteThrough for SQLite-style lazy checkpointing
+        // Durability is ensured by explicit Flush() calls
     }
 
     /// <summary>
@@ -95,15 +96,23 @@ public sealed class WriteAheadLog : IDisposable
             var headerSize = 17;
             var totalSize = headerSize + afterImage.Length;
             
-            var buffer = new byte[totalSize];
-            buffer[0] = (byte)WalRecordType.Write;
-            BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
-            BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
-            BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
-            
-            afterImage.CopyTo(buffer.AsSpan(headerSize));
-            
-            _walStream!.Write(buffer);
+            // OPTIMIZATION: Use ArrayPool instead of allocating new array
+            var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(totalSize);
+            try
+            {
+                buffer[0] = (byte)WalRecordType.Write;
+                BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
+                BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
+                BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
+                
+                afterImage.CopyTo(buffer.AsSpan(headerSize));
+                
+                _walStream!.Write(buffer.AsSpan(0, totalSize));
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
     }
 
@@ -115,6 +124,34 @@ public sealed class WriteAheadLog : IDisposable
         lock (_lock)
         {
             _walStream?.Flush(flushToDisk: true);
+        }
+    }
+
+    /// <summary>
+    /// Gets the current size of the WAL file in bytes
+    /// </summary>
+    public long GetCurrentSize()
+    {
+        lock (_lock)
+        {
+            return _walStream?.Length ?? 0;
+        }
+    }
+
+    /// <summary>
+    /// Truncates the WAL file (removes all content).
+    /// Should only be called after successful checkpoint.
+    /// </summary>
+    public void Truncate()
+    {
+        lock (_lock)
+        {
+            if (_walStream != null)
+            {
+                _walStream.SetLength(0);
+                _walStream.Position = 0;
+                _walStream.Flush(flushToDisk: true);
+            }
         }
     }
 
@@ -150,13 +187,6 @@ public sealed class WriteAheadLog : IDisposable
                     break;
                 }
                 
-                // Read common fields (txnId + timestamp = 16 bytes)
-                var bytesRead = _walStream.Read(headerBuf);
-                if (bytesRead < 16) break; // Incomplete record
-                
-                var txnId = BitConverter.ToUInt64(headerBuf[0..8]);
-                var timestamp = BitConverter.ToInt64(headerBuf[8..16]);
-                
                 WalRecord record;
                 
                 switch (type)
@@ -164,6 +194,17 @@ public sealed class WriteAheadLog : IDisposable
                     case WalRecordType.Begin:
                     case WalRecordType.Commit:
                     case WalRecordType.Abort:
+                        // Read common fields (txnId + timestamp = 16 bytes)
+                        var bytesRead = _walStream.Read(headerBuf);
+                        if (bytesRead < 16)
+                        {
+                            // Incomplete record, stop reading
+                            return records;
+                        }
+                        
+                        var txnId = BitConverter.ToUInt64(headerBuf[0..8]);
+                        var timestamp = BitConverter.ToInt64(headerBuf[8..16]);
+                        
                         record = new WalRecord 
                         { 
                             Type = type, 
@@ -173,20 +214,29 @@ public sealed class WriteAheadLog : IDisposable
                         break;
                         
                     case WalRecordType.Write:
-                        // Read data record specific fields (pageId + afterSize = 8 bytes)
-                        bytesRead = _walStream.Read(dataBuf.Slice(0, 8));
-                        if (bytesRead < 8) 
+                        // Write records have different format: txnId(8) + pageId(4) + afterSize(4)
+                        // Read txnId + pageId + afterSize = 16 bytes
+                        bytesRead = _walStream.Read(headerBuf);
+                        if (bytesRead < 16) 
                         {
-                            // Incomplete write record, stop reading
+                            // Incomplete write record header, stop reading
                             return records;
                         }
                         
-                        var pageId = BitConverter.ToUInt32(dataBuf[0..4]);
-                        var afterSize = BitConverter.ToInt32(dataBuf[4..8]);
+                        txnId = BitConverter.ToUInt64(headerBuf[0..8]);
+                        var pageId = BitConverter.ToUInt32(headerBuf[8..12]);
+                        var afterSize = BitConverter.ToInt32(headerBuf[12..16]);
+                        
+                        // Validate afterSize to prevent overflow or corruption
+                        if (afterSize < 0 || afterSize > 100 * 1024 * 1024) // Max 100MB per record
+                        {
+                            // Corrupted size, stop reading
+                            return records;
+                        }
                         
                         var afterImage = new byte[afterSize];
                         
-                        // Only read afterImage
+                        // Read afterImage
                         if (_walStream.Read(afterImage) < afterSize)
                         {
                             // Incomplete after image, stop reading
@@ -197,7 +247,7 @@ public sealed class WriteAheadLog : IDisposable
                         {
                             Type = type,
                             TransactionId = txnId,
-                            Timestamp = timestamp,
+                            Timestamp = 0, // Write records don't have timestamp
                             PageId = pageId,
                             AfterImage = afterImage
                         };

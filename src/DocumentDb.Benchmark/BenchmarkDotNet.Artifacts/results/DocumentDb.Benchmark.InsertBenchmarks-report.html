@@ -2,7 +2,7 @@
 <html lang='en'>
 <head>
 <meta charset='utf-8' />
-<title>DocumentDb.Benchmark.InsertBenchmarks-20260207-092124</title>
+<title>DocumentDb.Benchmark.InsertBenchmarks-20260208-114748</title>
 
 <style type="text/css">
 	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
@@ -16,23 +16,20 @@
 BenchmarkDotNet v0.15.8, Windows 11 (10.0.22631.6345/23H2/2023Update/SunValley3)
 13th Gen Intel Core i7-13800H 2.50GHz, 1 CPU, 20 logical and 14 physical cores
 .NET SDK 10.0.102
-  [Host]     : .NET 10.0.2 (10.0.2, 10.0.225.61305), X64 RyuJIT x86-64-v3
-  Job-CNUJVU : .NET 10.0.2 (10.0.2, 10.0.225.61305), X64 RyuJIT x86-64-v3
+  [Host] : .NET 10.0.2 (10.0.2, 10.0.225.61305), X64 RyuJIT x86-64-v3
 </code></pre>
-<pre><code>InvocationCount=1  UnrollFactor=1  
+<pre><code>Job=InProcess  Toolchain=InProcessEmitToolchain  InvocationCount=1  
+UnrollFactor=1  
 </code></pre>
 
 <table>
-<thead><tr><th>Method                                  </th><th>Job </th><th>Toolchain       </th><th>Mean</th><th>Error</th><th>Ratio</th><th>RatioSD</th><th>Alloc Ratio</th>
+<thead><tr><th>Method                                         </th><th>Mean</th><th>Error</th><th>StdDev</th><th>Ratio</th><th>RatioSD</th><th>Gen0</th><th>Gen1</th><th>Allocated</th><th>Alloc Ratio</th>
 </tr>
-</thead><tbody><tr><td>&#39;SQLite Batch Insert (1000 items, 1 Txn)&#39;</td><td>Job-CNUJVU</td><td>Default</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;DocumentDb Insert (1000 items, No Batch API)&#39;</td><td>Job-CNUJVU</td><td>Default</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;SQLite Batch Insert (1000 items, 1 Txn)&#39;</td><td>InProcess</td><td>InProcessEmitToolchain</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;DocumentDb Insert (1000 items, No Batch API)&#39;</td><td>InProcess</td><td>InProcessEmitToolchain</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;SQLite Single Insert (AutoCommit)&#39;</td><td>Job-CNUJVU</td><td>Default</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;DocumentDb Single Insert&#39;</td><td>Job-CNUJVU</td><td>Default</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;SQLite Single Insert (AutoCommit)&#39;</td><td>InProcess</td><td>InProcessEmitToolchain</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
-</tr><tr><td>&#39;DocumentDb Single Insert&#39;</td><td>InProcess</td><td>InProcessEmitToolchain</td><td>NA</td><td>NA</td><td>?</td><td>?</td><td>?</td>
+</thead><tbody><tr><td>&#39;SQLite Batch Insert (1000 items, Forced Checkpoint)&#39;</td><td>217.924 ms</td><td>9.0230 ms</td><td>25.5968 ms</td><td>?</td><td>?</td><td>5000.0000</td><td>-</td><td>65260.37 KB</td><td>?</td>
+</tr><tr><td>&#39;SQLite Batch Insert (1000 items, 1 Txn)&#39;</td><td>141.985 ms</td><td>3.3877 ms</td><td>9.6654 ms</td><td>?</td><td>?</td><td>5000.0000</td><td>-</td><td>65262.37 KB</td><td>?</td>
+</tr><tr><td>&#39;DocumentDb Batch Insert (1000 items, 1 Txn)&#39;</td><td>467.537 ms</td><td>9.2539 ms</td><td>18.0491 ms</td><td>?</td><td>?</td><td>67000.0000</td><td>5000.0000</td><td>829190.13 KB</td><td>?</td>
+</tr><tr><td>&#39;SQLite Single Insert (AutoCommit)&#39;</td><td>4.577 ms</td><td>0.1464 ms</td><td>0.4271 ms</td><td>1.01</td><td>0.13</td><td>-</td><td>-</td><td>10.19 KB</td><td>1.00</td>
+</tr><tr><td>&#39;DocumentDb Single Insert&#39;</td><td>1.377 ms</td><td>0.0327 ms</td><td>0.0958 ms</td><td>0.30</td><td>0.03</td><td>-</td><td>-</td><td>127.66 KB</td><td>12.53</td>
 </tr></tbody></table>
 </body>
 </html>
