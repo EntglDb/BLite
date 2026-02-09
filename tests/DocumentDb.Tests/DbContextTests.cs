@@ -1,10 +1,11 @@
-using DocumentDb.Bson;
+﻿using DocumentDb.Bson;
+using System.Security.Cryptography;
 
 namespace DocumentDb.Tests;
 
 public class DbContextTests : IDisposable
 {
-    private readonly string _dbPath;
+    private string _dbPath;
     
     public DbContextTests()
     {
@@ -53,19 +54,61 @@ public class DbContextTests : IDisposable
         Assert.Equal(1, db.Users.Count());
     }
 
-    [Fact(Skip = "TODO: Requires persistent _idToPageMap - currently in-memory only")]
+    [Fact]
     public void DbContext_Dispose_ReleasesResources()
     {
-        // First context - use using to ensure proper disposal
+        _dbPath = Path.Combine(Path.GetTempPath(), $"test_dbcontext_reopen.db");
+        var totalUsers = 0;
+        // First context - insert and dispose (auto-checkpoint)
         using (var db = new TestDbContext(_dbPath))
         {
             db.Users.Insert(new User { Name = "Test", Age = 20 });
-        } // Dispose called here, commits transaction
+            var beforeCheckpointTotalUsers = db.Users.FindAll().Count();
+            db._storage.Checkpoint(); // Force checkpoint to ensure data is persisted to main file
+            totalUsers = db.Users.FindAll().Count();
+            var countedUsers = db.Users.Count();
+            Assert.Equal(beforeCheckpointTotalUsers, totalUsers);
+        } // Dispose → Commit → Checkpoint → Write to PageFile
         
         // Should be able to open again and see persisted data
-        // LIMITATION: _idToPageMap is currently in-memory, so data is lost on close
         using var db2 = new TestDbContext(_dbPath);
-        Assert.Equal(1, db2.Users.Count());
+        
+        Assert.Equal(1, totalUsers);
+        Assert.Equal(totalUsers, db2.Users.FindAll().Count());
+        Assert.Equal(totalUsers, db2.Users.Count());
+    }
+    private static string ComputeFileHash(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var sha256 = SHA256.Create();
+        return Convert.ToHexString(sha256.ComputeHash(stream));
+    }
+
+    [Fact]
+    public void DatabaseFile_SizeAndContent_ChangeAfterInsert()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"test_dbfile_{Guid.NewGuid()}.db");
+
+        // 1. Crea e chiudi database vuoto
+        using (var db = new TestDbContext(dbPath))
+        {
+            db.Users.Insert(new User { Name = "Pippo", Age = 42 });
+        }
+        var initialSize = new FileInfo(dbPath).Length;
+        var initialHash = ComputeFileHash(dbPath);
+
+        // 2. Riapri, inserisci, chiudi
+        using (var db = new TestDbContext(dbPath))
+        {
+            db.Users.Insert(new User { Name = "Test", Age = 42 });
+            db._storage.Checkpoint(); // Forza persistenza
+        }
+        var afterInsertSize = new FileInfo(dbPath).Length;
+        var afterInsertHash = ComputeFileHash(dbPath);
+
+        // 3. Verifica che dimensione e hash siano cambiati
+        Assert.NotEqual(initialSize, afterInsertSize);
+        Assert.NotEqual(initialHash, afterInsertHash);
     }
 
     [Fact]

@@ -11,10 +11,9 @@ namespace DocumentDb.Core;
 /// </summary>
 public abstract partial class DocumentDbContext : IDisposable
 {
-    private readonly string _databasePath;
-    private readonly TransactionManager _transactionManager;
-    private readonly StorageEngine _storage;
-    private bool _disposed;
+    public readonly TransactionManager _transactionManager;
+    public readonly StorageEngine _storage;
+    public bool _disposed;
     
     /// <summary>
     /// Creates a new database context with default configuration
@@ -31,18 +30,8 @@ public abstract partial class DocumentDbContext : IDisposable
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
-        
-        _databasePath = databasePath;
-        
-        // Auto-derive WAL path
-        var walPath = Path.ChangeExtension(databasePath, ".wal");
-        
-        // Initialize storage infrastructure
-        var _pageFile = new PageFile(databasePath, config);
-        _pageFile.Open();
 
-        var _wal = new WriteAheadLog(walPath);
-        _storage = new StorageEngine(_pageFile, _wal);
+        _storage = new StorageEngine(databasePath, config);
 
         _transactionManager = new TransactionManager(_storage);
 

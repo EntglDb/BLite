@@ -1,4 +1,5 @@
 using DocumentDb.Core.Storage;
+using System.Diagnostics;
 
 namespace DocumentDb.Core.Transactions;
 
@@ -99,11 +100,12 @@ public sealed class CheckpointManager : IDisposable
             if (_disposed)
                 throw new ObjectDisposedException(nameof(CheckpointManager));
 
-            var pageCountBefore = _storage.CommittedPagesCount;
-            
-            // Delegate to StorageEngine to write committed pages
+            // Note: We no longer track "committed pages count" since we use WAL-only architecture
+            // The checkpoint now merges WAL into PageFile instead of flushing a buffer
+
+            // Delegate to StorageEngine to merge WAL into PageFile
             _storage.Checkpoint();
-            
+
             // Update checkpoint position
             _lastCheckpointPosition = _storage.GetWalSize();
 
@@ -112,22 +114,21 @@ public sealed class CheckpointManager : IDisposable
             {
                 case CheckpointMode.Truncate:
                 case CheckpointMode.Restart:
+                case CheckpointMode.Full:
                     // Truncate WAL after successful checkpoint
+                    // (Full mode needs this for clean shutdown)
                     _storage.TruncateWal();
                     _lastCheckpointPosition = 0;
                     break;
-                    
-                case CheckpointMode.Full:
-                    // Full mode: ensure everything is flushed
-                    _storage.FlushWal();
-                    break;
-                    
+
                 case CheckpointMode.Passive:
                     // Passive: best effort, already done
                     break;
             }
 
-            return pageCountBefore; // Return pages that were checkpointed
+            // Return 0 since we don't track page count anymore
+            // (WAL-based architecture doesn't maintain a committed buffer)
+            return 0;
         }
     }
 
@@ -148,17 +149,18 @@ public sealed class CheckpointManager : IDisposable
         lock (_lock)
         {
             StopAutoCheckpoint();
-            
+
             // Final checkpoint before disposal
             try
             {
                 Checkpoint(CheckpointMode.Full);
             }
-            catch
+            catch (Exception ex)
             {
                 // Best effort on dispose
+                Debug.WriteLine(ex.Message);
             }
-            
+
             _disposed = true;
         }
 

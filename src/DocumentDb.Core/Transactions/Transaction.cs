@@ -14,7 +14,6 @@ public sealed class Transaction : ITransaction
     private readonly DateTime _startTime;
     private readonly StorageEngine _storage;
     private TransactionState _state;
-    private readonly Dictionary<uint, WriteOperation> _writeSet;
     private bool _disposed;
 
     public Transaction(ulong transactionId, 
@@ -26,7 +25,6 @@ public sealed class Transaction : ITransaction
         _isolationLevel = isolationLevel;
         _startTime = DateTime.UtcNow;
         _state = TransactionState.Active;
-        _writeSet = new Dictionary<uint, WriteOperation>();
     }
 
     public ulong TransactionId => _transactionId;
@@ -45,21 +43,9 @@ public sealed class Transaction : ITransaction
             throw new InvalidOperationException($"Cannot add writes to transaction in state {_state}");
 
         // Defensive copy: necessary to prevent use-after-return if caller uses pooled buffers
-        // This is the primary remaining allocation, but it's required for correctness
         byte[] ownedCopy = operation.NewValue.ToArray();
-        
-        var ownedOperation = new WriteOperation(
-            operation.DocumentId,
-            ownedCopy,
-            operation.PageId,
-            operation.Type
-        );
-
-        // Coalesce writes: if we already have a write for this page, replace it
-        _writeSet[operation.PageId] = ownedOperation;
-        
-        // Register in StorageEngine for "Read Your Own Writes"
-        _storage.WritePage(operation.PageId, _transactionId, operation.NewValue.Span);
+        // StorageEngine gestisce tutte le scritture transazionali
+        _storage.WritePage(operation.PageId, _transactionId, ownedCopy);
     }
 
     /// <summary>
@@ -72,11 +58,8 @@ public sealed class Transaction : ITransaction
 
         _state = TransactionState.Preparing;
         
-        // Convert _writeSet to format expected by StorageEngine
-        var writeSet = _writeSet.Values.Select(w => (w.PageId, w.NewValue));
-        
         // StorageEngine handles WAL writes
-        return _storage.PrepareTransaction(_transactionId, writeSet);
+        return _storage.PrepareTransaction(_transactionId);
     }
 
     /// <summary>
@@ -88,12 +71,9 @@ public sealed class Transaction : ITransaction
     {
         if (_state != TransactionState.Preparing && _state != TransactionState.Active)
             throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
-
-        // Convert _writeSet to format expected by StorageEngine
-        var writeSet = _writeSet.Values.Select(w => (w.PageId, w.NewValue));
         
         // StorageEngine handles WAL writes and buffer management
-        _storage.CommitTransaction(_transactionId, writeSet);
+        _storage.CommitTransaction(_transactionId);
 
         _state = TransactionState.Committed;
     }
@@ -123,7 +103,6 @@ public sealed class Transaction : ITransaction
         if (_state == TransactionState.Committed)
             throw new InvalidOperationException("Cannot rollback committed transaction");
 
-        _writeSet.Clear();
         _storage.RollbackTransaction(_transactionId);
         _state = TransactionState.Aborted;
         

@@ -938,7 +938,8 @@ public class DocumentCollection<T> where T : class
                     var id = _mapper.GetId(entity);
                     var key = new IndexKey(id.ToByteArray());
 
-                    if (_primaryIndex.TryFind(key, out var _))
+                    // Check if entity exists using transaction isolation
+                    if (_primaryIndex.TryFind(key, out var _, txn.TransactionId))
                     {
                         var bufferWriter = new System.Buffers.ArrayBufferWriter<byte>();
                         _mapper.Serialize(entity, bufferWriter);

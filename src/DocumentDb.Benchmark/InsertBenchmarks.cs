@@ -95,23 +95,7 @@ public class InsertBenchmarks
     [IterationSetup]
     public void IterationSetup()
     {
-        // Cleanup and Re-Initialize for fairness per iteration/invocation?
-        // Actually, for Insert benchmarks we want to append.
-        // But for Batch insert we might fill up disk.
-        // Let's reset DBs every iteration to keep it clean.
-        
-        // 1. Reset DocumentDb
-        // Due to unique GUIDs, files should not exist. Skipping delete to avoid phantom IOExceptions.
-        // if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
-        // if (File.Exists(_docDbWalPath)) File.Delete(_docDbWalPath);
-        
-        var _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
-        _pageFile.Open();
-
-        var _wal = new WriteAheadLog(_docDbWalPath);
-
-        _storage = new StorageEngine(_pageFile, _wal);
-
+        _storage = new StorageEngine(_docDbWalPath, PageFileConfig.Default);
         _txnMgr = new TransactionManager(_storage);
         _collection = new DocumentCollection<Person>(new PersonMapper(), _storage, _txnMgr);
 

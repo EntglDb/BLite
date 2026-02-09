@@ -12,7 +12,6 @@ public sealed class TransactionManager : IDisposable
     private readonly object _lock = new();
     private readonly Dictionary<ulong, Transaction> _activeTransactions;
     private readonly StorageEngine _storage;
-    private readonly CheckpointManager _checkpointManager;
     private bool _disposed;
 
     public TransactionManager(StorageEngine storage)
@@ -20,21 +19,12 @@ public sealed class TransactionManager : IDisposable
         _nextTransactionId = 1;
         _activeTransactions = new Dictionary<ulong, Transaction>();
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
-        _checkpointManager = new CheckpointManager(_storage);
-        
-        // Start automatic background checkpointing (every 30s or 10MB threshold)
-        _checkpointManager.StartAutoCheckpoint();
     }
 
     /// <summary>
     /// Gets the storage engine
     /// </summary>
     public StorageEngine Storage => _storage;
-
-    /// <summary>
-    /// Gets the checkpoint manager for manual checkpoint control
-    /// </summary>
-    public CheckpointManager CheckpointManager => _checkpointManager;
 
     /// <summary>
     /// Begins a new transaction
@@ -102,15 +92,21 @@ public sealed class TransactionManager : IDisposable
 
         lock (_lock)
         {
-            // Rollback any active transactions
+            // Rollback only ACTIVE transactions (not already committed/aborted)
             foreach (var txn in _activeTransactions.Values.ToList())
             {
-                try { txn.Rollback(); } catch { }
+                try 
+                { 
+                    // Only rollback if still active
+                    if (txn.State == TransactionState.Active || 
+                        txn.State == TransactionState.Preparing)
+                    {
+                        txn.Rollback();
+                    }
+                } 
+                catch { /* Best effort */ }
             }
             _activeTransactions.Clear();
-
-            // Dispose CheckpointManager (performs final checkpoint)
-            _checkpointManager.Dispose();
             
             _disposed = true;
         }

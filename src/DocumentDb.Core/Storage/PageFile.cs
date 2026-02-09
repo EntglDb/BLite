@@ -178,7 +178,7 @@ public sealed class PageFile : IDisposable
             {
                 if (offset + _config.PageSize > _fileStream.Length)
                 {
-                    var newSize = (_fileStream.Length + _config.PageSize) * 2;
+                    var newSize = Math.Max(offset + _config.PageSize, _fileStream.Length * 2);
                     _fileStream.SetLength(newSize);
                     
                     // Recreate memory-mapped file with new size
@@ -194,8 +194,11 @@ public sealed class PageFile : IDisposable
             }
         }
 
-        using var accessor = _mappedFile.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write);
-        accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+        // Write to memory-mapped file
+        using (var accessor = _mappedFile.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write))
+        {
+            accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+        }
     }
 
     /// <summary>
@@ -320,8 +323,18 @@ public sealed class PageFile : IDisposable
 
         lock (_lock)
         {
+            // 1. Flush any pending writes from memory-mapped file
+            if (_fileStream != null)
+            {
+                _fileStream.Flush(flushToDisk: true);
+            }
+            
+            // 2. Close memory-mapped file first
             _mappedFile?.Dispose();
+            
+            // 3. Then close file stream
             _fileStream?.Dispose();
+            
             _disposed = true;
         }
 

@@ -16,13 +16,8 @@ try
     // Clean up
     if (File.Exists(dbPath)) File.Delete(dbPath);
     if (File.Exists(walPath)) File.Delete(walPath);
-    
-    using var pageFile = new PageFile(dbPath, PageFileConfig.Default);
-    pageFile.Open();
 
-    using var wal = new WriteAheadLog(walPath);
-
-    var storage = new StorageEngine(pageFile, wal);
+    var storage = new StorageEngine(dbPath, PageFileConfig.Default);
 
     using var txnMgr = new TransactionManager(storage);
 

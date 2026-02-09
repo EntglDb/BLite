@@ -18,10 +18,7 @@ public class DocumentCollectionTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.wal");
         
-        var _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
-        _pageFile.Open();
-        var _wal = new WriteAheadLog(_walPath);
-        _storage = new StorageEngine(_pageFile, _wal);
+        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
         _txnManager = new TransactionManager(_storage);
 
         var mapper = new UserMapper();

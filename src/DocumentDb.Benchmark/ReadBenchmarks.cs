@@ -55,10 +55,7 @@ public class ReadBenchmarks
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
 
         // 1. Setup DocumentDb & Insert Data
-        var _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
-        _pageFile.Open();
-        var _wal = new WriteAheadLog(_docDbWalPath);
-        _storage = new StorageEngine(_pageFile, _wal);
+        _storage = new StorageEngine(_docDbPath, PageFileConfig.Default);
         _txnMgr = new TransactionManager(_storage);
         _collection = new DocumentCollection<Person>(new PersonMapper(), _storage, _txnMgr);
 

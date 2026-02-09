@@ -16,10 +16,7 @@ public class InsertBulkTests : IDisposable
     public InsertBulkTests()
     {
         _testFile = Path.GetTempFileName();
-        var _pageFile = new PageFile(_testFile, PageFileConfig.Default); // Use Default config (16KB)
-        _pageFile.Open();
-        var _wal = new WriteAheadLog(_testFile + ".wal");
-        _storage = new StorageEngine(_pageFile, _wal);
+        _storage = new StorageEngine(_testFile, PageFileConfig.Default);
         _txnManager = new TransactionManager(_storage);
         var mapper = new UserMapper();
         _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
