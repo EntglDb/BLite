@@ -82,7 +82,7 @@ public sealed class TransactionManager : IDisposable
         lock (_lock)
         {
             transaction.Rollback();
-            _storage.WAL.WriteAbortRecord(transaction.TransactionId);
+            _storage.WriteAbortRecord(transaction.TransactionId);
             _activeTransactions.Remove(transaction.TransactionId);
         }
     }

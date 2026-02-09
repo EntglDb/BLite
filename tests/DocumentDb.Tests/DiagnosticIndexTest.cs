@@ -14,8 +14,6 @@ public class DiagnosticIndexTest : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
     private readonly StorageEngine _storage;
     private readonly TransactionManager _txnManager;
     private readonly ITestOutputHelper _output;
@@ -27,9 +25,9 @@ public class DiagnosticIndexTest : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_diag_{id}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_diag_{id}.wal");
         
-        _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
         _pageFile.Open();
-        _wal = new WriteAheadLog(_walPath);
+        var _wal = new WriteAheadLog(_walPath);
         _storage = new StorageEngine(_pageFile, _wal);
         _txnManager = new TransactionManager(_storage);
     }
@@ -37,7 +35,7 @@ public class DiagnosticIndexTest : IDisposable
     public void Dispose()
     {
         _txnManager?.Dispose();
-        _pageFile?.Dispose();
+        _storage?.Dispose();
         try { File.Delete(_dbPath); } catch { }
         try { File.Delete(_walPath); } catch { }
     }
@@ -47,7 +45,7 @@ public class DiagnosticIndexTest : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _storage, _txnManager);
         
         _output.WriteLine("Creating index on Age...");
         var ageIndex = collection.CreateIndex(p => p.Age);
@@ -88,10 +86,13 @@ public class DiagnosticIndexTest : IDisposable
             txn.Commit();
         }
 
-        // After commit, should still be visible
-        _output.WriteLine("After commit, seeking Age=25 without transaction...");
-        var resultAfterCommit = ageIndex.Seek(25);
-        _output.WriteLine($"Result after commit: {resultAfterCommit?.ToString() ?? "NULL"}");
-        Assert.NotNull(resultAfterCommit);
+        using (var readTxn = collection.BeginTransaction())
+        {
+            // After commit, should still be visible
+            _output.WriteLine("After commit, seeking Age=25 without transaction...");
+            var resultAfterCommit = ageIndex.Seek(25, readTxn);
+            _output.WriteLine($"Result after commit: {resultAfterCommit?.ToString() ?? "NULL"}");
+            Assert.NotNull(resultAfterCommit);
+        }
     }
 }

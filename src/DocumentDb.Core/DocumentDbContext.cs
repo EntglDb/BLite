@@ -12,10 +12,8 @@ namespace DocumentDb.Core;
 public abstract partial class DocumentDbContext : IDisposable
 {
     private readonly string _databasePath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
     private readonly TransactionManager _transactionManager;
-    private readonly BufferManager _bufferManager;
+    private readonly StorageEngine _storage;
     private bool _disposed;
     
     /// <summary>
@@ -40,13 +38,13 @@ public abstract partial class DocumentDbContext : IDisposable
         var walPath = Path.ChangeExtension(databasePath, ".wal");
         
         // Initialize storage infrastructure
-        _pageFile = new PageFile(databasePath, config);
+        var _pageFile = new PageFile(databasePath, config);
         _pageFile.Open();
 
-        _wal = new WriteAheadLog(walPath);
-        var storage = new StorageEngine(_pageFile, _wal);
-        _bufferManager = storage.BufferManager;
-        _transactionManager = new TransactionManager(storage);
+        var _wal = new WriteAheadLog(walPath);
+        _storage = new StorageEngine(_pageFile, _wal);
+
+        _transactionManager = new TransactionManager(_storage);
 
         // Initialize collections - implemented by derived class or Source Generator
         InitializeCollections();
@@ -74,13 +72,8 @@ public abstract partial class DocumentDbContext : IDisposable
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        return new DocumentCollection<T>(mapper, _pageFile, _wal, _transactionManager);
+        return new DocumentCollection<T>(mapper, _storage, _transactionManager);
     }
-    
-    /// <summary>
-    /// Exposes PageFile for advanced scenarios
-    /// </summary>
-    protected PageFile PageFile => _pageFile;
     
     /// <summary>
     /// Exposes TransactionManager for advanced scenarios
@@ -95,7 +88,7 @@ public abstract partial class DocumentDbContext : IDisposable
         _disposed = true;
         
         _transactionManager?.Dispose();
-        _pageFile?.Dispose();
+        _storage?.Dispose();
         
         GC.SuppressFinalize(this);
     }

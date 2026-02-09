@@ -84,24 +84,24 @@ public class PersonMapper : IDocumentMapper<Person>
 public class CustomIndexTests : IDisposable
 {
     private readonly string _dbPath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
     private readonly PersonMapper _mapper;
     private readonly StorageEngine _storageEngine;
+    private readonly TransactionManager _transactionManager;
 
     public CustomIndexTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_custom_index_{Guid.NewGuid():N}.db");
-        _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
         _pageFile.Open();
         _mapper = new PersonMapper();
-        _wal = new WriteAheadLog(Path.ChangeExtension(_dbPath, ".wal"));
+        var _wal = new WriteAheadLog(Path.ChangeExtension(_dbPath, ".wal"));
         _storageEngine = new StorageEngine(_pageFile, _wal);
+        _transactionManager = new TransactionManager(_storageEngine);   
     }
 
     public void Dispose()
     {
-        _pageFile?.Dispose();
+        _storageEngine?.Dispose();
         try { File.Delete(_dbPath); } catch { }
     }
 
@@ -235,13 +235,16 @@ public class CustomIndexTests : IDisposable
             Age = 30
         };
 
-        // Act
-        index.Insert(person);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            // Act
+            index.Insert(person, transaction);
 
-        // Assert - Seek should find the document
-        var foundId = index.Seek(30);
-        Assert.NotNull(foundId);
-        Assert.Equal(person.Id, foundId.Value);
+            // Assert - Seek should find the document
+            var foundId = index.Seek(30, transaction);
+            Assert.NotNull(foundId);
+            Assert.Equal(person.Id, foundId.Value);
+        }
     }
 
     [Fact]
@@ -259,15 +262,18 @@ public class CustomIndexTests : IDisposable
         var person2 = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
         var person3 = new Person { Id = ObjectId.NewObjectId(), Age = 35 };
 
-        // Act
-        index.Insert(person1);
-        index.Insert(person2);
-        index.Insert(person3);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            // Act
+            index.Insert(person1, transaction);
+            index.Insert(person2, transaction);
+            index.Insert(person3, transaction);
 
-        // Assert
-        Assert.Equal(person1.Id, index.Seek(25));
-        Assert.Equal(person2.Id, index.Seek(30));
-        Assert.Equal(person3.Id, index.Seek(35));
+            // Assert
+            Assert.Equal(person1.Id, index.Seek(25, transaction));
+            Assert.Equal(person2.Id, index.Seek(30, transaction));
+            Assert.Equal(person3.Id, index.Seek(35, transaction));
+        }
     }
 
     [Fact]
@@ -286,18 +292,21 @@ public class CustomIndexTests : IDisposable
         var person3 = new Person { Id = ObjectId.NewObjectId(), Age = 35 };
         var person4 = new Person { Id = ObjectId.NewObjectId(), Age = 40 };
 
-        index.Insert(person1);
-        index.Insert(person2);
-        index.Insert(person3);
-        index.Insert(person4);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            index.Insert(person1, transaction);
+            index.Insert(person2, transaction);
+            index.Insert(person3, transaction);
+            index.Insert(person4, transaction);
 
-        // Act - Range query: 28 <= age <= 36
-        var results = index.Range(28, 36).ToList();
+            // Act - Range query: 28 <= age <= 36
+            var results = index.Range(28, 36, transaction).ToList();
 
-        // Assert
-        Assert.Equal(2, results.Count);
-        Assert.Contains(person2.Id, results);
-        Assert.Contains(person3.Id, results);
+            // Assert
+            Assert.Equal(2, results.Count);
+            Assert.Contains(person2.Id, results);
+            Assert.Contains(person3.Id, results);
+        }
     }
 
     [Fact]
@@ -312,14 +321,18 @@ public class CustomIndexTests : IDisposable
         var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
 
         var person = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
-        index.Insert(person);
 
-        // Act
-        index.Delete(person);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            index.Insert(person, transaction);
 
-        // Assert
-        var foundId = index.Seek(30);
-        Assert.Null(foundId);
+            // Act
+            index.Delete(person, transaction);
+
+            // Assert
+            var foundId = index.Seek(30, transaction);
+            Assert.Null(foundId);
+        }
     }
 
     [Fact]
@@ -336,14 +349,17 @@ public class CustomIndexTests : IDisposable
         var oldPerson = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
         var newPerson = new Person { Id = oldPerson.Id, Age = 35 };
 
-        index.Insert(oldPerson);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            index.Insert(oldPerson, transaction);
 
-        // Act
-        index.Update(oldPerson, newPerson);
+            // Act
+            index.Update(oldPerson, newPerson, transaction);
 
-        // Assert
-        Assert.Null(index.Seek(30)); // Old value removed
-        Assert.Equal(newPerson.Id, index.Seek(35)); // New value added
+            // Assert
+            Assert.Null(index.Seek(30, transaction)); // Old value removed
+            Assert.Equal(newPerson.Id, index.Seek(35, transaction)); // New value added
+        }
     }
 
     [Fact]
@@ -360,13 +376,16 @@ public class CustomIndexTests : IDisposable
         var oldPerson = new Person { Id = ObjectId.NewObjectId(), FirstName = "John", Age = 30 };
         var newPerson = new Person { Id = oldPerson.Id, FirstName = "Jane", Age = 30 }; // Same age
 
-        index.Insert(oldPerson);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            index.Insert(oldPerson, transaction);
 
-        // Act - Should optimize and not touch index
-        index.Update(oldPerson, newPerson);
+            // Act - Should optimize and not touch index
+            index.Update(oldPerson, newPerson, transaction);
 
-        // Assert
-        Assert.Equal(newPerson.Id, index.Seek(30)); // Still works
+            // Assert
+            Assert.Equal(newPerson.Id, index.Seek(30, transaction)); // Still works
+        }
     }
 
     #endregion
@@ -530,12 +549,15 @@ public class CustomIndexTests : IDisposable
             Age = 30
         };
 
-        // Act
-        manager.InsertIntoAll(person);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            // Act
+            manager.InsertIntoAll(person, transaction);
 
-        // Assert
-        Assert.Equal(person.Id, ageIndex.Seek(30));
-        Assert.Equal(person.Id, nameIndex.Seek("John"));
+            // Assert
+            Assert.Equal(person.Id, ageIndex.Seek(30, transaction));
+            Assert.Equal(person.Id, nameIndex.Seek("John", transaction));
+        }
     }
 
     [Fact]
@@ -553,14 +575,17 @@ public class CustomIndexTests : IDisposable
             Age = 30
         };
 
-        manager.InsertIntoAll(person);
+        using (var transaction = _transactionManager.BeginTransaction())
+        {
+            manager.InsertIntoAll(person, transaction);
 
-        // Act
-        manager.DeleteFromAll(person);
+            // Act
+            manager.DeleteFromAll(person, transaction);
 
-        // Assert
-        Assert.Null(ageIndex.Seek(30));
-        Assert.Null(nameIndex.Seek("John"));
+            // Assert
+            Assert.Null(ageIndex.Seek(30, transaction));
+            Assert.Null(nameIndex.Seek("John", transaction));
+        }
     }
 
     #endregion
@@ -619,20 +644,23 @@ public class CustomIndexTests : IDisposable
             new Person { Id = ObjectId.NewObjectId(), FirstName = "Charlie", LastName = "Brown", Age = 35 }
         };
 
-        // Act - Insert all
-        foreach (var person in people)
+        using (var transaction = _transactionManager.BeginTransaction())
         {
-            manager.InsertIntoAll(person);
+            // Act - Insert all
+            foreach (var person in people)
+            {
+                manager.InsertIntoAll(person, transaction);
+            }
+
+            // Assert - Query by different indexes
+            var ageIndex = manager.GetIndex("idx_Age")!;
+            var nameIndex = manager.GetIndex("idx_FirstName")!;
+            var lastNameIndex = manager.GetIndex("idx_LastName")!;
+
+            Assert.Equal(people[0].Id, ageIndex.Seek(25, transaction));
+            Assert.Equal(people[1].Id, nameIndex.Seek("Bob", transaction));
+            Assert.Equal(people[2].Id, lastNameIndex.Seek("Brown", transaction));
         }
-
-        // Assert - Query by different indexes
-        var ageIndex = manager.GetIndex("idx_Age")!;
-        var nameIndex = manager.GetIndex("idx_FirstName")!;
-        var lastNameIndex = manager.GetIndex("idx_LastName")!;
-
-        Assert.Equal(people[0].Id, ageIndex.Seek(25));
-        Assert.Equal(people[1].Id, nameIndex.Seek("Bob"));
-        Assert.Equal(people[2].Id, lastNameIndex.Seek("Brown"));
     }
 
     [Fact]
@@ -646,20 +674,23 @@ public class CustomIndexTests : IDisposable
             .Select(i => new Person { Id = ObjectId.NewObjectId(), Age = i })
             .ToArray();
 
-        foreach (var person in people)
+        using (var transaction = _transactionManager.BeginTransaction())
         {
-            manager.InsertIntoAll(person);
+            foreach (var person in people)
+            {
+                manager.InsertIntoAll(person, transaction);
+            }
+
+            // Act - Query ages 40-50
+            var results = ageIndex.Range(40, 50, transaction).ToList();
+
+            // Assert
+            Assert.Equal(11, results.Count); // 40, 41, ..., 50
+
+            // Verify all IDs in range
+            var expectedIds = people.Skip(39).Take(11).Select(p => p.Id).ToHashSet();
+            Assert.True(results.All(id => expectedIds.Contains(id)));
         }
-
-        // Act - Query ages 40-50
-        var results = ageIndex.Range(40, 50).ToList();
-
-        // Assert
-        Assert.Equal(11, results.Count); // 40, 41, ..., 50
-
-        // Verify all IDs in range
-        var expectedIds = people.Skip(39).Take(11).Select(p => p.Id).ToHashSet();
-        Assert.True(results.All(id => expectedIds.Contains(id)));
     }
 
     #endregion

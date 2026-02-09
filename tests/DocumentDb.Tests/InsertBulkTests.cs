@@ -9,29 +9,26 @@ namespace DocumentDb.Tests;
 public class InsertBulkTests : IDisposable
 {
     private readonly string _testFile;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
+    private readonly StorageEngine _storage;
     private readonly TransactionManager _txnManager;
     private readonly DocumentCollection<User> _collection;
 
     public InsertBulkTests()
     {
         _testFile = Path.GetTempFileName();
-        _pageFile = new PageFile(_testFile, PageFileConfig.Default); // Use Default config (16KB)
+        var _pageFile = new PageFile(_testFile, PageFileConfig.Default); // Use Default config (16KB)
         _pageFile.Open();
-        _wal = new WriteAheadLog(_testFile + ".wal");
-        var storage = new StorageEngine(_pageFile, _wal);
-        _txnManager = new TransactionManager(storage);
+        var _wal = new WriteAheadLog(_testFile + ".wal");
+        _storage = new StorageEngine(_pageFile, _wal);
+        _txnManager = new TransactionManager(_storage);
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _pageFile, _wal, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
     }
 
     public void Dispose()
     {
         _txnManager.Dispose();
-        _pageFile.Dispose();
-        if (File.Exists(_testFile)) File.Delete(_testFile);
-        if (File.Exists(_testFile + ".wal")) File.Delete(_testFile + ".wal");
+        _storage.Dispose();
     }
 
     [Fact]

@@ -10,7 +10,7 @@ namespace DocumentDb.Core.Storage;
 /// Provides transparent caching and transaction isolation without exposing
 /// WAL or PageFile details to upper layers.
 /// </summary>
-public sealed class StorageEngine
+public sealed class StorageEngine : IDisposable
 {
     private readonly PageFile _pageFile;
     private readonly WriteAheadLog _wal;
@@ -27,11 +27,6 @@ public sealed class StorageEngine
     /// Page size for this storage engine
     /// </summary>
     public int PageSize => _pageFile.PageSize;
-
-    // Internal access for TransactionManager and CheckpointManager ONLY
-    internal BufferManager BufferManager => _bufferManager;
-    internal WriteAheadLog WAL => _wal;
-    internal PageFile PageFile => _pageFile;
 
     /// <summary>
     /// Reads a page with transaction isolation.
@@ -260,5 +255,29 @@ public sealed class StorageEngine
         }
         
         _pageFile.Flush();
+    }
+    
+    /// <summary>
+    /// Disposes the storage engine and closes WAL.
+    /// </summary>
+    public void Dispose()
+    {
+        // Perform final checkpoint to write all committed pages
+        try
+        {
+            Checkpoint();
+        }
+        catch
+        {
+            // Best effort
+        }
+        
+        // Close WAL
+        _wal?.Dispose();
+    }
+
+    internal void WriteAbortRecord(ulong transactionId)
+    {
+        _wal.WriteAbortRecord(transactionId);
     }
 }

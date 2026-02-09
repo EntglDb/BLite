@@ -10,22 +10,22 @@ namespace DocumentDb.Tests;
 public class TempIndexTests : IDisposable
 {
     private readonly string _testDbPath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
     private readonly StorageEngine _storageEngine;
+    private readonly TransactionManager _transactionManager;
 
     public TempIndexTests()
     {
         _testDbPath = Path.Combine(Path.GetTempPath(), $"test_temp_index_{Guid.NewGuid()}.db");
-        _pageFile = new PageFile(_testDbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_testDbPath, PageFileConfig.Default);
         _pageFile.Open();
-        _wal = new WriteAheadLog(Path.Combine(Path.GetTempPath(), $"test_temp_index_{Guid.NewGuid()}.wal"));
+        var _wal = new WriteAheadLog(Path.Combine(Path.GetTempPath(), $"test_temp_index_{Guid.NewGuid()}.wal"));
         _storageEngine = new StorageEngine(_pageFile, _wal);
+        _transactionManager = new TransactionManager(_storageEngine);
     }
 
     public void Dispose()
     {
-        _pageFile.Dispose();
+        _storageEngine.Dispose();
         if (File.Exists(_testDbPath))
             File.Delete(_testDbPath);
     }
@@ -37,8 +37,9 @@ public class TempIndexTests : IDisposable
         var btree = new BTreeIndex(_storageEngine, options);
         var key = new IndexKey(100);
         var docId = ObjectId.NewObjectId();
-        btree.Insert(key, docId);
-        Assert.True(btree.TryFind(key, out var foundId));
+        using var transaction = _transactionManager.BeginTransaction(IsolationLevel.Serializable);
+        btree.Insert(key, docId, transaction.TransactionId);
+        Assert.True(btree.TryFind(key, out var foundId, transaction.TransactionId));
         Assert.Equal(docId, foundId);
     }
 }

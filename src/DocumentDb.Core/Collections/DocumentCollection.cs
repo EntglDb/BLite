@@ -15,15 +15,10 @@ namespace DocumentDb.Core.Collections;
 public class DocumentCollection<T> where T : class
 {
     private readonly IDocumentMapper<T> _mapper;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
     private readonly StorageEngine _storage;
     private readonly BTreeIndex _primaryIndex;
     private readonly TransactionManager _txnManager;
     private readonly CollectionIndexManager<T> _indexManager; // NEW: Custom index manager
-
-    // ID → (PageId, SlotIndex) mapping
-    private readonly Dictionary<ObjectId, DocumentLocation> _idToLocationMap;
 
     // Free space tracking: PageId → Free bytes
     private readonly Dictionary<uint, ushort> _freeSpaceMap;
@@ -38,15 +33,12 @@ public class DocumentCollection<T> where T : class
 
     public DocumentCollection(
         IDocumentMapper<T> mapper,
-        PageFile pageFile,
-        WriteAheadLog wal,
+        StorageEngine storageEngine,
         TransactionManager txnManager)
     {
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-        _pageFile = pageFile ?? throw new ArgumentNullException(nameof(pageFile));
-        _wal = wal ?? throw new ArgumentNullException(nameof(wal));
         _txnManager = txnManager ?? throw new ArgumentNullException(nameof(txnManager));
-        _storage = txnManager.Storage;
+        _storage = storageEngine ?? throw new ArgumentNullException(nameof(storageEngine));
 
         // Create primary index on _id
         var indexOptions = IndexOptions.CreateBTree("_id");
@@ -54,26 +46,26 @@ public class DocumentCollection<T> where T : class
 
         // Initialize secondary index manager
         _indexManager = new CollectionIndexManager<T>(_storage, mapper);
-
-        // Initialize mappings
-        _idToLocationMap = new Dictionary<ObjectId, DocumentLocation>();
         _freeSpaceMap = new Dictionary<uint, ushort>();
 
+        var txn = _txnManager.BeginTransaction(); // Start a transaction to load metadata
         // Allocate metadata page (for now, hardcoded - future: registry)
-        _metadataPageId = AllocateMetadataPage();
+        _metadataPageId = AllocateMetadataPage(txn.TransactionId);
 
         // Load existing mappings from metadata
-        LoadIdMap();
+        LoadIdMap(txn.TransactionId);
+
+        txn.Commit();
     }
 
     #region Metadata Persistence
 
-    private uint AllocateMetadataPage()
+    private uint AllocateMetadataPage(ulong trnsactionId)
     {
-        var pageId = _pageFile.AllocatePage();
+        var pageId = _storage.AllocatePage();
 
         // Initialize empty metadata
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
             var writer = new BsonSpanWriter(buffer);
@@ -86,7 +78,7 @@ public class DocumentCollection<T> where T : class
 
             writer.EndDocument(sizePos);
 
-            _pageFile.WritePage(pageId, buffer);
+            _storage.WritePage(pageId, trnsactionId, buffer);
         }
         finally
         {
@@ -96,21 +88,21 @@ public class DocumentCollection<T> where T : class
         return pageId;
     }
 
-    private void LoadIdMap()
+    private void LoadIdMap(ulong transactionId)
     {
         uint currentPage = _metadataPageId;
 
         while (currentPage != 0)
         {
-            uint nextPage = LoadIdMapChunk(currentPage);
+            uint nextPage = LoadIdMapChunk(currentPage, transactionId);
             currentPage = nextPage;
         }
     }
 
-    private uint LoadIdMapChunk(uint pageId)
+    private uint LoadIdMapChunk(uint pageId, ulong transactionId)
     {
-        Span<byte> buffer = stackalloc byte[_pageFile.PageSize];
-        _pageFile.ReadPage(pageId, buffer);
+        Span<byte> buffer = stackalloc byte[_storage.PageSize];
+        _storage.ReadPage(pageId, transactionId, buffer);
 
         var reader = new BsonSpanReader(buffer);
         reader.ReadDocumentSize(); // Skip size
@@ -186,7 +178,7 @@ public class DocumentCollection<T> where T : class
         return nextPage;
     }
 
-    private void SaveIdMap()
+    private void SaveIdMap(ulong transactionId)
     {
         // Conservative estimate: each entry ~60 bytes (ObjectId + page + slot + overhead)
         // For 16KB page: ~200 entries per page safely
@@ -204,24 +196,25 @@ public class DocumentCollection<T> where T : class
             uint nextPage = 0;
             if (!isLastChunk)
             {
-                nextPage = _pageFile.AllocatePage();
+                nextPage = _storage.AllocatePage();
             }
 
-            SaveIdMapChunk(currentMetadataPage, chunk, nextPage, isFirstChunk);
+            SaveIdMapChunk(currentMetadataPage, transactionId, chunk, nextPage, isFirstChunk);
             currentMetadataPage = nextPage;
         }
     }
 
     private void SaveIdMapChunk(
         uint pageId,
+        ulong transactionId,
         IEnumerable<KeyValuePair<ObjectId, DocumentLocation>> entries,
         uint nextPage,
         bool isFirst)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            Array.Clear(buffer, 0, _pageFile.PageSize); // Clear buffer
+            Array.Clear(buffer, 0, _storage.PageSize); // Clear buffer
 
             var writer = new BsonSpanWriter(buffer);
             var sizePos = writer.BeginDocument();
@@ -248,7 +241,7 @@ public class DocumentCollection<T> where T : class
             writer.EndArray(arrayPos);
             writer.EndDocument(sizePos);
 
-            _pageFile.WritePage(pageId, buffer);
+            _storage.WritePage(pageId, transactionId, buffer);
         }
         finally
         {
@@ -309,12 +302,15 @@ public class DocumentCollection<T> where T : class
         if (keySelector == null)
             throw new ArgumentNullException(nameof(keySelector));
 
-        var index = _indexManager.CreateIndex(keySelector, name, unique);
+        using(var txn = _txnManager.BeginTransaction())
+        {
+            var index = _indexManager.CreateIndex(keySelector, name, unique);
 
-        // Rebuild index for existing documents
-        RebuildIndex(index);
+            // Rebuild index for existing documents
+            RebuildIndex(index, txn);
 
-        return index;
+            return index;
+        }
     }
 
     /// <summary>
@@ -360,7 +356,7 @@ public class DocumentCollection<T> where T : class
     /// Rebuilds an index by scanning all existing documents and re-inserting them.
     /// Called automatically when creating a new index.
     /// </summary>
-    private void RebuildIndex(CollectionSecondaryIndex<T> index)
+    private void RebuildIndex(CollectionSecondaryIndex<T> index, ITransaction txn)
     {
         // Iterate all documents in the collection and insert into the new index
         foreach (var (id, location) in _idToLocationMap)
@@ -370,7 +366,7 @@ public class DocumentCollection<T> where T : class
                 var document = FindById(id);
                 if (document != null)
                 {
-                    index.Insert(document);
+                    index.Insert(document, txn);
                 }
             }
             catch
@@ -397,9 +393,9 @@ public class DocumentCollection<T> where T : class
             }
             else
             {
-                // Load header and check
+                // Load header and check - use StorageEngine
                 Span<byte> page = stackalloc byte[SlottedPageHeader.Size];
-                _pageFile.ReadPage(_currentDataPage, page);
+                _storage.ReadPage(_currentDataPage, null, page);
                 var header = SlottedPageHeader.ReadFrom(page);
 
                 if (header.AvailableFreeSpace >= requiredBytes + SlotEntry.Size)
@@ -420,12 +416,12 @@ public class DocumentCollection<T> where T : class
         return 0; // No suitable page
     }
 
-    private uint AllocateNewDataPage(ITransaction? txn = null)
+    private uint AllocateNewDataPage(ITransaction txn)
     {
-        var pageId = _pageFile.AllocatePage();
+        var pageId = _storage.AllocatePage();
 
         // Initialize slotted page header
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
             buffer.AsSpan().Clear();
@@ -436,7 +432,7 @@ public class DocumentCollection<T> where T : class
                 PageType = PageType.Data,
                 SlotCount = 0,
                 FreeSpaceStart = SlottedPageHeader.Size,
-                FreeSpaceEnd = (ushort)_pageFile.PageSize,
+                FreeSpaceEnd = (ushort)_storage.PageSize,
                 NextOverflowPage = 0,
                 TransactionId = 0
             };
@@ -447,12 +443,12 @@ public class DocumentCollection<T> where T : class
             if (txn is Transaction t)
             {
                 // OPTIMIZATION: Pass ReadOnlyMemory to avoid ToArray() allocation
-                var writeOp = new WriteOperation(ObjectId.Empty, buffer.AsMemory(0, _pageFile.PageSize), pageId, OperationType.AllocatePage);
+                var writeOp = new WriteOperation(ObjectId.Empty, buffer.AsMemory(0, _storage.PageSize), pageId, OperationType.AllocatePage);
                 t.AddWrite(writeOp);
             }
             else
             {
-                _pageFile.WritePage(pageId, buffer);
+                _storage.WritePage(pageId, txn.TransactionId, buffer);
             }
 
             // Track free space
@@ -467,21 +463,13 @@ public class DocumentCollection<T> where T : class
         return pageId;
     }
 
-    private ushort InsertIntoPage(uint pageId, ReadOnlySpan<byte> data, ITransaction? transaction = null)
+    private ushort InsertIntoPage(uint pageId, ReadOnlySpan<byte> data, ITransaction transaction)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
         {
-            // Read from StorageEngine (transaction-aware) or PageFile
-            if (transaction != null)
-            {
-                _storage.ReadPage(pageId, transaction.TransactionId, buffer);
-            }
-            else
-            {
-                _pageFile.ReadPage(pageId, buffer);
-            }
+            _storage.ReadPage(pageId, transaction.TransactionId, buffer);
 
             var header = SlottedPageHeader.ReadFrom(buffer);
 
@@ -523,7 +511,7 @@ public class DocumentCollection<T> where T : class
                 // OPTIMIZATION: Pass ReadOnlyMemory to avoid ToArray() allocation
                 var writeOp = new WriteOperation(
                     documentId: ObjectId.Empty,
-                    newValue: buffer.AsMemory(0, _pageFile.PageSize),
+                    newValue: buffer.AsMemory(0, _storage.PageSize),
                     pageId: pageId,
                     type: OperationType.Insert
                 );
@@ -531,7 +519,7 @@ public class DocumentCollection<T> where T : class
             }
             else
             {
-                _pageFile.WritePage(pageId, buffer);
+                _storage.WritePage(pageId, transaction.TransactionId, buffer);
             }
 
             // Update free space map
@@ -561,10 +549,10 @@ public class DocumentCollection<T> where T : class
         return header.SlotCount;
     }
 
-    private uint AllocateOverflowPage(ReadOnlySpan<byte> data, uint nextOverflowPageId, ITransaction? transaction = null)
+    private uint AllocateOverflowPage(ReadOnlySpan<byte> data, uint nextOverflowPageId, ITransaction transaction)
     {
-        var pageId = _pageFile.AllocatePage();
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var pageId = _storage.AllocatePage();
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
         {
@@ -576,7 +564,7 @@ public class DocumentCollection<T> where T : class
                 PageType = PageType.Overflow,
                 SlotCount = 0,
                 FreeSpaceStart = SlottedPageHeader.Size,
-                FreeSpaceEnd = (ushort)_pageFile.PageSize,
+                FreeSpaceEnd = (ushort)_storage.PageSize,
                 NextOverflowPage = nextOverflowPageId,
                 TransactionId = 0
             };
@@ -587,20 +575,13 @@ public class DocumentCollection<T> where T : class
             data.CopyTo(buffer.AsSpan(SlottedPageHeader.Size));
 
             // NEW: Buffer write in transaction or write immediately
-            if (transaction != null)
-            {
-                var writeOp = new WriteOperation(
-                    documentId: ObjectId.Empty,
-                    newValue: buffer.AsSpan(0, _pageFile.PageSize).ToArray(),
-                    pageId: pageId,
-                    type: OperationType.Insert
-                );
-                ((Transaction)transaction).AddWrite(writeOp);
-            }
-            else
-            {
-                _pageFile.WritePage(pageId, buffer);
-            }
+            var writeOp = new WriteOperation(
+                documentId: ObjectId.Empty,
+                newValue: buffer.AsSpan(0, _storage.PageSize).ToArray(),
+                pageId: pageId,
+                type: OperationType.Insert
+            );
+            ((Transaction)transaction).AddWrite(writeOp);
 
             return pageId;
         }
@@ -610,7 +591,7 @@ public class DocumentCollection<T> where T : class
         }
     }
 
-    private (uint pageId, ushort slotIndex) InsertWithOverflow(ReadOnlySpan<byte> data, ITransaction? transaction = null)
+    private (uint pageId, ushort slotIndex) InsertWithOverflow(ReadOnlySpan<byte> data, ITransaction transaction)
     {
         // 1. Calculate Primary Chunk Size
         // We need 8 bytes for metadata (TotalLength: 4, NextOverflowPage: 4)
@@ -621,7 +602,7 @@ public class DocumentCollection<T> where T : class
         uint nextOverflowPageId = 0;
         int remainingBytes = data.Length - maxPrimaryPayload;
         int offset = data.Length;
-        int overflowChunkSize = _pageFile.PageSize - SlottedPageHeader.Size;
+        int overflowChunkSize = _storage.PageSize - SlottedPageHeader.Size;
 
         while (offset > maxPrimaryPayload)
         {
@@ -647,18 +628,10 @@ public class DocumentCollection<T> where T : class
             primaryPageId = AllocateNewDataPage(transaction);
 
         // 4. Write to Primary Page
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            // Read from StorageEngine (transaction-aware) or PageFile
-            if (transaction != null)
-            {
-                _storage.ReadPage(primaryPageId, transaction.TransactionId, buffer);
-            }
-            else
-            {
-                _pageFile.ReadPage(primaryPageId, buffer);
-            }
+            _storage.ReadPage(primaryPageId, transaction.TransactionId, buffer);
 
             var header = SlottedPageHeader.ReadFrom(buffer);
 
@@ -699,21 +672,13 @@ public class DocumentCollection<T> where T : class
             header.WriteTo(buffer);
 
             // NEW: Buffer write in transaction or write immediately
-            if (transaction != null)
-            {
-                // OPTIMIZATION: Pass ReadOnlyMemory to avoid ToArray() allocation
-                var writeOp = new WriteOperation(
-                    documentId: ObjectId.Empty,
-                    newValue: buffer.AsMemory(0, _pageFile.PageSize),
-                    pageId: primaryPageId,
-                    type: OperationType.Insert
-                );
-                ((Transaction)transaction).AddWrite(writeOp);
-            }
-            else
-            {
-                _pageFile.WritePage(primaryPageId, buffer);
-            }
+            var writeOp = new WriteOperation(
+                documentId: ObjectId.Empty,
+                newValue: buffer.AsMemory(0, _storage.PageSize),
+                pageId: primaryPageId,
+                type: OperationType.Insert
+            );
+            ((Transaction)transaction).AddWrite(writeOp);
 
             // Update free space map
             _freeSpaceMap[primaryPageId] = (ushort)header.AvailableFreeSpace;
@@ -742,8 +707,9 @@ public class DocumentCollection<T> where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        var txn = transaction ?? _txnManager.BeginTransaction();
-        bool isInternalTxn = (transaction == null);
+        ITransaction txn = transaction ?? _txnManager.BeginTransaction();
+
+        var isInternalTransaction = transaction == null;
 
         try
         {
@@ -768,9 +734,9 @@ public class DocumentCollection<T> where T : class
                 var pageId = FindPageWithSpace(docData.Length);
 
                 if (pageId == 0)
-                    pageId = AllocateNewDataPage();
+                    pageId = AllocateNewDataPage(txn);
 
-                var slotIndex = InsertIntoPage(pageId, docData);
+                var slotIndex = InsertIntoPage(pageId, docData, txn);
 
                 // Map ID → Location
                 _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
@@ -802,11 +768,10 @@ public class DocumentCollection<T> where T : class
                 _indexManager.InsertIntoAll(entity, txn);
             }
 
-            // Only commit if we created the transaction
-            if (isInternalTxn)
+            if (isInternalTransaction)
             {
                 // Persist mapping before commit (only for auto-commit)
-                SaveIdMap();
+                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
 
@@ -814,8 +779,7 @@ public class DocumentCollection<T> where T : class
         }
         catch
         {
-            // Only rollback if we created the transaction
-            if (isInternalTxn)
+            if (isInternalTransaction)
             {
                 txn.Rollback();
             }
@@ -834,76 +798,79 @@ public class DocumentCollection<T> where T : class
     /// var people = new List&lt;Person&gt; { person1, person2, person3 };
     /// var ids = collection.InsertBulk(people);
     /// </example>
-    public List<ObjectId> InsertBulk(IEnumerable<T> entities)
+    public List<ObjectId> InsertBulk(IEnumerable<T> entities, ITransaction? transaction = null)
     {
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
         var ids = new List<ObjectId>(entityList.Count);
 
+        var txn = transaction ?? _txnManager.BeginTransaction();
+        var isInternalTransaction = transaction == null;
+
         const int BATCH_SIZE = 50;  // Optimal: balances parallelism benefits vs memory overhead
 
-        using (var txn = BeginTransaction())
+        // Process in micro-batches
+        for (int batchStart = 0; batchStart < entityList.Count; batchStart += BATCH_SIZE)
         {
-            // Process in micro-batches
-            for (int batchStart = 0; batchStart < entityList.Count; batchStart += BATCH_SIZE)
+            int batchEnd = Math.Min(batchStart + BATCH_SIZE, entityList.Count);
+            int batchCount = batchEnd - batchStart;
+
+            // PHASE 1: Parallel serialize this batch
+            var serializedBatch = new (ObjectId id, byte[] data)[batchCount];
+
+            System.Threading.Tasks.Parallel.For(0, batchCount, i =>
             {
-                int batchEnd = Math.Min(batchStart + BATCH_SIZE, entityList.Count);
-                int batchCount = batchEnd - batchStart;
-
-                // PHASE 1: Parallel serialize this batch
-                var serializedBatch = new (ObjectId id, byte[] data)[batchCount];
-
-                System.Threading.Tasks.Parallel.For(0, batchCount, i =>
+                var entity = entityList[batchStart + i];
+                var id = _mapper.GetId(entity);
+                if (id == ObjectId.Empty)
                 {
-                    var entity = entityList[batchStart + i];
-                    var id = _mapper.GetId(entity);
-                    if (id == ObjectId.Empty)
-                    {
-                        id = ObjectId.NewObjectId();
-                        _mapper.SetId(entity, id);
-                    }
-
-                    var bufferWriter = new System.Buffers.ArrayBufferWriter<byte>();
-                    _mapper.Serialize(entity, bufferWriter);
-                    serializedBatch[i] = (id, bufferWriter.WrittenMemory.ToArray());
-                });
-
-                // PHASE 2: Sequential insert this batch
-                // Transaction handles caching and write coalescing automatically
-                for (int i = 0; i < batchCount; i++)
-                {
-                    var (id, docData) = serializedBatch[i];
-                    var entity = entityList[batchStart + i]; // Get entity for index updates
-
-                    if (docData.Length <= MaxDocumentSizeForSinglePage)
-                    {
-                        var pageId = FindPageWithSpace(docData.Length);
-
-                        if (pageId == 0)
-                            pageId = AllocateNewDataPage(txn);
-
-                        var slotIndex = InsertIntoPage(pageId, docData, txn);
-                        _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
-                    }
-                    else
-                    {
-                        // Multi-page overflow insert
-                        var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
-                        _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
-                    }
-
-                    var key = new IndexKey(id.ToByteArray());
-                    _primaryIndex.Insert(key, id, txn.TransactionId);
-
-                    // NEW: Insert into all secondary indexes
-                    _indexManager.InsertIntoAll(entity, txn);
-
-                    ids.Add(id);
+                    id = ObjectId.NewObjectId();
+                    _mapper.SetId(entity, id);
                 }
-            }
 
-            SaveIdMap();
+                var bufferWriter = new System.Buffers.ArrayBufferWriter<byte>();
+                _mapper.Serialize(entity, bufferWriter);
+                serializedBatch[i] = (id, bufferWriter.WrittenMemory.ToArray());
+            });
+
+            // PHASE 2: Sequential insert this batch
+            // Transaction handles caching and write coalescing automatically
+            for (int i = 0; i < batchCount; i++)
+            {
+                var (id, docData) = serializedBatch[i];
+                var entity = entityList[batchStart + i]; // Get entity for index updates
+
+                if (docData.Length <= MaxDocumentSizeForSinglePage)
+                {
+                    var pageId = FindPageWithSpace(docData.Length);
+
+                    if (pageId == 0)
+                        pageId = AllocateNewDataPage(txn);
+
+                    var slotIndex = InsertIntoPage(pageId, docData, txn);
+                    _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
+                }
+                else
+                {
+                    // Multi-page overflow insert
+                    var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
+                    _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
+                }
+
+                var key = new IndexKey(id.ToByteArray());
+                _primaryIndex.Insert(key, id, txn.TransactionId);
+
+                // NEW: Insert into all secondary indexes
+                _indexManager.InsertIntoAll(entity, txn);
+
+                ids.Add(id);
+            }
+        }
+
+        if (isInternalTransaction)
+        {
+            SaveIdMap(txn.TransactionId);
             txn.Commit();
         }
 
@@ -934,10 +901,11 @@ public class DocumentCollection<T> where T : class
 
     private T? FindByLocation(DocumentLocation location)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            _pageFile.ReadPage(location.PageId, buffer);
+            // Read from StorageEngine (checks committed buffer, then PageFile)
+            _storage.ReadPage(location.PageId, null, buffer);
 
             var header = SlottedPageHeader.ReadFrom(buffer);
 
@@ -972,12 +940,13 @@ public class DocumentCollection<T> where T : class
                     // Follow overflow chain
                     while (currentOverflowPageId != 0 && offset < totalLength)
                     {
-                        _pageFile.ReadPage(currentOverflowPageId, buffer);
+                        // Read from StorageEngine (checks committed buffer, then PageFile)
+                        _storage.ReadPage(currentOverflowPageId, null, buffer);
                         var overflowHeader = SlottedPageHeader.ReadFrom(buffer);
 
                         // Calculate data in this overflow page
                         // Overflow pages are full data pages (PageSize - HeaderSize)
-                        int maxChunkSize = _pageFile.PageSize - SlottedPageHeader.Size;
+                        int maxChunkSize = _storage.PageSize - SlottedPageHeader.Size;
                         int remaining = totalLength - offset;
                         int chunkSize = Math.Min(maxChunkSize, remaining);
 
@@ -1027,17 +996,17 @@ public class DocumentCollection<T> where T : class
         try
         {
             // Serialize new version
-            var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
             try
             {
                 var bytesWritten = _mapper.Serialize(entity, buffer);
                 var docData = buffer.AsSpan(0, bytesWritten);
 
                 // Read old page to check if we can update in-place
-                var pageBuffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+                var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
                 try
                 {
-                    _pageFile.ReadPage(oldLocation.PageId, pageBuffer);
+                    _storage.ReadPage(oldLocation.PageId, txn.TransactionId, pageBuffer);
 
                     var slotOffset = SlottedPageHeader.Size + (oldLocation.SlotIndex * SlotEntry.Size);
                     var oldSlot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOffset));
@@ -1052,7 +1021,7 @@ public class DocumentCollection<T> where T : class
                         newSlot.Length = (ushort)bytesWritten;
                         newSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
 
-                        _pageFile.WritePage(oldLocation.PageId, pageBuffer);
+                        _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
                     }
                     else
                     {
@@ -1063,18 +1032,18 @@ public class DocumentCollection<T> where T : class
                         {
                             var nextOverflowPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
                                 pageBuffer.AsSpan(oldSlot.Offset + 4, 4));
-                            FreeOverflowChain(nextOverflowPage);
+                            FreeOverflowChain(nextOverflowPage, txn.TransactionId);
                         }
 
                         // Mark old slot as deleted
                         oldSlot.Flags |= SlotFlags.Deleted;
                         oldSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
-                        _pageFile.WritePage(oldLocation.PageId, pageBuffer);
+                        _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
 
                         // Insert new version
                         var newPageId = FindPageWithSpace(bytesWritten);
                         if (newPageId == 0)
-                            newPageId = AllocateNewDataPage();
+                            newPageId = AllocateNewDataPage(txn);
 
                         var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
 
@@ -1087,7 +1056,7 @@ public class DocumentCollection<T> where T : class
                     ArrayPool<byte>.Shared.Return(pageBuffer);
                 }
 
-                SaveIdMap();
+                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
             finally
@@ -1118,7 +1087,7 @@ public class DocumentCollection<T> where T : class
 
         // Use provided transaction or create internal one
         var txn = transaction ?? _txnManager.BeginTransaction();
-        bool isInternalTxn = transaction == null;
+        var isInternalTransaction = transaction == null;
 
         try
         {
@@ -1155,19 +1124,11 @@ public class DocumentCollection<T> where T : class
                     if (!found) continue;
 
                     var oldLocation = _idToLocationMap[id];
-                    var pageBuffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+                    var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
                     try
                     {
-                        // Read from StorageEngine (transaction-aware) or PageFile
-                        if (txn != null)
-                        {
-                            _storage.ReadPage(oldLocation.PageId, txn.TransactionId, pageBuffer);
-                        }
-                        else
-                        {
-                            _pageFile.ReadPage(oldLocation.PageId, pageBuffer);
-                        }
+                        _storage.ReadPage(oldLocation.PageId, txn!.TransactionId, pageBuffer);
 
                         var slotOffset = SlottedPageHeader.Size + (oldLocation.SlotIndex * SlotEntry.Size);
                         var oldSlot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOffset));
@@ -1183,12 +1144,12 @@ public class DocumentCollection<T> where T : class
 
                             if (txn is Transaction txnObj)
                             {
-                                var writeOp = new WriteOperation(ObjectId.Empty, pageBuffer.AsSpan(0, _pageFile.PageSize).ToArray(), oldLocation.PageId, OperationType.Update);
+                                var writeOp = new WriteOperation(ObjectId.Empty, pageBuffer.AsSpan(0, _storage.PageSize).ToArray(), oldLocation.PageId, OperationType.Update);
                                 txnObj.AddWrite(writeOp);
                             }
                             else
                             {
-                                _pageFile.WritePage(oldLocation.PageId, pageBuffer);
+                                _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
                             }
                         }
                         else
@@ -1200,7 +1161,7 @@ public class DocumentCollection<T> where T : class
                             {
                                 var nextOverflowPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
                                     pageBuffer.AsSpan(oldSlot.Offset + 4, 4));
-                                FreeOverflowChain(nextOverflowPage);
+                                FreeOverflowChain(nextOverflowPage, txn.TransactionId);
                             }
 
                             // 2. Mark old deleted
@@ -1209,12 +1170,12 @@ public class DocumentCollection<T> where T : class
 
                             if (txn is Transaction txnObj2)
                             {
-                                var writeOp = new WriteOperation(ObjectId.Empty, pageBuffer.AsSpan(0, _pageFile.PageSize).ToArray(), oldLocation.PageId, OperationType.Delete);
+                                var writeOp = new WriteOperation(ObjectId.Empty, pageBuffer.AsSpan(0, _storage.PageSize).ToArray(), oldLocation.PageId, OperationType.Delete);
                                 txnObj2.AddWrite(writeOp);
                             }
                             else
                             {
-                                _pageFile.WritePage(oldLocation.PageId, pageBuffer);
+                                _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
                             }
 
                             // 3. Allocate New
@@ -1241,15 +1202,18 @@ public class DocumentCollection<T> where T : class
                 }
             }
 
-            if (isInternalTxn)
+            if (isInternalTransaction)
             {
-                SaveIdMap();
+                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
         }
         catch
         {
-            if (isInternalTxn) txn.Rollback();
+            if (isInternalTransaction)
+            {
+                txn.Rollback();
+            }
             throw;
         }
 
@@ -1264,10 +1228,10 @@ public class DocumentCollection<T> where T : class
         var txn = _txnManager.BeginTransaction();
         try
         {
-            var buffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
             try
             {
-                _pageFile.ReadPage(location.PageId, buffer);
+                _storage.ReadPage(location.PageId, txn.TransactionId, buffer);
 
                 // Mark slot as deleted
                 var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
@@ -1281,13 +1245,13 @@ public class DocumentCollection<T> where T : class
                     var nextOverflowPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
                         buffer.AsSpan(slot.Offset + 4, 4));
 
-                    FreeOverflowChain(nextOverflowPage);
+                    FreeOverflowChain(nextOverflowPage, txn.TransactionId);
                 }
 
                 slot.Flags |= SlotFlags.Deleted;
                 slot.WriteTo(buffer.AsSpan(slotOffset));
 
-                _pageFile.WritePage(location.PageId, buffer);
+                _storage.WritePage(location.PageId, txn.TransactionId, buffer);
 
                 // Remove from mapping
                 _idToLocationMap.Remove(id);
@@ -1295,7 +1259,7 @@ public class DocumentCollection<T> where T : class
                 // Remove from BTree index
                 _primaryIndex.Delete(new IndexKey(id.ToByteArray()), id, txn.TransactionId);
 
-                SaveIdMap();
+                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
             finally
@@ -1323,7 +1287,8 @@ public class DocumentCollection<T> where T : class
         int deleteCount = 0;
         // txn is always non-null after this line
         ITransaction txn = transaction ?? _txnManager.BeginTransaction();
-        bool isInternalTxn = transaction == null;
+
+        var isInternalTransaction = transaction == null;
 
         // Track deletions for rollback
         var deletedEntries = new List<(ObjectId Id, DocumentLocation Location)>();
@@ -1335,18 +1300,10 @@ public class DocumentCollection<T> where T : class
                 if (!_idToLocationMap.TryGetValue(id, out var location))
                     continue;
 
-                var pageData = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+                var pageData = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
                 try
                 {
-                    // Read from StorageEngine (transaction-aware) or PageFile
-                    if (txn != null)
-                    {
-                        _storage.ReadPage(location.PageId, txn.TransactionId, pageData);
-                    }
-                    else
-                    {
-                        _pageFile.ReadPage(location.PageId, pageData);
-                    }
+                    _storage.ReadPage(location.PageId, txn!.TransactionId, pageData);
 
                     // Mark slot as deleted
                     var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
@@ -1360,22 +1317,15 @@ public class DocumentCollection<T> where T : class
                     {
                         var nextOverflowPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
                             pageData.AsSpan(slot.Offset + 4, 4));
-                        FreeOverflowChain(nextOverflowPage);
+                        FreeOverflowChain(nextOverflowPage, txn.TransactionId);
                     }
 
                     slot.Flags |= SlotFlags.Deleted;
                     slot.WriteTo(pageData.AsSpan(slotOffset));
 
                     // Write back to Transaction or Disk
-                    if (txn is Transaction txnObj)
-                    {
-                        var writeOp = new WriteOperation(ObjectId.Empty, pageData.AsSpan(0, _pageFile.PageSize).ToArray(), location.PageId, OperationType.Delete);
-                        txnObj.AddWrite(writeOp);
-                    }
-                    else
-                    {
-                        _pageFile.WritePage(location.PageId, pageData);
-                    }
+                    var writeOp = new WriteOperation(ObjectId.Empty, pageData.AsSpan(0, _storage.PageSize).ToArray(), location.PageId, OperationType.Delete);
+                    txn.AddWrite(writeOp);
 
                     // 2. Remove from Memory Map
                     deletedEntries.Add((id, location));
@@ -1392,48 +1342,52 @@ public class DocumentCollection<T> where T : class
                 }
             }
 
-            // Register rollback handler
-            if (txn is ITransaction txnInt)
+            if (isInternalTransaction)
             {
-                txnInt.OnRollback += () =>
+                // Register rollback handler
+                if (txn is ITransaction txnInt)
                 {
-                    foreach (var entry in deletedEntries)
+                    txnInt.OnRollback += () =>
                     {
-                        _idToLocationMap[entry.Id] = entry.Location;
-                    }
-                };
-            }
+                        foreach (var entry in deletedEntries)
+                        {
+                            _idToLocationMap[entry.Id] = entry.Location;
+                        }
+                    };
+                }
 
-            if (isInternalTxn)
-            {
-                SaveIdMap();
-                txn.Commit();
+                if (isInternalTransaction)
+                {
+                    SaveIdMap(txn.TransactionId);
+                    txn.Commit();
+                }
             }
         }
         catch
         {
-
-
-            if (isInternalTxn) txn.Rollback();
+            if (isInternalTransaction)
+            {
+                txn.Rollback();
+            }
             throw;
         }
 
         return deleteCount;
     }
 
-    private void FreeOverflowChain(uint overflowPageId)
+    private void FreeOverflowChain(uint overflowPageId, ulong transactionId)
     {
-        var tempBuffer = ArrayPool<byte>.Shared.Rent(_pageFile.PageSize);
+        var tempBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
             while (overflowPageId != 0)
             {
-                _pageFile.ReadPage(overflowPageId, tempBuffer);
+                _storage.ReadPage(overflowPageId, transactionId, tempBuffer);
                 var header = SlottedPageHeader.ReadFrom(tempBuffer);
                 var nextPage = header.NextOverflowPage;
 
                 // Recycle this page
-                _pageFile.FreePage(overflowPageId);
+                _storage.FreePage(overflowPageId);
 
                 overflowPageId = nextPage;
             }

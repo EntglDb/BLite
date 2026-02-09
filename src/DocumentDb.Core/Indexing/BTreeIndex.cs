@@ -69,7 +69,7 @@ public sealed class BTreeIndex
     /// Reads a page using StorageEngine for transaction isolation.
     /// Implements "Read Your Own Writes" isolation.
     /// </summary>
-    private void ReadPage(uint pageId, ulong? transactionId, Span<byte> destination)
+    private void ReadPage(uint pageId, ulong transactionId, Span<byte> destination)
     {
         _storage.ReadPage(pageId, transactionId, destination);
     }
@@ -77,22 +77,15 @@ public sealed class BTreeIndex
     /// <summary>
     /// Writes a page using StorageEngine for transaction isolation.
     /// </summary>
-    private void WritePage(uint pageId, ulong? transactionId, ReadOnlySpan<byte> data)
+    private void WritePage(uint pageId, ulong transactionId, ReadOnlySpan<byte> data)
     {
-        if (transactionId.HasValue)
-        {
-            _storage.WritePage(pageId, transactionId.Value, data);
-        }
-        else
-        {
-            _storage.WritePageImmediate(pageId, data);
-        }
+        _storage.WritePage(pageId, transactionId, data);
     }
 
     /// <summary>
     /// Inserts a key-value pair into the index
     /// </summary>
-    public void Insert(IndexKey key, ObjectId documentId, ulong? transactionId = null)
+    public void Insert(IndexKey key, ObjectId documentId, ulong transactionId)
     {
         var entry = new IndexEntry(key, documentId);
         var path = new List<uint>();
@@ -129,7 +122,7 @@ public sealed class BTreeIndex
     /// <summary>
     /// Finds a document ID by exact key match
     /// </summary>
-    public bool TryFind(IndexKey key, out ObjectId documentId, ulong? transactionId = null)
+    public bool TryFind(IndexKey key, out ObjectId documentId, ulong transactionId)
     {
         documentId = default;
 
@@ -164,7 +157,7 @@ public sealed class BTreeIndex
     /// <summary>
     /// Range scan: finds all entries between minKey and maxKey (inclusive)
     /// </summary>
-    public IEnumerable<IndexEntry> Range(IndexKey minKey, IndexKey maxKey, ulong? transactionId = null)
+    public IEnumerable<IndexEntry> Range(IndexKey minKey, IndexKey maxKey, ulong transactionId)
     {
         var leafPageId = FindLeafNode(minKey, transactionId);
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -206,13 +199,13 @@ public sealed class BTreeIndex
         }
     }
 
-    private uint FindLeafNode(IndexKey key, ulong? transactionId = null)
+    private uint FindLeafNode(IndexKey key, ulong transactionId)
     {
         var path = new List<uint>();
         return FindLeafNodeWithPath(key, path, transactionId);
     }
 
-    private uint FindLeafNodeWithPath(IndexKey key, List<uint> path, ulong? transactionId = null)
+    private uint FindLeafNodeWithPath(IndexKey key, List<uint> path, ulong transactionId)
     {
         var currentPageId = _rootPageId;
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -274,7 +267,7 @@ public sealed class BTreeIndex
         return childPageId; // Return last pointer (>= last key)
     }
 
-    private void InsertIntoLeaf(uint leafPageId, IndexEntry entry, Span<byte> pageBuffer, ulong? transactionId = null)
+    private void InsertIntoLeaf(uint leafPageId, IndexEntry entry, Span<byte> pageBuffer, ulong transactionId)
     {
         // Read current entries to determine offset
         var header = BTreeNodeHeader.ReadFrom(pageBuffer[32..]);
@@ -306,7 +299,7 @@ public sealed class BTreeIndex
         WritePage(leafPageId, transactionId, pageBuffer);
     }
 
-    private void SplitNode(uint nodePageId, List<uint> path, ulong? transactionId = null)
+    private void SplitNode(uint nodePageId, List<uint> path, ulong transactionId)
     {
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
@@ -329,7 +322,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void SplitLeafNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path, ulong? transactionId = null)
+    private void SplitLeafNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path, ulong transactionId)
     {
         var entries = ReadLeafEntries(pageBuffer, header.EntryCount);
         var splitPoint = entries.Count / 2;
@@ -350,7 +343,7 @@ public sealed class BTreeIndex
         InsertIntoParent(nodePageId, promoteKey, newNodeId, path, transactionId);
     }
 
-    private void SplitInternalNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path, ulong? transactionId = null)
+    private void SplitInternalNode(uint nodePageId, BTreeNodeHeader header, Span<byte> pageBuffer, List<uint> path, ulong transactionId)
     {
         var (p0, entries) = ReadInternalEntries(pageBuffer, header.EntryCount);
         var splitPoint = entries.Count / 2;
@@ -375,7 +368,7 @@ public sealed class BTreeIndex
         InsertIntoParent(nodePageId, promoteKey, newNodeId, path, transactionId);
     }
 
-    private void InsertIntoParent(uint leftChildPageId, IndexKey key, uint rightChildPageId, List<uint> path, ulong? transactionId = null)
+    private void InsertIntoParent(uint leftChildPageId, IndexKey key, uint rightChildPageId, List<uint> path, ulong transactionId)
     {
         if (path.Count == 0 || path.Last() == leftChildPageId)
         {
@@ -444,7 +437,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void CreateNewRoot(uint leftChildId, IndexKey key, uint rightChildId, ulong? transactionId = null)
+    private void CreateNewRoot(uint leftChildId, IndexKey key, uint rightChildId, ulong transactionId)
     {
         var newRootId = CreateNode(isLeaf: false, transactionId);
         var entries = new List<InternalEntry> { new InternalEntry(key, rightChildId) };
@@ -455,7 +448,7 @@ public sealed class BTreeIndex
         // For now user passes rootPageId to ctor. BTreeIndex doesn't manage master root pointer persistence yet.
     }
 
-    private uint CreateNode(bool isLeaf, ulong? transactionId = null)
+    private uint CreateNode(bool isLeaf, ulong transactionId)
     {
         var pageId = _storage.AllocatePage();
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -532,7 +525,7 @@ public sealed class BTreeIndex
         return (p0, entries);
     }
 
-    private void WriteLeafNode(uint pageId, List<IndexEntry> entries, uint nextLeafId, ulong? transactionId = null)
+    private void WriteLeafNode(uint pageId, List<IndexEntry> entries, uint nextLeafId, ulong transactionId)
     {
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
@@ -580,7 +573,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void WriteInternalNode(uint pageId, uint p0, List<InternalEntry> entries, ulong? transactionId = null)
+    private void WriteInternalNode(uint pageId, uint p0, List<InternalEntry> entries, ulong transactionId)
     {
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
@@ -632,7 +625,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void InsertIntoInternal(uint pageId, BTreeNodeHeader header, Span<byte> pageBuffer, IndexKey key, uint rightChildId, ulong? transactionId = null)
+    private void InsertIntoInternal(uint pageId, BTreeNodeHeader header, Span<byte> pageBuffer, IndexKey key, uint rightChildId, ulong transactionId)
     {
         // Read, insert, write back. In production do in-place shift.
         var (p0, entries) = ReadInternalEntries(pageBuffer, header.EntryCount);
@@ -663,7 +656,7 @@ public sealed class BTreeIndex
     /// <summary>
     /// Deletes a key-value pair from the index
     /// </summary>
-    public bool Delete(IndexKey key, ObjectId documentId, ulong? transactionId = null)
+    public bool Delete(IndexKey key, ObjectId documentId, ulong transactionId)
     {
         var path = new List<uint>();
         var leafPageId = FindLeafNodeWithPath(key, path, transactionId);
@@ -705,7 +698,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void HandleUnderflow(uint nodeId, List<uint> path, ulong? transactionId)
+    private void HandleUnderflow(uint nodeId, List<uint> path, ulong transactionId)
     {
         if (path.Count == 0)
         {
@@ -758,7 +751,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private bool BorrowFromSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, ulong? transactionId)
+    private bool BorrowFromSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, ulong transactionId)
     {
         // TODO: Implement rotation (borrow from left or right sibling)
         // Complexity: High. Need to update Parent, Sibling, and Node.
@@ -767,7 +760,7 @@ public sealed class BTreeIndex
         return false;
     }
 
-    private void MergeWithSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, List<uint> path, ulong? transactionId)
+    private void MergeWithSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, List<uint> path, ulong transactionId)
     {
         // Identify sibling to merge with.
         // If P0 (childIndex -1), merge with right sibling (Entry 0).
@@ -837,7 +830,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private void MergeNodes(uint leftNodeId, uint rightNodeId, IndexKey separatorKey, ulong? transactionId)
+    private void MergeNodes(uint leftNodeId, uint rightNodeId, IndexKey separatorKey, ulong transactionId)
     {
         var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try

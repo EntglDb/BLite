@@ -10,8 +10,7 @@ public class DocumentCollectionDeleteTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
+    private readonly StorageEngine _storage;
     private readonly TransactionManager _txnManager;
     private readonly DocumentCollection<User> _collection;
 
@@ -20,24 +19,21 @@ public class DocumentCollectionDeleteTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_delete_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_delete_{Guid.NewGuid()}.wal");
 
-        _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
         _pageFile.Open();
 
-        _wal = new WriteAheadLog(_walPath);
-        var storage = new StorageEngine(_pageFile, _wal);
-        _txnManager = new TransactionManager(storage);
+        var _wal = new WriteAheadLog(_walPath);
+        _storage = new StorageEngine(_pageFile, _wal);
+        _txnManager = new TransactionManager(_storage);
 
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _pageFile, _wal, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
     }
 
     public void Dispose()
     {
-        _pageFile.Dispose();
+        _storage.Dispose();
         _txnManager.Dispose();
-
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        if (File.Exists(_walPath)) File.Delete(_walPath);
     }
 
     [Fact]

@@ -206,7 +206,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Inserts a document into all indexes
     /// </summary>
-    public void InsertIntoAll(T document, ITransaction? transaction = null)
+    public void InsertIntoAll(T document, ITransaction transaction)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));
@@ -223,7 +223,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Updates a document in all indexes
     /// </summary>
-    public void UpdateInAll(T oldDocument, T newDocument, ITransaction? transaction = null)
+    public void UpdateInAll(T oldDocument, T newDocument, ITransaction transaction)
     {
         if (oldDocument == null)
             throw new ArgumentNullException(nameof(oldDocument));
@@ -242,7 +242,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Deletes a document from all indexes
     /// </summary>
-    public void DeleteFromAll(T document, ITransaction? transaction = null)
+    public void DeleteFromAll(T document, ITransaction transaction)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));

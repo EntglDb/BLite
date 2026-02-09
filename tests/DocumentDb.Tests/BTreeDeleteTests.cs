@@ -13,6 +13,7 @@ public class BTreeDeleteTests : IDisposable
     private readonly WriteAheadLog _wal;
     private readonly BTreeIndex _index;
     private StorageEngine _storageEngine;
+    private TransactionManager _transactionManager;
 
     public BTreeDeleteTests()
     {
@@ -22,6 +23,7 @@ public class BTreeDeleteTests : IDisposable
         _wal = new WriteAheadLog(Path.ChangeExtension(_tempFile, ".wal"));
         _storageEngine = new StorageEngine(_pageFile, _wal);
         _index = new BTreeIndex(_storageEngine, new IndexOptions());
+        _transactionManager = new TransactionManager(_storageEngine);
     }
 
     public void Dispose()
@@ -37,19 +39,21 @@ public class BTreeDeleteTests : IDisposable
         // Arrange
         var key = new IndexKey(BitConverter.GetBytes(100));
         var id = ObjectId.NewObjectId();
+        using (var txn = _transactionManager.BeginTransaction())
+        {
+            _index.Insert(key, id, txn.TransactionId);
 
-        _index.Insert(key, id);
-        
-        // Verify Insert
-        Assert.True(_index.TryFind(key, out var foundId));
-        Assert.Equal(id, foundId);
+            // Verify Insert
+            Assert.True(_index.TryFind(key, out var foundId, txn.TransactionId));
+            Assert.Equal(id, foundId);
 
-        // Act
-        var deleted = _index.Delete(key, id);
+            // Act
+            var deleted = _index.Delete(key, id, txn.TransactionId);
 
-        // Assert
-        Assert.True(deleted, "Delete returned false");
-        Assert.False(_index.TryFind(key, out _), "Item still found after delete");
+            // Assert
+            Assert.True(deleted, "Delete returned false");
+            Assert.False(_index.TryFind(key, out _, txn.TransactionId), "Item still found after delete");
+        }
     }
 
     [Fact]
@@ -60,10 +64,13 @@ public class BTreeDeleteTests : IDisposable
         var id = ObjectId.NewObjectId();
 
         // Act
-        var deleted = _index.Delete(key, id);
+        using (var txn = _transactionManager.BeginTransaction())
+        {
+            var deleted = _index.Delete(key, id, txn.TransactionId);
 
-        // Assert
-        Assert.False(deleted);
+            // Assert
+            Assert.False(deleted);
+        }
     }
 
     [Fact]
@@ -79,21 +86,25 @@ public class BTreeDeleteTests : IDisposable
         var key3 = new IndexKey(BitConverter.GetBytes(3));
         var id3 = ObjectId.NewObjectId();
 
-        _index.Insert(key2, id2);
-        _index.Insert(key1, id1);
-        _index.Insert(key3, id3);
+        using (var txn = _transactionManager.BeginTransaction())
+        {
 
-        // Act
-        var deleted = _index.Delete(key2, id2);
+            _index.Insert(key2, id2, txn.TransactionId);
+            _index.Insert(key1, id1, txn.TransactionId);
+            _index.Insert(key3, id3, txn.TransactionId);
 
-        // Assert
-        Assert.True(deleted);
-        Assert.False(_index.TryFind(key2, out _));
-        
-        Assert.True(_index.TryFind(key1, out var found1));
-        Assert.Equal(id1, found1);
-        
-        Assert.True(_index.TryFind(key3, out var found3));
-        Assert.Equal(id3, found3);
+            // Act
+            var deleted = _index.Delete(key2, id2, txn.TransactionId);
+
+            // Assert
+            Assert.True(deleted);
+            Assert.False(_index.TryFind(key2, out _, txn.TransactionId));
+
+            Assert.True(_index.TryFind(key1, out var found1, txn.TransactionId));
+            Assert.Equal(id1, found1);
+
+            Assert.True(_index.TryFind(key3, out var found3, txn.TransactionId));
+            Assert.Equal(id3, found3);
+        }
     }
 }

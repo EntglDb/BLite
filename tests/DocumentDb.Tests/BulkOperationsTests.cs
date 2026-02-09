@@ -10,8 +10,6 @@ public class BulkOperationsTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
     private readonly StorageEngine _storage;
     private readonly TransactionManager _txnManager;
     private readonly DocumentCollection<User> _collection;
@@ -21,26 +19,23 @@ public class BulkOperationsTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_bulk_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_bulk_{Guid.NewGuid()}.wal");
         
-        _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
         _pageFile.Open();
 
-        _wal = new WriteAheadLog(_walPath);
+        var _wal = new WriteAheadLog(_walPath);
 
         _storage = new StorageEngine(_pageFile, _wal);
 
         _txnManager = new TransactionManager(_storage);
         
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _pageFile, _wal, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
     }
 
     public void Dispose()
     {
-        _pageFile.Dispose();
+        _storage.Dispose();
         _txnManager.Dispose();
-        
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        if (File.Exists(_walPath)) File.Delete(_walPath);
     }
 
     [Fact]
@@ -120,6 +115,8 @@ public class BulkOperationsTests : IDisposable
         // Arrange
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Txn User", Age = 20 };
         _collection.Insert(user);
+
+        Assert.NotNull(_collection.FindById(user.Id));
 
         using (var txn = _collection.BeginTransaction())
         {

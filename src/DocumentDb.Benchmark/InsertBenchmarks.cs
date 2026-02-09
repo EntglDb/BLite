@@ -31,9 +31,8 @@ public class InsertBenchmarks
     private string _sqliteConnString = "";
 
     // DocumentDb
-    private PageFile? _pageFile = null;
-    private WriteAheadLog? _wal = null;
     private TransactionManager? _txnMgr = null;
+    private StorageEngine? _storage = null;
     private DocumentCollection<Person>? _collection = null;
 
     // Data
@@ -106,15 +105,15 @@ public class InsertBenchmarks
         // if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
         // if (File.Exists(_docDbWalPath)) File.Delete(_docDbWalPath);
         
-        _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
         _pageFile.Open();
 
-        _wal = new WriteAheadLog(_docDbWalPath);
+        var _wal = new WriteAheadLog(_docDbWalPath);
 
-        var storage = new StorageEngine(_pageFile, _wal);
+        _storage = new StorageEngine(_pageFile, _wal);
 
-        _txnMgr = new TransactionManager(storage);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _pageFile, _wal, _txnMgr);
+        _txnMgr = new TransactionManager(_storage);
+        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage, _txnMgr);
 
         // 2. Reset SQLite
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
@@ -128,7 +127,7 @@ public class InsertBenchmarks
     {
         try
         {
-            _pageFile?.Dispose();
+            _storage?.Dispose();
             _txnMgr?.Dispose();
             
             SqliteConnection.ClearAllPools();

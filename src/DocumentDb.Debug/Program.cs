@@ -27,7 +27,7 @@ try
     using var txnMgr = new TransactionManager(storage);
 
     var mapper = new UserMapper();
-    var collection = new DocumentCollection<User>(mapper, pageFile, wal, txnMgr);
+    var collection = new DocumentCollection<User>(mapper, storage, txnMgr);
     
     // Test 1: Insert large document (20KB)
     Console.WriteLine("Test 1: Insert 20KB document");

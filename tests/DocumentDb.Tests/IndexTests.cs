@@ -124,11 +124,13 @@ public class IndexTests : IDisposable
     
         var key = new IndexKey(100);    
         var docId = ObjectId.NewObjectId();
+        using (var txn = _txnManager.BeginTransaction())
+        {
+            btree.Insert(key, docId, txn.TransactionId);
 
-        btree.Insert(key, docId);
-
-        Assert.True(btree.TryFind(key, out var foundId));
-        Assert.Equal(docId, foundId);
+            Assert.True(btree.TryFind(key, out var foundId, txn.TransactionId));
+            Assert.Equal(docId, foundId);
+        }
     }
 
     [Fact]
@@ -145,16 +147,19 @@ public class IndexTests : IDisposable
             (new IndexKey(5), ObjectId.NewObjectId())
         };
 
-        foreach (var (key, docId) in entries)
+        using (var txn = _txnManager.BeginTransaction())
         {
-            btree.Insert(key, docId);
-        }
+            foreach (var (key, docId) in entries)
+            {
+                btree.Insert(key, docId, txn.TransactionId);
+            }
 
-        // Verify all can be found
-        foreach (var (key, expectedDocId) in entries)
-        {
-            Assert.True(btree.TryFind(key, out var foundId));
-            Assert.Equal(expectedDocId, foundId);
+            // Verify all can be found
+            foreach (var (key, expectedDocId) in entries)
+            {
+                Assert.True(btree.TryFind(key, out var foundId, txn.TransactionId));
+                Assert.Equal(expectedDocId, foundId);
+            }
         }
     }
 
@@ -164,26 +169,30 @@ public class IndexTests : IDisposable
         var options = IndexOptions.CreateBTree("testField");
         var btree = new BTreeIndex(_storage, options);
 
-        // Insert values: 5, 10, 15, 20, 25, 30
-        for (int i = 5; i <= 30; i += 5)
+        using (var txn = _txnManager.BeginTransaction())
         {
-            btree.Insert(new IndexKey(i), ObjectId.NewObjectId());
-        }
+            // Insert values: 5, 10, 15, 20, 25, 30
+            for (int i = 5; i <= 30; i += 5)
+            {
+                btree.Insert(new IndexKey(i), ObjectId.NewObjectId(), txn.TransactionId);
+            }
 
-        // Range scan: 10 to 25
-        var minKey = new IndexKey(10);
-        var maxKey = new IndexKey(25);
-        var results = btree.Range(minKey, maxKey).ToList();
+            // Range scan: 10 to 25
+            var minKey = new IndexKey(10);
+            var maxKey = new IndexKey(25);
+            var results = btree.Range(minKey, maxKey, txn.TransactionId).ToList();
 
-        // Should find: 10, 15, 20, 25 (4 entries)
-        Assert.True(results.Count >= 4); // May have more due to simplified implementation
-        
-        // Verify all returned keys are in range
-        foreach (var entry in results)
-        {
-            Assert.True(entry.Key >= minKey && entry.Key <= maxKey);
+            // Should find: 10, 15, 20, 25 (4 entries)
+            Assert.True(results.Count >= 4); // May have more due to simplified implementation
+
+            // Verify all returned keys are in range
+            foreach (var entry in results)
+            {
+                Assert.True(entry.Key >= minKey && entry.Key <= maxKey);
+            }
         }
     }
+
     [Fact]
     public void BTreeIndex_Split_ShouldWork()
     {
@@ -194,22 +203,24 @@ public class IndexTests : IDisposable
         // Insert 20 items to trigger multiple splits and levels.
         int count = 20;
         var keys = new List<IndexKey>();
-
-        for (int i = 0; i < count; i++)
+        using (var txn = _txnManager.BeginTransaction())
         {
-            var key = new IndexKey(i * 10);
-            keys.Add(key);
-            btree.Insert(key, ObjectId.NewObjectId());
-        }
+            for (int i = 0; i < count; i++)
+            {
+                var key = new IndexKey(i * 10);
+                keys.Add(key);
+                btree.Insert(key, ObjectId.NewObjectId(), txn.TransactionId);
+            }
 
-        // Verify all items are found
-        foreach (var key in keys)
-        {
-            Assert.True(btree.TryFind(key, out _), $"Key {key} not found after splits");
+            // Verify all items are found
+            foreach (var key in keys)
+            {
+                Assert.True(btree.TryFind(key, out _, txn.TransactionId), $"Key {key} not found after splits");
+            }
+
+            // Verify range scan covers all
+            var range = btree.Range(keys.First(), keys.Last(), txn.TransactionId).ToList();
+            Assert.Equal(count, range.Count);
         }
-        
-        // Verify range scan covers all
-        var range = btree.Range(keys.First(), keys.Last()).ToList();
-        Assert.Equal(count, range.Count);
     }
 }

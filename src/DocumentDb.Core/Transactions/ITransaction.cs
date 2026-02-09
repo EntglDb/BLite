@@ -18,24 +18,36 @@ public interface ITransaction : IDisposable
     /// Unique transaction identifier
     /// </summary>
     ulong TransactionId { get; }
-    
+
     /// <summary>
     /// Current state of the transaction
     /// </summary>
     TransactionState State { get; }
-    
+
     /// <summary>
     /// Commits the transaction, making all changes permanent.
     /// Must be called before Dispose() to persist changes.
     /// </summary>
     void Commit();
-    
+
     /// <summary>
     /// Rolls back the transaction, discarding all changes.
     /// Called automatically on Dispose() if Commit() was not called.
     /// </summary>
     void Rollback();
-    
+
+    /// <summary>
+    /// Adds a write operation to the current batch or transaction.
+    /// </summary>
+    /// <param name="operation">The write operation to add. Cannot be null.</param>
+    void AddWrite(WriteOperation operation);
+
+    /// <summary>
+    /// Prepares the object for use by performing any necessary initialization or setup.
+    /// </summary>
+    /// <returns>true if the preparation was successful; otherwise, false.</returns>
+    bool Prepare();
+
     /// <summary>
     /// Event triggered when the transaction acts rollback.
     /// Useful for restoring in-memory state (like ID maps).

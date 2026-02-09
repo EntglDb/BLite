@@ -30,8 +30,7 @@ public class ReadBenchmarks
     private string _sqliteConnString = null!;
 
     // DocumentDb
-    private PageFile _pageFile = null!;
-    private WriteAheadLog _wal = null!;
+    private StorageEngine _storage = null!;
     private TransactionManager _txnMgr = null!;
     private DocumentCollection<Person> _collection = null!;
     // _mapper removed (unused)
@@ -56,12 +55,12 @@ public class ReadBenchmarks
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
 
         // 1. Setup DocumentDb & Insert Data
-        _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
+        var _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
         _pageFile.Open();
-        _wal = new WriteAheadLog(_docDbWalPath);
-        var storage = new StorageEngine(_pageFile, _wal);
-        _txnMgr = new TransactionManager(storage);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _pageFile, _wal, _txnMgr);
+        var _wal = new WriteAheadLog(_docDbWalPath);
+        _storage = new StorageEngine(_pageFile, _wal);
+        _txnMgr = new TransactionManager(_storage);
+        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage, _txnMgr);
 
         _ids = new ObjectId[DocCount];
         for (int i = 0; i < DocCount; i++)
@@ -94,7 +93,7 @@ public class ReadBenchmarks
     [GlobalCleanup]
     public void Cleanup()
     {
-        _pageFile?.Dispose();
+        _storage?.Dispose();
         SqliteConnection.ClearAllPools();
         _txnMgr?.Dispose();
         
