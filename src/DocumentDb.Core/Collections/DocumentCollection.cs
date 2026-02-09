@@ -161,7 +161,7 @@ public class DocumentCollection<T> where T : class
         {
             try
             {
-                var document = FindByLocation(entry.Location);
+                var document = FindByLocation(entry.Location, txn);
                 if (document != null)
                 {
                     index.Insert(document, entry.Location, txn);
@@ -671,36 +671,70 @@ public class DocumentCollection<T> where T : class
 
     #region Find
 
-    public T? FindById(ObjectId id)
+    /// <summary>
+    /// Finds a document by its ObjectId.
+    /// If called within a transaction, will see uncommitted changes ("Read Your Own Writes").
+    /// Otherwise creates a read-only snapshot transaction.
+    /// </summary>
+    /// <param name="id">ObjectId of the document</param>
+    /// <param name="transaction">Optional transaction for isolation (supports Read Your Own Writes)</param>
+    /// <returns>The document, or null if not found</returns>
+    public T? FindById(ObjectId id, ITransaction? transaction = null)
     {
-        var key = new IndexKey(id.ToByteArray());
-        if (!_primaryIndex.TryFind(key, out var location))
-            return null;
+        var txn = transaction ?? _txnManager.BeginTransaction();
+        var isInternal = transaction == null;
+        
+        try
+        {
+            var key = new IndexKey(id.ToByteArray());
+            if (!_primaryIndex.TryFind(key, out var location, txn.TransactionId))
+                return null;
 
-        return FindByLocation(location);
+            return FindByLocation(location, txn);
+        }
+        finally
+        {
+            // Read-only transaction, no commit needed - just cleanup
+            if (isInternal) 
+                txn.Dispose();
+        }
     }
 
-    public IEnumerable<T> FindAll()
+    /// <summary>
+    /// Returns all documents in the collection.
+    /// WARNING: This method requires an external transaction for proper isolation!
+    /// If no transaction is provided, reads committed snapshot only (may see partial updates).
+    /// </summary>
+    /// <param name="transaction">Transaction for isolation (REQUIRED for consistent reads during concurrent writes)</param>
+    /// <returns>Enumerable of all documents</returns>
+    public IEnumerable<T> FindAll(ITransaction? transaction = null)
     {
+        // For IEnumerable methods with yield, we CANNOT create internal transactions
+        // because the finally block won't execute until enumeration completes.
+        // Caller must provide transaction if they need isolation.
+        
+        var txnId = transaction?.TransactionId ?? 0; // 0 = read committed only
+        
         // Scan all entries in primary index
         var minKey = new IndexKey(new byte[] { 0 });
         var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray());
         
-        foreach (var entry in _primaryIndex.Range(minKey, maxKey, null))
+        foreach (var entry in _primaryIndex.Range(minKey, maxKey, txnId))
         {
-            var entity = FindByLocation(entry.Location);
+            var entity = FindByLocation(entry.Location, transaction);
             if (entity != null)
                 yield return entity;
         }
     }
-
-    private T? FindByLocation(DocumentLocation location)
+    
+    private T? FindByLocation(DocumentLocation location, ITransaction? transaction)
     {
+        var txnId = transaction?.TransactionId ?? 0;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            // Read from StorageEngine (checks committed buffer, then PageFile)
-            _storage.ReadPage(location.PageId, null, buffer);
+            // Read from StorageEngine with transaction isolation
+            _storage.ReadPage(location.PageId, txnId, buffer);
 
             var header = SlottedPageHeader.ReadFrom(buffer);
 
@@ -735,8 +769,8 @@ public class DocumentCollection<T> where T : class
                     // Follow overflow chain
                     while (currentOverflowPageId != 0 && offset < totalLength)
                     {
-                        // Read from StorageEngine (checks committed buffer, then PageFile)
-                        _storage.ReadPage(currentOverflowPageId, null, buffer);
+                        // Read from StorageEngine with transaction isolation
+                        _storage.ReadPage(currentOverflowPageId, txnId, buffer);
                         var overflowHeader = SlottedPageHeader.ReadFrom(buffer);
 
                         // Calculate data in this overflow page
@@ -1181,17 +1215,38 @@ public class DocumentCollection<T> where T : class
 
     #region Query Helpers
 
-    public int Count()
+    /// <summary>
+    /// Counts all documents in the collection.
+    /// If called within a transaction, will count uncommitted changes.
+    /// </summary>
+    /// <param name="transaction">Optional transaction for isolation</param>
+    /// <returns>Number of documents</returns>
+    public int Count(ITransaction? transaction = null)
     {
-        // Count all entries in primary index
-        var minKey = new IndexKey(new byte[] { 0 });
-        var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray());
-        return _primaryIndex.Range(minKey, maxKey, null).Count();
+        var txn = transaction ?? _txnManager.BeginTransaction();
+        var isInternal = transaction == null;
+        
+        try
+        {
+            // Count all entries in primary index
+            var minKey = new IndexKey(new byte[] { 0 });
+            var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray());
+            return _primaryIndex.Range(minKey, maxKey, txn.TransactionId).Count();
+        }
+        finally
+        {
+            if (isInternal) 
+                txn.Dispose();
+        }
     }
 
-    public IEnumerable<T> FindAll(Func<T, bool> predicate)
+    /// <summary>
+    /// Finds all documents matching the predicate.
+    /// If transaction is provided, will see uncommitted changes.
+    /// </summary>
+    public IEnumerable<T> FindAll(Func<T, bool> predicate, ITransaction? transaction = null)
     {
-        foreach (var entity in FindAll())
+        foreach (var entity in FindAll(transaction))
         {
             if (predicate(entity))
                 yield return entity;
@@ -1201,7 +1256,8 @@ public class DocumentCollection<T> where T : class
     /// <summary>
     /// Find entities matching predicate (alias for FindAll with predicate)
     /// </summary>
-    public IEnumerable<T> Find(Func<T, bool> predicate) => FindAll(predicate);
+    public IEnumerable<T> Find(Func<T, bool> predicate, ITransaction? transaction = null) 
+        => FindAll(predicate, transaction);
 
     #endregion
 }

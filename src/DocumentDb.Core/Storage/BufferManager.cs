@@ -34,7 +34,9 @@ public sealed class BufferManager
     public void ReadPage(uint pageId, ulong? transactionId, Span<byte> destination)
     {
         // 1. Check transaction-local buffer first (Read Your Own Writes)
-        if (transactionId.HasValue &&
+        // Note: transactionId=0 or null means "no active transaction, read committed only"
+        if (transactionId.HasValue && 
+            transactionId.Value != 0 &&  // ? 0 means "no transaction"
             _transactionBuffers.TryGetValue(transactionId.Value, out var pageBuffer) &&
             pageBuffer.TryGetValue(pageId, out var txnData))
         {
