@@ -10,7 +10,6 @@ public class DocumentCollectionTests : IDisposable
     private readonly string _dbPath;
     private readonly string _walPath;
     private readonly StorageEngine _storage;
-    private readonly TransactionManager _txnManager;
     private readonly DocumentCollection<User> _collection;
 
     public DocumentCollectionTests()
@@ -19,10 +18,9 @@ public class DocumentCollectionTests : IDisposable
         _walPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.wal");
         
         _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-        _txnManager = new TransactionManager(_storage);
 
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _storage);
     }
 
     [Fact]
@@ -176,9 +174,27 @@ public class DocumentCollectionTests : IDisposable
         Assert.Equal(3, _collection.Count());
     }
 
+    [Fact]
+    public void Insert_With_SpecifiedId_RetainsId()
+    {
+        // Arrange
+        var id = ObjectId.NewObjectId();
+        var user = new User { Id = id, Name = "SpecifiedID", Age = 40 };
+
+        // Act
+        var insertedId = _collection.Insert(user);
+
+        // Assert
+        Assert.Equal(id, insertedId);
+        
+        var found = _collection.FindById(id);
+        Assert.NotNull(found);
+        Assert.Equal(id, found.Id);
+        Assert.Equal("SpecifiedID", found.Name);
+    }
+
     public void Dispose()
     {
-        _txnManager?.Dispose();
         _storage?.Dispose();
     }
 }

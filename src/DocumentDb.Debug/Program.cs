@@ -19,10 +19,8 @@ try
 
     var storage = new StorageEngine(dbPath, PageFileConfig.Default);
 
-    using var txnMgr = new TransactionManager(storage);
-
     var mapper = new UserMapper();
-    var collection = new DocumentCollection<User>(mapper, storage, txnMgr);
+    var collection = new DocumentCollection<User>(mapper, storage);
     
     // Test 1: Insert large document (20KB)
     Console.WriteLine("Test 1: Insert 20KB document");

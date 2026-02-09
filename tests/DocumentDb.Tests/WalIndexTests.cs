@@ -15,7 +15,6 @@ public class WalIndexTests : IDisposable
     private readonly string _dbPath;
     private readonly string _walPath;
     private StorageEngine _storage; // Mutable to allow Dispose/Reload
-    private TransactionManager _txnManager;
     private DocumentCollection<User> _collection;
     private readonly ITestOutputHelper _output;
 
@@ -27,11 +26,10 @@ public class WalIndexTests : IDisposable
         _walPath = Path.ChangeExtension(_dbPath, ".wal");
         
         _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-        _txnManager = new TransactionManager(_storage);
         
         var mapper = new UserMapper();
         // 1. Ensure index on "Age"
-        _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _storage);
         _collection.EnsureIndex(u => u.Age);
     }
 
@@ -39,7 +37,7 @@ public class WalIndexTests : IDisposable
     public void IndexWritesAreLoggedToWal()
     {
         // 2. Start a transaction
-        using var txn = _txnManager.BeginTransaction();
+        using var txn = _storage.BeginTransaction();
         _output.WriteLine($"Started Transaction: {txn.TransactionId}");
         
         // 3. Insert a user
@@ -52,8 +50,6 @@ public class WalIndexTests : IDisposable
         
         // 5. Verify WAL
         // Dispose current storage to release file locks, BUT skip checkpoint/truncate
-        _storage.CheckpointManager.SkipCheckpointOnDispose = true;
-        _txnManager.Dispose();
         _storage.Dispose();
         
         Assert.True(File.Exists(_walPath), "WAL file should exist");
@@ -100,7 +96,6 @@ public class WalIndexTests : IDisposable
     {
         try 
         { 
-            _txnManager?.Dispose();
             _storage?.Dispose(); // Safe to call multiple times
         } 
         catch {}

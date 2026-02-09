@@ -12,7 +12,7 @@ public sealed class BTreeIndex
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
     private uint _rootPageId;
-    internal const int MaxEntriesPerNode = 4; // Low value to test splitting
+    internal const int MaxEntriesPerNode = 100; // Low value to test splitting
 
     public BTreeIndex(StorageEngine storage,
                       IndexOptions options, 

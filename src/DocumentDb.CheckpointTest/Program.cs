@@ -20,31 +20,25 @@ class Program
         if (File.Exists(dbPath)) File.Delete(dbPath);
         if (File.Exists(walPath)) File.Delete(walPath);
 
-        using var pageFile = new PageFile(dbPath, PageFileConfig.Default);
-        pageFile.Open();
-
-        using var txnMgr = new TransactionManager(walPath, pageFile);
+        using var storage = new StorageEngine(dbPath, PageFileConfig.Default);
 
         Console.WriteLine("1. Testing Single Inserts (500 transactions)...");
         var sw = Stopwatch.StartNew();
         
         for (int i = 0; i < 500; i++)
         {
-            using var txn = txnMgr.BeginTransaction();
+            using var txn = storage.BeginTransaction();
             
             // Simulate a write
-            var pageId = pageFile.AllocatePage();
-            var data = new byte[pageFile.PageSize];
+            var pageId = storage.AllocatePage();
+            var data = new byte[storage.PageSize];
             new Random().NextBytes(data);
             
-            txn.AddWrite(new WriteOperation(
-                documentId: new DocumentDb.Bson.ObjectId(),
-                newValue: data,
-                pageId: pageId,
-                type: OperationType.Insert
-            ));
+            // Write directly to storage
+            // Old: txn.AddWrite(...)
+            storage.WritePage(pageId, txn.TransactionId, data);
             
-            txnMgr.CommitTransaction(txn);
+            storage.CommitTransaction(txn);
         }
         
         sw.Stop();
@@ -56,18 +50,18 @@ class Program
 
         Console.WriteLine("2. Performing Manual Checkpoint...");
         sw.Restart();
-        var pagesCheckpointed = txnMgr.CheckpointManager.Checkpoint(CheckpointMode.Full);
+        storage.Checkpoint();
         sw.Stop();
         
-        Console.WriteLine($"   ? Checkpointed {pagesCheckpointed} pages in {sw.ElapsedMilliseconds}ms");
+        Console.WriteLine($"   ? Checkpoint completed in {sw.ElapsedMilliseconds}ms");
         
         var dbSize = new FileInfo(dbPath).Length;
         var walSizeAfter = new FileInfo(walPath).Length;
         Console.WriteLine($"   ? DB size: {dbSize / 1024.0:F1} KB");
         Console.WriteLine($"   ? WAL size after checkpoint: {walSizeAfter / 1024.0:F1} KB\n");
 
-        Console.WriteLine("3. Testing Checkpoint with Truncate...");
-        txnMgr.CheckpointManager.CheckpointAndTruncate();
+        Console.WriteLine("3. Testing Checkpoint with Truncate (Integrated)...");
+        storage.Checkpoint();
         
         walSizeAfter = new FileInfo(walPath).Length;
         Console.WriteLine($"   ? WAL size after truncate: {walSizeAfter / 1024.0:F1} KB\n");
@@ -77,20 +71,15 @@ class Program
         
         for (int i = 0; i < 1000; i++)
         {
-            using var txn = txnMgr.BeginTransaction();
+            using var txn = storage.BeginTransaction();
             
-            var pageId = pageFile.AllocatePage();
-            var data = new byte[pageFile.PageSize];
+            var pageId = storage.AllocatePage();
+            var data = new byte[storage.PageSize];
             new Random().NextBytes(data);
             
-            txn.AddWrite(new WriteOperation(
-                documentId: new DocumentDb.Bson.ObjectId(),
-                newValue: data,
-                pageId: pageId,
-                type: OperationType.Insert
-            ));
+            storage.WritePage(pageId, txn.TransactionId, data);
             
-            txnMgr.CommitTransaction(txn);
+            storage.CommitTransaction(txn);
         }
         
         sw.Stop();
@@ -101,7 +90,7 @@ class Program
         Console.WriteLine($"   ? WAL size: {walSize / 1024.0:F1} KB\n");
 
         Console.WriteLine("5. Final checkpoint and cleanup...");
-        txnMgr.CheckpointManager.CheckpointAndTruncate();
+        storage.Checkpoint();
         
         dbSize = new FileInfo(dbPath).Length;
         walSizeAfter = new FileInfo(walPath).Length;

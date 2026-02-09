@@ -24,8 +24,6 @@ public class MetadataPersistenceTests : IDisposable
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             // Disable auto-checkpoint to ensure cleaner test tracing, though not strictly required
-            // storage.CheckpointManager.StopAutoCheckpoint();
-
             var mapper = new UserMapper();
             var indexManager = new CollectionIndexManager<User>(storage, mapper);
             
@@ -63,9 +61,8 @@ public class MetadataPersistenceTests : IDisposable
         // 1. Create index
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
-            var txnMgr = new TransactionManager(storage);
             var mapper = new UserMapper();
-            var collection = new DocumentCollection<User>(mapper, storage, txnMgr);
+            var collection = new DocumentCollection<User>(mapper, storage);
             
             collection.EnsureIndex(u => u.Age);
         }
@@ -73,9 +70,8 @@ public class MetadataPersistenceTests : IDisposable
         // 2. Re-open and EnsureIndex again - should be fast/no-op
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
-            var txnMgr = new TransactionManager(storage);
             var mapper = new UserMapper();
-            var collection = new DocumentCollection<User>(mapper, storage, txnMgr);
+            var collection = new DocumentCollection<User>(mapper, storage);
             
             // Use reflection or diagnostic to check if it triggered rebuild?
             // Currently hard to verify "no rebuild" without logs or mocking.
@@ -85,7 +81,7 @@ public class MetadataPersistenceTests : IDisposable
             Assert.NotNull(idx);
             
             // Verify functioning
-            using var txn = txnMgr.BeginTransaction();
+            using var txn = storage.BeginTransaction();
             collection.Insert(new User { Name = "Bob", Age = 50 }, txn);
             txn.Commit();
             

@@ -286,34 +286,23 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         return $"idx_{string.Join("_", propertyPaths)}";
     }
 
-    private void SaveMetadata()
+    public uint PrimaryRootPageId { get; private set; }
+
+    public void SetPrimaryRootPageId(uint pageId)
     {
-        // Simple binary format: [Count(4)] [Entry1] [Entry2] ...
-        // Entry: [NameLen(2)][Name][Unique(1)][Type(1)][PathCount(1)][Path1Len][Path1]...
-
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-
         lock (_lock)
         {
-            writer.Write(_indexes.Count);
-            foreach (var idx in _indexes.Values)
+            if (PrimaryRootPageId != pageId)
             {
-                var def = idx.Definition;
-                writer.Write(def.Name); // BinaryWriter handles length prefix
-                writer.Write(def.IsUnique);
-                writer.Write((byte)def.Type);
-                
-                writer.Write(def.PropertyPaths.Length);
-                foreach (var path in def.PropertyPaths)
-                {
-                    writer.Write(path);
-                }
+                PrimaryRootPageId = pageId;
+                SaveMetadataToPage();
             }
         }
+    }
 
-        var data = stream.ToArray();
-        _storage.WritePageImmediate(1, data); // Page 1 is reserved for metadata
+    private void SaveMetadata()
+    {
+        SaveMetadataToPage();
     }
 
     private void LoadMetadata()
@@ -321,46 +310,24 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         var buffer = new byte[_storage.PageSize];
         _storage.ReadPage(1, null, buffer);
         
-        // Check if page is initialized (PageType should be Collection=2 in header, 
-        // but here we read raw data including header if using ReadPage? 
-        // StorageEngine.ReadPage reads the WHOLE page including header. 
-        // However, StorageEngine.WritePageImmediate writes raw data.
-        // Wait, Header is 32 bytes. We should write/read payload after header.
-        
-        // Actually DocumentCollection.InsertIntoPage handles headers.
-        // For metadata page, we treat it as a raw blob after the 24-byte header?
-        // Page 1 matches SlottedPageHeader structure? 
-        // In PageFile.InitializeHeader we wrote a SlottedPageHeader.
-        // So we should respect that structure or overwrite it?
-        // The plan said "serialize... into this page".
-        
-        // Let's treat it as a SlottedPage with 1 slot containing the metadata blob.
-        // OR simpler: Just write raw data at offset HeaderSize.
-        // SlottedPageHeader size is 24.
-        // Let's use the SlottedPage structure to be consistent with tools that might verify pages.
-        
-        // Read header
         var header = SlottedPageHeader.ReadFrom(buffer);
-        if (header.PageType != PageType.Collection) 
-            return; // Not a valid metadata page
+        if (header.PageType != PageType.Collection || header.SlotCount == 0) 
+            return;
             
-        // If empty, nothing to load (SlotCount 0)
-        if (header.SlotCount == 0) return;
-        
-        // Assume slot 0 contains the metadata blob
         var slot = SlotEntry.ReadFrom(buffer.AsSpan(SlottedPageHeader.Size));
         if (slot.Length == 0) return;
         
         var metadataSpan = buffer.AsSpan(slot.Offset, slot.Length);
         
-        // Deserialize
-        // We need a stream wrapper around span? specialized reader? 
-        // BinaryReader takes a Stream.
         using var stream = new MemoryStream(metadataSpan.ToArray());
         using var reader = new BinaryReader(stream);
         
         try 
         {
+            // Changes format! If we have legacy data, this breaks. 
+            // Assuming we can break format for now (Tests use temp files).
+            PrimaryRootPageId = reader.ReadUInt32();
+
             var count = reader.ReadInt32();
             for (int i = 0; i < count; i++)
             {
@@ -373,10 +340,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
                 for (int j = 0; j < pathCount; j++)
                     paths[j] = reader.ReadString();
                 
-                // Reconstruct definition
                 var definition = RebuildDefinition(name, paths, isUnique, type);
-                
-                // Add to index (without saving!)
                 var index = new CollectionSecondaryIndex<T>(definition, _storage, _mapper);
                 _indexes[name] = index;
             }
@@ -437,50 +401,52 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         
         return new CollectionIndexDefinition<T>(name, paths, lambda, isUnique, type);
     }
-    
+
+    // ... RebuildDefinition ...
+
     private void SaveMetadataToPage()
     {
-        // Re-implement SaveMetadata to maintain Page 1 structure properly
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         
-        writer.Write(_indexes.Count);
-        foreach (var idx in _indexes.Values)
+        lock (_lock)
         {
-            var def = idx.Definition;
-            writer.Write(def.Name);
-            writer.Write(def.IsUnique);
-            writer.Write((byte)def.Type);
-            writer.Write(def.PropertyPaths.Length);
-            foreach (var p in def.PropertyPaths) writer.Write(p);
+            writer.Write(PrimaryRootPageId);
+            writer.Write(_indexes.Count);
+            foreach (var idx in _indexes.Values)
+            {
+                var def = idx.Definition;
+                writer.Write(def.Name); // BinaryWriter handles length prefix
+                writer.Write(def.IsUnique);
+                writer.Write((byte)def.Type);
+                
+                writer.Write(def.PropertyPaths.Length);
+                foreach (var path in def.PropertyPaths)
+                {
+                    writer.Write(path);
+                }
+            }
         }
         
         var data = stream.ToArray();
         
-        // Write to Page 1
         var buffer = new byte[_storage.PageSize];
         var header = new SlottedPageHeader
         {
             PageId = 1,
             PageType = PageType.Collection,
             SlotCount = 1,
-            // Free space starts after header + 1 slot (32 bytes)
             FreeSpaceStart = (ushort)(SlottedPageHeader.Size + SlotEntry.Size),
-            // Free space ends at payload start (growing up? no, standard slot layout)
-            // Data is at the END of the page.
             FreeSpaceEnd = (ushort)(_storage.PageSize - data.Length),
             NextOverflowPage = 0,
             TransactionId = 0
         };
         
-        // Write header
         header.WriteTo(buffer);
         
-        // Write payload at end
         var payloadOffset = header.FreeSpaceEnd;
         data.CopyTo(buffer.AsSpan(payloadOffset));
         
-        // Write slot 0 pointing to payload
         var slot = new SlotEntry
         {
              Offset = (ushort)payloadOffset,

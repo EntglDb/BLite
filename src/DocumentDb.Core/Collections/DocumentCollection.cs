@@ -17,7 +17,6 @@ public class DocumentCollection<T> where T : class
     private readonly IDocumentMapper<T> _mapper;
     private readonly StorageEngine _storage;
     private readonly BTreeIndex _primaryIndex;
-    private readonly TransactionManager _txnManager;
     private readonly CollectionIndexManager<T> _indexManager;
 
     // Free space tracking: PageId → Free bytes
@@ -30,20 +29,25 @@ public class DocumentCollection<T> where T : class
 
     public DocumentCollection(
         IDocumentMapper<T> mapper,
-        StorageEngine storageEngine,
-        TransactionManager txnManager)
+        StorageEngine storageEngine)
     {
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-        _txnManager = txnManager ?? throw new ArgumentNullException(nameof(txnManager));
         _storage = storageEngine ?? throw new ArgumentNullException(nameof(storageEngine));
 
-        // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
-        var indexOptions = IndexOptions.CreateBTree("_id");
-        _primaryIndex = new BTreeIndex(_storage, indexOptions);
-
-        // Initialize secondary index manager
+        // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
         _indexManager = new CollectionIndexManager<T>(_storage, mapper);
         _freeSpaceMap = new Dictionary<uint, ushort>();
+
+        // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
+        // Use persisted root page ID if available
+        var indexOptions = IndexOptions.CreateBTree("_id");
+        _primaryIndex = new BTreeIndex(_storage, indexOptions, _indexManager.PrimaryRootPageId);
+
+        // If a new root page was allocated, persist it
+        if (_indexManager.PrimaryRootPageId != _primaryIndex.RootPageId)
+        {
+            _indexManager.SetPrimaryRootPageId(_primaryIndex.RootPageId);
+        }
     }
 
     #region Public Transaction API
@@ -63,7 +67,7 @@ public class DocumentCollection<T> where T : class
     /// </example>
     public ITransaction BeginTransaction()
     {
-        return _txnManager.BeginTransaction();
+        return _storage.BeginTransaction();
     }
 
     #endregion
@@ -97,7 +101,7 @@ public class DocumentCollection<T> where T : class
         if (keySelector == null)
             throw new ArgumentNullException(nameof(keySelector));
 
-        using(var txn = _txnManager.BeginTransaction())
+        using (var txn = _storage.BeginTransaction())
         {
             var index = _indexManager.CreateIndex(keySelector, name, unique);
 
@@ -184,7 +188,7 @@ public class DocumentCollection<T> where T : class
         // Iterate all documents in the collection via primary index
         var minKey = new IndexKey(new byte[] { 0 });
         var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray()); // Max for ObjectId (12 bytes)
-        
+
         foreach (var entry in _primaryIndex.Range(minKey, maxKey, txn.TransactionId))
         {
             try
@@ -533,7 +537,7 @@ public class DocumentCollection<T> where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        ITransaction txn = transaction ?? _txnManager.BeginTransaction();
+        ITransaction txn = transaction ?? _storage.BeginTransaction();
 
         var isInternalTransaction = transaction == null;
 
@@ -621,7 +625,7 @@ public class DocumentCollection<T> where T : class
         var entityList = entities.ToList();
         var ids = new List<ObjectId>(entityList.Count);
 
-        var txn = transaction ?? _txnManager.BeginTransaction();
+        var txn = transaction ?? _storage.BeginTransaction();
         var isInternalTransaction = transaction == null;
 
         const int BATCH_SIZE = 50;  // Optimal: balances parallelism benefits vs memory overhead
@@ -658,7 +662,7 @@ public class DocumentCollection<T> where T : class
                 var entity = entityList[batchStart + i]; // Get entity for index updates
 
                 DocumentLocation location;
-                
+
                 if (docData.Length <= MaxDocumentSizeForSinglePage)
                 {
                     var pageId = FindPageWithSpace(docData.Length);
@@ -709,9 +713,9 @@ public class DocumentCollection<T> where T : class
     /// <returns>The document, or null if not found</returns>
     public T? FindById(ObjectId id, ITransaction? transaction = null)
     {
-        var txn = transaction ?? _txnManager.BeginTransaction();
+        var txn = transaction ?? _storage.BeginTransaction();
         var isInternal = transaction == null;
-        
+
         try
         {
             var key = new IndexKey(id.ToByteArray());
@@ -723,7 +727,7 @@ public class DocumentCollection<T> where T : class
         finally
         {
             // Read-only transaction, no commit needed - just cleanup
-            if (isInternal) 
+            if (isInternal)
                 txn.Dispose();
         }
     }
@@ -740,13 +744,13 @@ public class DocumentCollection<T> where T : class
         // For IEnumerable methods with yield, we CANNOT create internal transactions
         // because the finally block won't execute until enumeration completes.
         // Caller must provide transaction if they need isolation.
-        
+
         var txnId = transaction?.TransactionId ?? 0; // 0 = read committed only
-        
+
         // Scan all entries in primary index
         var minKey = new IndexKey(new byte[] { 0 });
         var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray());
-        
+
         foreach (var entry in _primaryIndex.Range(minKey, maxKey, txnId))
         {
             var entity = FindByLocation(entry.Location, transaction);
@@ -754,7 +758,7 @@ public class DocumentCollection<T> where T : class
                 yield return entity;
         }
     }
-    
+
     private T? FindByLocation(DocumentLocation location, ITransaction? transaction)
     {
         var txnId = transaction?.TransactionId ?? 0;
@@ -841,17 +845,19 @@ public class DocumentCollection<T> where T : class
 
     #region Update & Delete
 
-    public bool Update(T entity)
+    public bool Update(T entity, ITransaction? transaction = null)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         var id = _mapper.GetId(entity);
         var key = new IndexKey(id.ToByteArray());
-        
+
         if (!_primaryIndex.TryFind(key, out var oldLocation))
             return false;
 
-        var txn = _txnManager.BeginTransaction();
+        var txn = transaction ?? _storage.BeginTransaction();
+        var isInternalTransaction = transaction == null;
+
         try
         {
             // Serialize new version
@@ -918,7 +924,10 @@ public class DocumentCollection<T> where T : class
                     ArrayPool<byte>.Shared.Return(pageBuffer);
                 }
 
-                txn.Commit();
+                if (isInternalTransaction)
+                {
+                    txn.Commit();
+                }
             }
             finally
             {
@@ -927,7 +936,10 @@ public class DocumentCollection<T> where T : class
         }
         catch
         {
-            txn.Rollback();
+            if (isInternalTransaction)
+            {
+                txn.Rollback();
+            }
             throw;
         }
 
@@ -947,7 +959,7 @@ public class DocumentCollection<T> where T : class
         const int BATCH_SIZE = 50;
 
         // Use provided transaction or create internal one
-        var txn = transaction ?? _txnManager.BeginTransaction();
+        var txn = transaction ?? _storage.BeginTransaction();
         var isInternalTransaction = transaction == null;
 
         try
@@ -989,7 +1001,7 @@ public class DocumentCollection<T> where T : class
                     var key = new IndexKey(id.ToByteArray());
                     if (!_primaryIndex.TryFind(key, out var oldLocation))
                         continue;
-                    
+
                     var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
                     try
@@ -1058,7 +1070,7 @@ public class DocumentCollection<T> where T : class
                                 var (newPageId, newSlotIndex) = InsertWithOverflow(docData, txn);
                                 newLocation = new DocumentLocation(newPageId, newSlotIndex);
                             }
-                            
+
                             // Update primary index
                             _primaryIndex.Delete(key, oldLocation, txn.TransactionId);
                             _primaryIndex.Insert(key, newLocation, txn.TransactionId);
@@ -1089,13 +1101,15 @@ public class DocumentCollection<T> where T : class
         return updateCount;
     }
 
-    public bool Delete(ObjectId id)
+    public bool Delete(ObjectId id, ITransaction? transaction = null)
     {
         var key = new IndexKey(id.ToByteArray());
         if (!_primaryIndex.TryFind(key, out var location))
             return false;
 
-        var txn = _txnManager.BeginTransaction();
+        var txn = transaction ?? _storage.BeginTransaction();
+        var isInternalTransaction = transaction == null;
+
         try
         {
             var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1126,7 +1140,10 @@ public class DocumentCollection<T> where T : class
                 // Remove from primary index
                 _primaryIndex.Delete(key, location, txn.TransactionId);
 
-                txn.Commit();
+                if (isInternalTransaction)
+                {
+                    txn.Commit();
+                }
             }
             finally
             {
@@ -1135,7 +1152,10 @@ public class DocumentCollection<T> where T : class
         }
         catch
         {
-            txn.Rollback();
+            if (isInternalTransaction)
+            {
+                txn.Rollback();
+            }
             throw;
         }
 
@@ -1151,7 +1171,7 @@ public class DocumentCollection<T> where T : class
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         int deleteCount = 0;
-        ITransaction txn = transaction ?? _txnManager.BeginTransaction();
+        ITransaction txn = transaction ?? _storage.BeginTransaction();
         var isInternalTransaction = transaction == null;
 
         try
@@ -1252,9 +1272,9 @@ public class DocumentCollection<T> where T : class
     /// <returns>Number of documents</returns>
     public int Count(ITransaction? transaction = null)
     {
-        var txn = transaction ?? _txnManager.BeginTransaction();
+        var txn = transaction ?? _storage.BeginTransaction();
         var isInternal = transaction == null;
-        
+
         try
         {
             // Count all entries in primary index
@@ -1264,7 +1284,7 @@ public class DocumentCollection<T> where T : class
         }
         finally
         {
-            if (isInternal) 
+            if (isInternal)
                 txn.Dispose();
         }
     }
@@ -1285,7 +1305,7 @@ public class DocumentCollection<T> where T : class
     /// <summary>
     /// Find entities matching predicate (alias for FindAll with predicate)
     /// </summary>
-    public IEnumerable<T> Find(Func<T, bool> predicate, ITransaction? transaction = null) 
+    public IEnumerable<T> Find(Func<T, bool> predicate, ITransaction? transaction = null)
         => FindAll(predicate, transaction);
 
     #endregion

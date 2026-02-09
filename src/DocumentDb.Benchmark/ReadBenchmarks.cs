@@ -31,7 +31,6 @@ public class ReadBenchmarks
 
     // DocumentDb
     private StorageEngine _storage = null!;
-    private TransactionManager _txnMgr = null!;
     private DocumentCollection<Person> _collection = null!;
     // _mapper removed (unused)
 
@@ -56,8 +55,7 @@ public class ReadBenchmarks
 
         // 1. Setup DocumentDb & Insert Data
         _storage = new StorageEngine(_docDbPath, PageFileConfig.Default);
-        _txnMgr = new TransactionManager(_storage);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage, _txnMgr);
+        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage);
 
         _ids = new ObjectId[DocCount];
         for (int i = 0; i < DocCount; i++)
@@ -92,7 +90,6 @@ public class ReadBenchmarks
     {
         _storage?.Dispose();
         SqliteConnection.ClearAllPools();
-        _txnMgr?.Dispose();
         
         if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
         if (File.Exists(_docDbWalPath)) File.Delete(_docDbWalPath);

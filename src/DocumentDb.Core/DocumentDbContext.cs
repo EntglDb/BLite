@@ -11,7 +11,6 @@ namespace DocumentDb.Core;
 /// </summary>
 public abstract partial class DocumentDbContext : IDisposable
 {
-    public readonly TransactionManager _transactionManager;
     public readonly StorageEngine _storage;
     public bool _disposed;
     
@@ -32,8 +31,6 @@ public abstract partial class DocumentDbContext : IDisposable
             throw new ArgumentNullException(nameof(databasePath));
 
         _storage = new StorageEngine(databasePath, config);
-
-        _transactionManager = new TransactionManager(_storage);
 
         // Initialize collections - implemented by derived class or Source Generator
         InitializeCollections();
@@ -61,13 +58,8 @@ public abstract partial class DocumentDbContext : IDisposable
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        return new DocumentCollection<T>(mapper, _storage, _transactionManager);
+        return new DocumentCollection<T>(mapper, _storage);
     }
-    
-    /// <summary>
-    /// Exposes TransactionManager for advanced scenarios
-    /// </summary>
-    protected TransactionManager TransactionManager => _transactionManager;
     
     public void Dispose()
     {
@@ -76,7 +68,6 @@ public abstract partial class DocumentDbContext : IDisposable
         
         _disposed = true;
         
-        _transactionManager?.Dispose();
         _storage?.Dispose();
         
         GC.SuppressFinalize(this);

@@ -11,7 +11,6 @@ public class BulkOperationsTests : IDisposable
     private readonly string _dbPath;
     private readonly string _walPath;
     private readonly StorageEngine _storage;
-    private readonly TransactionManager _txnManager;
     private readonly DocumentCollection<User> _collection;
 
     public BulkOperationsTests()
@@ -21,16 +20,13 @@ public class BulkOperationsTests : IDisposable
         
         _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
 
-        _txnManager = new TransactionManager(_storage);
-        
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _storage, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _storage);
     }
 
     public void Dispose()
     {
         _storage.Dispose();
-        _txnManager.Dispose();
     }
 
     [Fact]

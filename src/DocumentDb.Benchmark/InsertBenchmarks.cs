@@ -31,7 +31,6 @@ public class InsertBenchmarks
     private string _sqliteConnString = "";
 
     // DocumentDb
-    private TransactionManager? _txnMgr = null;
     private StorageEngine? _storage = null;
     private DocumentCollection<Person>? _collection = null;
 
@@ -96,8 +95,7 @@ public class InsertBenchmarks
     public void IterationSetup()
     {
         _storage = new StorageEngine(_docDbWalPath, PageFileConfig.Default);
-        _txnMgr = new TransactionManager(_storage);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage, _txnMgr);
+        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage);
 
         // 2. Reset SQLite
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
@@ -112,7 +110,6 @@ public class InsertBenchmarks
         try
         {
             _storage?.Dispose();
-            _txnMgr?.Dispose();
             
             SqliteConnection.ClearAllPools();
             
