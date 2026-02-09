@@ -206,7 +206,10 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Inserts a document into all indexes
     /// </summary>
-    public void InsertIntoAll(T document, ITransaction transaction)
+    /// <param name="document">Document to insert</param>
+    /// <param name="location">Physical location of the document</param>
+    /// <param name="transaction">Transaction context</param>
+    public void InsertIntoAll(T document, DocumentLocation location, ITransaction transaction)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));
@@ -215,7 +218,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         {
             foreach (var index in _indexes.Values)
             {
-                index.Insert(document, transaction);
+                index.Insert(document, location, transaction);
             }
         }
     }
@@ -223,7 +226,12 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Updates a document in all indexes
     /// </summary>
-    public void UpdateInAll(T oldDocument, T newDocument, ITransaction transaction)
+    /// <param name="oldDocument">Old version of document</param>
+    /// <param name="newDocument">New version of document</param>
+    /// <param name="oldLocation">Physical location of old document</param>
+    /// <param name="newLocation">Physical location of new document</param>
+    /// <param name="transaction">Transaction context</param>
+    public void UpdateInAll(T oldDocument, T newDocument, DocumentLocation oldLocation, DocumentLocation newLocation, ITransaction transaction)
     {
         if (oldDocument == null)
             throw new ArgumentNullException(nameof(oldDocument));
@@ -234,7 +242,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         {
             foreach (var index in _indexes.Values)
             {
-                index.Update(oldDocument, newDocument, transaction);
+                index.Update(oldDocument, newDocument, oldLocation, newLocation, transaction);
             }
         }
     }
@@ -242,7 +250,10 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Deletes a document from all indexes
     /// </summary>
-    public void DeleteFromAll(T document, ITransaction transaction)
+    /// <param name="document">Document to delete</param>
+    /// <param name="location">Physical location of the document</param>
+    /// <param name="transaction">Transaction context</param>
+    public void DeleteFromAll(T document, DocumentLocation location, ITransaction transaction)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));
@@ -251,7 +262,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         {
             foreach (var index in _indexes.Values)
             {
-                index.Delete(document, transaction);
+                index.Delete(document, location, transaction);
             }
         }
     }

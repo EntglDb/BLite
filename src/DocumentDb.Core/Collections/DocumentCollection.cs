@@ -18,16 +18,13 @@ public class DocumentCollection<T> where T : class
     private readonly StorageEngine _storage;
     private readonly BTreeIndex _primaryIndex;
     private readonly TransactionManager _txnManager;
-    private readonly CollectionIndexManager<T> _indexManager; // NEW: Custom index manager
+    private readonly CollectionIndexManager<T> _indexManager;
 
     // Free space tracking: PageId → Free bytes
     private readonly Dictionary<uint, ushort> _freeSpaceMap;
 
     // Current page for inserts (optimization)
     private uint _currentDataPage;
-
-    // Metadata page for persistence
-    private readonly uint _metadataPageId;
 
     private const int MaxDocumentSizeForSinglePage = 15000; // ~15KB for 16KB pages
 
@@ -40,216 +37,14 @@ public class DocumentCollection<T> where T : class
         _txnManager = txnManager ?? throw new ArgumentNullException(nameof(txnManager));
         _storage = storageEngine ?? throw new ArgumentNullException(nameof(storageEngine));
 
-        // Create primary index on _id
+        // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
         var indexOptions = IndexOptions.CreateBTree("_id");
         _primaryIndex = new BTreeIndex(_storage, indexOptions);
 
         // Initialize secondary index manager
         _indexManager = new CollectionIndexManager<T>(_storage, mapper);
         _freeSpaceMap = new Dictionary<uint, ushort>();
-
-        var txn = _txnManager.BeginTransaction(); // Start a transaction to load metadata
-        // Allocate metadata page (for now, hardcoded - future: registry)
-        _metadataPageId = AllocateMetadataPage(txn.TransactionId);
-
-        // Load existing mappings from metadata
-        LoadIdMap(txn.TransactionId);
-
-        txn.Commit();
     }
-
-    #region Metadata Persistence
-
-    private uint AllocateMetadataPage(ulong trnsactionId)
-    {
-        var pageId = _storage.AllocatePage();
-
-        // Initialize empty metadata
-        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-        try
-        {
-            var writer = new BsonSpanWriter(buffer);
-            var sizePos = writer.BeginDocument();
-            writer.WriteString("collection", _mapper.CollectionName);
-            writer.WriteInt32("version", 1);
-
-            var arrayPos = writer.BeginArray("locations");
-            writer.EndArray(arrayPos);
-
-            writer.EndDocument(sizePos);
-
-            _storage.WritePage(pageId, trnsactionId, buffer);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
-
-        return pageId;
-    }
-
-    private void LoadIdMap(ulong transactionId)
-    {
-        uint currentPage = _metadataPageId;
-
-        while (currentPage != 0)
-        {
-            uint nextPage = LoadIdMapChunk(currentPage, transactionId);
-            currentPage = nextPage;
-        }
-    }
-
-    private uint LoadIdMapChunk(uint pageId, ulong transactionId)
-    {
-        Span<byte> buffer = stackalloc byte[_storage.PageSize];
-        _storage.ReadPage(pageId, transactionId, buffer);
-
-        var reader = new BsonSpanReader(buffer);
-        reader.ReadDocumentSize(); // Skip size
-
-        uint nextPage = 0;
-
-        // Read until we find "locations" array
-        while (reader.Position < buffer.Length)
-        {
-            var type = reader.ReadBsonType();
-            if (type == BsonType.EndOfDocument)
-                break;
-
-            var name = reader.ReadCString();
-
-            if (name == "nextMetadataPage" && type == BsonType.Int32)
-            {
-                nextPage = (uint)reader.ReadInt32();
-            }
-            else if (name == "locations" && type == BsonType.Array)
-            {
-                reader.ReadDocumentSize(); // Array size
-
-                // Read array elements
-                while (true)
-                {
-                    var elemType = reader.ReadBsonType();
-                    if (elemType == BsonType.EndOfDocument)
-                        break;
-
-                    reader.ReadCString(); // Array index as string ("0", "1", ...)
-
-                    if (elemType == BsonType.Document)
-                    {
-                        reader.ReadDocumentSize();
-
-                        ObjectId id = ObjectId.Empty;
-                        uint entryPageId = 0;
-                        ushort slotIndex = 0;
-
-                        // Read document fields
-                        while (true)
-                        {
-                            var fieldType = reader.ReadBsonType();
-                            if (fieldType == BsonType.EndOfDocument)
-                                break;
-
-                            var fieldName = reader.ReadCString();
-
-                            if (fieldName == "_id" && fieldType == BsonType.ObjectId)
-                                id = reader.ReadObjectId();
-                            else if (fieldName == "page" && fieldType == BsonType.Int32)
-                                entryPageId = (uint)reader.ReadInt32();
-                            else if (fieldName == "slot" && fieldType == BsonType.Int32)
-                                slotIndex = (ushort)reader.ReadInt32();
-                            else
-                                reader.SkipValue(fieldType);
-                        }
-
-                        if (id != ObjectId.Empty && entryPageId != 0)
-                        {
-                            _idToLocationMap[id] = new DocumentLocation(entryPageId, slotIndex);
-                        }
-                    }
-                }
-            }
-            else
-            {
-                reader.SkipValue(type);
-            }
-        }
-
-        return nextPage;
-    }
-
-    private void SaveIdMap(ulong transactionId)
-    {
-        // Conservative estimate: each entry ~60 bytes (ObjectId + page + slot + overhead)
-        // For 16KB page: ~200 entries per page safely
-        const int ENTRIES_PER_PAGE = 200;
-
-        var entries = _idToLocationMap.ToList();
-        uint currentMetadataPage = _metadataPageId;
-
-        for (int offset = 0; offset < entries.Count; offset += ENTRIES_PER_PAGE)
-        {
-            var chunk = entries.Skip(offset).Take(ENTRIES_PER_PAGE);
-            bool isFirstChunk = (offset == 0);
-            bool isLastChunk = (offset + ENTRIES_PER_PAGE >= entries.Count);
-
-            uint nextPage = 0;
-            if (!isLastChunk)
-            {
-                nextPage = _storage.AllocatePage();
-            }
-
-            SaveIdMapChunk(currentMetadataPage, transactionId, chunk, nextPage, isFirstChunk);
-            currentMetadataPage = nextPage;
-        }
-    }
-
-    private void SaveIdMapChunk(
-        uint pageId,
-        ulong transactionId,
-        IEnumerable<KeyValuePair<ObjectId, DocumentLocation>> entries,
-        uint nextPage,
-        bool isFirst)
-    {
-        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-        try
-        {
-            Array.Clear(buffer, 0, _storage.PageSize); // Clear buffer
-
-            var writer = new BsonSpanWriter(buffer);
-            var sizePos = writer.BeginDocument();
-
-            if (isFirst)
-            {
-                writer.WriteString("collection", _mapper.CollectionName);
-                writer.WriteInt32("version", 1);
-            }
-
-            writer.WriteInt32("nextMetadataPage", (int)nextPage);
-
-            var arrayPos = writer.BeginArray("locations");
-            int index = 0;
-            foreach (var kvp in entries)
-            {
-                var entryPos = writer.BeginDocument(index.ToString());
-                writer.WriteObjectId("_id", kvp.Key);
-                writer.WriteInt32("page", (int)kvp.Value.PageId);
-                writer.WriteInt32("slot", kvp.Value.SlotIndex);
-                writer.EndDocument(entryPos);
-                index++;
-            }
-            writer.EndArray(arrayPos);
-            writer.EndDocument(sizePos);
-
-            _storage.WritePage(pageId, transactionId, buffer);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
-    }
-
-    #endregion
 
     #region Public Transaction API
 
@@ -358,15 +153,18 @@ public class DocumentCollection<T> where T : class
     /// </summary>
     private void RebuildIndex(CollectionSecondaryIndex<T> index, ITransaction txn)
     {
-        // Iterate all documents in the collection and insert into the new index
-        foreach (var (id, location) in _idToLocationMap)
+        // Iterate all documents in the collection via primary index
+        var minKey = new IndexKey(new byte[] { 0 });
+        var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray()); // Max for ObjectId (12 bytes)
+        
+        foreach (var entry in _primaryIndex.Range(minKey, maxKey, txn.TransactionId))
         {
             try
             {
-                var document = FindById(id);
+                var document = FindByLocation(entry.Location);
                 if (document != null)
                 {
-                    index.Insert(document, txn);
+                    index.Insert(document, entry.Location, txn);
                 }
             }
             catch
@@ -737,41 +535,31 @@ public class DocumentCollection<T> where T : class
                     pageId = AllocateNewDataPage(txn);
 
                 var slotIndex = InsertIntoPage(pageId, docData, txn);
+                var location = new DocumentLocation(pageId, slotIndex);
 
-                // Map ID → Location
-                _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
-
-                // NOTE: InsertIntoPage already wrote to PageFile directly.
-                // We don't add to transaction WAL here because the write is immediate.
-                // TODO: Implement proper transactional writes with rollback support
-
-                // Add to primary index
+                // Add to primary index (stores ObjectId → DocumentLocation)
                 var key = new IndexKey(id.ToByteArray());
-                _primaryIndex.Insert(key, id, txn.TransactionId);
+                _primaryIndex.Insert(key, location, txn.TransactionId);
 
-                // NEW: Insert into all secondary indexes
-                _indexManager.InsertIntoAll(entity, txn);
+                // Insert into all secondary indexes
+                _indexManager.InsertIntoAll(entity, location, txn);
             }
             else
             {
                 // Multi-page overflow insert
                 var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
+                var location = new DocumentLocation(pageId, slotIndex);
 
-                // Map ID → Location
-                _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
-
-                // Add to primary index
+                // Add to primary index (stores ObjectId → DocumentLocation)
                 var key = new IndexKey(id.ToByteArray());
-                _primaryIndex.Insert(key, id, txn.TransactionId);
+                _primaryIndex.Insert(key, location, txn.TransactionId);
 
-                // NEW: Insert into all secondary indexes
-                _indexManager.InsertIntoAll(entity, txn);
+                // Insert into all secondary indexes
+                _indexManager.InsertIntoAll(entity, location, txn);
             }
 
             if (isInternalTransaction)
             {
-                // Persist mapping before commit (only for auto-commit)
-                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
 
@@ -841,6 +629,8 @@ public class DocumentCollection<T> where T : class
                 var (id, docData) = serializedBatch[i];
                 var entity = entityList[batchStart + i]; // Get entity for index updates
 
+                DocumentLocation location;
+                
                 if (docData.Length <= MaxDocumentSizeForSinglePage)
                 {
                     var pageId = FindPageWithSpace(docData.Length);
@@ -849,20 +639,21 @@ public class DocumentCollection<T> where T : class
                         pageId = AllocateNewDataPage(txn);
 
                     var slotIndex = InsertIntoPage(pageId, docData, txn);
-                    _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
+                    location = new DocumentLocation(pageId, slotIndex);
                 }
                 else
                 {
                     // Multi-page overflow insert
                     var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
-                    _idToLocationMap[id] = new DocumentLocation(pageId, slotIndex);
+                    location = new DocumentLocation(pageId, slotIndex);
                 }
 
+                // Add to primary index
                 var key = new IndexKey(id.ToByteArray());
-                _primaryIndex.Insert(key, id, txn.TransactionId);
+                _primaryIndex.Insert(key, location, txn.TransactionId);
 
-                // NEW: Insert into all secondary indexes
-                _indexManager.InsertIntoAll(entity, txn);
+                // Insert into all secondary indexes
+                _indexManager.InsertIntoAll(entity, location, txn);
 
                 ids.Add(id);
             }
@@ -870,7 +661,6 @@ public class DocumentCollection<T> where T : class
 
         if (isInternalTransaction)
         {
-            SaveIdMap(txn.TransactionId);
             txn.Commit();
         }
 
@@ -883,7 +673,8 @@ public class DocumentCollection<T> where T : class
 
     public T? FindById(ObjectId id)
     {
-        if (!_idToLocationMap.TryGetValue(id, out var location))
+        var key = new IndexKey(id.ToByteArray());
+        if (!_primaryIndex.TryFind(key, out var location))
             return null;
 
         return FindByLocation(location);
@@ -891,9 +682,13 @@ public class DocumentCollection<T> where T : class
 
     public IEnumerable<T> FindAll()
     {
-        foreach (var location in _idToLocationMap.Values)
+        // Scan all entries in primary index
+        var minKey = new IndexKey(new byte[] { 0 });
+        var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray());
+        
+        foreach (var entry in _primaryIndex.Range(minKey, maxKey, null))
         {
-            var entity = FindByLocation(location);
+            var entity = FindByLocation(entry.Location);
             if (entity != null)
                 yield return entity;
         }
@@ -989,7 +784,9 @@ public class DocumentCollection<T> where T : class
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         var id = _mapper.GetId(entity);
-        if (!_idToLocationMap.TryGetValue(id, out var oldLocation))
+        var key = new IndexKey(id.ToByteArray());
+        
+        if (!_primaryIndex.TryFind(key, out var oldLocation))
             return false;
 
         var txn = _txnManager.BeginTransaction();
@@ -1013,7 +810,7 @@ public class DocumentCollection<T> where T : class
 
                     if (bytesWritten <= oldSlot.Length)
                     {
-                        // In-place update
+                        // In-place update - location doesn't change
                         docData.CopyTo(pageBuffer.AsSpan(oldSlot.Offset, bytesWritten));
 
                         // Update slot length
@@ -1022,6 +819,7 @@ public class DocumentCollection<T> where T : class
                         newSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
 
                         _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
+                        // Primary index doesn't need update (location unchanged)
                     }
                     else
                     {
@@ -1046,9 +844,11 @@ public class DocumentCollection<T> where T : class
                             newPageId = AllocateNewDataPage(txn);
 
                         var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
+                        var newLocation = new DocumentLocation(newPageId, newSlotIndex);
 
-                        // Update location mapping
-                        _idToLocationMap[id] = new DocumentLocation(newPageId, newSlotIndex);
+                        // Update primary index with new location
+                        _primaryIndex.Delete(key, oldLocation, txn.TransactionId);
+                        _primaryIndex.Insert(key, newLocation, txn.TransactionId);
                     }
                 }
                 finally
@@ -1056,7 +856,6 @@ public class DocumentCollection<T> where T : class
                     ArrayPool<byte>.Shared.Return(pageBuffer);
                 }
 
-                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
             finally
@@ -1103,8 +902,9 @@ public class DocumentCollection<T> where T : class
                 {
                     var entity = entityList[batchStart + i];
                     var id = _mapper.GetId(entity);
+                    var key = new IndexKey(id.ToByteArray());
 
-                    if (_idToLocationMap.ContainsKey(id))
+                    if (_primaryIndex.TryFind(key, out var _))
                     {
                         var bufferWriter = new System.Buffers.ArrayBufferWriter<byte>();
                         _mapper.Serialize(entity, bufferWriter);
@@ -1123,7 +923,10 @@ public class DocumentCollection<T> where T : class
                     var (id, docData, found) = serializedBatch[i];
                     if (!found) continue;
 
-                    var oldLocation = _idToLocationMap[id];
+                    var key = new IndexKey(id.ToByteArray());
+                    if (!_primaryIndex.TryFind(key, out var oldLocation))
+                        continue;
+                    
                     var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
                     try
@@ -1179,19 +982,23 @@ public class DocumentCollection<T> where T : class
                             }
 
                             // 3. Allocate New
-                            // Note: InsertIntoPage/InsertWithOverflow checks Transaction cache now
+                            DocumentLocation newLocation;
                             if (docData.Length <= MaxDocumentSizeForSinglePage)
                             {
                                 var newPageId = FindPageWithSpace(docData.Length);
                                 if (newPageId == 0) newPageId = AllocateNewDataPage(txn);
                                 var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
-                                _idToLocationMap[id] = new DocumentLocation(newPageId, newSlotIndex);
+                                newLocation = new DocumentLocation(newPageId, newSlotIndex);
                             }
                             else
                             {
                                 var (newPageId, newSlotIndex) = InsertWithOverflow(docData, txn);
-                                _idToLocationMap[id] = new DocumentLocation(newPageId, newSlotIndex);
+                                newLocation = new DocumentLocation(newPageId, newSlotIndex);
                             }
+                            
+                            // Update primary index
+                            _primaryIndex.Delete(key, oldLocation, txn.TransactionId);
+                            _primaryIndex.Insert(key, newLocation, txn.TransactionId);
                         }
                         updateCount++;
                     }
@@ -1204,7 +1011,6 @@ public class DocumentCollection<T> where T : class
 
             if (isInternalTransaction)
             {
-                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
         }
@@ -1222,7 +1028,8 @@ public class DocumentCollection<T> where T : class
 
     public bool Delete(ObjectId id)
     {
-        if (!_idToLocationMap.TryGetValue(id, out var location))
+        var key = new IndexKey(id.ToByteArray());
+        if (!_primaryIndex.TryFind(key, out var location))
             return false;
 
         var txn = _txnManager.BeginTransaction();
@@ -1253,13 +1060,9 @@ public class DocumentCollection<T> where T : class
 
                 _storage.WritePage(location.PageId, txn.TransactionId, buffer);
 
-                // Remove from mapping
-                _idToLocationMap.Remove(id);
+                // Remove from primary index
+                _primaryIndex.Delete(key, location, txn.TransactionId);
 
-                // Remove from BTree index
-                _primaryIndex.Delete(new IndexKey(id.ToByteArray()), id, txn.TransactionId);
-
-                SaveIdMap(txn.TransactionId);
                 txn.Commit();
             }
             finally
@@ -1285,19 +1088,15 @@ public class DocumentCollection<T> where T : class
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         int deleteCount = 0;
-        // txn is always non-null after this line
         ITransaction txn = transaction ?? _txnManager.BeginTransaction();
-
         var isInternalTransaction = transaction == null;
-
-        // Track deletions for rollback
-        var deletedEntries = new List<(ObjectId Id, DocumentLocation Location)>();
 
         try
         {
             foreach (var id in ids)
             {
-                if (!_idToLocationMap.TryGetValue(id, out var location))
+                var key = new IndexKey(id.ToByteArray());
+                if (!_primaryIndex.TryFind(key, out var location))
                     continue;
 
                 var pageData = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1327,12 +1126,8 @@ public class DocumentCollection<T> where T : class
                     var writeOp = new WriteOperation(ObjectId.Empty, pageData.AsSpan(0, _storage.PageSize).ToArray(), location.PageId, OperationType.Delete);
                     txn.AddWrite(writeOp);
 
-                    // 2. Remove from Memory Map
-                    deletedEntries.Add((id, location));
-                    _idToLocationMap.Remove(id);
-
-                    // 3. Remove from Index (txn is guaranteed non-null by initialization)
-                    _primaryIndex.Delete(new IndexKey(id.ToByteArray()), id, txn!.TransactionId);
+                    // Remove from primary index
+                    _primaryIndex.Delete(key, location, txn!.TransactionId);
 
                     deleteCount++;
                 }
@@ -1344,23 +1139,7 @@ public class DocumentCollection<T> where T : class
 
             if (isInternalTransaction)
             {
-                // Register rollback handler
-                if (txn is ITransaction txnInt)
-                {
-                    txnInt.OnRollback += () =>
-                    {
-                        foreach (var entry in deletedEntries)
-                        {
-                            _idToLocationMap[entry.Id] = entry.Location;
-                        }
-                    };
-                }
-
-                if (isInternalTransaction)
-                {
-                    SaveIdMap(txn.TransactionId);
-                    txn.Commit();
-                }
+                txn.Commit();
             }
         }
         catch
@@ -1402,7 +1181,13 @@ public class DocumentCollection<T> where T : class
 
     #region Query Helpers
 
-    public int Count() => _idToLocationMap.Count;
+    public int Count()
+    {
+        // Count all entries in primary index
+        var minKey = new IndexKey(new byte[] { 0 });
+        var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 24).ToArray());
+        return _primaryIndex.Range(minKey, maxKey, null).Count();
+    }
 
     public IEnumerable<T> FindAll(Func<T, bool> predicate)
     {
