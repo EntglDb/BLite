@@ -104,8 +104,36 @@ public class DocumentCollection<T> where T : class
             // Rebuild index for existing documents
             RebuildIndex(index, txn);
 
+            txn.Commit();
+
             return index;
         }
+    }
+
+    /// <summary>
+    /// Ensures that an index exists on the specified property.
+    /// If the index already exists, it is returned without modification (idempotent).
+    /// If it doesn't exist, it is created and populated.
+    /// </summary>
+    public CollectionSecondaryIndex<T> EnsureIndex<TKey>(
+        System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+        string? name = null,
+        bool unique = false)
+    {
+        if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
+
+        // 1. Check if index already exists (fast path)
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var indexName = name ?? $"idx_{string.Join("_", propertyPaths)}";
+
+        var existingIndex = GetIndex(indexName);
+        if (existingIndex != null)
+        {
+            return existingIndex;
+        }
+
+        // 2. Create if missing (slow path: rebuilds index)
+        return CreateIndex(keySelector, name, unique);
     }
 
     /// <summary>

@@ -87,8 +87,8 @@ public sealed class PageFile : IDisposable
 
             if (!fileExists || _fileStream.Length == 0)
             {
-                // Initialize new file
-                _fileStream.SetLength(_config.InitialFileSize);
+                // Initialize new file with 2 pages (Header + Collection Metadata)
+                _fileStream.SetLength(_config.InitialFileSize < _config.PageSize * 2 ? _config.PageSize * 2 : _config.InitialFileSize);
                 InitializeHeader();
             }
 
@@ -116,10 +116,11 @@ public sealed class PageFile : IDisposable
     }
 
     /// <summary>
-    /// Initializes the file header (page 0)
+    /// Initializes the file header (page 0) and collection metadata (page 1)
     /// </summary>
     private void InitializeHeader()
     {
+        // 1. Initialize Header (Page 0)
         var header = new PageHeader
         {
             PageId = 0,
@@ -130,11 +131,30 @@ public sealed class PageFile : IDisposable
             Checksum = 0
         };
 
-        Span<byte> headerPage = stackalloc byte[_config.PageSize];
-        header.WriteTo(headerPage);
+        Span<byte> buffer = stackalloc byte[_config.PageSize];
+        header.WriteTo(buffer);
 
         _fileStream!.Position = 0;
-        _fileStream.Write(headerPage);
+        _fileStream.Write(buffer);
+
+        // 2. Initialize Collection Metadata (Page 1)
+        // This page is reserved for storing index definitions
+        buffer.Clear();
+        var metaHeader = new SlottedPageHeader
+        {
+            PageId = 1,
+            PageType = PageType.Collection,
+            SlotCount = 0,
+            FreeSpaceStart = SlottedPageHeader.Size,
+            FreeSpaceEnd = (ushort)_config.PageSize,
+            NextOverflowPage = 0,
+            TransactionId = 0
+        };
+        metaHeader.WriteTo(buffer);
+
+        _fileStream.Position = _config.PageSize;
+        _fileStream.Write(buffer);
+        
         _fileStream.Flush();
     }
 

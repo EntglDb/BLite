@@ -141,6 +141,12 @@ public sealed class CheckpointManager : IDisposable
         Checkpoint(CheckpointMode.Truncate);
     }
 
+
+    /// <summary>
+    /// If true, skips the final checkpoint on disposal (simulates crash/abrupt shutdown)
+    /// </summary>
+    public bool SkipCheckpointOnDispose { get; set; }
+
     public void Dispose()
     {
         if (_disposed)
@@ -151,14 +157,17 @@ public sealed class CheckpointManager : IDisposable
             StopAutoCheckpoint();
 
             // Final checkpoint before disposal
-            try
+            if (!SkipCheckpointOnDispose)
             {
-                Checkpoint(CheckpointMode.Full);
-            }
-            catch (Exception ex)
-            {
-                // Best effort on dispose
-                Debug.WriteLine(ex.Message);
+                try
+                {
+                    Checkpoint(CheckpointMode.Full);
+                }
+                catch (Exception ex)
+                {
+                    // Best effort on dispose
+                    Debug.WriteLine(ex.Message);
+                }
             }
 
             _disposed = true;
