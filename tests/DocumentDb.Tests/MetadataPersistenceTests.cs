@@ -25,7 +25,7 @@ public class MetadataPersistenceTests : IDisposable
         {
             // Disable auto-checkpoint to ensure cleaner test tracing, though not strictly required
             var mapper = new UserMapper();
-            var indexManager = new CollectionIndexManager<User>(storage, mapper);
+            var indexManager = new CollectionIndexManager<User>(storage, mapper, nameof(User));
             
             // Create 2 indexes
             indexManager.CreateIndex(u => u.Age, "idx_age");
@@ -36,7 +36,8 @@ public class MetadataPersistenceTests : IDisposable
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             var mapper = new UserMapper();
-            var indexManager = new CollectionIndexManager<User>(storage, mapper);
+            // Assuming Page 1 was allocated above in clean DB
+            var indexManager = new CollectionIndexManager<User>(storage, mapper, nameof(User));
             
             var indexes = indexManager.GetAllIndexes().ToList();
             

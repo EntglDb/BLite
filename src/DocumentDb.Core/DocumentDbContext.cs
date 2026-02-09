@@ -1,6 +1,7 @@
 using DocumentDb.Core.Collections;
 using DocumentDb.Core.Storage;
 using DocumentDb.Core.Transactions;
+using DocumentDb.Core.Metadata;
 
 namespace DocumentDb.Core;
 
@@ -32,8 +33,22 @@ public abstract partial class DocumentDbContext : IDisposable
 
         _storage = new StorageEngine(databasePath, config);
 
+        // Initialize model before collections
+        var modelBuilder = new ModelBuilder();
+        OnModelCreating(modelBuilder);
+        _model = modelBuilder.GetEntityBuilders();
+
         // Initialize collections - implemented by derived class or Source Generator
         InitializeCollections();
+    }
+    
+    private readonly IReadOnlyDictionary<Type, object> _model;
+
+    /// <summary>
+    /// Override to configure the model using Fluent API.
+    /// </summary>
+    protected virtual void OnModelCreating(ModelBuilder modelBuilder)
+    {
     }
     
     /// <summary>
@@ -43,9 +58,6 @@ public abstract partial class DocumentDbContext : IDisposable
     /// </summary>
     protected virtual void InitializeCollections()
     {
-        // Default: no-op
-        // Derived classes override to initialize collection properties
-        // OR Source Generator implements this via partial method
     }
     
     /// <summary>
@@ -58,7 +70,27 @@ public abstract partial class DocumentDbContext : IDisposable
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        return new DocumentCollection<T>(mapper, _storage);
+        string? customName = null;
+        EntityTypeBuilder<T>? builder = null;
+
+        if (_model.TryGetValue(typeof(T), out var builderObj))
+        {
+            builder = builderObj as EntityTypeBuilder<T>;
+            customName = builder?.CollectionName;
+        }
+
+        var collection = new DocumentCollection<T>(mapper, _storage, customName);
+
+        // Apply configurations from ModelBuilder
+        if (builder != null)
+        {
+            foreach (var indexBuilder in builder.Indexes)
+            {
+                collection.ApplyIndexBuilder(indexBuilder);
+            }
+        }
+
+        return collection;
     }
     
     public void Dispose()

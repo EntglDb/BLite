@@ -29,13 +29,14 @@ public class DocumentCollection<T> where T : class
 
     public DocumentCollection(
         IDocumentMapper<T> mapper,
-        StorageEngine storageEngine)
+        StorageEngine storageEngine,
+        string? collectionName = null)
     {
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _storage = storageEngine ?? throw new ArgumentNullException(nameof(storageEngine));
 
         // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
-        _indexManager = new CollectionIndexManager<T>(_storage, mapper);
+        _indexManager = new CollectionIndexManager<T>(_storage, mapper, collectionName);
         _freeSpaceMap = new Dictionary<uint, ushort>();
 
         // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
@@ -166,6 +167,24 @@ public class DocumentCollection<T> where T : class
     public IEnumerable<CollectionIndexInfo> GetIndexes()
     {
         return _indexManager.GetIndexInfo();
+    }
+
+    internal void ApplyIndexBuilder(Metadata.IndexBuilder<T> builder)
+    {
+        // Use the IndexManager directly to ensure the index exists
+        // We need to convert the LambdaExpression to a typed expression if possible, 
+        // or add an untyped CreateIndex to IndexManager.
+        
+        // For now, let's use a dynamic approach or cast if we know it's Func<T, object>
+        if (builder.KeySelector is System.Linq.Expressions.Expression<Func<T, object>> selector)
+        {
+             _indexManager.EnsureIndex(selector, builder.Name, builder.IsUnique);
+        }
+        else
+        {
+            // Try to rebuild the expression or use untyped version
+            _indexManager.EnsureIndexUntyped(builder.KeySelector, builder.Name, builder.IsUnique);
+        }
     }
 
     /// <summary>

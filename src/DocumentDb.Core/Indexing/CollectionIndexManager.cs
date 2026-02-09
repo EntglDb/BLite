@@ -18,11 +18,13 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     private readonly IDocumentMapper<T> _mapper;
     private readonly object _lock = new();
     private bool _disposed;
+    private readonly string _collectionName;
 
-    public CollectionIndexManager(StorageEngine storage, IDocumentMapper<T> mapper)
+    public CollectionIndexManager(StorageEngine storage, IDocumentMapper<T> mapper, string? collectionName = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _collectionName = collectionName ?? _mapper.CollectionName;
         _indexes = new Dictionary<string, CollectionSecondaryIndex<T>>(StringComparer.OrdinalIgnoreCase);
         
         // Load existing index definitions from metadata page
@@ -96,6 +98,40 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
             unique);
 
         return CreateIndex(definition);
+    }
+
+    public CollectionSecondaryIndex<T> EnsureIndex(
+        Expression<Func<T, object>> keySelector,
+        string? name = null,
+        bool unique = false)
+    {
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        name ??= GenerateIndexName(propertyPaths);
+
+        lock (_lock)
+        {
+            if (_indexes.TryGetValue(name, out var existing))
+                return existing;
+
+            return CreateIndex(keySelector, name, unique);
+        }
+    }
+
+    internal CollectionSecondaryIndex<T> EnsureIndexUntyped(
+        LambdaExpression keySelector,
+        string? name = null,
+        bool unique = false)
+    {
+        // Convert LambdaExpression to Expression<Func<T, object>> properly by sharing parameters
+        var body = keySelector.Body;
+        if (body.Type != typeof(object))
+        {
+            body = Expression.Convert(body, typeof(object));
+        }
+        
+        var lambda = Expression.Lambda<Func<T, object>>(body, keySelector.Parameters);
+
+        return EnsureIndex(lambda, name, unique);
     }
 
 
@@ -313,41 +349,55 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         var header = SlottedPageHeader.ReadFrom(buffer);
         if (header.PageType != PageType.Collection || header.SlotCount == 0) 
             return;
-            
-        var slot = SlotEntry.ReadFrom(buffer.AsSpan(SlottedPageHeader.Size));
-        if (slot.Length == 0) return;
-        
-        var metadataSpan = buffer.AsSpan(slot.Offset, slot.Length);
-        
-        using var stream = new MemoryStream(metadataSpan.ToArray());
-        using var reader = new BinaryReader(stream);
-        
-        try 
-        {
-            // Changes format! If we have legacy data, this breaks. 
-            // Assuming we can break format for now (Tests use temp files).
-            PrimaryRootPageId = reader.ReadUInt32();
 
-            var count = reader.ReadInt32();
-            for (int i = 0; i < count; i++)
-            {
-                var name = reader.ReadString();
-                var isUnique = reader.ReadBoolean();
-                var type = (IndexType)reader.ReadByte();
-                
-                var pathCount = reader.ReadInt32();
-                var paths = new string[pathCount];
-                for (int j = 0; j < pathCount; j++)
-                    paths[j] = reader.ReadString();
-                
-                var definition = RebuildDefinition(name, paths, isUnique, type);
-                var index = new CollectionSecondaryIndex<T>(definition, _storage, _mapper);
-                _indexes[name] = index;
-            }
-        }
-        catch (Exception)
+        // Iterate all slots to find the one for this collection
+        for (ushort i = 0; i < header.SlotCount; i++)
         {
-            // Corrupt metadata? Log/Ignore
+            var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+            
+            if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
+
+            var dataSpan = buffer.AsSpan(slot.Offset, slot.Length);
+            
+            // Format: [NameLength:int] [Name:string] [Metadata...]
+            // Peek name to see if it matches
+            try
+            {
+                using var stream = new MemoryStream(dataSpan.ToArray());
+                using var reader = new BinaryReader(stream);
+
+                var name = reader.ReadString();
+                if (!string.Equals(name, _collectionName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue; // Not our collection
+                }
+
+                // Match! Load metadata
+                PrimaryRootPageId = reader.ReadUInt32();
+                var indexCount = reader.ReadInt32();
+                
+                for (int j = 0; j < indexCount; j++)
+                {
+                    var idxName = reader.ReadString();
+                    var isUnique = reader.ReadBoolean();
+                    var type = (IndexType)reader.ReadByte();
+                    
+                    var pathCount = reader.ReadInt32();
+                    var paths = new string[pathCount];
+                    for (int k = 0; k < pathCount; k++)
+                        paths[k] = reader.ReadString();
+                    
+                    var definition = RebuildDefinition(idxName, paths, isUnique, type);
+                    var index = new CollectionSecondaryIndex<T>(definition, _storage, _mapper);
+                    _indexes[idxName] = index;
+                }
+                return; // Found and loaded
+            }
+            catch
+            {
+                // Ignore malformed slots
+            }
         }
     }
 
@@ -406,17 +456,19 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
 
     private void SaveMetadataToPage()
     {
+        // 1. Serialize Metadata
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         
         lock (_lock)
         {
+            writer.Write(_collectionName); // Tag payload with collection name
             writer.Write(PrimaryRootPageId);
             writer.Write(_indexes.Count);
             foreach (var idx in _indexes.Values)
             {
                 var def = idx.Definition;
-                writer.Write(def.Name); // BinaryWriter handles length prefix
+                writer.Write(def.Name); 
                 writer.Write(def.IsUnique);
                 writer.Write((byte)def.Type);
                 
@@ -428,32 +480,115 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
             }
         }
         
-        var data = stream.ToArray();
+        var newData = stream.ToArray();
+        
+        // 2. Update Page 1
+        // We need to lock the file/page to avoid race conditions if multiple collections save metadata
+        // For now, we rely on WritePageImmediate being atomic for disk io, but Read-Modify-Write is racy.
+        // In a real DB, we'd lock the page. Here we'll do a simple Read-Modify-Write loop.
         
         var buffer = new byte[_storage.PageSize];
-        var header = new SlottedPageHeader
+        _storage.ReadPage(1, null, buffer);
+        
+        var header = SlottedPageHeader.ReadFrom(buffer);
+        
+        // Identify existing slot index
+        int existingSlotIndex = -1;
+        
+        for (ushort i = 0; i < header.SlotCount; i++)
         {
-            PageId = 1,
-            PageType = PageType.Collection,
-            SlotCount = 1,
-            FreeSpaceStart = (ushort)(SlottedPageHeader.Size + SlotEntry.Size),
-            FreeSpaceEnd = (ushort)(_storage.PageSize - data.Length),
-            NextOverflowPage = 0,
-            TransactionId = 0
+            var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+            if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
+            
+            // Check name
+             try
+            {
+                var slotSpan = buffer.AsSpan(slot.Offset, slot.Length);
+                // Peek name
+                // We can't use BinaryReader nicely on Span in older .NET, but we can do string match manually
+                // Or just fast-path: name is length-prefixed string. 
+                // Read length (7-bit encoded int... tricky).
+                // Let's rely on BinaryReader over buffer stream slice.
+                using var ms = new MemoryStream(buffer, slot.Offset, slot.Length, false);
+                using var reader = new BinaryReader(ms);
+                var name = reader.ReadString();
+                
+                if (string.Equals(name, _collectionName, StringComparison.OrdinalIgnoreCase))
+                {
+                    existingSlotIndex = i;
+                    break;
+                }
+            } 
+            catch { }
+        }
+        
+        // If found, mark as deleted (simplest update strategy)
+        if (existingSlotIndex >= 0)
+        {
+             var slotOffset = SlottedPageHeader.Size + (existingSlotIndex * SlotEntry.Size);
+             var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+             slot.Flags |= SlotFlags.Deleted;
+             slot.WriteTo(buffer.AsSpan(slotOffset));
+        }
+        
+        // Insert new data
+        // Find free space (simplified: append to end of free space, if fits)
+        // Note: Compact is not implemented here. If we run out of space on Page 1, we fail.
+        // Page 1 is 16KB (usually). Metadata is small. Should be fine for many collections.
+        
+        if (header.AvailableFreeSpace < newData.Length + SlotEntry.Size)
+        {
+            // Try to compact? Or just throw.
+            throw new InvalidOperationException("Not enough space in Metadata Page (Page 1) to save collection metadata.");
+        }
+        
+        // Write data at FreeSpaceEnd - Length (grows down? No, Header says FreeSpaceEnd points to start of data payload usually? 
+        // Wait, Slot architecture usually: Header | Slots -> ... <- Data | End
+        // Let's check DocumentCollection.InsertIntoPage logic:
+        // "Write document at end of used space (grows up)" -> "docOffset = header.FreeSpaceEnd - data.Length;"
+        // And FreeSpaceEnd is initialized to PageSize. So it grows DOWN.
+        // FreeSpaceStart grows UP (slots).
+        
+        int docOffset = header.FreeSpaceEnd - newData.Length;
+        newData.CopyTo(buffer.AsSpan(docOffset));
+        
+        // Write slot
+        // Reuse existing slot index if we deleted it? 
+        // For simplicity, append new slot unless we want to scan for deleted ones.
+        // If we marked existingSlotIndex as deleted, we can reuse it IF it's consistent.
+        // But reusing slot index requires updating the Slot entry which is at a fixed position. 
+        // Yes, we can reuse existingSlotIndex.
+        
+        ushort slotIndex;
+        if (existingSlotIndex >= 0)
+        {
+            slotIndex = (ushort)existingSlotIndex;
+        }
+        else
+        {
+             slotIndex = header.SlotCount;
+             header.SlotCount++;
+        }
+        
+        var newSlotEntryOffset = SlottedPageHeader.Size + (slotIndex * SlotEntry.Size);
+        var newSlot = new SlotEntry
+        {
+            Offset = (ushort)docOffset,
+            Length = (ushort)newData.Length,
+            Flags = SlotFlags.None
         };
+        newSlot.WriteTo(buffer.AsSpan(newSlotEntryOffset));
+        
+        // Update header
+        header.FreeSpaceEnd = (ushort)docOffset;
+        // If we added a new slot, check if FreeSpaceStart needs update
+        if (existingSlotIndex == -1)
+        {
+             header.FreeSpaceStart = (ushort)(SlottedPageHeader.Size + (header.SlotCount * SlotEntry.Size));
+        }
         
         header.WriteTo(buffer);
-        
-        var payloadOffset = header.FreeSpaceEnd;
-        data.CopyTo(buffer.AsSpan(payloadOffset));
-        
-        var slot = new SlotEntry
-        {
-             Offset = (ushort)payloadOffset,
-             Length = (ushort)data.Length,
-             Flags = SlotFlags.None
-        };
-        slot.WriteTo(buffer.AsSpan(SlottedPageHeader.Size));
         
         _storage.WritePageImmediate(1, buffer);
     }
@@ -505,11 +640,22 @@ public static class ExpressionAnalyzer
                 .Select(m => m.Member.Name)
                 .ToArray();
         }
-        else if (expression.Body is UnaryExpression { NodeType: ExpressionType.Convert } unaryExpr
-                 && unaryExpr.Operand is MemberExpression innerMember)
+        else if (expression.Body is UnaryExpression { NodeType: ExpressionType.Convert } unaryExpr)
         {
-            // Wrapped property: p => (object)p.Age
-            return new[] { innerMember.Member.Name };
+            // Handle Convert(Member) or Convert(New)
+            if (unaryExpr.Operand is MemberExpression innerMember)
+            {
+                // Wrapped property: p => (object)p.Age
+                return new[] { innerMember.Member.Name };
+            }
+            else if (unaryExpr.Operand is NewExpression innerNew)
+            {
+                 // Wrapped anonymous type: p => (object)new { p.City, p.Age }
+                 return innerNew.Arguments
+                    .OfType<MemberExpression>()
+                    .Select(m => m.Member.Name)
+                    .ToArray();
+            }
         }
 
         throw new ArgumentException(
