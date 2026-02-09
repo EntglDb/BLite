@@ -45,8 +45,9 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
     /// Inserts a document into this index
     /// </summary>
     /// <param name="document">Document to index</param>
+    /// <param name="location">Physical location of the document</param>
     /// <param name="transaction">Optional transaction</param>
-    public void Insert(T document, ITransaction transaction)
+    public void Insert(T document, DocumentLocation location, ITransaction transaction)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));
@@ -65,8 +66,8 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
         // Create composite key (UserKey + ObjectId) for uniqueness
         var compositeKey = CreateCompositeKey(userKey, documentId);
         
-        // Insert into underlying BTree with composite key
-        _btreeIndex.Insert(compositeKey, documentId, transaction.TransactionId);
+        // Insert into underlying BTree with composite key and location
+        _btreeIndex.Insert(compositeKey, location, transaction?.TransactionId);
     }
 
     /// <summary>
@@ -75,8 +76,10 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
     /// </summary>
     /// <param name="oldDocument">Old version of document</param>
     /// <param name="newDocument">New version of document</param>
+    /// <param name="oldLocation">Physical location of old document</param>
+    /// <param name="newLocation">Physical location of new document</param>
     /// <param name="transaction">Optional transaction</param>
-    public void Update(T oldDocument, T newDocument, ITransaction transaction)
+    public void Update(T oldDocument, T newDocument, DocumentLocation oldLocation, DocumentLocation newLocation, ITransaction transaction)
     {
         if (oldDocument == null)
             throw new ArgumentNullException(nameof(oldDocument));
@@ -98,7 +101,7 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
         {
             var oldUserKey = ConvertToIndexKey(oldKey);
             var oldCompositeKey = CreateCompositeKey(oldUserKey, documentId);
-            _btreeIndex.Delete(oldCompositeKey, documentId, transaction.TransactionId);
+            _btreeIndex.Delete(oldCompositeKey, oldLocation, transaction?.TransactionId);
         }
         
         // Insert new entry if it has a key
@@ -106,7 +109,7 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
         {
             var newUserKey = ConvertToIndexKey(newKey);
             var newCompositeKey = CreateCompositeKey(newUserKey, documentId);
-            _btreeIndex.Insert(newCompositeKey, documentId, transaction.TransactionId);
+            _btreeIndex.Insert(newCompositeKey, newLocation, transaction?.TransactionId);
         }
     }
 
@@ -114,8 +117,9 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
     /// Deletes a document from this index
     /// </summary>
     /// <param name="document">Document to remove from index</param>
+    /// <param name="location">Physical location of the document</param>
     /// <param name="transaction">Optional transaction</param>
-    public void Delete(T document, ITransaction transaction)
+    public void Delete(T document, DocumentLocation location, ITransaction transaction)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));
@@ -130,7 +134,7 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
         
         // Create composite key and delete
         var compositeKey = CreateCompositeKey(userKey, documentId);
-        _btreeIndex.Delete(compositeKey, documentId, transaction.TransactionId);
+        _btreeIndex.Delete(compositeKey, location, transaction?.TransactionId);
     }
 
     /// <summary>
@@ -138,8 +142,8 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
     /// </summary>
     /// <param name="key">Key value to seek</param>
     /// <param name="transaction">Optional transaction to read uncommitted changes</param>
-    /// <returns>Document ID if found, null otherwise</returns>
-    public ObjectId? Seek(object key, ITransaction transaction)
+    /// <returns>Document location if found, null otherwise</returns>
+    public DocumentLocation? Seek(object key, ITransaction? transaction = null)
     {
         if (key == null)
             return null;
@@ -153,9 +157,9 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
         var maxComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: false);
         
         // WAL-aware read: BTreeIndex.Range now accepts transaction parameter
-        var firstEntry = _btreeIndex.Range(minComposite, maxComposite, transaction.TransactionId).FirstOrDefault();
+        var firstEntry = _btreeIndex.Range(minComposite, maxComposite, transaction?.TransactionId).FirstOrDefault();
         
-        return firstEntry.DocumentId == ObjectId.Empty ? null : (ObjectId?)firstEntry.DocumentId;
+        return firstEntry.Location.PageId == 0 ? null : (DocumentLocation?)firstEntry.Location;
     }
 
     /// <summary>
@@ -164,8 +168,8 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
     /// <param name="minKey">Minimum key (inclusive), null for unbounded</param>
     /// <param name="maxKey">Maximum key (inclusive), null for unbounded</param>
     /// <param name="transaction">Optional transaction to read uncommitted changes</param>
-    /// <returns>Enumerable of document IDs in key order</returns>
-    public IEnumerable<ObjectId> Range(object? minKey, object? maxKey, ITransaction transaction)
+    /// <returns>Enumerable of document locations in key order</returns>
+    public IEnumerable<DocumentLocation> Range(object? minKey, object? maxKey, ITransaction? transaction = null)
     {
         // Handle unbounded ranges
         IndexKey actualMinKey;
@@ -203,10 +207,10 @@ public sealed class CollectionSecondaryIndex<T> : IDisposable where T : class
         }
         
         // Use BTreeIndex.Range with WAL-aware reads
-        // Extract DocumentId from each entry (already in the value)
-        foreach (var entry in _btreeIndex.Range(actualMinKey, actualMaxKey, transaction.TransactionId))
+        // Extract DocumentLocation from each entry
+        foreach (var entry in _btreeIndex.Range(actualMinKey, actualMaxKey, transaction?.TransactionId))
         {
-            yield return entry.DocumentId;
+            yield return entry.Location;
         }
     }
 

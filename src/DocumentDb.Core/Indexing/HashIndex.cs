@@ -1,4 +1,5 @@
 using DocumentDb.Bson;
+using DocumentDb.Core.Storage;
 
 namespace DocumentDb.Core.Indexing;
 
@@ -18,9 +19,9 @@ public sealed class HashIndex
     }
 
     /// <summary>
-    /// Inserts a key-value pair into the hash index
+    /// Inserts a key-location pair into the hash index
     /// </summary>
-    public void Insert(IndexKey key, ObjectId documentId)
+    public void Insert(IndexKey key, DocumentLocation location)
     {
         if (_options.Unique && TryFind(key, out _))
             throw new InvalidOperationException($"Duplicate key violation for unique index");
@@ -33,15 +34,15 @@ public sealed class HashIndex
             _buckets[hashCode] = bucket;
         }
 
-        bucket.Add(new IndexEntry(key, documentId));
+        bucket.Add(new IndexEntry(key, location));
     }
 
     /// <summary>
-    /// Finds a document ID by exact key match
+    /// Finds a document location by exact key match
     /// </summary>
-    public bool TryFind(IndexKey key, out ObjectId documentId)
+    public bool TryFind(IndexKey key, out DocumentLocation location)
     {
-        documentId = default;
+        location = default;
         var hashCode = key.GetHashCode();
 
         if (!_buckets.TryGetValue(hashCode, out var bucket))
@@ -51,7 +52,7 @@ public sealed class HashIndex
         {
             if (entry.Key == key)
             {
-                documentId = entry.DocumentId;
+                location = entry.Location;
                 return true;
             }
         }
@@ -62,7 +63,7 @@ public sealed class HashIndex
     /// <summary>
     /// Removes an entry from the index
     /// </summary>
-    public bool Remove(IndexKey key, ObjectId documentId)
+    public bool Remove(IndexKey key, DocumentLocation location)
     {
         var hashCode = key.GetHashCode();
 
@@ -71,7 +72,9 @@ public sealed class HashIndex
 
         for (int i = 0; i < bucket.Count; i++)
         {
-            if (bucket[i].Key == key && bucket[i].DocumentId == documentId)
+            if (bucket[i].Key == key && 
+                bucket[i].Location.PageId == location.PageId &&
+                bucket[i].Location.SlotIndex == location.SlotIndex)
             {
                 bucket.RemoveAt(i);
                 
