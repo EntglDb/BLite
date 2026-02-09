@@ -83,35 +83,36 @@ public sealed class BTreeIndex
     }
 
     /// <summary>
-    /// Inserts a key-value pair into the index
+    /// Inserts a key-location pair into the index
     /// </summary>
-    public void Insert(IndexKey key, ObjectId documentId, ulong transactionId)
+    public void Insert(IndexKey key, DocumentLocation location, ulong? transactionId = null)
     {
-        var entry = new IndexEntry(key, documentId);
+        var txnId = transactionId ?? 0;
+        var entry = new IndexEntry(key, location);
         var path = new List<uint>();
 
         // Find the leaf node for insertion
-        var leafPageId = FindLeafNodeWithPath(key, path, transactionId);
+        var leafPageId = FindLeafNodeWithPath(key, path, txnId);
 
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            ReadPage(leafPageId, transactionId, pageBuffer);
+            ReadPage(leafPageId, txnId, pageBuffer);
             var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
 
             // Check if we need to split
             if (header.EntryCount >= MaxEntriesPerNode)
             {
-                SplitNode(leafPageId, path, transactionId);
+                SplitNode(leafPageId, path, txnId);
 
                 // Re-find leaf after split to ensure we have correct node
                 path.Clear();
-                leafPageId = FindLeafNodeWithPath(key, path, transactionId);
-                ReadPage(leafPageId, transactionId, pageBuffer);
+                leafPageId = FindLeafNodeWithPath(key, path, txnId);
+                ReadPage(leafPageId, txnId, pageBuffer);
             }
 
             // Insert entry into leaf
-            InsertIntoLeaf(leafPageId, entry, pageBuffer, transactionId);
+            InsertIntoLeaf(leafPageId, entry, pageBuffer, txnId);
         }
         finally
         {
@@ -120,16 +121,17 @@ public sealed class BTreeIndex
     }
 
     /// <summary>
-    /// Finds a document ID by exact key match
+    /// Finds a document location by exact key match
     /// </summary>
-    public bool TryFind(IndexKey key, out ObjectId documentId, ulong transactionId)
+    public bool TryFind(IndexKey key, out DocumentLocation location, ulong? transactionId = null)
     {
-        documentId = default;
+        location = default;
+        var txnId = transactionId ?? 0;
 
-        var leafPageId = FindLeafNode(key, transactionId);
+        var leafPageId = FindLeafNode(key, txnId);
 
         Span<byte> pageBuffer = stackalloc byte[_storage.PageSize];
-        ReadPage(leafPageId, transactionId, pageBuffer);
+        ReadPage(leafPageId, txnId, pageBuffer);
 
         var header = BTreeNodeHeader.ReadFrom(pageBuffer[32..]);
         var dataOffset = 32 + 16; // Page header + BTree node header
@@ -141,14 +143,14 @@ public sealed class BTreeIndex
 
             if (entryKey.Equals(key))
             {
-                // Found - read ObjectId
-                var oidOffset = dataOffset + entryKey.Data.Length + 4; // +4 for key length prefix
-                documentId = new ObjectId(pageBuffer.Slice(oidOffset, 12));
+                // Found - read DocumentLocation (6 bytes: 4 for PageId + 2 for SlotIndex)
+                var locationOffset = dataOffset + entryKey.Data.Length + 4; // +4 for key length prefix
+                location = DocumentLocation.ReadFrom(pageBuffer.Slice(locationOffset, DocumentLocation.SerializedSize));
                 return true;
             }
 
-            // Move to next entry
-            dataOffset += 4 + entryKey.Data.Length + 12; // length + key + oid
+            // Move to next entry: length(4) + key + location(6)
+            dataOffset += 4 + entryKey.Data.Length + DocumentLocation.SerializedSize;
         }
 
         return false;
@@ -157,16 +159,17 @@ public sealed class BTreeIndex
     /// <summary>
     /// Range scan: finds all entries between minKey and maxKey (inclusive)
     /// </summary>
-    public IEnumerable<IndexEntry> Range(IndexKey minKey, IndexKey maxKey, ulong transactionId)
+    public IEnumerable<IndexEntry> Range(IndexKey minKey, IndexKey maxKey, ulong? transactionId = null)
     {
-        var leafPageId = FindLeafNode(minKey, transactionId);
+        var txnId = transactionId ?? 0;
+        var leafPageId = FindLeafNode(minKey, txnId);
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
         {
             while (leafPageId != 0)
             {
-                ReadPage(leafPageId, transactionId, pageBuffer);
+                ReadPage(leafPageId, txnId, pageBuffer);
 
                 var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
                 var dataOffset = 32 + 16;
@@ -177,16 +180,16 @@ public sealed class BTreeIndex
 
                     if (entryKey >= minKey && entryKey <= maxKey)
                     {
-                        var oidOffset = dataOffset + entryKey.Data.Length + 4;
-                        var oid = new ObjectId(pageBuffer.AsSpan(oidOffset, 12));
-                        yield return new IndexEntry(entryKey, oid);
+                        var locationOffset = dataOffset + entryKey.Data.Length + 4;
+                        var location = DocumentLocation.ReadFrom(pageBuffer.AsSpan(locationOffset, DocumentLocation.SerializedSize));
+                        yield return new IndexEntry(entryKey, location);
                     }
                     else if (entryKey > maxKey)
                     {
                         yield break; // Exceeded range
                     }
 
-                    dataOffset += 4 + entryKey.Data.Length + 12;
+                    dataOffset += 4 + entryKey.Data.Length + DocumentLocation.SerializedSize;
                 }
 
                 // Move to next leaf
@@ -277,7 +280,7 @@ public sealed class BTreeIndex
         for (int i = 0; i < header.EntryCount; i++)
         {
             var keyLen = BitConverter.ToInt32(pageBuffer.Slice(dataOffset, 4));
-            dataOffset += 4 + keyLen + 12; // Length + Key + ObjectId
+            dataOffset += 4 + keyLen + DocumentLocation.SerializedSize; // Length + Key + DocumentLocation
         }
 
         // Write key length
@@ -288,8 +291,8 @@ public sealed class BTreeIndex
         entry.Key.Data.CopyTo(pageBuffer.Slice(dataOffset, entry.Key.Data.Length));
         dataOffset += entry.Key.Data.Length;
 
-        // Write ObjectId
-        entry.DocumentId.WriteTo(pageBuffer.Slice(dataOffset, 12));
+        // Write DocumentLocation (6 bytes)
+        entry.Location.WriteTo(pageBuffer.Slice(dataOffset, DocumentLocation.SerializedSize));
 
         // Update header
         header.EntryCount++;
@@ -498,10 +501,10 @@ public sealed class BTreeIndex
         for (int i = 0; i < count; i++)
         {
             var key = ReadIndexKey(pageBuffer, dataOffset);
-            var oidOffset = dataOffset + 4 + key.Data.Length;
-            var oid = new ObjectId(pageBuffer.Slice(oidOffset, 12));
-            entries.Add(new IndexEntry(key, oid));
-            dataOffset = oidOffset + 12;
+            var locationOffset = dataOffset + 4 + key.Data.Length;
+            var location = DocumentLocation.ReadFrom(pageBuffer.Slice(locationOffset, DocumentLocation.SerializedSize));
+            entries.Add(new IndexEntry(key, location));
+            dataOffset = locationOffset + DocumentLocation.SerializedSize;
         }
         return entries;
     }
@@ -525,8 +528,9 @@ public sealed class BTreeIndex
         return (p0, entries);
     }
 
-    private void WriteLeafNode(uint pageId, List<IndexEntry> entries, uint nextLeafId, ulong transactionId)
+    private void WriteLeafNode(uint pageId, List<IndexEntry> entries, uint nextLeafId, ulong? transactionId = null)
     {
+        var txnId = transactionId ?? 0;
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
@@ -554,18 +558,18 @@ public sealed class BTreeIndex
             };
             nodeHeader.WriteTo(pageBuffer.AsSpan(32, 16));
 
-            // Write entries in SINGLE-VALUE format (OLD)
+            // Write entries with DocumentLocation (6 bytes instead of ObjectId 12 bytes)
             var dataOffset = 32 + 16;
             foreach (var entry in entries)
             {
                 BitConverter.TryWriteBytes(pageBuffer.AsSpan(dataOffset, 4), entry.Key.Data.Length);
                 entry.Key.Data.CopyTo(pageBuffer.AsSpan(dataOffset + 4));
-                entry.DocumentId.WriteTo(pageBuffer.AsSpan(dataOffset + 4 + entry.Key.Data.Length));
-                dataOffset += 4 + entry.Key.Data.Length + 12;
+                entry.Location.WriteTo(pageBuffer.AsSpan(dataOffset + 4 + entry.Key.Data.Length));
+                dataOffset += 4 + entry.Key.Data.Length + DocumentLocation.SerializedSize;
             }
 
             // Write page
-            WritePage(pageId, transactionId, pageBuffer.AsSpan(0, _storage.PageSize));
+            WritePage(pageId, txnId, pageBuffer.AsSpan(0, _storage.PageSize));
         }
         finally
         {
@@ -654,22 +658,25 @@ public sealed class BTreeIndex
     }
 
     /// <summary>
-    /// Deletes a key-value pair from the index
+    /// Deletes a key-location pair from the index
     /// </summary>
-    public bool Delete(IndexKey key, ObjectId documentId, ulong transactionId)
+    public bool Delete(IndexKey key, DocumentLocation location, ulong? transactionId = null)
     {
+        var txnId = transactionId ?? 0;
         var path = new List<uint>();
-        var leafPageId = FindLeafNodeWithPath(key, path, transactionId);
+        var leafPageId = FindLeafNodeWithPath(key, path, txnId);
 
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            ReadPage(leafPageId, transactionId, pageBuffer);
+            ReadPage(leafPageId, txnId, pageBuffer);
             var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
 
             // Check if key exists in leaf
             var entries = ReadLeafEntries(pageBuffer, header.EntryCount);
-            var entryIndex = entries.FindIndex(e => e.Key.Equals(key) && e.DocumentId == documentId);
+            var entryIndex = entries.FindIndex(e => e.Key.Equals(key) && 
+                e.Location.PageId == location.PageId && 
+                e.Location.SlotIndex == location.SlotIndex);
 
             if (entryIndex == -1)
             {
@@ -680,14 +687,14 @@ public sealed class BTreeIndex
             entries.RemoveAt(entryIndex);
 
             // Update leaf
-            WriteLeafNode(leafPageId, entries, header.NextLeafPageId, transactionId);
+            WriteLeafNode(leafPageId, entries, header.NextLeafPageId, txnId);
 
             // Check for underflow (min 50% fill)
             // Simplified: min 1 entry for now, or MaxEntries/2
             int minEntries = MaxEntriesPerNode / 2;
             if (entries.Count < minEntries && _rootPageId != leafPageId)
             {
-                HandleUnderflow(leafPageId, path, transactionId);
+                HandleUnderflow(leafPageId, path, txnId);
             }
 
             return true;

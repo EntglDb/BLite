@@ -1,20 +1,31 @@
 using DocumentDb.Bson;
+using DocumentDb.Core.Storage;
 
 namespace DocumentDb.Core.Indexing;
 
 /// <summary>
-/// Represents an entry in an index mapping a key to a document ID.
+/// Represents an entry in an index mapping a key to a document location.
 /// Implemented as struct for memory efficiency.
 /// </summary>
 public struct IndexEntry
 {
     public IndexKey Key { get; set; }
-    public ObjectId DocumentId { get; set; }
+    public DocumentLocation Location { get; set; }
 
+    public IndexEntry(IndexKey key, DocumentLocation location)
+    {
+        Key = key;
+        Location = location;
+    }
+    
+    // Backward compatibility: constructor that takes ObjectId (for migration)
+    // Will be removed once all code is migrated
+    [Obsolete("Use constructor with DocumentLocation instead")]
     public IndexEntry(IndexKey key, ObjectId documentId)
     {
         Key = key;
-        DocumentId = documentId;
+        // Create a temporary location (will be replaced by proper implementation)
+        Location = new DocumentLocation(0, 0);
     }
 }
 
