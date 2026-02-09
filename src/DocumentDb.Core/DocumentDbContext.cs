@@ -13,7 +13,9 @@ public abstract partial class DocumentDbContext : IDisposable
 {
     private readonly string _databasePath;
     private readonly PageFile _pageFile;
+    private readonly WriteAheadLog _wal;
     private readonly TransactionManager _transactionManager;
+    private readonly BufferManager _bufferManager;
     private bool _disposed;
     
     /// <summary>
@@ -40,9 +42,12 @@ public abstract partial class DocumentDbContext : IDisposable
         // Initialize storage infrastructure
         _pageFile = new PageFile(databasePath, config);
         _pageFile.Open();
-        
-        _transactionManager = new TransactionManager(walPath, _pageFile);
-        
+
+        _wal = new WriteAheadLog(walPath);
+        var storage = new StorageEngine(_pageFile, _wal);
+        _bufferManager = storage.BufferManager;
+        _transactionManager = new TransactionManager(storage);
+
         // Initialize collections - implemented by derived class or Source Generator
         InitializeCollections();
     }
@@ -69,7 +74,7 @@ public abstract partial class DocumentDbContext : IDisposable
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        return new DocumentCollection<T>(mapper, _pageFile, _transactionManager);
+        return new DocumentCollection<T>(mapper, _pageFile, _wal, _transactionManager);
     }
     
     /// <summary>

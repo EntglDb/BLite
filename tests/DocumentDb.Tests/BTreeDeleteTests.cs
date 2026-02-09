@@ -2,6 +2,7 @@ using DocumentDb.Core.Storage;
 using DocumentDb.Core.Indexing;
 using DocumentDb.Bson;
 using Xunit;
+using DocumentDb.Core.Transactions;
 
 namespace DocumentDb.Tests;
 
@@ -9,14 +10,18 @@ public class BTreeDeleteTests : IDisposable
 {
     private readonly string _tempFile;
     private readonly PageFile _pageFile;
+    private readonly WriteAheadLog _wal;
     private readonly BTreeIndex _index;
+    private StorageEngine _storageEngine;
 
     public BTreeDeleteTests()
     {
         _tempFile = Path.GetTempFileName();
         _pageFile = new PageFile(_tempFile, PageFileConfig.Default);
         _pageFile.Open();
-        _index = new BTreeIndex(_pageFile, new IndexOptions());
+        _wal = new WriteAheadLog(Path.ChangeExtension(_tempFile, ".wal"));
+        _storageEngine = new StorageEngine(_pageFile, _wal);
+        _index = new BTreeIndex(_storageEngine, new IndexOptions());
     }
 
     public void Dispose()

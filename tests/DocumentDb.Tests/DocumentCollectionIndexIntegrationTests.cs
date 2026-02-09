@@ -15,6 +15,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     private readonly string _dbPath;
     private readonly string _walPath;
     private readonly PageFile _pageFile;
+    private readonly WriteAheadLog _wal;
     private readonly TransactionManager _txnManager;
 
     public DocumentCollectionIndexIntegrationTests()
@@ -25,7 +26,9 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
         
         _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
         _pageFile.Open();
-        _txnManager = new TransactionManager(_walPath, _pageFile);
+        _wal = new WriteAheadLog(_walPath);
+        var storage = new StorageEngine(_pageFile, _wal);
+        _txnManager = new TransactionManager(storage);
     }
 
     public void Dispose()
@@ -41,7 +44,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
         
         // Insert some documents BEFORE creating index
         collection.Insert(new SimplePerson { FirstName = "Alice", Age = 25 });
@@ -62,7 +65,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
         
         // Create indexes BEFORE inserting
         var ageIndex = collection.CreateIndex(p => p.Age);
@@ -82,7 +85,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
         
         var ageIndex = collection.CreateIndex(p => p.Age);
 
@@ -113,7 +116,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
 
         // Act
         collection.CreateIndex(p => p.Age, name: "idx_age");
@@ -132,7 +135,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
         
         collection.CreateIndex(p => p.Age, name: "idx_age");
 
@@ -150,7 +153,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
         
         // This test just verifies the index is created as unique
         // Actual enforcement would require BTreeIndex unique constraint implementation
@@ -165,7 +168,7 @@ public class DocumentCollectionIndexIntegrationTests : IDisposable
     {
         // Arrange
         var mapper = new SimplePersonMapper();
-        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _txnManager);
+        var collection = new DocumentCollection<SimplePerson>(mapper, _pageFile, _wal, _txnManager);
         
         var ageIndex = collection.CreateIndex(p => p.Age);
         var nameIndex = collection.CreateIndex(p => p.FirstName);

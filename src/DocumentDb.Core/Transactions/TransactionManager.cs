@@ -11,22 +11,25 @@ public sealed class TransactionManager : IDisposable
     private ulong _nextTransactionId;
     private readonly object _lock = new();
     private readonly Dictionary<ulong, Transaction> _activeTransactions;
-    private readonly WriteAheadLog _wal;
-    private readonly PageFile _pageFile;
+    private readonly StorageEngine _storage;
     private readonly CheckpointManager _checkpointManager;
     private bool _disposed;
 
-    public TransactionManager(string walPath, PageFile pageFile)
+    public TransactionManager(StorageEngine storage)
     {
         _nextTransactionId = 1;
         _activeTransactions = new Dictionary<ulong, Transaction>();
-        _wal = new WriteAheadLog(walPath);
-        _pageFile = pageFile ?? throw new ArgumentNullException(nameof(pageFile));
-        _checkpointManager = new CheckpointManager(_wal, _pageFile);
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _checkpointManager = new CheckpointManager(_storage);
         
         // Start automatic background checkpointing (every 30s or 10MB threshold)
         _checkpointManager.StartAutoCheckpoint();
     }
+
+    /// <summary>
+    /// Gets the storage engine
+    /// </summary>
+    public StorageEngine Storage => _storage;
 
     /// <summary>
     /// Gets the checkpoint manager for manual checkpoint control
@@ -41,7 +44,7 @@ public sealed class TransactionManager : IDisposable
         lock (_lock)
         {
             var txnId = _nextTransactionId++;
-            var transaction = new Transaction(txnId, _pageFile, _wal, isolationLevel);
+            var transaction = new Transaction(txnId, _storage, isolationLevel);
             _activeTransactions[txnId] = transaction;
             return transaction;
         }
@@ -59,11 +62,7 @@ public sealed class TransactionManager : IDisposable
             if (!transaction.Prepare())
                 throw new InvalidOperationException("Transaction prepare failed");
 
-            // Write commit record to WAL
-            _wal.WriteCommitRecord(transaction.TransactionId);
-            _wal.Flush();
-
-            // Phase 2: Mark as committed (no PageFile write here!)
+            // Phase 2: Mark as committed (StorageEngine handles WAL commit record)
             // The transaction is now durable in WAL.
             // CheckpointManager will apply changes to PageFile asynchronously.
             transaction.MarkCommitted();
@@ -83,7 +82,7 @@ public sealed class TransactionManager : IDisposable
         lock (_lock)
         {
             transaction.Rollback();
-            _wal.WriteAbortRecord(transaction.TransactionId);
+            _storage.WAL.WriteAbortRecord(transaction.TransactionId);
             _activeTransactions.Remove(transaction.TransactionId);
         }
     }
@@ -93,36 +92,7 @@ public sealed class TransactionManager : IDisposable
     /// </summary>
     public void Recover()
     {
-        var records = _wal.ReadAll();
-        var committedTxns = new HashSet<ulong>();
-        var txnWrites = new Dictionary<ulong, List<WalRecord>>();
-        
-        // First pass: identify committed transactions and collect writes
-        foreach (var record in records)
-        {
-            if (record.Type == WalRecordType.Commit)
-                committedTxns.Add(record.TransactionId);
-            else if (record.Type == WalRecordType.Write)
-            {
-                if (!txnWrites.ContainsKey(record.TransactionId))
-                    txnWrites[record.TransactionId] = new List<WalRecord>();
-                txnWrites[record.TransactionId].Add(record);
-            }
-        }
-        
-        // Second pass: redo committed transactions
-        foreach (var txnId in committedTxns)
-        {
-            if (!txnWrites.ContainsKey(txnId))
-                continue;
-                
-            foreach (var write in txnWrites[txnId])
-            {
-                // Apply after-image to page
-                if (write.AfterImage != null)
-                    _pageFile.WritePage(write.PageId, write.AfterImage);
-            }
-        }
+        _storage.Recover();
     }
 
     public void Dispose()
@@ -142,7 +112,6 @@ public sealed class TransactionManager : IDisposable
             // Dispose CheckpointManager (performs final checkpoint)
             _checkpointManager.Dispose();
             
-            _wal.Dispose();
             _disposed = true;
         }
 

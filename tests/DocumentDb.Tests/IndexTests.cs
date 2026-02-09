@@ -1,6 +1,7 @@
 using DocumentDb.Bson;
 using DocumentDb.Core.Indexing;
 using DocumentDb.Core.Storage;
+using DocumentDb.Core.Transactions;
 using Xunit;
 
 namespace DocumentDb.Tests;
@@ -9,12 +10,18 @@ public class IndexTests : IDisposable
 {
     private readonly string _testDbPath;
     private readonly PageFile _pageFile;
+    private readonly WriteAheadLog _wal;
+    private readonly StorageEngine _storage;
+    private readonly TransactionManager _txnManager;    
 
     public IndexTests()
     {
         _testDbPath = Path.Combine(Path.GetTempPath(), $"test_index_{Guid.NewGuid()}.db");
         _pageFile = new PageFile(_testDbPath, PageFileConfig.Default);
         _pageFile.Open();
+        _wal = new WriteAheadLog(_testDbPath + ".wal");
+        _storage = new StorageEngine(_pageFile, _wal);
+        _txnManager = new TransactionManager(_storage);
     }
 
     public void Dispose()
@@ -113,9 +120,9 @@ public class IndexTests : IDisposable
     public void BTreeIndex_InsertAndFind_ShouldWork()
     {
         var options = IndexOptions.CreateBTree("testField");
-        var btree = new BTreeIndex(_pageFile, options);
-
-        var key = new IndexKey(100);
+        var btree = new BTreeIndex(_storage, options);
+    
+        var key = new IndexKey(100);    
         var docId = ObjectId.NewObjectId();
 
         btree.Insert(key, docId);
@@ -128,7 +135,7 @@ public class IndexTests : IDisposable
     public void BTreeIndex_MultipleInserts_ShouldWork()
     {
         var options = IndexOptions.CreateBTree("testField");
-        var btree = new BTreeIndex(_pageFile, options);
+        var btree = new BTreeIndex(_storage, options);
 
         var entries = new[]
         {
@@ -155,7 +162,7 @@ public class IndexTests : IDisposable
     public void BTreeIndex_RangeScan_ShouldReturnMatchingEntries()
     {
         var options = IndexOptions.CreateBTree("testField");
-        var btree = new BTreeIndex(_pageFile, options);
+        var btree = new BTreeIndex(_storage, options);
 
         // Insert values: 5, 10, 15, 20, 25, 30
         for (int i = 5; i <= 30; i += 5)
@@ -181,7 +188,7 @@ public class IndexTests : IDisposable
     public void BTreeIndex_Split_ShouldWork()
     {
         var options = IndexOptions.CreateBTree("testField");
-        var btree = new BTreeIndex(_pageFile, options);
+        var btree = new BTreeIndex(_storage, options);
 
         // MaxEntriesPerNode is 4. Inserting 5 items should trigger split.
         // Insert 20 items to trigger multiple splits and levels.

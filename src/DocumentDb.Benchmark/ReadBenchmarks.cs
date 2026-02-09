@@ -31,6 +31,7 @@ public class ReadBenchmarks
 
     // DocumentDb
     private PageFile _pageFile = null!;
+    private WriteAheadLog _wal = null!;
     private TransactionManager _txnMgr = null!;
     private DocumentCollection<Person> _collection = null!;
     // _mapper removed (unused)
@@ -57,8 +58,10 @@ public class ReadBenchmarks
         // 1. Setup DocumentDb & Insert Data
         _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
         _pageFile.Open();
-        _txnMgr = new TransactionManager(_docDbWalPath, _pageFile);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _pageFile, _txnMgr);
+        _wal = new WriteAheadLog(_docDbWalPath);
+        var storage = new StorageEngine(_pageFile, _wal);
+        _txnMgr = new TransactionManager(storage);
+        _collection = new DocumentCollection<Person>(new PersonMapper(), _pageFile, _wal, _txnMgr);
 
         _ids = new ObjectId[DocCount];
         for (int i = 0; i < DocCount; i++)

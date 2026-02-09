@@ -10,6 +10,7 @@ public class InsertBulkTests : IDisposable
 {
     private readonly string _testFile;
     private readonly PageFile _pageFile;
+    private readonly WriteAheadLog _wal;
     private readonly TransactionManager _txnManager;
     private readonly DocumentCollection<User> _collection;
 
@@ -18,9 +19,11 @@ public class InsertBulkTests : IDisposable
         _testFile = Path.GetTempFileName();
         _pageFile = new PageFile(_testFile, PageFileConfig.Default); // Use Default config (16KB)
         _pageFile.Open();
-        _txnManager = new TransactionManager(_testFile + ".wal", _pageFile); // Correct arg order
+        _wal = new WriteAheadLog(_testFile + ".wal");
+        var storage = new StorageEngine(_pageFile, _wal);
+        _txnManager = new TransactionManager(storage);
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _pageFile, _txnManager);
+        _collection = new DocumentCollection<User>(mapper, _pageFile, _wal, _txnManager);
     }
 
     public void Dispose()

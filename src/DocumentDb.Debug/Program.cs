@@ -19,11 +19,15 @@ try
     
     using var pageFile = new PageFile(dbPath, PageFileConfig.Default);
     pageFile.Open();
-    
-    using var txnMgr = new TransactionManager(walPath, pageFile);
-    
+
+    using var wal = new WriteAheadLog(walPath);
+
+    var storage = new StorageEngine(pageFile, wal);
+
+    using var txnMgr = new TransactionManager(storage);
+
     var mapper = new UserMapper();
-    var collection = new DocumentCollection<User>(mapper, pageFile, txnMgr);
+    var collection = new DocumentCollection<User>(mapper, pageFile, wal, txnMgr);
     
     // Test 1: Insert large document (20KB)
     Console.WriteLine("Test 1: Insert 20KB document");

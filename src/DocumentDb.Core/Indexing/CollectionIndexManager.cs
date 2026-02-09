@@ -14,14 +14,14 @@ namespace DocumentDb.Core.Indexing;
 public sealed class CollectionIndexManager<T> : IDisposable where T : class
 {
     private readonly Dictionary<string, CollectionSecondaryIndex<T>> _indexes;
-    private readonly PageFile _pageFile;
+    private readonly StorageEngine _storage;
     private readonly IDocumentMapper<T> _mapper;
     private readonly object _lock = new();
     private bool _disposed;
 
-    public CollectionIndexManager(PageFile pageFile, IDocumentMapper<T> mapper)
+    public CollectionIndexManager(StorageEngine storage, IDocumentMapper<T> mapper)
     {
-        _pageFile = pageFile ?? throw new ArgumentNullException(nameof(pageFile));
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _indexes = new Dictionary<string, CollectionSecondaryIndex<T>>(StringComparer.OrdinalIgnoreCase);
     }
@@ -46,7 +46,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
                 throw new InvalidOperationException($"Index '{definition.Name}' already exists");
 
             // Create secondary index
-            var secondaryIndex = new CollectionSecondaryIndex<T>(definition, _pageFile, _mapper);
+            var secondaryIndex = new CollectionSecondaryIndex<T>(definition, _storage, _mapper);
             _indexes[definition.Name] = secondaryIndex;
 
             return secondaryIndex;

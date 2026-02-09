@@ -17,6 +17,11 @@ public readonly struct ObjectId : IEquatable<ObjectId>
     /// </summary>
     public static readonly ObjectId Empty = new ObjectId(0, 0);
 
+    /// <summary>
+    /// Maximum ObjectId (all 0xFF bytes) - useful for range queries
+    /// </summary>
+    public static readonly ObjectId MaxValue = new ObjectId(int.MaxValue, long.MaxValue);
+
     public ObjectId(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 12)

@@ -4,6 +4,7 @@ using DocumentDb.Core.Indexing;
 using DocumentDb.Core.Storage;
 using DocumentDb.Core.Collections;
 using System.Buffers;
+using DocumentDb.Core.Transactions;
 
 namespace DocumentDb.Tests;
 
@@ -39,17 +40,17 @@ public class PersonMapper : IDocumentMapper<Person>
         // Minimal BSON-like serialization for testing
         var ms = new MemoryStream();
         var bw = new BinaryWriter(ms);
-        
+
         // Write ID
         var idBytes = new byte[12];
         entity.Id.WriteTo(idBytes);
         bw.Write(idBytes);
-        
+
         // Write other fields
         bw.Write(entity.FirstName ?? "");
         bw.Write(entity.LastName ?? "");
         bw.Write(entity.Age);
-        
+
         var bytes = ms.ToArray();
         writer.Write(bytes);
     }
@@ -59,10 +60,10 @@ public class PersonMapper : IDocumentMapper<Person>
         // Minimal deserialization for testing
         var ms = new MemoryStream(buffer.ToArray());
         var br = new BinaryReader(ms);
-        
+
         var idBytes = new byte[12];
         br.Read(idBytes, 0, 12);
-        
+
         return new Person
         {
             Id = new ObjectId(idBytes),
@@ -84,7 +85,9 @@ public class CustomIndexTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly PageFile _pageFile;
+    private readonly WriteAheadLog _wal;
     private readonly PersonMapper _mapper;
+    private readonly StorageEngine _storageEngine;
 
     public CustomIndexTests()
     {
@@ -92,6 +95,8 @@ public class CustomIndexTests : IDisposable
         _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
         _pageFile.Open();
         _mapper = new PersonMapper();
+        _wal = new WriteAheadLog(Path.ChangeExtension(_dbPath, ".wal"));
+        _storageEngine = new StorageEngine(_pageFile, _wal);
     }
 
     public void Dispose()
@@ -221,10 +226,10 @@ public class CustomIndexTests : IDisposable
             new[] { "Age" },
             p => p.Age);
 
-        var index = new CollectionSecondaryIndex<Person>(definition, _pageFile, _mapper);
-        
-        var person = new Person 
-        { 
+        var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
+
+        var person = new Person
+        {
             Id = ObjectId.NewObjectId(),
             FirstName = "John",
             Age = 30
@@ -248,8 +253,8 @@ public class CustomIndexTests : IDisposable
             new[] { "Age" },
             p => p.Age);
 
-        var index = new CollectionSecondaryIndex<Person>(definition, _pageFile, _mapper);
-        
+        var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
+
         var person1 = new Person { Id = ObjectId.NewObjectId(), Age = 25 };
         var person2 = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
         var person3 = new Person { Id = ObjectId.NewObjectId(), Age = 35 };
@@ -274,8 +279,8 @@ public class CustomIndexTests : IDisposable
             new[] { "Age" },
             p => p.Age);
 
-        var index = new CollectionSecondaryIndex<Person>(definition, _pageFile, _mapper);
-        
+        var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
+
         var person1 = new Person { Id = ObjectId.NewObjectId(), Age = 25 };
         var person2 = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
         var person3 = new Person { Id = ObjectId.NewObjectId(), Age = 35 };
@@ -304,8 +309,8 @@ public class CustomIndexTests : IDisposable
             new[] { "Age" },
             p => p.Age);
 
-        var index = new CollectionSecondaryIndex<Person>(definition, _pageFile, _mapper);
-        
+        var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
+
         var person = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
         index.Insert(person);
 
@@ -326,11 +331,11 @@ public class CustomIndexTests : IDisposable
             new[] { "Age" },
             p => p.Age);
 
-        var index = new CollectionSecondaryIndex<Person>(definition, _pageFile, _mapper);
-        
+        var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
+
         var oldPerson = new Person { Id = ObjectId.NewObjectId(), Age = 30 };
         var newPerson = new Person { Id = oldPerson.Id, Age = 35 };
-        
+
         index.Insert(oldPerson);
 
         // Act
@@ -350,11 +355,11 @@ public class CustomIndexTests : IDisposable
             new[] { "Age" },
             p => p.Age);
 
-        var index = new CollectionSecondaryIndex<Person>(definition, _pageFile, _mapper);
-        
+        var index = new CollectionSecondaryIndex<Person>(definition, _storageEngine, _mapper);
+
         var oldPerson = new Person { Id = ObjectId.NewObjectId(), FirstName = "John", Age = 30 };
         var newPerson = new Person { Id = oldPerson.Id, FirstName = "Jane", Age = 30 }; // Same age
-        
+
         index.Insert(oldPerson);
 
         // Act - Should optimize and not touch index
@@ -372,7 +377,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_CreateIndex_Success()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
 
         // Act
         var index = manager.CreateIndex(p => p.Age);
@@ -386,7 +391,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_CreateIndex_CustomName()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
 
         // Act
         var index = manager.CreateIndex(p => p.Age, name: "my_age_index");
@@ -399,7 +404,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_CreateIndex_Unique()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
 
         // Act
         var index = manager.CreateIndex(p => p.Age, unique: true);
@@ -412,11 +417,11 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_CreateIndex_DuplicateName_Throws()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age, name: "idx_age");
 
         // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => 
+        Assert.Throws<InvalidOperationException>(() =>
             manager.CreateIndex(p => p.FirstName, name: "idx_age"));
     }
 
@@ -424,7 +429,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_DropIndex_Success()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age, name: "idx_age");
 
         // Act
@@ -439,7 +444,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_DropIndex_NotFound_ReturnsFalse()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
 
         // Act
         var result = manager.DropIndex("nonexistent");
@@ -452,7 +457,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_GetAllIndexes_ReturnsAll()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age);
         manager.CreateIndex(p => p.FirstName);
         manager.CreateIndex(p => p.LastName);
@@ -468,7 +473,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_FindBestIndex_SimpleQuery()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age);
         manager.CreateIndex(p => p.FirstName);
 
@@ -484,7 +489,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_FindBestIndex_PreferUnique()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age, name: "idx_age_non_unique", unique: false);
         manager.CreateIndex(p => p.Age, name: "idx_age_unique", unique: true);
 
@@ -500,7 +505,7 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_FindBestIndex_NoMatch_ReturnsNull()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age);
 
         // Act
@@ -514,12 +519,12 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_InsertIntoAll_UpdatesAllIndexes()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         var ageIndex = manager.CreateIndex(p => p.Age);
         var nameIndex = manager.CreateIndex(p => p.FirstName);
 
-        var person = new Person 
-        { 
+        var person = new Person
+        {
             Id = ObjectId.NewObjectId(),
             FirstName = "John",
             Age = 30
@@ -537,12 +542,12 @@ public class CustomIndexTests : IDisposable
     public void IndexManager_DeleteFromAll_RemovesFromAllIndexes()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         var ageIndex = manager.CreateIndex(p => p.Age);
         var nameIndex = manager.CreateIndex(p => p.FirstName);
 
-        var person = new Person 
-        { 
+        var person = new Person
+        {
             Id = ObjectId.NewObjectId(),
             FirstName = "John",
             Age = 30
@@ -590,7 +595,7 @@ public class CustomIndexTests : IDisposable
     public void ExpressionAnalyzer_InvalidExpression_Throws()
     {
         // Act & Assert
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             ExpressionAnalyzer.ExtractPropertyPaths<Person, int>(p => p.Age + 10));
     }
 
@@ -602,7 +607,7 @@ public class CustomIndexTests : IDisposable
     public void Integration_MultipleIndexes_WorkTogether()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         manager.CreateIndex(p => p.Age);
         manager.CreateIndex(p => p.FirstName);
         manager.CreateIndex(p => p.LastName);
@@ -634,7 +639,7 @@ public class CustomIndexTests : IDisposable
     public void Integration_RangeQuery_MultipleDocs()
     {
         // Arrange
-        var manager = new CollectionIndexManager<Person>(_pageFile, _mapper);
+        var manager = new CollectionIndexManager<Person>(_storageEngine, _mapper);
         var ageIndex = manager.CreateIndex(p => p.Age);
 
         var people = Enumerable.Range(1, 100)
@@ -651,7 +656,7 @@ public class CustomIndexTests : IDisposable
 
         // Assert
         Assert.Equal(11, results.Count); // 40, 41, ..., 50
-        
+
         // Verify all IDs in range
         var expectedIds = people.Skip(39).Take(11).Select(p => p.Id).ToHashSet();
         Assert.True(results.All(id => expectedIds.Contains(id)));
