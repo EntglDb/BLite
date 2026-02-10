@@ -7,7 +7,7 @@ namespace DocumentDb.Core.Indexing;
 /// Represents an entry in an index mapping a key to a document location.
 /// Implemented as struct for memory efficiency.
 /// </summary>
-public struct IndexEntry
+public struct IndexEntry : IComparable<IndexEntry>, IComparable
 {
     public IndexKey Key { get; set; }
     public DocumentLocation Location { get; set; }
@@ -26,6 +26,17 @@ public struct IndexEntry
         Key = key;
         // Create a temporary location (will be replaced by proper implementation)
         Location = new DocumentLocation(0, 0);
+    }
+
+    public int CompareTo(IndexEntry other)
+    {
+        return Key.CompareTo(other.Key);
+    }
+
+    public int CompareTo(object? obj)
+    {
+        if (obj is IndexEntry other) return CompareTo(other);
+        throw new ArgumentException("Object is not an IndexEntry");
     }
 }
 

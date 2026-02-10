@@ -69,7 +69,7 @@ public sealed class BTreeIndex
     /// Reads a page using StorageEngine for transaction isolation.
     /// Implements "Read Your Own Writes" isolation.
     /// </summary>
-    private void ReadPage(uint pageId, ulong transactionId, Span<byte> destination)
+    internal void ReadPage(uint pageId, ulong transactionId, Span<byte> destination)
     {
         _storage.ReadPage(pageId, transactionId, destination);
     }
@@ -232,12 +232,7 @@ public sealed class BTreeIndex
                     
                     // Check if we need to continue to previous leaf
                     // If the first entry in this page is still >= minKey, we might have more matches in PrevLeaf
-                    // Actually, the loop above breaks if we hit < minKey. 
-                    // But what if ALL entries in this page are > maxKey? (e.g. we landed on a page slightly after maxKey?)
-                    // FindLeafNode(maxKey) returns the leaf *containing* potential maxKey or where it would be.
-                    // So entries could be larger than maxKey. We just skip them.
-                    // If the *first* (smallest) entry in this page is >= minKey, we must check previous page.
-                    
+                    // "Check previous page" logic...
                     if (entries.Count > 0 && entries[0].Key >= minKey)
                     {
                         leafPageId = header.PrevLeafPageId;
@@ -245,8 +240,6 @@ public sealed class BTreeIndex
                     else
                     {
                          // We found an entry < minKey (handled in loop break) OR page was empty (unlikely)
-                         // Safe to stop? 
-                         // If entries[0].Key < minKey, we broke out of loop. We should stop page iteration too.
                          if (entries.Count > 0 && entries[0].Key < minKey)
                             yield break;
 
@@ -261,7 +254,7 @@ public sealed class BTreeIndex
         }
     }
 
-    private uint FindLeafNode(IndexKey key, ulong transactionId)
+    internal uint FindLeafNode(IndexKey key, ulong transactionId)
     {
         var path = new List<uint>();
         return FindLeafNodeWithPath(key, path, transactionId);
@@ -327,6 +320,181 @@ public sealed class BTreeIndex
         }
 
         return childPageId; // Return last pointer (>= last key)
+    }
+
+    public IBTreeCursor CreateCursor(ulong transactionId)
+    {
+        return new BTreeCursor(this, _storage, transactionId);
+    }
+
+    // --- Query Primitives ---
+
+    public IEnumerable<IndexEntry> Equal(IndexKey key, ulong transactionId)
+    {
+        using var cursor = CreateCursor(transactionId);
+        if (cursor.Seek(key))
+        {
+            yield return cursor.Current;
+            // Handle duplicates if we support them? Current impl looks unique-ish per key unless multi-value index.
+            // BTreeIndex doesn't strictly prevent duplicates in structure, but usually unique keys.
+            // If unique, yield one. If not, loop.
+            // Assuming unique for now based on TryFind.
+        }
+    }
+
+    public IEnumerable<IndexEntry> GreaterThan(IndexKey key, bool orEqual, ulong transactionId)
+    {
+        using var cursor = CreateCursor(transactionId);
+        bool found = cursor.Seek(key); 
+
+        if (found && !orEqual)
+        {
+             if (!cursor.MoveNext()) yield break;
+        }
+        
+        // Loop forward
+        do
+        {
+             yield return cursor.Current;
+        } while (cursor.MoveNext());
+    }
+
+    public IEnumerable<IndexEntry> LessThan(IndexKey key, bool orEqual, ulong transactionId)
+    {
+        using var cursor = CreateCursor(transactionId);
+        bool found = cursor.Seek(key);
+
+        if (found && !orEqual)
+        {
+            if (!cursor.MovePrev()) yield break;
+        }
+        else if (!found)
+        {
+             // Seek landed on next greater (or invalid if end)
+             // We want < key.
+             // If Seek returns false, it is at Next Greater. 
+             // So Current > Key.
+             // MovePrev to get < Key.
+             if (!cursor.MovePrev()) yield break; 
+        }
+
+        // Loop backward
+        do
+        {
+             yield return cursor.Current;
+        } while (cursor.MovePrev());
+    }
+
+    public IEnumerable<IndexEntry> Between(IndexKey start, IndexKey end, bool startInclusive, bool endInclusive, ulong transactionId)
+    {
+        using var cursor = CreateCursor(transactionId);
+        bool found = cursor.Seek(start);
+
+        if (found && !startInclusive)
+        {
+            if (!cursor.MoveNext()) yield break;
+        }
+
+        // Iterate while <= end
+        do
+        {
+            var current = cursor.Current;
+            if (current.Key > end) yield break;
+            if (current.Key == end && !endInclusive) yield break;
+
+            yield return current;
+
+        } while (cursor.MoveNext());
+    }
+
+    public IEnumerable<IndexEntry> StartsWith(string prefix, ulong transactionId)
+    {
+        var startKey = IndexKey.Create(prefix);
+        using var cursor = CreateCursor(transactionId);
+        cursor.Seek(startKey); 
+        
+        do
+        {
+            var current = cursor.Current;
+            string val;
+            try { val = current.Key.As<string>(); } 
+            catch { break; } 
+
+            if (!val.StartsWith(prefix)) break;
+            
+            yield return current;
+
+        } while (cursor.MoveNext());
+    }
+
+    public IEnumerable<IndexEntry> In(IEnumerable<IndexKey> keys, ulong transactionId)
+    {
+        var sortedKeys = keys.OrderBy(k => k);
+        using var cursor = CreateCursor(transactionId);
+
+        foreach (var key in sortedKeys)
+        {
+            if (cursor.Seek(key))
+            {
+                yield return cursor.Current;
+            }
+        }
+    }
+    
+    public IEnumerable<IndexEntry> Like(string pattern, ulong transactionId)
+    {
+        string regexPattern = "^" + System.Text.RegularExpressions.Regex.Escape(pattern)
+            .Replace("%", ".*")
+            .Replace("_", ".") + "$";
+            
+        var regex = new System.Text.RegularExpressions.Regex(regexPattern, System.Text.RegularExpressions.RegexOptions.Compiled);
+        
+        string prefix = "";
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            if (pattern[i] == '%' || pattern[i] == '_') break;
+            prefix += pattern[i];
+        }
+
+        using var cursor = CreateCursor(transactionId);
+
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            cursor.Seek(IndexKey.Create(prefix));
+        }
+        else
+        {
+            cursor.MoveToFirst();
+        }
+
+        do 
+        {
+            IndexEntry current;
+            try { current = cursor.Current; } catch { break; } // Safe break if cursor invalid
+            
+            if (!string.IsNullOrEmpty(prefix))
+            {
+                try 
+                { 
+                    string val = current.Key.As<string>();
+                    if (!val.StartsWith(prefix)) break;
+                }
+                catch { break; } 
+            }
+            
+            bool match = false;
+            try
+            {
+                match = regex.IsMatch(current.Key.As<string>());
+            }
+            catch 
+            {
+                 // Ignore mismatch types
+            }
+            
+            if (match) yield return current;
+
+        } while (cursor.MoveNext());
     }
 
     private void InsertIntoLeaf(uint leafPageId, IndexEntry entry, Span<byte> pageBuffer, ulong transactionId)
