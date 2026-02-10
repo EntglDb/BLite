@@ -8,6 +8,8 @@
 
 **DocumentDb** is an embedded, ACID-compliant, document-oriented database built from scratch for **maximum performance** and **zero allocation**. It leverages modern .NET features like `Span<T>`, `Memory<T>`, and Source Generators to eliminate runtime overhead.
 
+> **Note**: Currently targets **.NET 10** to maximize performance with `Span<T>` and modern hardware intrinsics. Future support for `.netstandard2.1` is being evaluated.
+
 ---
 
 ## 🚀 Why DocumentDb?
@@ -117,6 +119,7 @@ We are actively building the core. Here is where we stand:
 
 ### 3. Performance & Optimization
 - **Projection Engine**: Read only specific fields from disk (via BSON offsets) without full document deserialization.
+- **Portability**: Evaluate `.netstandard2.1` support for broader compatibility (Unity, MAUI, etc.).
 
 ---
 
