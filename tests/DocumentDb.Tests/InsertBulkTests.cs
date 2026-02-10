@@ -17,7 +17,7 @@ public class InsertBulkTests : IDisposable
         _testFile = Path.GetTempFileName();
         _storage = new StorageEngine(_testFile, PageFileConfig.Default);
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _storage);
+        _collection = new DocumentCollection<User>(_storage, mapper);
     }
 
     public void Dispose()

@@ -4,6 +4,7 @@ using DocumentDb.Core.Collections;
 using DocumentDb.Core.Indexing;
 using DocumentDb.Core.Metadata;
 using Xunit;
+using DocumentDb.Bson;
 
 namespace DocumentDb.Tests;
 
@@ -37,10 +38,14 @@ public class MultiCollectionTests : IDisposable
 
     private class TestContext : DocumentDbContext
     {
-        public DocumentCollection<Person> People { get; private set; } = null!;
-        public DocumentCollection<Product> Products { get; private set; } = null!;
+        public DocumentCollection<ObjectId,Person> People { get; private set; } = null!;
+        public DocumentCollection<ObjectId, Product> Products { get; private set; } = null!;
 
-        public TestContext(string path) : base(path, PageFileConfig.Default) { }
+        public TestContext(string path) : base(path, PageFileConfig.Default)
+        {
+            People = CreateCollection(new PersonMapper());
+            Products = CreateCollection(new ProductMapper());
+        }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -51,12 +56,6 @@ public class MultiCollectionTests : IDisposable
             modelBuilder.Entity<Product>()
                 .ToCollection("products_collection")
                 .HasIndex(p => p.Price, name: "Price", unique: true);
-        }
-
-        protected override void InitializeCollections()
-        {
-            People = CreateCollection<Person>(new PersonMapper());
-            Products = CreateCollection<Product>(new ProductMapper());
         }
     }
 
@@ -80,22 +79,20 @@ public class MultiCollectionTests : IDisposable
 }
 
 // Mock mappers for the test
-public class PersonMapper : IDocumentMapper<MultiCollectionTests.Person>
+public class PersonMapper : ObjectIdMapperBase<MultiCollectionTests.Person>
 {
-    public string CollectionName => "People"; // Should be overridden by model!
-    public int Serialize(MultiCollectionTests.Person entity, Span<byte> buffer) => 0;
-    public void Serialize(MultiCollectionTests.Person entity, System.Buffers.IBufferWriter<byte> writer) { }
-    public MultiCollectionTests.Person Deserialize(ReadOnlySpan<byte> buffer) => new();
-    public DocumentDb.Bson.ObjectId GetId(MultiCollectionTests.Person entity) => default;
-    public void SetId(MultiCollectionTests.Person entity, DocumentDb.Bson.ObjectId id) { }
+    public override string CollectionName => "People"; // Should be overridden by model!
+    public override int Serialize(MultiCollectionTests.Person entity, Span<byte> buffer) => 0;
+    public override MultiCollectionTests.Person Deserialize(ReadOnlySpan<byte> buffer) => new();
+    public override DocumentDb.Bson.ObjectId GetId(MultiCollectionTests.Person entity) => default;
+    public override void SetId(MultiCollectionTests.Person entity, DocumentDb.Bson.ObjectId id) { }
 }
 
-public class ProductMapper : IDocumentMapper<MultiCollectionTests.Product>
+public class ProductMapper : ObjectIdMapperBase<MultiCollectionTests.Product>
 {
-    public string CollectionName => "Products"; // Should be overridden by model!
-    public int Serialize(MultiCollectionTests.Product entity, Span<byte> buffer) => 0;
-    public void Serialize(MultiCollectionTests.Product entity, System.Buffers.IBufferWriter<byte> writer) { }
-    public MultiCollectionTests.Product Deserialize(ReadOnlySpan<byte> buffer) => new();
-    public DocumentDb.Bson.ObjectId GetId(MultiCollectionTests.Product entity) => default;
-    public void SetId(MultiCollectionTests.Product entity, DocumentDb.Bson.ObjectId id) { }
+    public override string CollectionName => "Products"; // Should be overridden by model!
+    public override int Serialize(MultiCollectionTests.Product entity, Span<byte> buffer) => 0;
+    public override MultiCollectionTests.Product Deserialize(ReadOnlySpan<byte> buffer) => new();
+    public override DocumentDb.Bson.ObjectId GetId(MultiCollectionTests.Product entity) => default;
+    public override void SetId(MultiCollectionTests.Product entity, DocumentDb.Bson.ObjectId id) { }
 }

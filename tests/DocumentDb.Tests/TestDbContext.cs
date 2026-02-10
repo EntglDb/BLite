@@ -10,16 +10,10 @@ namespace DocumentDb.Tests;
 /// </summary>
 public class TestDbContext : DocumentDbContext
 {
-    public DocumentCollection<User> Users { get; private set; } = null!;
+    public DocumentCollection<ObjectId,User> Users { get; private set; } = null!;
     
     public TestDbContext(string databasePath) : base(databasePath)
     {
-    }
-    
-    protected override void InitializeCollections()
-    {
-        // Manually initialize collections
-        // Future: Source Generator will auto-generate this
         Users = CreateCollection(new UserMapper());
     }
 }

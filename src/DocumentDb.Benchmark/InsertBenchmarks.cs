@@ -95,7 +95,7 @@ public class InsertBenchmarks
     public void IterationSetup()
     {
         _storage = new StorageEngine(_docDbWalPath, PageFileConfig.Default);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage);
+        _collection = new DocumentCollection<Person>(_storage, new PersonMapper());
 
         // 2. Reset SQLite
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);

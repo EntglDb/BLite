@@ -1,3 +1,4 @@
+using DocumentDb.Bson;
 using DocumentDb.Core.Collections;
 using DocumentDb.Core.Indexing;
 using DocumentDb.Core.Storage;
@@ -25,7 +26,7 @@ public class MetadataPersistenceTests : IDisposable
         {
             // Disable auto-checkpoint to ensure cleaner test tracing, though not strictly required
             var mapper = new UserMapper();
-            var indexManager = new CollectionIndexManager<User>(storage, mapper, nameof(User));
+            var indexManager = new CollectionIndexManager<ObjectId,User>(storage, mapper, nameof(User));
             
             // Create 2 indexes
             indexManager.CreateIndex(u => u.Age, "idx_age");
@@ -37,7 +38,7 @@ public class MetadataPersistenceTests : IDisposable
         {
             var mapper = new UserMapper();
             // Assuming Page 1 was allocated above in clean DB
-            var indexManager = new CollectionIndexManager<User>(storage, mapper, nameof(User));
+            var indexManager = new CollectionIndexManager<ObjectId,User>(storage, mapper, nameof(User));
             
             var indexes = indexManager.GetAllIndexes().ToList();
             
@@ -63,7 +64,7 @@ public class MetadataPersistenceTests : IDisposable
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             var mapper = new UserMapper();
-            var collection = new DocumentCollection<User>(mapper, storage);
+            var collection = new DocumentCollection<ObjectId, User>(storage, mapper);
             
             collection.EnsureIndex(u => u.Age);
         }
@@ -72,7 +73,7 @@ public class MetadataPersistenceTests : IDisposable
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             var mapper = new UserMapper();
-            var collection = new DocumentCollection<User>(mapper, storage);
+            var collection = new DocumentCollection<ObjectId, User>(storage, mapper);
             
             // Use reflection or diagnostic to check if it triggered rebuild?
             // Currently hard to verify "no rebuild" without logs or mocking.

@@ -29,7 +29,7 @@ public class WalIndexTests : IDisposable
         
         var mapper = new UserMapper();
         // 1. Ensure index on "Age"
-        _collection = new DocumentCollection<User>(mapper, _storage);
+        _collection = new DocumentCollection<User>(_storage, mapper);
         _collection.EnsureIndex(u => u.Age);
     }
 

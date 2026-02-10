@@ -5,15 +5,15 @@ using System.Runtime.InteropServices;
 
 namespace DocumentDb.Benchmark;
 
-public class PersonMapper : IDocumentMapper<Person>
+public class PersonMapper : ObjectIdMapperBase<Person>
 {
-    public string CollectionName => "people";
+    public override string CollectionName => "people";
 
-    public ObjectId GetId(Person entity) => entity.Id;
+    public override ObjectId GetId(Person entity) => entity.Id;
 
-    public void SetId(Person entity, ObjectId id) => entity.Id = id;
+    public override void SetId(Person entity, ObjectId id) => entity.Id = id;
 
-    public int Serialize(Person entity, Span<byte> buffer)
+    public override int Serialize(Person entity, Span<byte> buffer)
     {
         var writer = new BsonSpanWriter(buffer);
         var sizePos = writer.BeginDocument();
@@ -68,73 +68,7 @@ public class PersonMapper : IDocumentMapper<Person>
         return writer.Position;
     }
 
-    public void Serialize(Person entity, IBufferWriter<byte> writer)
-    {
-        // Re-using Span logic via ArrayBufferWriter would be cleaner but for benchmark strictness we duplicate logic
-        // Or simplified: use BsonBufferWriter which mirrors BsonSpanWriter
-        var bson = new BsonBufferWriter(writer);
-        var sizePos = bson.BeginDocument();
-        
-        bson.WriteObjectId("_id", entity.Id);
-        bson.WriteString("FirstName", entity.FirstName);
-        bson.WriteString("LastName", entity.LastName);
-        bson.WriteInt32("Age", entity.Age);
-        
-        if (entity.Bio != null)
-            bson.WriteString("Bio", entity.Bio);
-        else
-            bson.WriteNull("Bio");
-            
-        bson.WriteInt64("CreatedAt", entity.CreatedAt.Ticks);
-        
-        bson.WriteDouble("Balance", (double)entity.Balance);
-        
-        var addrPos = bson.BeginDocument("HomeAddress");
-        bson.WriteString("Street", entity.HomeAddress.Street);
-        bson.WriteString("City", entity.HomeAddress.City);
-        bson.WriteString("ZipCode", entity.HomeAddress.ZipCode);
-        bson.EndDocument(addrPos);
-        
-        var histPos = bson.BeginArray("EmploymentHistory");
-        for (int i = 0; i < entity.EmploymentHistory.Count; i++)
-        {
-            var item = entity.EmploymentHistory[i];
-            var itemPos = bson.BeginDocument(i.ToString());
-            
-            bson.WriteString("CompanyName", item.CompanyName);
-            bson.WriteString("Title", item.Title);
-            bson.WriteInt32("DurationYears", item.DurationYears);
-            
-            var tagsPos = bson.BeginArray("Tags");
-            for (int j = 0; j < item.Tags.Count; j++)
-            {
-                bson.WriteString(j.ToString(), item.Tags[j]);
-            }
-            bson.EndArray(tagsPos);
-            
-            bson.EndDocument(itemPos);
-        }
-        bson.EndArray(histPos);
-        
-        bson.EndDocument(sizePos);
-        
-        // Patch size if possible
-        if (writer is ArrayBufferWriter<byte> arrayWriter)
-        {
-            var readOnlySpan = arrayWriter.WrittenSpan;
-            var span = MemoryMarshal.CreateSpan(
-                ref MemoryMarshal.GetReference(readOnlySpan), 
-                readOnlySpan.Length
-            );
-            
-            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(
-                span.Slice(sizePos, 4), 
-                bson.Position
-            );
-        }
-    }
-
-    public Person Deserialize(ReadOnlySpan<byte> data)
+    public override Person Deserialize(ReadOnlySpan<byte> data)
     {
         var reader = new BsonSpanReader(data);
         var person = new Person();

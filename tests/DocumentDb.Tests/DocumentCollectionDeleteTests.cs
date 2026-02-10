@@ -21,7 +21,7 @@ public class DocumentCollectionDeleteTests : IDisposable
         _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
 
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _storage);
+        _collection = new DocumentCollection<User>(_storage, mapper);
     }
 
     public void Dispose()

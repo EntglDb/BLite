@@ -12,6 +12,9 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     private readonly byte[] _data;
     private readonly int _hashCode;
 
+    public static IndexKey MinKey => new IndexKey(Array.Empty<byte>());
+    public static IndexKey MaxKey => new IndexKey(Enumerable.Repeat((byte)0xFF, 32).ToArray());
+
     public IndexKey(ReadOnlySpan<byte> data)
     {
         _data = data.ToArray();
@@ -40,6 +43,12 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     public IndexKey(string value)
     {
         _data = System.Text.Encoding.UTF8.GetBytes(value);
+        _hashCode = ComputeHashCode(_data);
+    }
+
+    public IndexKey(Guid value)
+    {
+        _data = value.ToByteArray();
         _hashCode = ComputeHashCode(_data);
     }
 
@@ -89,5 +98,33 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         var hash = new HashCode();
         hash.AddBytes(data);
         return hash.ToHashCode();
+    }
+
+    public static IndexKey Create<T>(T value)
+    {
+        if (value == null) return default;
+
+        if (typeof(T) == typeof(ObjectId)) return new IndexKey((ObjectId)(object)value);
+        if (typeof(T) == typeof(int)) return new IndexKey((int)(object)value);
+        if (typeof(T) == typeof(long)) return new IndexKey((long)(object)value);
+        if (typeof(T) == typeof(string)) return new IndexKey((string)(object)value);
+        if (typeof(T) == typeof(Guid)) return new IndexKey((Guid)(object)value);
+        if (typeof(T) == typeof(byte[])) return new IndexKey((byte[])(object)value);
+
+        throw new NotSupportedException($"Type {typeof(T).Name} is not supported as an IndexKey. Provide a custom mapping.");
+    }
+
+    public readonly T As<T>()
+    {
+        if (_data == null) return default!;
+
+        if (typeof(T) == typeof(ObjectId)) return (T)(object)new ObjectId(_data);
+        if (typeof(T) == typeof(int)) return (T)(object)BitConverter.ToInt32(_data);
+        if (typeof(T) == typeof(long)) return (T)(object)BitConverter.ToInt64(_data);
+        if (typeof(T) == typeof(string)) return (T)(object)System.Text.Encoding.UTF8.GetString(_data);
+        if (typeof(T) == typeof(Guid)) return (T)(object)new Guid(_data);
+        if (typeof(T) == typeof(byte[])) return (T)(object)_data;
+
+        throw new NotSupportedException($"Type {typeof(T).Name} cannot be extracted from IndexKey. Provide a custom mapping.");
     }
 }

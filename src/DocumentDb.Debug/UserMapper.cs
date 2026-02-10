@@ -18,11 +18,11 @@ public class User
 /// <summary>
 /// Zero-allocation mapper for User entity
 /// </summary>
-public class UserMapper : IDocumentMapper<User>
+public class UserMapper : ObjectIdMapperBase<User>
 {
-    public string CollectionName => "users";
+    public override string CollectionName => "users";
 
-    public int Serialize(User entity, Span<byte> buffer)
+    public override int Serialize(User entity, Span<byte> buffer)
     {
         var writer = new BsonSpanWriter(buffer);
         
@@ -40,40 +40,7 @@ public class UserMapper : IDocumentMapper<User>
         return writer.Position;
     }
 
-    public void Serialize(User entity, IBufferWriter<byte> writer)
-    {
-        var bsonWriter = new BsonBufferWriter(writer);
-        
-        // Begin document
-        var sizePos = bsonWriter.BeginDocument();
-        
-        // Write fields
-        bsonWriter.WriteObjectId("_id", entity.Id);
-        bsonWriter.WriteString("name", entity.Name);
-        bsonWriter.WriteInt32("age", entity.Age);
-        
-        // End document
-        bsonWriter.EndDocument(sizePos);
-        
-        // Patch document size (ArrayBufferWriter allows accessing WrittenSpan)
-        if (writer is ArrayBufferWriter<byte> arrayWriter)
-        {
-            // UNSAFE: Cast ReadOnlySpan to Span to patch size at the beginning of the document
-            // This is safe here because we know ArrayBufferWriter memory is mutable and pinned/managed
-            var readOnlySpan = arrayWriter.WrittenSpan;
-            var span = System.Runtime.InteropServices.MemoryMarshal.CreateSpan(
-                ref System.Runtime.InteropServices.MemoryMarshal.GetReference(readOnlySpan), 
-                readOnlySpan.Length
-            );
-            
-            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(
-                span.Slice(sizePos, 4), 
-                bsonWriter.Position
-            );
-        }
-    }
-
-    public User Deserialize(ReadOnlySpan<byte> buffer)
+    public override User Deserialize(ReadOnlySpan<byte> buffer)
     {
         var reader = new BsonSpanReader(buffer);
         var user = new User();
@@ -111,7 +78,7 @@ public class UserMapper : IDocumentMapper<User>
         return user;
     }
 
-    public ObjectId GetId(User entity) => entity.Id;
-    
-    public void SetId(User entity, ObjectId id) => entity.Id = id;
+    public override ObjectId GetId(User entity) => entity.Id;
+
+    public override void SetId(User entity, ObjectId id) => entity.Id = id;
 }

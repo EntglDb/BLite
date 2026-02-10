@@ -20,7 +20,7 @@ try
     var storage = new StorageEngine(dbPath, PageFileConfig.Default);
 
     var mapper = new UserMapper();
-    var collection = new DocumentCollection<User>(mapper, storage);
+    var collection = new DocumentCollection<User>(storage, mapper);
     
     // Test 1: Insert large document (20KB)
     Console.WriteLine("Test 1: Insert 20KB document");

@@ -10,22 +10,23 @@ namespace DocumentDb.Core.Indexing;
 /// Manages a collection of secondary indexes on a document collection.
 /// Handles index creation, deletion, automatic selection, and maintenance.
 /// </summary>
+/// <typeparam name="TId">Primary key type</typeparam>
 /// <typeparam name="T">Document type</typeparam>
-public sealed class CollectionIndexManager<T> : IDisposable where T : class
+public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
 {
-    private readonly Dictionary<string, CollectionSecondaryIndex<T>> _indexes;
+    private readonly Dictionary<string, CollectionSecondaryIndex<TId, T>> _indexes;
     private readonly StorageEngine _storage;
-    private readonly IDocumentMapper<T> _mapper;
+    private readonly IDocumentMapper<TId, T> _mapper;
     private readonly object _lock = new();
     private bool _disposed;
     private readonly string _collectionName;
 
-    public CollectionIndexManager(StorageEngine storage, IDocumentMapper<T> mapper, string? collectionName = null)
+    public CollectionIndexManager(StorageEngine storage, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _collectionName = collectionName ?? _mapper.CollectionName;
-        _indexes = new Dictionary<string, CollectionSecondaryIndex<T>>(StringComparer.OrdinalIgnoreCase);
+        _indexes = new Dictionary<string, CollectionSecondaryIndex<TId, T>>(StringComparer.OrdinalIgnoreCase);
         
         // Load existing index definitions from metadata page
         LoadMetadata();
@@ -36,7 +37,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// </summary>
     /// <param name="definition">Index definition</param>
     /// <returns>The created secondary index</returns>
-    public CollectionSecondaryIndex<T> CreateIndex(CollectionIndexDefinition<T> definition)
+    public CollectionSecondaryIndex<TId, T> CreateIndex(CollectionIndexDefinition<T> definition)
     {
         if (definition == null)
             throw new ArgumentNullException(nameof(definition));
@@ -44,14 +45,14 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         lock (_lock)
         {
             if (_disposed)
-                throw new ObjectDisposedException(nameof(CollectionIndexManager<T>));
+                throw new ObjectDisposedException(nameof(CollectionIndexManager<TId, T>));
 
             // Check if index with this name already exists
             if (_indexes.ContainsKey(definition.Name))
                 throw new InvalidOperationException($"Index '{definition.Name}' already exists");
 
             // Create secondary index
-            var secondaryIndex = new CollectionSecondaryIndex<T>(definition, _storage, _mapper);
+            var secondaryIndex = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
             _indexes[definition.Name] = secondaryIndex;
             
             // Persist metadata
@@ -71,7 +72,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <param name="name">Optional index name (auto-generated if null)</param>
     /// <param name="unique">Enforce uniqueness constraint</param>
     /// <returns>The created secondary index</returns>
-    public CollectionSecondaryIndex<T> CreateIndex<TKey>(
+    public CollectionSecondaryIndex<TId, T> CreateIndex<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false)
@@ -100,7 +101,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         return CreateIndex(definition);
     }
 
-    public CollectionSecondaryIndex<T> EnsureIndex(
+    public CollectionSecondaryIndex<TId, T> EnsureIndex(
         Expression<Func<T, object>> keySelector,
         string? name = null,
         bool unique = false)
@@ -117,7 +118,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
         }
     }
 
-    internal CollectionSecondaryIndex<T> EnsureIndexUntyped(
+    internal CollectionSecondaryIndex<TId, T> EnsureIndexUntyped(
         LambdaExpression keySelector,
         string? name = null,
         bool unique = false)
@@ -166,7 +167,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Gets an index by name
     /// </summary>
-    public CollectionSecondaryIndex<T>? GetIndex(string name)
+    public CollectionSecondaryIndex<TId, T>? GetIndex(string name)
     {
         lock (_lock)
         {
@@ -177,7 +178,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Gets all indexes
     /// </summary>
-    public IEnumerable<CollectionSecondaryIndex<T>> GetAllIndexes()
+    public IEnumerable<CollectionSecondaryIndex<TId, T>> GetAllIndexes()
     {
         lock (_lock)
         {
@@ -202,7 +203,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// </summary>
     /// <param name="propertyPath">Property path being queried</param>
     /// <returns>Best index for the query, or null if none suitable</returns>
-    public CollectionSecondaryIndex<T>? FindBestIndex(string propertyPath)
+    public CollectionSecondaryIndex<TId, T>? FindBestIndex(string propertyPath)
     {
         if (string.IsNullOrWhiteSpace(propertyPath))
             return null;
@@ -228,7 +229,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
     /// <summary>
     /// Finds the best index for a compound query on multiple properties
     /// </summary>
-    public CollectionSecondaryIndex<T>? FindBestCompoundIndex(string[] propertyPaths)
+    public CollectionSecondaryIndex<TId, T>? FindBestCompoundIndex(string[] propertyPaths)
     {
         if (propertyPaths == null || propertyPaths.Length == 0)
             return null;
@@ -389,7 +390,7 @@ public sealed class CollectionIndexManager<T> : IDisposable where T : class
                         paths[k] = reader.ReadString();
                     
                     var definition = RebuildDefinition(idxName, paths, isUnique, type);
-                    var index = new CollectionSecondaryIndex<T>(definition, _storage, _mapper);
+                    var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
                     _indexes[idxName] = index;
                 }
                 return; // Found and loaded

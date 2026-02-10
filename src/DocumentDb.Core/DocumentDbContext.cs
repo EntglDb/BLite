@@ -37,9 +37,6 @@ public abstract partial class DocumentDbContext : IDisposable
         var modelBuilder = new ModelBuilder();
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
-
-        // Initialize collections - implemented by derived class or Source Generator
-        InitializeCollections();
     }
     
     private readonly IReadOnlyDictionary<Type, object> _model;
@@ -52,19 +49,10 @@ public abstract partial class DocumentDbContext : IDisposable
     }
     
     /// <summary>
-    /// Initialize collection properties.
-    /// Override in derived class to manually create collections,
-    /// or let Source Generator implement this as partial method.
+    /// Helper to create a DocumentCollection instance with custom TId.
+    /// Used by derived classes in InitializeCollections for typed primary keys.
     /// </summary>
-    protected virtual void InitializeCollections()
-    {
-    }
-    
-    /// <summary>
-    /// Helper to create a DocumentCollection instance.
-    /// Used by derived classes in InitializeCollections.
-    /// </summary>
-    protected DocumentCollection<T> CreateCollection<T>(IDocumentMapper<T> mapper)
+    protected DocumentCollection<TId, T> CreateCollection<TId, T>(IDocumentMapper<TId, T> mapper)
         where T : class
     {
         if (_disposed)
@@ -79,7 +67,7 @@ public abstract partial class DocumentDbContext : IDisposable
             customName = builder?.CollectionName;
         }
 
-        var collection = new DocumentCollection<T>(mapper, _storage, customName);
+        var collection = new DocumentCollection<TId, T>(_storage, mapper, customName);
 
         // Apply configurations from ModelBuilder
         if (builder != null)

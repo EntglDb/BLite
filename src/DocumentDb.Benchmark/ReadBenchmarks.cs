@@ -55,7 +55,7 @@ public class ReadBenchmarks
 
         // 1. Setup DocumentDb & Insert Data
         _storage = new StorageEngine(_docDbPath, PageFileConfig.Default);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _storage);
+        _collection = new DocumentCollection<Person>(_storage, new PersonMapper());
 
         _ids = new ObjectId[DocCount];
         for (int i = 0; i < DocCount; i++)
