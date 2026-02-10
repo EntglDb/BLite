@@ -97,7 +97,26 @@ We are actively building the core. Here is where we stand:
 - ✅ **Indexing**: B-Tree implementation.
 - ✅ **Query Engine**: Basic LINQ (Where, OrderBy, Select, Page).
 - 🚧 **Advanced LINQ**: GroupBy, Joins, Aggregations (Coming Soon).
+- 🚧 **Source Generators**: Auto-map POCO/DDD classes (Nested Objects, Collections, Value Objects).
 - 🚧 **Async I/O**: `ToListAsync`, `FirstAsync` (Coming Soon).
+
+## 🔮 Future Vision
+
+### 1. Advanced Querying & Specialized Indices
+- **Vector Search (The AI Layer)**:
+  - HNSW (Hierarchical Navigable Small World) index for fast similarity searches.
+  - Store embeddings as `BinData` within BSON, indexed in memory-mapped structures.
+- **Geospatial (The Location Layer)**:
+  - R-Tree or S2 Geometry index for GeoJSON coordinates.
+- **Graph Traversals**:
+  - Specialized index for "links" (Document IDs) for $O(1)$ navigation without full scans.
+
+### 2. CDC & Event Integration
+- **BSON Change Stream**: "Log Miner" that decodes WAL entries and emits structured events.
+- **Internal Dispatcher**: Keeps Vector/Spatial indices updated automatically via CDC.
+
+### 3. Performance & Optimization
+- **Projection Engine**: Read only specific fields from disk (via BSON offsets) without full document deserialization.
 
 ---
 
