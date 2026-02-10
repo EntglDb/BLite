@@ -845,6 +845,11 @@ public class DocumentCollection<TId, T> where T : class
         {
             if (!_primaryIndex.TryFind(key, out var oldLocation, txn.TransactionId))
                 return false;
+
+            // Retrieve old version for index updates
+            var oldEntity = FindByLocation(oldLocation, txn);
+            if (oldEntity == null) return false; // Concurrently deleted?
+
             // Serialize new version
             var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
             try
@@ -873,7 +878,9 @@ public class DocumentCollection<TId, T> where T : class
                         newSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
 
                         _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
-                        // Primary index doesn't need update (location unchanged)
+                        
+                        // Notify secondary indexes (primary index unchanged)
+                        _indexManager.UpdateInAll(oldEntity, entity, oldLocation, oldLocation, txn);
                     }
                     else
                     {
@@ -905,7 +912,7 @@ public class DocumentCollection<TId, T> where T : class
                         _primaryIndex.Insert(key, newLocation, txn.TransactionId);
 
                         // Notify secondary indexes
-                        _indexManager.UpdateInAll(null!, entity, oldLocation, newLocation, txn); // TODO: pass old version if needed
+                        _indexManager.UpdateInAll(oldEntity, entity, oldLocation, newLocation, txn);
                     }
                 }
                 finally
@@ -1005,6 +1012,10 @@ public class DocumentCollection<TId, T> where T : class
     {
         var key = _mapper.ToIndexKey(id);
         var bytesWritten = docData.Length;
+
+        // Retrieve old version for index updates
+        var oldEntity = FindByLocation(oldLocation, txn);
+        if (oldEntity == null) return false;
         
         // Read old page
         var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1023,12 +1034,15 @@ public class DocumentCollection<TId, T> where T : class
                 newSlot.Length = (ushort)bytesWritten;
                 newSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
                 _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
+
+                // Notify secondary indexes (primary index unchanged)
+                _indexManager.UpdateInAll(oldEntity, entity, oldLocation, oldLocation, txn);
                 return true;
             }
             else
             {
                 // Delete old + insert new
-                DeleteInternal(id, oldLocation, txn);
+                DeleteInternal(id, oldLocation, txn); // Be careful: DeleteInternal might commit if not careful? No, txn passed.
                 
                 DocumentLocation newLocation;
                 if (bytesWritten <= MaxDocumentSizeForSinglePage)
@@ -1045,7 +1059,7 @@ public class DocumentCollection<TId, T> where T : class
                 }
 
                 _primaryIndex.Insert(key, newLocation, txn.TransactionId);
-                _indexManager.UpdateInAll(null!, entity, oldLocation, newLocation, txn);
+                _indexManager.UpdateInAll(oldEntity, entity, oldLocation, newLocation, txn);
                 return true;
             }
         }
@@ -1064,7 +1078,9 @@ public class DocumentCollection<TId, T> where T : class
             if (!_primaryIndex.TryFind(key, out var location, txn.TransactionId))
                 return false;
 
-            return DeleteInternal(id, location, txn);
+            var result = DeleteInternal(id, location, txn);
+            if (result && transaction == null) txn.Commit();
+            return result;
         }
         catch
         {
@@ -1086,7 +1102,7 @@ public class DocumentCollection<TId, T> where T : class
         }
         else
         {
-             // Console.WriteLine($"Debug: DeleteInternal - Entity not found at location {location.PageId}:{location.SlotIndex}");
+             // Entity might have been deleted concurrently or index is stale
         }
 
         // Read page
