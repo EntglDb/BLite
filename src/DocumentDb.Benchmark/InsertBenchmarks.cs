@@ -31,9 +31,7 @@ public class InsertBenchmarks
     private string _sqliteConnString = "";
 
     // DocumentDb
-    private PageFile? _pageFile = null;
-    private WriteAheadLog? _wal = null;
-    private TransactionManager? _txnMgr = null;
+    private StorageEngine? _storage = null;
     private DocumentCollection<Person>? _collection = null;
 
     // Data
@@ -96,25 +94,8 @@ public class InsertBenchmarks
     [IterationSetup]
     public void IterationSetup()
     {
-        // Cleanup and Re-Initialize for fairness per iteration/invocation?
-        // Actually, for Insert benchmarks we want to append.
-        // But for Batch insert we might fill up disk.
-        // Let's reset DBs every iteration to keep it clean.
-        
-        // 1. Reset DocumentDb
-        // Due to unique GUIDs, files should not exist. Skipping delete to avoid phantom IOExceptions.
-        // if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
-        // if (File.Exists(_docDbWalPath)) File.Delete(_docDbWalPath);
-        
-        _pageFile = new PageFile(_docDbPath, PageFileConfig.Default);
-        _pageFile.Open();
-
-        _wal = new WriteAheadLog(_docDbWalPath);
-
-        var storage = new StorageEngine(_pageFile, _wal);
-
-        _txnMgr = new TransactionManager(storage);
-        _collection = new DocumentCollection<Person>(new PersonMapper(), _pageFile, _wal, _txnMgr);
+        _storage = new StorageEngine(_docDbWalPath, PageFileConfig.Default);
+        _collection = new DocumentCollection<Person>(_storage, new PersonMapper());
 
         // 2. Reset SQLite
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
@@ -128,8 +109,7 @@ public class InsertBenchmarks
     {
         try
         {
-            _pageFile?.Dispose();
-            _txnMgr?.Dispose();
+            _storage?.Dispose();
             
             SqliteConnection.ClearAllPools();
             

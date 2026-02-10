@@ -16,18 +16,11 @@ try
     // Clean up
     if (File.Exists(dbPath)) File.Delete(dbPath);
     if (File.Exists(walPath)) File.Delete(walPath);
-    
-    using var pageFile = new PageFile(dbPath, PageFileConfig.Default);
-    pageFile.Open();
 
-    using var wal = new WriteAheadLog(walPath);
-
-    var storage = new StorageEngine(pageFile, wal);
-
-    using var txnMgr = new TransactionManager(storage);
+    var storage = new StorageEngine(dbPath, PageFileConfig.Default);
 
     var mapper = new UserMapper();
-    var collection = new DocumentCollection<User>(mapper, pageFile, wal, txnMgr);
+    var collection = new DocumentCollection<User>(storage, mapper);
     
     // Test 1: Insert large document (20KB)
     Console.WriteLine("Test 1: Insert 20KB document");

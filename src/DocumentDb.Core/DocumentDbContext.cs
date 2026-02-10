@@ -1,6 +1,7 @@
 using DocumentDb.Core.Collections;
 using DocumentDb.Core.Storage;
 using DocumentDb.Core.Transactions;
+using DocumentDb.Core.Metadata;
 
 namespace DocumentDb.Core;
 
@@ -11,12 +12,8 @@ namespace DocumentDb.Core;
 /// </summary>
 public abstract partial class DocumentDbContext : IDisposable
 {
-    private readonly string _databasePath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
-    private readonly TransactionManager _transactionManager;
-    private readonly BufferManager _bufferManager;
-    private bool _disposed;
+    public readonly StorageEngine _storage;
+    public bool _disposed;
     
     /// <summary>
     /// Creates a new database context with default configuration
@@ -33,59 +30,56 @@ public abstract partial class DocumentDbContext : IDisposable
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
-        
-        _databasePath = databasePath;
-        
-        // Auto-derive WAL path
-        var walPath = Path.ChangeExtension(databasePath, ".wal");
-        
-        // Initialize storage infrastructure
-        _pageFile = new PageFile(databasePath, config);
-        _pageFile.Open();
 
-        _wal = new WriteAheadLog(walPath);
-        var storage = new StorageEngine(_pageFile, _wal);
-        _bufferManager = storage.BufferManager;
-        _transactionManager = new TransactionManager(storage);
+        _storage = new StorageEngine(databasePath, config);
 
-        // Initialize collections - implemented by derived class or Source Generator
-        InitializeCollections();
+        // Initialize model before collections
+        var modelBuilder = new ModelBuilder();
+        OnModelCreating(modelBuilder);
+        _model = modelBuilder.GetEntityBuilders();
     }
     
+    private readonly IReadOnlyDictionary<Type, object> _model;
+
     /// <summary>
-    /// Initialize collection properties.
-    /// Override in derived class to manually create collections,
-    /// or let Source Generator implement this as partial method.
+    /// Override to configure the model using Fluent API.
     /// </summary>
-    protected virtual void InitializeCollections()
+    protected virtual void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // Default: no-op
-        // Derived classes override to initialize collection properties
-        // OR Source Generator implements this via partial method
     }
     
     /// <summary>
-    /// Helper to create a DocumentCollection instance.
-    /// Used by derived classes in InitializeCollections.
+    /// Helper to create a DocumentCollection instance with custom TId.
+    /// Used by derived classes in InitializeCollections for typed primary keys.
     /// </summary>
-    protected DocumentCollection<T> CreateCollection<T>(IDocumentMapper<T> mapper)
+    protected DocumentCollection<TId, T> CreateCollection<TId, T>(IDocumentMapper<TId, T> mapper)
         where T : class
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        return new DocumentCollection<T>(mapper, _pageFile, _wal, _transactionManager);
+        string? customName = null;
+        EntityTypeBuilder<T>? builder = null;
+
+        if (_model.TryGetValue(typeof(T), out var builderObj))
+        {
+            builder = builderObj as EntityTypeBuilder<T>;
+            customName = builder?.CollectionName;
+        }
+
+        var collection = new DocumentCollection<TId, T>(_storage, mapper, customName);
+
+        // Apply configurations from ModelBuilder
+        if (builder != null)
+        {
+            foreach (var indexBuilder in builder.Indexes)
+            {
+                collection.ApplyIndexBuilder(indexBuilder);
+            }
+        }
+
+        return collection;
     }
-    
-    /// <summary>
-    /// Exposes PageFile for advanced scenarios
-    /// </summary>
-    protected PageFile PageFile => _pageFile;
-    
-    /// <summary>
-    /// Exposes TransactionManager for advanced scenarios
-    /// </summary>
-    protected TransactionManager TransactionManager => _transactionManager;
     
     public void Dispose()
     {
@@ -94,8 +88,7 @@ public abstract partial class DocumentDbContext : IDisposable
         
         _disposed = true;
         
-        _transactionManager?.Dispose();
-        _pageFile?.Dispose();
+        _storage?.Dispose();
         
         GC.SuppressFinalize(this);
     }

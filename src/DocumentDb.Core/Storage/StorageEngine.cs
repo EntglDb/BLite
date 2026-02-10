@@ -1,26 +1,66 @@
+﻿using System.Collections.Concurrent;
 using DocumentDb.Core.Transactions;
 
 namespace DocumentDb.Core.Storage;
 
 /// <summary>
-/// Central storage engine that manages page reads/writes.
-/// Acts as an intermediary between components (BTreeIndex, DocumentCollection)
-/// and the underlying storage layers (BufferManager, WAL, PageFile).
+/// Central storage engine managing page-based storage with WAL for durability.
 /// 
-/// Provides transparent caching and transaction isolation without exposing
-/// WAL or PageFile details to upper layers.
+/// Architecture (WAL-based like SQLite/PostgreSQL):
+/// - PageFile: Committed baseline (persistent on disk)
+/// - WAL Cache: Uncommitted transaction writes (in-memory)
+/// - Read: PageFile + WAL cache overlay (for Read Your Own Writes)
+/// - Commit: Flush to WAL, clear cache
+/// - Checkpoint: Merge WAL ? PageFile periodically
 /// </summary>
-public sealed class StorageEngine
+public sealed class StorageEngine : IDisposable
 {
     private readonly PageFile _pageFile;
     private readonly WriteAheadLog _wal;
-    private readonly BufferManager _bufferManager;
+    
+    // WAL cache: TransactionId → (PageId → PageData)
+    // Stores uncommitted writes for "Read Your Own Writes" isolation
+    private readonly ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>> _walCache;
+    
+    // WAL index cache: PageId → PageData (from latest committed transaction)
+    // Lazily populated on first read after commit
+    private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
+    
+    // Global lock for commit/checkpoint synchronization
+    private readonly object _commitLock = new();
+    
+    // Transaction Management
+    private readonly ConcurrentDictionary<ulong, Transaction> _activeTransactions;
+    private ulong _nextTransactionId;
 
-    public StorageEngine(PageFile pageFile, WriteAheadLog wal)
+    private const long MaxWalSize = 4 * 1024 * 1024; // 4MB
+
+    public StorageEngine(string databasePath, PageFileConfig config)
     {
-        _pageFile = pageFile ?? throw new ArgumentNullException(nameof(pageFile));
-        _wal = wal ?? throw new ArgumentNullException(nameof(wal));
-        _bufferManager = new BufferManager(_pageFile);
+
+        // Auto-derive WAL path
+        var walPath = Path.ChangeExtension(databasePath, ".wal");
+
+        // Initialize storage infrastructure
+        _pageFile = new PageFile(databasePath, config);
+        _pageFile.Open();
+
+        _wal = new WriteAheadLog(walPath);
+        _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
+        _walIndex = new ConcurrentDictionary<uint, byte[]>();
+        _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
+        _nextTransactionId = 1;
+        
+        // Recover from WAL if exists (crash recovery or resume after close)
+        // This replays any committed transactions not yet checkpointed
+        if (_wal.GetCurrentSize() > 0)
+        {
+            Recover();
+        }
+        
+        // Create and start checkpoint manager
+        // _checkpointManager = new Transactions.CheckpointManager(this);
+        // _checkpointManager.StartAutoCheckpoint();
     }
 
     /// <summary>
@@ -28,42 +68,108 @@ public sealed class StorageEngine
     /// </summary>
     public int PageSize => _pageFile.PageSize;
 
-    // Internal access for TransactionManager and CheckpointManager ONLY
-    internal BufferManager BufferManager => _bufferManager;
-    internal WriteAheadLog WAL => _wal;
-    internal PageFile PageFile => _pageFile;
+    #region Transaction Management
+
+    public Transaction BeginTransaction(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
+    {
+        lock (_commitLock)
+        {
+            var txnId = _nextTransactionId++;
+            var transaction = new Transaction(txnId, this, isolationLevel);
+            _activeTransactions[txnId] = transaction;
+            return transaction;
+        }
+    }
+
+    public void CommitTransaction(Transaction transaction)
+    {
+        lock (_commitLock)
+        {
+            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
+                throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
+
+            // 1. Prepare (Write to WAL)
+            // In a fuller 2PC, this would be separate. Here we do it as part of commit.
+            if (!PrepareTransaction(transaction.TransactionId))
+                throw new IOException("Failed to write transaction to WAL");
+
+            // 2. Commit (Write commit record, flush, move to cache)
+            CommitTransaction(transaction.TransactionId);
+            
+            _activeTransactions.TryRemove(transaction.TransactionId, out _);
+        }
+    }
+
+    public void RollbackTransaction(Transaction transaction)
+    {
+        RollbackTransaction(transaction.TransactionId);
+        _activeTransactions.TryRemove(transaction.TransactionId, out _);
+    }
+
+    #endregion
+
 
     /// <summary>
     /// Reads a page with transaction isolation.
-    /// Automatically checks transaction-local changes, committed buffer, then disk.
+    /// 1. Check WAL cache for uncommitted writes (Read Your Own Writes)
+    /// 2. Check WAL index for committed writes (lazy replay)
+    /// 3. Read from PageFile (committed baseline)
     /// </summary>
     /// <param name="pageId">Page to read</param>
     /// <param name="transactionId">Optional transaction ID for isolation</param>
     /// <param name="destination">Buffer to write page data</param>
     public void ReadPage(uint pageId, ulong? transactionId, Span<byte> destination)
     {
-        // BufferManager handles the hierarchy:
-        // 1. Transaction-local (if txnId provided)
-        // 2. Committed buffer
-        // 3. PageFile
-        _bufferManager.ReadPage(pageId, transactionId, destination);
+        // 1. Check transaction-local WAL cache (Read Your Own Writes)
+        // transactionId=0 or null means "no active transaction, read committed only"
+        if (transactionId.HasValue && 
+            transactionId.Value != 0 &&
+            _walCache.TryGetValue(transactionId.Value, out var txnPages) &&
+            txnPages.TryGetValue(pageId, out var uncommittedData))
+        {
+            var length = Math.Min(uncommittedData.Length, destination.Length);
+            uncommittedData.AsSpan(0, length).CopyTo(destination);
+            return;
+        }
+        
+        // 2. Check WAL index (committed but not checkpointed)
+        if (_walIndex.TryGetValue(pageId, out var committedData))
+        {
+            var length = Math.Min(committedData.Length, destination.Length);
+            committedData.AsSpan(0, length).CopyTo(destination);
+            return;
+        }
+        
+        // 3. Read committed baseline from PageFile
+        _pageFile.ReadPage(pageId, destination);
     }
 
     /// <summary>
     /// Writes a page within a transaction.
-    /// Data is buffered in-memory and not visible to other transactions until commit.
+    /// Data goes to WAL cache immediately and becomes visible to that transaction only.
+    /// Will be written to WAL on commit.
     /// </summary>
     /// <param name="pageId">Page to write</param>
     /// <param name="transactionId">Transaction ID owning this write</param>
     /// <param name="data">Page data</param>
     public void WritePage(uint pageId, ulong transactionId, ReadOnlySpan<byte> data)
     {
-        _bufferManager.WritePage(pageId, transactionId, data);
+        if (transactionId == 0)
+            throw new InvalidOperationException("Cannot write without a transaction (transactionId=0 is reserved)");
+        
+        // Get or create transaction-local cache
+        var txnPages = _walCache.GetOrAdd(transactionId, 
+            _ => new ConcurrentDictionary<uint, byte[]>());
+        
+        // Store defensive copy
+        var copy = data.ToArray();
+        txnPages[pageId] = copy;
     }
+
 
     /// <summary>
     /// Writes a page immediately to disk (non-transactional).
-    /// Used for initialization and metadata updates.
+    /// Used for initialization and metadata updates outside of transactions.
     /// </summary>
     /// <param name="pageId">Page to write</param>
     /// <param name="data">Page data</param>
@@ -73,26 +179,24 @@ public sealed class StorageEngine
     }
 
     /// <summary>
-    /// Prepares a transaction: writes to WAL but doesn't commit yet.
-    /// Returns true if preparation was successful.
+    /// Prepares a transaction: writes all changes to WAL but doesn't commit yet.
+    /// Part of 2-Phase Commit protocol.
     /// </summary>
     /// <param name="transactionId">Transaction ID</param>
     /// <param name="writeSet">All writes to record in WAL</param>
     /// <returns>True if preparation succeeded</returns>
-    public bool PrepareTransaction(ulong transactionId, IEnumerable<(uint pageId, ReadOnlyMemory<byte> data)> writeSet)
+    public bool PrepareTransaction(ulong transactionId)
     {
         try
         {
-            // Write Begin record to WAL
             _wal.WriteBeginRecord(transactionId);
-            
-            // Write all data modifications to WAL
-            foreach (var (pageId, data) in writeSet)
+
+            foreach (var walEntry in _walCache[transactionId])
             {
-                _wal.WriteDataRecord(transactionId, pageId, data.Span);
+                _wal.WriteDataRecord(transactionId, walEntry.Key, walEntry.Value);
             }
             
-            _wal.Flush(); // Ensure WAL is on disk
+            _wal.Flush(); // Ensure WAL is persisted
             return true;
         }
         catch
@@ -102,27 +206,53 @@ public sealed class StorageEngine
     }
 
     /// <summary>
-    /// Commits a transaction.
-    /// Writes commit record to WAL and moves data to committed buffer.
+    /// Commits a transaction:
+    /// 1. Writes all changes to WAL (for durability)
+    /// 2. Writes commit record
+    /// 3. Flushes WAL to disk
+    /// 4. Moves pages from cache to WAL index (for future reads)
+    /// 5. Clears WAL cache
     /// </summary>
     /// <param name="transactionId">Transaction to commit</param>
-    /// <param name="writeSet">All writes performed in this transaction</param>
-    public void CommitTransaction(ulong transactionId, IEnumerable<(uint pageId, ReadOnlyMemory<byte> data)> writeSet)
+    /// <param name="writeSet">All writes performed in this transaction (unused, kept for compatibility)</param>
+    public void CommitTransaction(ulong transactionId)
     {
-        // 1. Write to WAL for durability
-        _wal.WriteBeginRecord(transactionId);
-        
-        foreach (var (pageId, data) in writeSet)
+        lock (_commitLock)
         {
-            _wal.WriteDataRecord(transactionId, pageId, data.Span);
-        }
-        
-        _wal.WriteCommitRecord(transactionId);
-        _wal.Flush(); // Ensure durability
+            // Get ALL pages from WAL cache (includes both data and index pages)
+            if (!_walCache.TryGetValue(transactionId, out var pages))
+            {
+                // No writes for this transaction, just write commit record
+                _wal.WriteCommitRecord(transactionId);
+                _wal.Flush();
+                return;
+            }
+            
+            // 1. Write all changes to WAL (from cache, not writeSet!)
+            _wal.WriteBeginRecord(transactionId);
+            
+            foreach (var (pageId, data) in pages)
+            {
+                _wal.WriteDataRecord(transactionId, pageId, data);
+            }
+            
+            // 2. Write commit record and flush
+            _wal.WriteCommitRecord(transactionId);
+            _wal.Flush(); // Durability: ensure WAL is on disk
+            
+            // 3. Move pages from cache to WAL index (for reads)
+            _walCache.TryRemove(transactionId, out _);
+            foreach (var kvp in pages)
+            {
+                _walIndex[kvp.Key] = kvp.Value;
+            }
 
-        // 2. Move from transaction-local to committed buffer
-        // Data is now visible to all, but not yet on disk
-        _bufferManager.CommitTransaction(transactionId);
+            // Auto-checkpoint if WAL grows too large
+            if (_wal.GetCurrentSize() > MaxWalSize)
+            {
+                Checkpoint();
+            }
+        }
     }
     
     /// <summary>
@@ -132,21 +262,35 @@ public sealed class StorageEngine
     /// <param name="transactionId">Transaction to mark committed</param>
     public void MarkTransactionCommitted(ulong transactionId)
     {
-        // Write commit record to WAL
-        _wal.WriteCommitRecord(transactionId);
-        _wal.Flush();
-        
-        // Move from transaction-local to committed buffer
-        _bufferManager.CommitTransaction(transactionId);
+        lock (_commitLock)
+        {
+            _wal.WriteCommitRecord(transactionId);
+            _wal.Flush();
+            
+            // Move from cache to WAL index
+            if (_walCache.TryRemove(transactionId, out var pages))
+            {
+                foreach (var kvp in pages)
+                {
+                    _walIndex[kvp.Key] = kvp.Value;
+                }
+            }
+
+            // Auto-checkpoint if WAL grows too large
+            if (_wal.GetCurrentSize() > MaxWalSize)
+            {
+                Checkpoint();
+            }
+        }
     }
 
     /// <summary>
-    /// Rolls back a transaction, discarding all writes.
+    /// Rolls back a transaction: discards all uncommitted changes.
     /// </summary>
     /// <param name="transactionId">Transaction to rollback</param>
     public void RollbackTransaction(ulong transactionId)
     {
-        _bufferManager.RollbackTransaction(transactionId);
+        _walCache.TryRemove(transactionId, out _);
         _wal.WriteAbortRecord(transactionId);
     }
 
@@ -169,14 +313,15 @@ public sealed class StorageEngine
     }
 
     /// <summary>
-    /// Gets the number of committed pages waiting for checkpoint (diagnostics).
-    /// </summary>
-    public int CommittedPagesCount => _bufferManager.CommittedPagesCount;
-
-    /// <summary>
     /// Gets the number of active transactions (diagnostics).
     /// </summary>
-    public int ActiveTransactionCount => _bufferManager.ActiveTransactionCount;
+    public int ActiveTransactionCount => _walCache.Count;
+
+    /// <summary>
+    /// Gets the number of pages currently allocated in the page file.
+    /// Useful for full database scans.
+    /// </summary>
+    public uint PageCount => _pageFile.NextPageId;
 
     /// <summary>
     /// Gets the current size of the WAL file.
@@ -204,61 +349,116 @@ public sealed class StorageEngine
     }
     
     /// <summary>
-    /// Performs a checkpoint: writes committed pages to disk and clears committed buffer.
-    /// Called by CheckpointManager.
+    /// Performs a checkpoint: merges WAL into PageFile.
+    /// Reads all committed transactions from WAL and applies them to PageFile.
+    /// Then truncates the WAL.
+    /// </summary>
+    /// <summary>
+    /// Performs a checkpoint: merges WAL into PageFile.
+    /// Uses in-memory WAL index for efficiency and consistency.
     /// </summary>
     public void Checkpoint()
     {
-        var committedPages = _bufferManager.GetCommittedPages();
-        
-        foreach (var kvp in committedPages)
+        lock (_commitLock)
         {
-            _pageFile.WritePage(kvp.Key, kvp.Value);
-            _bufferManager.ClearCommittedPage(kvp.Key);
+            if (_walIndex.IsEmpty)
+                return;
+
+            // 1. Write all committed pages from index to PageFile
+            foreach (var kvp in _walIndex)
+            {
+                _pageFile.WritePage(kvp.Key, kvp.Value);
+            }
+            
+            // 2. Flush PageFile to ensure durability
+            _pageFile.Flush();
+            
+            // 3. Clear in-memory WAL index (now persisted)
+            _walIndex.Clear();
+            
+            // 4. Truncate WAL (all changes now in PageFile)
+            _wal.Truncate();
         }
-        
-        _pageFile.Flush();
     }
     
     /// <summary>
     /// Recovers from crash by replaying WAL.
-    /// Reads WAL records and applies committed transactions to PageFile.
+    /// Applies all committed transactions to PageFile, then truncates WAL.
     /// </summary>
     public void Recover()
     {
-        var records = _wal.ReadAll();
-        var committedTxns = new HashSet<ulong>();
-        var txnWrites = new Dictionary<ulong, List<(uint pageId, byte[] data)>>();
-        
-        // First pass: identify committed transactions and collect writes
-        foreach (var record in records)
+        lock (_commitLock)
         {
-            if (record.Type == WalRecordType.Commit)
-                committedTxns.Add(record.TransactionId);
-            else if (record.Type == WalRecordType.Write)
+            // 1. Read WAL and identify committed transactions
+            var records = _wal.ReadAll();
+            var committedTxns = new HashSet<ulong>();
+            var txnWrites = new Dictionary<ulong, List<(uint pageId, byte[] data)>>();
+            
+            foreach (var record in records)
             {
-                if (!txnWrites.ContainsKey(record.TransactionId))
-                    txnWrites[record.TransactionId] = new List<(uint, byte[])>();
-                
-                if (record.AfterImage != null) // Null check
+                if (record.Type == WalRecordType.Commit)
+                    committedTxns.Add(record.TransactionId);
+                else if (record.Type == WalRecordType.Write)
                 {
-                    txnWrites[record.TransactionId].Add((record.PageId, record.AfterImage));
+                    if (!txnWrites.ContainsKey(record.TransactionId))
+                        txnWrites[record.TransactionId] = new List<(uint, byte[])>();
+                    
+                    if (record.AfterImage != null)
+                    {
+                        txnWrites[record.TransactionId].Add((record.PageId, record.AfterImage));
+                    }
                 }
             }
-        }
-        
-        // Second pass: redo committed transactions
-        foreach (var txnId in committedTxns)
-        {
-            if (!txnWrites.ContainsKey(txnId))
-                continue;
-                
-            foreach (var (pageId, data) in txnWrites[txnId])
+            
+            // 2. Apply committed transactions to PageFile
+            foreach (var txnId in committedTxns)
             {
-                _pageFile.WritePage(pageId, data);
+                if (!txnWrites.ContainsKey(txnId))
+                    continue;
+                    
+                foreach (var (pageId, data) in txnWrites[txnId])
+                {
+                    _pageFile.WritePage(pageId, data);
+                }
             }
+            
+            // 3. Flush PageFile to ensure durability
+            _pageFile.Flush();
+            
+            // 4. Clear in-memory WAL index (redundant since we just recovered)
+            _walIndex.Clear();
+            
+            // 5. Truncate WAL (all changes now in PageFile)
+            _wal.Truncate();
         }
-        
-        _pageFile.Flush();
+    }
+    
+    /// <summary>
+    /// Disposes the storage engine and closes WAL.
+    /// </summary>
+    public void Dispose()
+    {
+        // 1. Rollback any active transactions
+        if (_activeTransactions != null)
+        {
+            foreach (var txn in _activeTransactions.Values)
+            {
+                try
+                {
+                    RollbackTransaction(txn.TransactionId);
+                }
+                catch { /* Ignore errors during dispose */ }
+            }
+            _activeTransactions.Clear();
+        }
+
+        // 2. Close WAL and PageFile
+        _wal?.Dispose();
+        _pageFile?.Dispose();
+    }
+
+    internal void WriteAbortRecord(ulong transactionId)
+    {
+        _wal.WriteAbortRecord(transactionId);
     }
 }

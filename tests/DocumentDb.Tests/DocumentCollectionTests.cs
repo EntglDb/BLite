@@ -9,9 +9,7 @@ public class DocumentCollectionTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly PageFile _pageFile;
-    private readonly WriteAheadLog _wal;
-    private readonly TransactionManager _txnManager;
+    private readonly StorageEngine _storage;
     private readonly DocumentCollection<User> _collection;
 
     public DocumentCollectionTests()
@@ -19,14 +17,10 @@ public class DocumentCollectionTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.wal");
         
-        _pageFile = new PageFile(_dbPath, PageFileConfig.Default);
-        _pageFile.Open();
-        _wal = new WriteAheadLog(_walPath);
-        var storage = new StorageEngine(_pageFile, _wal);
-        _txnManager = new TransactionManager(storage);
+        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
 
         var mapper = new UserMapper();
-        _collection = new DocumentCollection<User>(mapper, _pageFile, _wal, _txnManager);
+        _collection = new DocumentCollection<User>(_storage, mapper);
     }
 
     [Fact]
@@ -180,12 +174,27 @@ public class DocumentCollectionTests : IDisposable
         Assert.Equal(3, _collection.Count());
     }
 
+    [Fact]
+    public void Insert_With_SpecifiedId_RetainsId()
+    {
+        // Arrange
+        var id = ObjectId.NewObjectId();
+        var user = new User { Id = id, Name = "SpecifiedID", Age = 40 };
+
+        // Act
+        var insertedId = _collection.Insert(user);
+
+        // Assert
+        Assert.Equal(id, insertedId);
+        
+        var found = _collection.FindById(id);
+        Assert.NotNull(found);
+        Assert.Equal(id, found.Id);
+        Assert.Equal("SpecifiedID", found.Name);
+    }
+
     public void Dispose()
     {
-        _txnManager?.Dispose();
-        _pageFile?.Dispose();
-        
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        if (File.Exists(_walPath)) File.Delete(_walPath);
+        _storage?.Dispose();
     }
 }

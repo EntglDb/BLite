@@ -57,6 +57,8 @@ public sealed class PageFile : IDisposable
     private uint _nextPageId;
     private uint _firstFreePageId;
 
+    public uint NextPageId => _nextPageId;
+
     public PageFile(string filePath, PageFileConfig config)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
@@ -87,8 +89,8 @@ public sealed class PageFile : IDisposable
 
             if (!fileExists || _fileStream.Length == 0)
             {
-                // Initialize new file
-                _fileStream.SetLength(_config.InitialFileSize);
+                // Initialize new file with 2 pages (Header + Collection Metadata)
+                _fileStream.SetLength(_config.InitialFileSize < _config.PageSize * 2 ? _config.PageSize * 2 : _config.InitialFileSize);
                 InitializeHeader();
             }
 
@@ -116,10 +118,11 @@ public sealed class PageFile : IDisposable
     }
 
     /// <summary>
-    /// Initializes the file header (page 0)
+    /// Initializes the file header (page 0) and collection metadata (page 1)
     /// </summary>
     private void InitializeHeader()
     {
+        // 1. Initialize Header (Page 0)
         var header = new PageHeader
         {
             PageId = 0,
@@ -130,11 +133,30 @@ public sealed class PageFile : IDisposable
             Checksum = 0
         };
 
-        Span<byte> headerPage = stackalloc byte[_config.PageSize];
-        header.WriteTo(headerPage);
+        Span<byte> buffer = stackalloc byte[_config.PageSize];
+        header.WriteTo(buffer);
 
         _fileStream!.Position = 0;
-        _fileStream.Write(headerPage);
+        _fileStream.Write(buffer);
+
+        // 2. Initialize Collection Metadata (Page 1)
+        // This page is reserved for storing index definitions
+        buffer.Clear();
+        var metaHeader = new SlottedPageHeader
+        {
+            PageId = 1,
+            PageType = PageType.Collection,
+            SlotCount = 0,
+            FreeSpaceStart = SlottedPageHeader.Size,
+            FreeSpaceEnd = (ushort)_config.PageSize,
+            NextOverflowPage = 0,
+            TransactionId = 0
+        };
+        metaHeader.WriteTo(buffer);
+
+        _fileStream.Position = _config.PageSize;
+        _fileStream.Write(buffer);
+        
         _fileStream.Flush();
     }
 
@@ -178,7 +200,7 @@ public sealed class PageFile : IDisposable
             {
                 if (offset + _config.PageSize > _fileStream.Length)
                 {
-                    var newSize = (_fileStream.Length + _config.PageSize) * 2;
+                    var newSize = Math.Max(offset + _config.PageSize, _fileStream.Length * 2);
                     _fileStream.SetLength(newSize);
                     
                     // Recreate memory-mapped file with new size
@@ -194,8 +216,11 @@ public sealed class PageFile : IDisposable
             }
         }
 
-        using var accessor = _mappedFile.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write);
-        accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+        // Write to memory-mapped file
+        using (var accessor = _mappedFile.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write))
+        {
+            accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+        }
     }
 
     /// <summary>
@@ -320,8 +345,18 @@ public sealed class PageFile : IDisposable
 
         lock (_lock)
         {
+            // 1. Flush any pending writes from memory-mapped file
+            if (_fileStream != null)
+            {
+                _fileStream.Flush(flushToDisk: true);
+            }
+            
+            // 2. Close memory-mapped file first
             _mappedFile?.Dispose();
+            
+            // 3. Then close file stream
             _fileStream?.Dispose();
+            
             _disposed = true;
         }
 

@@ -148,4 +148,35 @@ public readonly struct DocumentLocation
         PageId = pageId;
         SlotIndex = slotIndex;
     }
+    
+    /// <summary>
+    /// Serializes DocumentLocation to a byte span (6 bytes: 4 for PageId + 2 for SlotIndex)
+    /// </summary>
+    public void WriteTo(Span<byte> destination)
+    {
+        if (destination.Length < 6)
+            throw new ArgumentException("Destination must be at least 6 bytes", nameof(destination));
+            
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination, PageId);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(4), SlotIndex);
+    }
+    
+    /// <summary>
+    /// Deserializes DocumentLocation from a byte span (6 bytes)
+    /// </summary>
+    public static DocumentLocation ReadFrom(ReadOnlySpan<byte> source)
+    {
+        if (source.Length < 6)
+            throw new ArgumentException("Source must be at least 6 bytes", nameof(source));
+            
+        var pageId = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(source);
+        var slotIndex = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(source.Slice(4));
+        
+        return new DocumentLocation(pageId, slotIndex);
+    }
+    
+    /// <summary>
+    /// Size in bytes when serialized
+    /// </summary>
+    public const int SerializedSize = 6;
 }
