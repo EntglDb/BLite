@@ -158,7 +158,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         var maxComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: false);
         
         // WAL-aware read: BTreeIndex.Range now accepts transaction parameter
-        var firstEntry = _btreeIndex.Range(minComposite, maxComposite, transaction?.TransactionId).FirstOrDefault();
+        var firstEntry = _btreeIndex.Range(minComposite, maxComposite, IndexDirection.Forward, transaction?.TransactionId).FirstOrDefault();
         
         return firstEntry.Location.PageId == 0 ? null : (DocumentLocation?)firstEntry.Location;
     }
@@ -170,7 +170,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     /// <param name="maxKey">Maximum key (inclusive), null for unbounded</param>
     /// <param name="transaction">Optional transaction to read uncommitted changes</param>
     /// <returns>Enumerable of document locations in key order</returns>
-    public IEnumerable<DocumentLocation> Range(object? minKey, object? maxKey, ITransaction? transaction = null)
+    public IEnumerable<DocumentLocation> Range(object? minKey, object? maxKey, IndexDirection direction = IndexDirection.Forward, ITransaction? transaction = null)
     {
         // Handle unbounded ranges
         IndexKey actualMinKey;
@@ -207,9 +207,9 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
             actualMaxKey = CreateCompositeKeyBoundary(userMaxKey, useMinObjectId: false);
         }
         
-        // Use BTreeIndex.Range with WAL-aware reads
+        // Use BTreeIndex.Range with WAL-aware reads and direction
         // Extract DocumentLocation from each entry
-        foreach (var entry in _btreeIndex.Range(actualMinKey, actualMaxKey, transaction?.TransactionId))
+        foreach (var entry in _btreeIndex.Range(actualMinKey, actualMaxKey, direction, transaction?.TransactionId))
         {
             yield return entry.Location;
         }

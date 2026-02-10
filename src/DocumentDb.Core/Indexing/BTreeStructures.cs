@@ -40,25 +40,27 @@ public struct BTreeNodeHeader
     public ushort EntryCount { get; set; }
     public uint ParentPageId { get; set; }
     public uint NextLeafPageId { get; set; }  // For leaf nodes only
+    public uint PrevLeafPageId { get; set; }  // For leaf nodes only (added for reverse scan)
 
     public void WriteTo(Span<byte> destination)
     {
-        if (destination.Length < 16)
-            throw new ArgumentException("Destination must be at least 16 bytes");
+        if (destination.Length < 20)
+            throw new ArgumentException("Destination must be at least 20 bytes");
 
         BitConverter.TryWriteBytes(destination[0..4], PageId);
         destination[4] = (byte)(IsLeaf ? 1 : 0);
         BitConverter.TryWriteBytes(destination[5..7], EntryCount);
         BitConverter.TryWriteBytes(destination[7..11], ParentPageId);
         BitConverter.TryWriteBytes(destination[11..15], NextLeafPageId);
+        BitConverter.TryWriteBytes(destination[15..19], PrevLeafPageId);
     }
 
     public static BTreeNodeHeader ReadFrom(ReadOnlySpan<byte> source)
     {
-        if (source.Length < 16)
+        if (source.Length < 20)
             throw new ArgumentException("Source must be at least 16 bytes");
 
-        return new BTreeNodeHeader
+        var header = new BTreeNodeHeader
         {
             PageId = BitConverter.ToUInt32(source[0..4]),
             IsLeaf = source[4] != 0,
@@ -66,5 +68,12 @@ public struct BTreeNodeHeader
             ParentPageId = BitConverter.ToUInt32(source[7..11]),
             NextLeafPageId = BitConverter.ToUInt32(source[11..15])
         };
+
+        if (source.Length >= 20)
+        {
+            header.PrevLeafPageId = BitConverter.ToUInt32(source[15..19]);
+        }
+
+        return header;
     }
 }

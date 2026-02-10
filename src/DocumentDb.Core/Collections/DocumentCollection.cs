@@ -4,6 +4,9 @@ using DocumentDb.Bson;
 using DocumentDb.Core.Indexing;
 using DocumentDb.Core.Storage;
 using DocumentDb.Core.Transactions;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("DocumentDb.Tests")]
 
 namespace DocumentDb.Core.Collections;
 
@@ -218,7 +221,7 @@ public class DocumentCollection<TId, T> where T : class
         var minKey = new IndexKey(Array.Empty<byte>());
         var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 32).ToArray());
 
-        foreach (var entry in _primaryIndex.Range(minKey, maxKey, txn.TransactionId))
+        foreach (var entry in _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, txn.TransactionId))
         {
             try
             {
@@ -458,27 +461,52 @@ public class DocumentCollection<TId, T> where T : class
         int maxPrimaryPayload = MaxDocumentSizeForSinglePage - MetadataSize;
 
         // 2. Build Overflow Chain (Reverse Order)
+        // We must ensure that pages closer to Primary are FULL (PageSize-Header),
+        // and only the last page (tail) is partial. This matches FindByLocation greedy reading.
+        
         uint nextOverflowPageId = 0;
-        int remainingBytes = data.Length - maxPrimaryPayload;
-        int offset = data.Length;
         int overflowChunkSize = _storage.PageSize - SlottedPageHeader.Size;
-
-        while (offset > maxPrimaryPayload)
+        int totalOverflowBytes = data.Length - maxPrimaryPayload;
+        
+        if (totalOverflowBytes > 0) 
         {
-            int chunkSize = Math.Min(overflowChunkSize, offset - maxPrimaryPayload);
-            offset -= chunkSize;
+            int tailSize = totalOverflowBytes % overflowChunkSize;
+            int fullPages = totalOverflowBytes / overflowChunkSize;
 
-            var overflowPageId = AllocateOverflowPage(
-                data.Slice(offset, chunkSize),
-                nextOverflowPageId,
-                transaction
-            );
-            nextOverflowPageId = overflowPageId;
+            // 2a. Handle Tail (if any) - This is the highest offset
+            if (tailSize > 0)
+            {
+                int tailOffset = maxPrimaryPayload + (fullPages * overflowChunkSize);
+                var overflowPageId = AllocateOverflowPage(
+                    data.Slice(tailOffset, tailSize),
+                    nextOverflowPageId, // Points to 0 (or previous tail if we had one? No, 0)
+                    transaction
+                );
+                nextOverflowPageId = overflowPageId;
+            }
+            else if (fullPages > 0)
+            {
+                 // If no tail, nextId starts at 0.
+            }
+
+            // 2b. Handle Full Pages (Reverse order)
+            // Iterate from last full page down to first full page
+            for (int i = fullPages - 1; i >= 0; i--)
+            {
+                int chunkOffset = maxPrimaryPayload + (i * overflowChunkSize);
+                var overflowPageId = AllocateOverflowPage(
+                    data.Slice(chunkOffset, overflowChunkSize),
+                    nextOverflowPageId,
+                    transaction
+                );
+                nextOverflowPageId = overflowPageId;
+            }
         }
 
         // 3. Prepare Primary Page Payload
         // Layout: [TotalLength (4)] [NextOverflowPage (4)] [DataChunk (...)]
-        int primaryPayloadSize = offset; // This is the remaining data at start
+        // Since we are in InsertWithOverflow, we know data.Length > maxPrimaryPayload
+        int primaryPayloadSize = maxPrimaryPayload;
         int totalSlotSize = MetadataSize + primaryPayloadSize;
 
         // Allocate primary page
@@ -588,34 +616,43 @@ public class DocumentCollection<TId, T> where T : class
             }
 
             // Serialize
-            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-            var bytesWritten = _mapper.Serialize(entity, buffer);
+            // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            // var bytesWritten = _mapper.Serialize(entity, buffer);
+            var bytesWritten = SerializeWithRetry(entity, out var buffer);
             var docData = buffer.AsSpan(0, bytesWritten);
 
             DocumentLocation location;
-            if (docData.Length <= MaxDocumentSizeForSinglePage)
+            try
             {
-                var pageId = FindPageWithSpace(docData.Length);
-                if (pageId == 0) pageId = AllocateNewDataPage(txn);
-                var slotIndex = InsertIntoPage(pageId, docData, txn);
-                location = new DocumentLocation(pageId, slotIndex);
+                if (docData.Length <= MaxDocumentSizeForSinglePage)
+                {
+                    var pageId = FindPageWithSpace(docData.Length);
+                    if (pageId == 0) pageId = AllocateNewDataPage(txn);
+                    var slotIndex = InsertIntoPage(pageId, docData, txn);
+                    location = new DocumentLocation(pageId, slotIndex);
+                }
+                else
+                {
+                    var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
+                    location = new DocumentLocation(pageId, slotIndex);
+                }
+
+                // Primary index update using IndexKey from TId
+                var key = _mapper.ToIndexKey(id);
+                _primaryIndex.Insert(key, location, txn.TransactionId);
+
+                // Notify secondary indexes
+                _indexManager.InsertIntoAll(entity, location, txn);
+
+                if (isInternalTransaction) txn.Commit();
+                return id;
             }
-            else
+            finally
             {
-                var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
-                location = new DocumentLocation(pageId, slotIndex);
+                ArrayPool<byte>.Shared.Return(buffer);
             }
-
-            // Primary index update using IndexKey from TId
-            var key = _mapper.ToIndexKey(id);
-            _primaryIndex.Insert(key, location, txn.TransactionId);
-
-            // Notify secondary indexes
-            _indexManager.InsertIntoAll(entity, location, txn);
-
-            if (isInternalTransaction) txn.Commit();
-            return id;
         }
+
         catch
         {
             if (isInternalTransaction) txn.Rollback();
@@ -665,8 +702,11 @@ public class DocumentCollection<TId, T> where T : class
                     _mapper.SetId(entity, id);
                 }
 
-                var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-                var length = _mapper.Serialize(entity, buffer);
+                // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                // var length = _mapper.Serialize(entity, buffer);
+                // serializedBatch[i] = (id, buffer, length);
+                // Use SerializeWithRetry
+                var length = SerializeWithRetry(entity, out var buffer);
                 serializedBatch[i] = (id, buffer, length);
             });
 
@@ -677,25 +717,31 @@ public class DocumentCollection<TId, T> where T : class
                 var docData = buffer.AsSpan(0, length);
                 var entity = entityList[batchStart + i];
 
-                DocumentLocation location;
-                if (docData.Length <= MaxDocumentSizeForSinglePage)
+                try
                 {
-                    var pageId = FindPageWithSpace(docData.Length);
-                    if (pageId == 0) pageId = AllocateNewDataPage(txn);
-                    var slotIndex = InsertIntoPage(pageId, docData, txn);
-                    location = new DocumentLocation(pageId, slotIndex);
-                }
-                else
-                {
-                    var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
-                    location = new DocumentLocation(pageId, slotIndex);
-                }
+                    DocumentLocation location;
+                    if (docData.Length <= MaxDocumentSizeForSinglePage)
+                    {
+                        var pageId = FindPageWithSpace(docData.Length);
+                        if (pageId == 0) pageId = AllocateNewDataPage(txn);
+                        var slotIndex = InsertIntoPage(pageId, docData, txn);
+                        location = new DocumentLocation(pageId, slotIndex);
+                    }
+                    else
+                    {
+                        var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
+                        location = new DocumentLocation(pageId, slotIndex);
+                    }
 
-                var key = _mapper.ToIndexKey(id);
-                _primaryIndex.Insert(key, location, txn.TransactionId);
-                _indexManager.InsertIntoAll(entity, location, txn);
-                ids.Add(id);
-                ArrayPool<byte>.Shared.Return(buffer);
+                    var key = _mapper.ToIndexKey(id);
+                    _primaryIndex.Insert(key, location, txn.TransactionId);
+                    _indexManager.InsertIntoAll(entity, location, txn);
+                    ids.Add(id);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
             }
         }
 
@@ -726,6 +772,8 @@ public class DocumentCollection<TId, T> where T : class
         return FindByLocation(location, txn);
     }
 
+
+
     /// <summary>
     /// Returns all documents in the collection.
     /// WARNING: This method requires an external transaction for proper isolation!
@@ -739,7 +787,7 @@ public class DocumentCollection<TId, T> where T : class
         var minKey = new IndexKey(Array.Empty<byte>());
         var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 32).ToArray());
 
-        foreach (var entry in _primaryIndex.Range(minKey, maxKey, txnId))
+        foreach (var entry in _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, txnId))
         {
             var entity = FindByLocation(entry.Location, transaction);
             if (entity != null)
@@ -747,7 +795,7 @@ public class DocumentCollection<TId, T> where T : class
         }
     }
 
-    private T? FindByLocation(DocumentLocation location, ITransaction? transaction)
+    internal T? FindByLocation(DocumentLocation location, ITransaction? transaction)
     {
         var txnId = transaction?.TransactionId ?? 0;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -851,10 +899,12 @@ public class DocumentCollection<TId, T> where T : class
             if (oldEntity == null) return false; // Concurrently deleted?
 
             // Serialize new version
-            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-            try
+            // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            // try {
+            //     var bytesWritten = _mapper.Serialize(entity, buffer);
+            var bytesWritten = SerializeWithRetry(entity, out var buffer);
+            try 
             {
-                var bytesWritten = _mapper.Serialize(entity, buffer);
                 var docData = buffer.AsSpan(0, bytesWritten);
 
                 // Read old page to check if we can update in-place
@@ -900,12 +950,21 @@ public class DocumentCollection<TId, T> where T : class
                         _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
 
                         // Insert new version
-                        var newPageId = FindPageWithSpace(bytesWritten);
-                        if (newPageId == 0)
-                            newPageId = AllocateNewDataPage(txn);
+                        DocumentLocation newLocation;
+                        if (bytesWritten <= MaxDocumentSizeForSinglePage)
+                        {
+                            var newPageId = FindPageWithSpace(bytesWritten);
+                            if (newPageId == 0)
+                                newPageId = AllocateNewDataPage(txn);
 
-                        var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
-                        var newLocation = new DocumentLocation(newPageId, newSlotIndex);
+                            var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
+                            newLocation = new DocumentLocation(newPageId, newSlotIndex);
+                        }
+                        else
+                        {
+                            var (newPageId, newSlotIndex) = InsertWithOverflow(docData, txn);
+                            newLocation = new DocumentLocation(newPageId, newSlotIndex);
+                        }
 
                         // Update primary index with new location
                         _primaryIndex.Delete(key, oldLocation, txn.TransactionId);
@@ -968,8 +1027,10 @@ public class DocumentCollection<TId, T> where T : class
                     // Check if entity exists
                     if (_primaryIndex.TryFind(key, out var _, txn.TransactionId))
                     {
-                        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-                        _mapper.Serialize(entity, buffer);
+                        // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                        // _mapper.Serialize(entity, buffer);
+                        // serializedBatch[i] = (id, buffer, true);
+                        var length = SerializeWithRetry(entity, out var buffer);
                         serializedBatch[i] = (id, buffer, true);
                     }
                     else
@@ -1216,7 +1277,7 @@ public class DocumentCollection<TId, T> where T : class
             // Use generic min/max keys for the index
             var minKey = IndexKey.MinKey;
             var maxKey = IndexKey.MaxKey;
-            return _primaryIndex.Range(minKey, maxKey, txn.TransactionId).Count();
+            return _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, txn.TransactionId).Count();
         }
         finally
         {
@@ -1245,4 +1306,46 @@ public class DocumentCollection<TId, T> where T : class
         => FindAll(predicate, transaction);
 
     #endregion
+
+    /// <summary>
+    /// Serializes an entity with adaptive buffer sizing (Stepped Retry).
+    /// Strategies:
+    /// 1. 64KB (Covers 99% of docs, small overhead)
+    /// 2. 2MB (Covers large docs)
+    /// 3. 16MB (Max limit)
+    /// </summary>
+    private int SerializeWithRetry(T entity, out byte[] rentedBuffer)
+    {
+        // 64KB, 2MB, 16MB
+        int[] steps = { 65536, 2097152, 16777216 };
+
+        for (int i = 0; i < steps.Length; i++)
+        {
+            int size = steps[i];
+            
+            // Ensure we at least cover PageSize (unlikely to be > 64KB but safe)
+            if (size < _storage.PageSize) size = _storage.PageSize;
+
+            var buffer = ArrayPool<byte>.Shared.Rent(size);
+            try
+            {
+                int bytesWritten = _mapper.Serialize(entity, buffer);
+                rentedBuffer = buffer;
+                return bytesWritten;
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is IndexOutOfRangeException || ex is ArgumentOutOfRangeException)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+                // Continue to next step
+            }
+            catch
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+                throw;
+            }
+        }
+
+        rentedBuffer = null!; // specific compiler satisfaction, though we throw
+        throw new InvalidOperationException($"Document too large. Maximum size allowed is 16MB.");
+    }
 }
