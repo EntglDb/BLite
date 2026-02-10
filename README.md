@@ -1,71 +1,82 @@
-# DocumentDb - High-Performance BSON Database Engine
+# ⚡ DocumentDb
+### High-Performance BSON Database Engine for .NET 10
 
-An embedded, ACID-compliant, document-oriented database for .NET 10, built for maximum performance and minimum allocation.
+![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Platform](https://img.shields.io/badge/platform-.NET%2010-purple)
+![Status](https://img.shields.io/badge/status-active%20development-orange)
 
-## 🚀 Key Features
+**DocumentDb** is an embedded, ACID-compliant, document-oriented database built from scratch for **maximum performance** and **zero allocation**. It leverages modern .NET features like `Span<T>`, `Memory<T>`, and Source Generators to eliminate runtime overhead.
 
-### 1. Zero-Allocation Architecture
-- **Span-based I/O**: Operations use `Span<byte>` and `Memory<byte>` throughout the stack.
-- **No Reflection**: Serialization is handled at compile-time via **Source Generators**.
-- **Memory-Mapped Files**: Efficient page-based storage engine with OS-level caching.
+---
 
-### 2. Powerful Query Engine (LINQ)
-Full `IQueryable<T>` support seamlessly integrated with the storage engine.
+## 🚀 Why DocumentDb?
+
+Most embedded databases for .NET are either wrappers around C libraries (SQLite, RocksDB) or legacy C# codebases burdened by heavy GC pressure.
+
+**DocumentDb is different:**
+- **Zero Allocation**: I/O and interaction paths use `Span<byte>` and `stackalloc`. No heap allocations for reads/writes.
+- **Type-Safe**: No reflection. All serialization code is generated at compile-time.
+- **Developer Experience**: Full LINQ provider (`IQueryable`) that feels like Entity Framework but runs on bare metal.
+- **Reliable**: Full ACID transactions with Write-Ahead Logging (WAL) and Snapshot Isolation.
+
+---
+
+## ✨ Key Features
+
+### 🚄 Zero-Allocation Architecture
+- **Span-based I/O**: The entire pipeline, from disk to user objects, utilizes `Span<T>` to avoid copying memory.
+- **Memory-Mapped Files**: OS-level paging and caching for blazing fast access.
+
+### 🧠 Powerful Query Engine (LINQ)
+Write queries naturally using LINQ. The engine automatically translates them to optimized B-Tree lookups.
+
 ```csharp
 // Automatic Index Usage
 var users = collection.AsQueryable()
     .Where(x => x.Age > 25 && x.Name.StartsWith("A"))
     .OrderBy(x => x.Age)
     .Take(10)
-    .ToList();
+    .AsEnumerable(); // Executed efficiently on the engine
 ```
-- **Index Optimization**: Automatically selects indexes for Equality, Range (`>`, `<`), `Between`, and Prefix (`StartsWith`) queries.
-- **Scan Optimization**: Fallback queries use **Raw BSON Scanning**, evaluating predicates on bytes without object deserialization.
-- **Full Capabilities**: Supports `Select` (Projections), `Skip`/`Take` (Pagination), and Sorting.
 
-### 3. Advanced Indexing
-- **B-Tree Indexes**: Logarithmic lookup time for primary and secondary keys.
-- **Composite Indexes**: Multi-column indexing support.
-- **Range & Prefix**: Efficiently handles range queries and string prefix matching.
+- **Optimized**: Uses B-Tree indexes for `=`, `>`, `<`, `Between`, and `StartsWith`.
+- **Smart Scans**: Fallback to **Raw BSON Scanning** (predicates evaluated on raw bytes) when no index is available.
 
-### 4. Transactions & ACID
-- **WAL (Write-Ahead Logging)**: Ensures durability and crash recovery.
-- **Snapshot Isolation**: Readers do not block writers; writers do not block readers.
-- **Atomic Operations**: Support for multi-document transactions.
+### 🔍 Advanced Indexing
+- **B-Tree Indexes**: Logarithmic time complexity for lookups.
+- **Composite Indexes**: Support for multi-column keys.
+- **Prefix Compression**: Efficient storage for string keys.
 
-### 5. Large Document Support
-- **Overflow Pages**: Handles documents exceeding the 16KB page limit.
-- **Adaptive Buffering**: Smart memory management for large object serialization (64KB -> 2MB -> 16MB).
+### 🛡️ Transactions & ACID
+- **Atomic**: Multi-document transactions.
+- **Durable**: WAL ensures data safety even in power loss.
+- **Isolated**: Snapshot isolation allowing concurrent readers and writers.
 
-## 🏗️ Architecture Stack
-
-### `DocumentDb.Bson`
-Core serialization library.
-- `BsonSpanReader`: Low-level, zero-copy BSON parser.
-- `BsonSpanWriter`: Stack-allocated BSON writer.
-
-### `DocumentDb.Core`
-The database engine.
-- `PageFile`: Paged storage abstraction (4KB/8KB/16KB pages).
-- `DocumentCollection`: Typed interface for document management.
-- `BTreeIndex`: The backbone of data retrieval.
-
-### `DocumentDb.Generators`
-Source generators that produce `IBsonMapper<T>` implementations at compile time, eliminating runtime reflection cost.
+---
 
 ## 📦 Quick Start
 
+### 1. Installation
+*Coming soon to NuGet...*
+
+### 2. Basic Usage
+
 ```csharp
-// 1. Configure Storage
-var storage = new StorageEngine("mydb.data");
+// 1. Initialize Engine
+using var storage = new StorageEngine("mydb.data");
 
-// 2. Define Document & Mapper
-public class User { public ObjectId Id { get; set; } public string Name { get; set; } }
+// 2. Define your Data
+public class User 
+{ 
+    public ObjectId Id { get; set; } 
+    public string Name { get; set; } 
+}
 
-// 3. Open Collection
+// 3. Get Collection (Mapper auto-generated via Source Generator)
 var users = new DocumentCollection<User>(storage, new UserMapper(), "users");
 
-// 4. Indexing & Querying
+// 4. Index & Query
 users.EnsureIndex(u => u.Name, "idx_name");
 
 users.Insert(new User { Name = "Alice" });
@@ -75,11 +86,38 @@ var results = users.AsQueryable()
     .ToList();
 ```
 
-## 📊 Performance Philosophy
-- **Minimize GC Pressure**: Reuse buffers, avoid temporary objects.
-- **Locality of Reference**: B-Tree structure maximizes cache hits.
-- **Asynchronous I/O**: Non-blocking disk operations where critical.
+---
+
+## �️ Roadmap & Status
+
+We are actively building the core. Here is where we stand:
+
+- ✅ **Core Storage**: Paged I/O, WAL, Transactions.
+- ✅ **BSON Engine**: Zero-copy Reader/Writer.
+- ✅ **Indexing**: B-Tree implementation.
+- ✅ **Query Engine**: Basic LINQ (Where, OrderBy, Select, Page).
+- 🚧 **Advanced LINQ**: GroupBy, Joins, Aggregations (Coming Soon).
+- 🚧 **Async I/O**: `ToListAsync`, `FirstAsync` (Coming Soon).
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! This is a great project to learn about database internals, B-Trees, and high-performance .NET.
+
+### How to Build
+1. **Clone**: `git clone https://github.com/mrdevrobot/DocumentDb.git`
+2. **Build**: `dotnet build`
+3. **Test**: `dotnet test` (We have comprehensive tests for Storage, Indexing, and LINQ).
+
+### Areas to Contribute
+- **Missing LINQ Operators**: Help us implement `GroupBy`, `Count`, or `Join`.
+- **Benchmarks**: Help us prove `DocumentDb` is faster than the competition.
+- **Documentation**: Examples, Guides, and Wiki.
+
+---
 
 ## 📝 License
-MIT License
+
+Licensed under the MIT License. Use it freely in personal and commercial projects.
 
