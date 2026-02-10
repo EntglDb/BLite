@@ -57,6 +57,8 @@ public sealed class PageFile : IDisposable
     private uint _nextPageId;
     private uint _firstFreePageId;
 
+    public uint NextPageId => _nextPageId;
+
     public PageFile(string filePath, PageFileConfig config)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));

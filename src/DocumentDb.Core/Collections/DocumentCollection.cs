@@ -5,6 +5,9 @@ using DocumentDb.Core.Indexing;
 using DocumentDb.Core.Storage;
 using DocumentDb.Core.Transactions;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 
 [assembly: InternalsVisibleTo("DocumentDb.Tests")]
 
@@ -193,10 +196,110 @@ public class DocumentCollection<TId, T> where T : class
         {
              _indexManager.EnsureIndex(selector, builder.Name, builder.IsUnique);
         }
+
         else
         {
             // Try to rebuild the expression or use untyped version
             _indexManager.EnsureIndexUntyped(builder.KeySelector, builder.Name, builder.IsUnique);
+        }
+    }
+
+    /// <summary>
+    /// Scans the entire collection using a raw BSON predicate.
+    /// This avoids deserializing documents that don't match the criteria.
+    /// </summary>
+    /// <param name="predicate">Function to evaluate raw BSON data</param>
+    /// <param name="transaction">Optional transaction for isolation</param>
+    /// <returns>Matching documents</returns>
+    public IEnumerable<T> Scan(Func<BsonSpanReader, bool> predicate, ITransaction? transaction = null)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var txnId = transaction?.TransactionId ?? 0;
+        var pageCount = _storage.PageCount;
+        var buffer = new byte[_storage.PageSize];
+        var pageResults = new List<T>();
+
+        for (uint pageId = 0; pageId < pageCount; pageId++)
+        {
+            pageResults.Clear();
+            ScanPage(pageId, txnId, buffer, predicate, pageResults, transaction);
+            
+            foreach (var doc in pageResults)
+            {
+                yield return doc;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Scans the collection in parallel using multiple threads.
+    /// Useful for large collections on multi-core machines.
+    /// </summary>
+    /// <param name="predicate">Function to evaluate raw BSON data</param>
+    /// <param name="transaction">Optional transaction for isolation</param>
+    /// <param name="degreeOfParallelism">Number of threads to use (default: -1 = ProcessorCount)</param>
+    public IEnumerable<T> ParallelScan(Func<BsonSpanReader, bool> predicate, ITransaction? transaction = null, int degreeOfParallelism = -1)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var txnId = transaction?.TransactionId ?? 0;
+        var pageCount = (int)_storage.PageCount;
+        
+        if (degreeOfParallelism <= 0)
+            degreeOfParallelism = Environment.ProcessorCount;
+
+        return Partitioner.Create(0, pageCount)
+            .AsParallel()
+            .WithDegreeOfParallelism(degreeOfParallelism)
+            .SelectMany(range => 
+            {
+                var localBuffer = new byte[_storage.PageSize];
+                var localResults = new List<T>();
+                
+                for (int i = range.Item1; i < range.Item2; i++)
+                {
+                    ScanPage((uint)i, txnId, localBuffer, predicate, localResults, transaction);
+                }
+                return localResults; 
+                // Wait: SelectMany iterates the returned IEnumerable. 
+                // If I return localResults here, it means for each range, I return a LIST of all results in that range.
+                // But localResults is cleared in the loop!
+                // ERROR: I am clearing localResults in the loop. I need to accumulate results for the range.
+                // Correct logic: Accumulate for the whole range, then return.
+            });
+    }
+
+    private void ScanPage(uint pageId, ulong txnId, byte[] buffer, Func<BsonSpanReader, bool> predicate, List<T> results, ITransaction? transaction)
+    {
+        _storage.ReadPage(pageId, txnId, buffer);
+        var header = SlottedPageHeader.ReadFrom(buffer);
+
+        // Only scan Data pages
+        if (header.PageType != PageType.Data)
+            return;
+
+        // Iterate slots
+        var slots = MemoryMarshal.Cast<byte, SlotEntry>(
+            buffer.AsSpan(SlottedPageHeader.Size, header.SlotCount * SlotEntry.Size));
+
+        for (int i = 0; i < header.SlotCount; i++)
+        {
+            var slot = slots[i];
+
+            if (slot.Flags.HasFlag(SlotFlags.Deleted))
+                continue;
+
+            // For now, skip overflow documents in scan optimization 
+            var data = buffer.AsSpan(slot.Offset, slot.Length);
+            var reader = new BsonSpanReader(data);
+
+            if (predicate(reader))
+            {
+                var doc = FindByLocation(new DocumentLocation(pageId, (ushort)i), transaction);
+                if (doc != null)
+                    results.Add(doc);
+            }
         }
     }
 

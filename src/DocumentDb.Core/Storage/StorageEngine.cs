@@ -318,6 +318,12 @@ public sealed class StorageEngine : IDisposable
     public int ActiveTransactionCount => _walCache.Count;
 
     /// <summary>
+    /// Gets the number of pages currently allocated in the page file.
+    /// Useful for full database scans.
+    /// </summary>
+    public uint PageCount => _pageFile.NextPageId;
+
+    /// <summary>
     /// Gets the current size of the WAL file.
     /// </summary>
     public long GetWalSize()
