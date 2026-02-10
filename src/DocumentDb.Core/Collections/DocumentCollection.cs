@@ -8,6 +8,9 @@ using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Linq;
+using System.Linq.Expressions;
+using DocumentDb.Core.Query;
 
 [assembly: InternalsVisibleTo("DocumentDb.Tests")]
 
@@ -304,14 +307,39 @@ public class DocumentCollection<TId, T> where T : class
     }
 
     /// <summary>
+    /// Gets a queryable interface for this collection.
+    /// Supports LINQ queries that are translated to optimized BTree scans or index lookups.
+    /// </summary>
+    public IQueryable<T> AsQueryable()
+    {
+        return new BTreeQueryable<T>(new BTreeQueryProvider(this));
+    }
+
+    /// <summary>
     /// Gets a specific secondary index by name for advanced querying.
     /// Returns null if the index doesn't exist.
     /// </summary>
-    /// <param name="name">Index name</param>
-    /// <returns>The secondary index, or null if not found</returns>
     public CollectionSecondaryIndex<TId, T>? GetIndex(string name)
     {
         return _indexManager.GetIndex(name);
+    }
+
+    /// <summary>
+    /// Queries a specific index for a range of values.
+    /// Returns matching documents using the index for efficient retrieval.
+    /// </summary>
+    public IEnumerable<T> QueryIndex(string indexName, object? minKey, object? maxKey, bool ascending = true, ITransaction? transaction = null)
+    {
+         var index = GetIndex(indexName);
+         if (index == null) throw new ArgumentException($"Index {indexName} not found");
+         
+         var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
+         
+         foreach (var location in index.Range(minKey, maxKey, direction, transaction))
+         {
+             var doc = FindByLocation(location, transaction);
+             if (doc != null) yield return doc;
+         }
     }
 
     /// <summary>
