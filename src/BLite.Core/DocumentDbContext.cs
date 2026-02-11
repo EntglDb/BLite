@@ -96,4 +96,14 @@ public abstract partial class DocumentDbContext : IDisposable
         
         GC.SuppressFinalize(this);
     }
+
+    public ITransaction BeginTransaction()
+    {
+        return _storage.BeginTransaction();
+    }
+
+    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    {
+        return await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+    }
 }

@@ -78,6 +78,17 @@ public sealed class Transaction : ITransaction
         _state = TransactionState.Committed;
     }
 
+    public async Task CommitAsync(CancellationToken ct = default)
+    {
+        if (_state != TransactionState.Preparing && _state != TransactionState.Active)
+            throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
+        
+        // StorageEngine handles WAL writes and buffer management
+        await _storage.CommitTransactionAsync(_transactionId, ct);
+
+        _state = TransactionState.Committed;
+    }
+
     /// <summary>
     /// Marks the transaction as committed without writing to PageFile.
     /// Used by TransactionManager with lazy checkpointing.

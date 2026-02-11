@@ -27,7 +27,7 @@ public sealed partial class StorageEngine : IDisposable
     private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
     
     // Global lock for commit/checkpoint synchronization
-    private readonly object _commitLock = new();
+    private readonly SemaphoreSlim _commitLock = new(1, 1);
     
     // Transaction Management
     private readonly ConcurrentDictionary<ulong, Transaction> _activeTransactions;
@@ -71,6 +71,24 @@ public sealed partial class StorageEngine : IDisposable
     public int PageSize => _pageFile.PageSize;
 
     /// <summary>
+    /// Checks if a page is currently being modified by another active transaction.
+    /// This is used to implement pessimistic locking for page allocation/selection.
+    /// </summary>
+    public bool IsPageLocked(uint pageId, ulong excludingTxId)
+    {
+        foreach (var kvp in _walCache)
+        {
+            var txId = kvp.Key;
+            if (txId == excludingTxId) continue;
+            
+            var txnPages = kvp.Value;
+            if (txnPages.ContainsKey(pageId))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Disposes the storage engine and closes WAL.
     /// </summary>
     public void Dispose()
@@ -92,5 +110,6 @@ public sealed partial class StorageEngine : IDisposable
         // 2. Close WAL and PageFile
         _wal?.Dispose();
         _pageFile?.Dispose();
+        _commitLock?.Dispose();
     }
 }

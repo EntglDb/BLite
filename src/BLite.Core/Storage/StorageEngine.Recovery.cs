@@ -33,14 +33,54 @@ public sealed partial class StorageEngine
     /// Performs a checkpoint: merges WAL into PageFile.
     /// Uses in-memory WAL index for efficiency and consistency.
     /// </summary>
+    /// <summary>
+    /// Performs a checkpoint: merges WAL into PageFile.
+    /// Uses in-memory WAL index for efficiency and consistency.
+    /// </summary>
     public void Checkpoint()
     {
-        lock (_commitLock)
+        _commitLock.Wait();
+        try
+        {
+            CheckpointInternal();
+        }
+        finally
+        {
+            _commitLock.Release();
+        }
+    }
+
+    private void CheckpointInternal()
+    {
+        if (_walIndex.IsEmpty)
+            return;
+
+        // 1. Write all committed pages from index to PageFile
+        foreach (var kvp in _walIndex)
+        {
+            _pageFile.WritePage(kvp.Key, kvp.Value);
+        }
+        
+        // 2. Flush PageFile to ensure durability
+        _pageFile.Flush();
+        
+        // 3. Clear in-memory WAL index (now persisted)
+        _walIndex.Clear();
+        
+        // 4. Truncate WAL (all changes now in PageFile)
+        _wal.Truncate();
+    }
+
+    public async Task CheckpointAsync(CancellationToken ct = default)
+    {
+        await _commitLock.WaitAsync(ct);
+        try
         {
             if (_walIndex.IsEmpty)
                 return;
 
             // 1. Write all committed pages from index to PageFile
+            // PageFile writes are sync (MMF), but that's fine as per plan (ValueTask strategy for MMF)
             foreach (var kvp in _walIndex)
             {
                 _pageFile.WritePage(kvp.Key, kvp.Value);
@@ -53,7 +93,13 @@ public sealed partial class StorageEngine
             _walIndex.Clear();
             
             // 4. Truncate WAL (all changes now in PageFile)
+            // WAL truncation involves file resize and flush
+            // TODO: Add TruncateAsync to WAL? For now Truncate is sync.
             _wal.Truncate();
+        }
+        finally
+        {
+            _commitLock.Release();
         }
     }
     
@@ -63,7 +109,8 @@ public sealed partial class StorageEngine
     /// </summary>
     public void Recover()
     {
-        lock (_commitLock)
+        _commitLock.Wait();
+        try
         {
             // 1. Read WAL and identify committed transactions
             var records = _wal.ReadAll();
@@ -106,6 +153,10 @@ public sealed partial class StorageEngine
             
             // 5. Truncate WAL (all changes now in PageFile)
             _wal.Truncate();
+        }
+        finally
+        {
+            _commitLock.Release();
         }
     }
 }

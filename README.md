@@ -87,6 +87,12 @@ users.Insert(new User { Name = "Alice" });
 var results = users.AsQueryable()
     .Where(u => u.Name == "Alice")
     .ToList();
+
+// 5. Async Operations
+// Parallel non-blocking I/O
+await users.InsertAsync(new User { Name = "Bob" });
+
+var count = await users.UpdateBulkAsync(manyUsers);
 ```
 
 ---
@@ -100,8 +106,8 @@ We are actively building the core. Here is where we stand:
 - ✅ **Indexing**: B-Tree implementation.
 - ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
+- ✅ **Async I/O**: Full `async`/`await` support for CRUD and Bulk operations.
 - 🚧 **Source Generators**: Auto-map POCO/DDD classes (Nested Objects, Collections, Value Objects).
-- 🚧 **Async I/O**: `ToListAsync`, `FirstAsync` (Coming Soon).
 
 ## 🔮 Future Vision
 

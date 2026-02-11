@@ -48,7 +48,10 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
     public SchemaVersion? CurrentSchemaVersion { get; private set; }
 
-    private const int MaxDocumentSizeForSinglePage = 15000; // ~15KB for 16KB pages
+    // Concurrency control for write operations (B-Tree and Page modifications)
+    private readonly SemaphoreSlim _collectionLock = new(1, 1);
+
+    private readonly int _maxDocumentSizeForSinglePage;
 
     public DocumentCollection(StorageEngine storage, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
@@ -59,6 +62,10 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
         _indexManager = new CollectionIndexManager<TId, T>(_storage, _mapper, _collectionName);
         _freeSpaceMap = new Dictionary<uint, ushort>();
+
+        // Calculate max document size dynamically based on page size
+        // Reserve space for PageHeader (24) and some safety margin
+        _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
 
         // Ensure schema is persisted and versioned
         EnsureSchema();
@@ -126,6 +133,14 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     public ITransaction BeginTransaction()
     {
         return _storage.BeginTransaction();
+    }
+
+    /// <summary>
+    /// Begins a new transaction asynchronously.
+    /// </summary>
+    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    {
+        return await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
     }
 
     #endregion
@@ -412,14 +427,16 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
     #region Data Page Management
 
-    private uint FindPageWithSpace(int requiredBytes)
+    private uint FindPageWithSpace(int requiredBytes, ITransaction txn)
     {
+        var txnId = txn?.TransactionId ?? 0;
+
         // Try current page first
         if (_currentDataPage != 0)
         {
             if (_freeSpaceMap.TryGetValue(_currentDataPage, out var freeBytes))
             {
-                if (freeBytes >= requiredBytes + SlotEntry.Size)
+                if (freeBytes >= requiredBytes && !_storage.IsPageLocked(_currentDataPage, txnId))
                     return _currentDataPage;
             }
             else
@@ -429,10 +446,11 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
                 _storage.ReadPage(_currentDataPage, null, page);
                 var header = SlottedPageHeader.ReadFrom(page);
 
-                if (header.AvailableFreeSpace >= requiredBytes + SlotEntry.Size)
+                if (header.AvailableFreeSpace >= requiredBytes)
                 {
                     _freeSpaceMap[_currentDataPage] = (ushort)header.AvailableFreeSpace;
-                    return _currentDataPage;
+                    if (!_storage.IsPageLocked(_currentDataPage, txnId))
+                        return _currentDataPage;
                 }
             }
         }
@@ -440,8 +458,11 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // Search free space map
         foreach (var (pageId, freeBytes) in _freeSpaceMap)
         {
-            if (freeBytes >= requiredBytes + SlotEntry.Size)
-                return pageId;
+            if (freeBytes >= requiredBytes)
+            {
+                 if (!_storage.IsPageLocked(pageId, txnId))
+                    return pageId;
+            }
         }
 
         return 0; // No suitable page
@@ -627,7 +648,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // 1. Calculate Primary Chunk Size
         // We need 8 bytes for metadata (TotalLength: 4, NextOverflowPage: 4)
         const int MetadataSize = 8;
-        int maxPrimaryPayload = MaxDocumentSizeForSinglePage - MetadataSize;
+        int maxPrimaryPayload = _maxDocumentSizeForSinglePage - MetadataSize;
 
         // 2. Build Overflow Chain (Reverse Order)
         // We must ensure that pages closer to Primary are FULL (PageSize-Header),
@@ -679,7 +700,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         int totalSlotSize = MetadataSize + primaryPayloadSize;
 
         // Allocate primary page
-        var primaryPageId = FindPageWithSpace(totalSlotSize);
+        var primaryPageId = FindPageWithSpace(totalSlotSize + SlotEntry.Size, transaction);
         if (primaryPageId == 0)
             primaryPageId = AllocateNewDataPage(transaction);
 
@@ -758,74 +779,63 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// </summary>
     /// <param name="entity">Entity to insert</param>
     /// <param name="transaction">Optional transaction to batch multiple operations. If null, auto-commits.</param>
-    /// <returns>The ObjectId of the inserted document</returns>
+    /// <returns>The primary key of the inserted document</returns>
     public TId Insert(T entity, ITransaction? transaction = null)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        ITransaction txn = transaction ?? _storage.BeginTransaction();
-        var isInternalTransaction = transaction == null;
-
+        _collectionLock.Wait();
         try
         {
-            // Get or generate ID
-            var id = _mapper.GetId(entity);
-            if (EqualityComparer<TId>.Default.Equals(id, default))
-            {
-                if (typeof(TId) == typeof(ObjectId))
-                {
-                    id = (TId)(object)ObjectId.NewObjectId();
-                    _mapper.SetId(entity, id);
-                }
-                else if (typeof(TId) == typeof(Guid))
-                {
-                    id = (TId)(object)Guid.NewGuid();
-                    _mapper.SetId(entity, id);
-                }
-            }
+            ITransaction txn = transaction ?? _storage.BeginTransaction();
+            var isInternalTransaction = transaction == null;
 
-            // Serialize
-            // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-            // var bytesWritten = _mapper.Serialize(entity, buffer);
-            var bytesWritten = SerializeWithRetry(entity, out var buffer);
-            var docData = buffer.AsSpan(0, bytesWritten);
-
-            DocumentLocation location;
             try
             {
-                if (docData.Length <= MaxDocumentSizeForSinglePage)
-                {
-                    var pageId = FindPageWithSpace(docData.Length);
-                    if (pageId == 0) pageId = AllocateNewDataPage(txn);
-                    var slotIndex = InsertIntoPage(pageId, docData, txn);
-                    location = new DocumentLocation(pageId, slotIndex);
-                }
-                else
-                {
-                    var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
-                    location = new DocumentLocation(pageId, slotIndex);
-                }
-
-                // Primary index update using IndexKey from TId
-                var key = _mapper.ToIndexKey(id);
-                _primaryIndex.Insert(key, location, txn.TransactionId);
-
-                // Notify secondary indexes
-                _indexManager.InsertIntoAll(entity, location, txn);
-
+                var id = InsertCore(entity, txn);
                 if (isInternalTransaction) txn.Commit();
                 return id;
             }
-            finally
+            catch
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                if (isInternalTransaction) txn.Rollback();
+                throw;
             }
         }
-
-        catch
+        finally
         {
-            if (isInternalTransaction) txn.Rollback();
-            throw;
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously inserts a new document into the collection
+    /// </summary>
+    public async Task<TId> InsertAsync(T entity, ITransaction? transaction = null)
+    {
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        await _collectionLock.WaitAsync();
+        try
+        {
+            ITransaction txn = transaction ?? await _storage.BeginTransactionAsync();
+            var isInternalTransaction = transaction == null;
+
+            try
+            {
+                var id = InsertCore(entity, txn);
+                if (isInternalTransaction) await txn.CommitAsync();
+                return id;
+            }
+            catch
+            {
+                if (isInternalTransaction) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
         }
     }
 
@@ -847,9 +857,66 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         var entityList = entities.ToList();
         var ids = new List<TId>(entityList.Count);
 
-        var txn = transaction ?? _storage.BeginTransaction();
-        var isInternalTransaction = transaction == null;
+        _collectionLock.Wait();
+        try
+        {
+            var txn = transaction ?? _storage.BeginTransaction();
+            var isInternalTransaction = transaction == null;
 
+            try
+            {
+                InsertBulkInternal(entityList, ids, txn);
+                if (isInternalTransaction) txn.Commit();
+                return ids;
+            }
+            catch
+            {
+                if (isInternalTransaction) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously inserts multiple documents in a single transaction.
+    /// </summary>
+    public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction = null)
+    {
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var entityList = entities.ToList();
+        var ids = new List<TId>(entityList.Count);
+
+        await _collectionLock.WaitAsync();
+        try
+        {
+            var txn = transaction ?? await _storage.BeginTransactionAsync();
+            var isInternalTransaction = transaction == null;
+
+            try
+            {
+                InsertBulkInternal(entityList, ids, txn);
+                if (isInternalTransaction) await txn.CommitAsync();
+                return ids;
+            }
+            catch
+            {
+                if (isInternalTransaction) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    private void InsertBulkInternal(List<T> entityList, List<TId> ids, ITransaction txn)
+    {
         const int BATCH_SIZE = 50;
 
         for (int batchStart = 0; batchStart < entityList.Count; batchStart += BATCH_SIZE)
@@ -863,18 +930,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             System.Threading.Tasks.Parallel.For(0, batchCount, i =>
             {
                 var entity = entityList[batchStart + i];
-                var id = _mapper.GetId(entity);
-                if (EqualityComparer<TId>.Default.Equals(id, default))
-                {
-                    if (typeof(TId) == typeof(ObjectId)) id = (TId)(object)ObjectId.NewObjectId();
-                    else if (typeof(TId) == typeof(Guid)) id = (TId)(object)Guid.NewGuid();
-                    _mapper.SetId(entity, id);
-                }
-
-                // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-                // var length = _mapper.Serialize(entity, buffer);
-                // serializedBatch[i] = (id, buffer, length);
-                // Use SerializeWithRetry
+                var id = EnsureId(entity);
                 var length = SerializeWithRetry(entity, out var buffer);
                 serializedBatch[i] = (id, buffer, length);
             });
@@ -883,28 +939,11 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             for (int i = 0; i < batchCount; i++)
             {
                 var (id, buffer, length) = serializedBatch[i];
-                var docData = buffer.AsSpan(0, length);
                 var entity = entityList[batchStart + i];
 
                 try
                 {
-                    DocumentLocation location;
-                    if (docData.Length <= MaxDocumentSizeForSinglePage)
-                    {
-                        var pageId = FindPageWithSpace(docData.Length);
-                        if (pageId == 0) pageId = AllocateNewDataPage(txn);
-                        var slotIndex = InsertIntoPage(pageId, docData, txn);
-                        location = new DocumentLocation(pageId, slotIndex);
-                    }
-                    else
-                    {
-                        var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
-                        location = new DocumentLocation(pageId, slotIndex);
-                    }
-
-                    var key = _mapper.ToIndexKey(id);
-                    _primaryIndex.Insert(key, location, txn.TransactionId);
-                    _indexManager.InsertIntoAll(entity, location, txn);
+                    InsertDataCore(id, entity, buffer.AsSpan(0, length), txn);
                     ids.Add(id);
                 }
                 finally
@@ -913,9 +952,61 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
                 }
             }
         }
+    }
 
-        if (isInternalTransaction) txn.Commit();
-        return ids;
+    private TId EnsureId(T entity)
+    {
+        var id = _mapper.GetId(entity);
+        if (EqualityComparer<TId>.Default.Equals(id, default))
+        {
+            if (typeof(TId) == typeof(ObjectId))
+            {
+                id = (TId)(object)ObjectId.NewObjectId();
+                _mapper.SetId(entity, id);
+            }
+            else if (typeof(TId) == typeof(Guid))
+            {
+                id = (TId)(object)Guid.NewGuid();
+                _mapper.SetId(entity, id);
+            }
+        }
+        return id;
+    }
+
+    private TId InsertCore(T entity, ITransaction txn)
+    {
+        var id = EnsureId(entity);
+        var length = SerializeWithRetry(entity, out var buffer);
+        try
+        {
+            InsertDataCore(id, entity, buffer.AsSpan(0, length), txn);
+            return id;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private void InsertDataCore(TId id, T entity, ReadOnlySpan<byte> docData, ITransaction txn)
+    {
+        DocumentLocation location;
+        if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
+        {
+            var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, txn);
+            if (pageId == 0) pageId = AllocateNewDataPage(txn);
+            var slotIndex = InsertIntoPage(pageId, docData, txn);
+            location = new DocumentLocation(pageId, slotIndex);
+        }
+        else
+        {
+            var (pageId, slotIndex) = InsertWithOverflow(docData, txn);
+            location = new DocumentLocation(pageId, slotIndex);
+        }
+
+        var key = _mapper.ToIndexKey(id);
+        _primaryIndex.Insert(key, location, txn.TransactionId);
+        _indexManager.InsertIntoAll(entity, location, txn);
     }
 
     #endregion
@@ -1050,198 +1141,199 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
     #region Update & Delete
 
+    /// <summary>
+    /// Updates an existing document in the collection
+    /// </summary>
     public bool Update(T entity, ITransaction? transaction = null)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        var id = _mapper.GetId(entity);
-        var key = _mapper.ToIndexKey(id);
-
-        using var txn = transaction ?? _storage.BeginTransaction();
+        _collectionLock.Wait();
         try
         {
-            if (!_primaryIndex.TryFind(key, out var oldLocation, txn.TransactionId))
-                return false;
-
-            // Retrieve old version for index updates
-            var oldEntity = FindByLocation(oldLocation, txn);
-            if (oldEntity == null) return false; // Concurrently deleted?
-
-            // Serialize new version
-            // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-            // try {
-            //     var bytesWritten = _mapper.Serialize(entity, buffer);
-            var bytesWritten = SerializeWithRetry(entity, out var buffer);
-            try 
+            using var txn = transaction ?? _storage.BeginTransaction();
+            try
             {
-                var docData = buffer.AsSpan(0, bytesWritten);
-
-                // Read old page to check if we can update in-place
-                var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-                try
-                {
-                    _storage.ReadPage(oldLocation.PageId, txn.TransactionId, pageBuffer);
-
-                    var slotOffset = SlottedPageHeader.Size + (oldLocation.SlotIndex * SlotEntry.Size);
-                    var oldSlot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOffset));
-                    var hasOverflow = (oldSlot.Flags & SlotFlags.HasOverflow) != 0;
-
-                    if (bytesWritten <= oldSlot.Length && !hasOverflow)
-                    {
-                        // In-place update - location doesn't change
-                        docData.CopyTo(pageBuffer.AsSpan(oldSlot.Offset, bytesWritten));
-
-                        // Update slot length
-                        var newSlot = oldSlot;
-                        newSlot.Length = (ushort)bytesWritten;
-                        newSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
-
-                        _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
-                        
-                        // Notify secondary indexes (primary index unchanged)
-                        _indexManager.UpdateInAll(oldEntity, entity, oldLocation, oldLocation, txn);
-                    }
-                    else
-                    {
-                        // Delete old + insert new
-
-                        // Check if old slot has overflow and free it
-                        if ((oldSlot.Flags & SlotFlags.HasOverflow) != 0)
-                        {
-                            var nextOverflowPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
-                                pageBuffer.AsSpan(oldSlot.Offset + 4, 4));
-                            FreeOverflowChain(nextOverflowPage, txn.TransactionId);
-                        }
-
-                        // Mark old slot as deleted
-                        oldSlot.Flags |= SlotFlags.Deleted;
-                        oldSlot.WriteTo(pageBuffer.AsSpan(slotOffset));
-                        _storage.WritePage(oldLocation.PageId, txn.TransactionId, pageBuffer);
-
-                        // Insert new version
-                        DocumentLocation newLocation;
-                        if (bytesWritten <= MaxDocumentSizeForSinglePage)
-                        {
-                            var newPageId = FindPageWithSpace(bytesWritten);
-                            if (newPageId == 0)
-                                newPageId = AllocateNewDataPage(txn);
-
-                            var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
-                            newLocation = new DocumentLocation(newPageId, newSlotIndex);
-                        }
-                        else
-                        {
-                            var (newPageId, newSlotIndex) = InsertWithOverflow(docData, txn);
-                            newLocation = new DocumentLocation(newPageId, newSlotIndex);
-                        }
-
-                        // Update primary index with new location
-                        _primaryIndex.Delete(key, oldLocation, txn.TransactionId);
-                        _primaryIndex.Insert(key, newLocation, txn.TransactionId);
-
-                        // Notify secondary indexes
-                        _indexManager.UpdateInAll(oldEntity, entity, oldLocation, newLocation, txn);
-                    }
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(pageBuffer);
-                }
-
-                if (transaction == null) txn.Commit();
+                var result = UpdateCore(entity, txn);
+                if (result && transaction == null) txn.Commit();
+                return result;
             }
-            finally
+            catch
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                if (transaction == null) txn.Rollback();
+                throw;
             }
         }
-        catch
+        finally
         {
-            if (transaction == null) txn.Rollback();
-            throw;
+            _collectionLock.Release();
         }
-
-        return true;
     }
 
     /// <summary>
-    /// Updates multiple documents in a single transaction for optimal performance.
-    /// Uses parallel serialization and efficient storage handling.
+    /// Asynchronously updates an existing document in the collection
     /// </summary>
+    public async Task<bool> UpdateAsync(T entity, ITransaction? transaction = null)
+    {
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        await _collectionLock.WaitAsync();
+        try
+        {
+            using var txn = transaction ?? await _storage.BeginTransactionAsync();
+            try
+            {
+                var result = UpdateCore(entity, txn);
+                if (result && transaction == null) await txn.CommitAsync();
+                return result;
+            }
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
     public int UpdateBulk(IEnumerable<T> entities, ITransaction? transaction = null)
     {
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
         int updateCount = 0;
-        const int BATCH_SIZE = 50;
 
-        using var txn = transaction ?? _storage.BeginTransaction();
+        _collectionLock.Wait();
         try
         {
-            for (int batchStart = 0; batchStart < entityList.Count; batchStart += BATCH_SIZE)
+            using var txn = transaction ?? _storage.BeginTransaction();
+            try
             {
-                int batchEnd = Math.Min(batchStart + BATCH_SIZE, entityList.Count);
-                int batchCount = batchEnd - batchStart;
-
-                // PHASE 1: Parallel Serialization
-                var serializedBatch = new (TId id, byte[] data, bool found)[batchCount];
-
-                System.Threading.Tasks.Parallel.For(0, batchCount, i =>
-                {
-                    var entity = entityList[batchStart + i];
-                    var id = _mapper.GetId(entity);
-                    var key = _mapper.ToIndexKey(id);
-
-                    // Check if entity exists
-                    if (_primaryIndex.TryFind(key, out var _, txn.TransactionId))
-                    {
-                        // var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-                        // _mapper.Serialize(entity, buffer);
-                        // serializedBatch[i] = (id, buffer, true);
-                        var length = SerializeWithRetry(entity, out var buffer);
-                        serializedBatch[i] = (id, buffer, true);
-                    }
-                    else
-                    {
-                        serializedBatch[i] = (default!, null!, false);
-                    }
-                });
-
-                // PHASE 2: Sequential Update
-                for (int i = 0; i < batchCount; i++)
-                {
-                    var (id, docData, found) = serializedBatch[i];
-                    if (!found) continue;
-
-                    var entity = entityList[batchStart + i];
-                    var key = _mapper.ToIndexKey(id);
-
-                    if (_primaryIndex.TryFind(key, out var oldLocation, txn.TransactionId))
-                    {
-                         // Re-use logic from Update but optimized for batch
-                         // For simplicity in this PR, we'll just call a private UpdateInternal
-                         if (UpdateInternal(id, entity, docData.AsSpan(), oldLocation, txn))
-                             updateCount++;
-                    }
-                    ArrayPool<byte>.Shared.Return(docData);
-                }
+                updateCount = UpdateBulkInternal(entityList, txn);
+                if (transaction == null) txn.Commit();
+                return updateCount;
             }
-
-            if (transaction == null) txn.Commit();
-            return updateCount;
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
         }
-        catch
+        finally
         {
-            if (transaction == null) txn.Rollback();
-            throw;
+            _collectionLock.Release();
         }
     }
 
-    private bool UpdateInternal(TId id, T entity, ReadOnlySpan<byte> docData, DocumentLocation oldLocation, ITransaction txn)
+    /// <summary>
+    /// Asynchronously updates multiple documents in a single transaction.
+    /// </summary>
+    public async Task<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction = null)
+    {
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var entityList = entities.ToList();
+        int updateCount = 0;
+
+        await _collectionLock.WaitAsync();
+        try
+        {
+            using var txn = transaction ?? await _storage.BeginTransactionAsync();
+            try
+            {
+                updateCount = UpdateBulkInternal(entityList, txn);
+                if (transaction == null) await txn.CommitAsync();
+                return updateCount;
+            }
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    private int UpdateBulkInternal(List<T> entityList, ITransaction txn)
+    {
+        int updateCount = 0;
+        const int BATCH_SIZE = 50;
+
+        for (int batchStart = 0; batchStart < entityList.Count; batchStart += BATCH_SIZE)
+        {
+            int batchEnd = Math.Min(batchStart + BATCH_SIZE, entityList.Count);
+            int batchCount = batchEnd - batchStart;
+
+            // PHASE 1: Parallel Serialization
+            var serializedBatch = new (TId id, byte[] data, int length, bool found)[batchCount];
+
+            for (int i = 0; i < batchCount; i++)
+            {
+                var entity = entityList[batchStart + i];
+                var id = _mapper.GetId(entity);
+                var key = _mapper.ToIndexKey(id);
+
+                // Check if entity exists
+                // We do this sequentially to avoid ThreadPool exhaustion or IO-related deadlocks
+                if (_primaryIndex.TryFind(key, out var _, txn.TransactionId))
+                {
+                    var length = SerializeWithRetry(entity, out var buffer);
+                    serializedBatch[i] = (id, buffer, length, true);
+                }
+                else
+                {
+                    serializedBatch[i] = (default!, null!, 0, false);
+                }
+            }
+
+            // PHASE 2: Sequential Update
+            for (int i = 0; i < batchCount; i++)
+            {
+                var (id, docData, length, found) = serializedBatch[i];
+                if (!found) continue;
+
+                var entity = entityList[batchStart + i];
+                try
+                {
+                    if (UpdateDataCore(id, entity, docData.AsSpan(0, length), txn))
+                        updateCount++;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(docData);
+                }
+            }
+        }
+        return updateCount;
+    }
+
+    private bool UpdateCore(T entity, ITransaction txn)
+    {
+        var id = _mapper.GetId(entity);
+        var length = SerializeWithRetry(entity, out var buffer);
+        try
+        {
+            return UpdateDataCore(id, entity, buffer.AsSpan(0, length), txn);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private bool UpdateDataCore(TId id, T entity, ReadOnlySpan<byte> docData, ITransaction txn)
     {
         var key = _mapper.ToIndexKey(id);
         var bytesWritten = docData.Length;
+
+        if (!_primaryIndex.TryFind(key, out var oldLocation, txn.TransactionId))
+            return false;
 
         // Retrieve old version for index updates
         var oldEntity = FindByLocation(oldLocation, txn);
@@ -1272,12 +1364,12 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             else
             {
                 // Delete old + insert new
-                DeleteInternal(id, oldLocation, txn); // Be careful: DeleteInternal might commit if not careful? No, txn passed.
+                DeleteCore(id, txn); 
                 
                 DocumentLocation newLocation;
-                if (bytesWritten <= MaxDocumentSizeForSinglePage)
+                if (bytesWritten + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
                 {
-                    var newPageId = FindPageWithSpace(bytesWritten);
+                    var newPageId = FindPageWithSpace(bytesWritten + SlotEntry.Size, txn);
                     if (newPageId == 0) newPageId = AllocateNewDataPage(txn);
                     var newSlotIndex = InsertIntoPage(newPageId, docData, txn);
                     newLocation = new DocumentLocation(newPageId, newSlotIndex);
@@ -1301,38 +1393,138 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
     public bool Delete(TId id, ITransaction? transaction = null)
     {
-        using var txn = transaction ?? _storage.BeginTransaction();
+        _collectionLock.Wait();
         try
         {
-            var key = _mapper.ToIndexKey(id);
-            if (!_primaryIndex.TryFind(key, out var location, txn.TransactionId))
-                return false;
-
-            var result = DeleteInternal(id, location, txn);
-            if (result && transaction == null) txn.Commit();
-            return result;
+            using var txn = transaction ?? _storage.BeginTransaction();
+            try
+            {
+                var result = DeleteCore(id, txn);
+                if (result && transaction == null) txn.Commit();
+                return result;
+            }
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
         }
-        catch
+        finally
         {
-            if (transaction == null) txn.Rollback();
-            throw;
+            _collectionLock.Release();
         }
     }
 
-    private bool DeleteInternal(TId id, DocumentLocation location, ITransaction txn)
+    /// <summary>
+    /// Asynchronously deletes a document by its primary key.
+    /// </summary>
+    public async Task<bool> DeleteAsync(TId id, ITransaction? transaction = null)
+    {
+        await _collectionLock.WaitAsync();
+        try
+        {
+            using var txn = transaction ?? await _storage.BeginTransactionAsync();
+            try
+            {
+                var result = DeleteCore(id, txn);
+                if (result && transaction == null) await txn.CommitAsync();
+                return result;
+            }
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes multiple documents in a single transaction.
+    /// Efficiently updates storage and index.
+    /// </summary>
+    public int DeleteBulk(IEnumerable<TId> ids, ITransaction? transaction = null)
+    {
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+
+        int deleteCount = 0;
+        _collectionLock.Wait();
+        try
+        {
+            using var txn = transaction ?? _storage.BeginTransaction();
+            try
+            {
+                deleteCount = DeleteBulkInternal(ids, txn);
+                if (transaction == null) txn.Commit();
+                return deleteCount;
+            }
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously deletes multiple documents in a single transaction.
+    /// </summary>
+    public async Task<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction = null)
+    {
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+
+        int deleteCount = 0;
+        await _collectionLock.WaitAsync();
+        try
+        {
+            using var txn = transaction ?? await _storage.BeginTransactionAsync();
+            try
+            {
+                deleteCount = DeleteBulkInternal(ids, txn);
+                if (transaction == null) await txn.CommitAsync();
+                return deleteCount;
+            }
+            catch
+            {
+                if (transaction == null) txn.Rollback();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    private int DeleteBulkInternal(IEnumerable<TId> ids, ITransaction txn)
+    {
+        int deleteCount = 0;
+        foreach (var id in ids)
+        {
+            if (DeleteCore(id, txn))
+                deleteCount++;
+        }
+        return deleteCount;
+    }
+
+    private bool DeleteCore(TId id, ITransaction txn)
     {
         var key = _mapper.ToIndexKey(id);
+        if (!_primaryIndex.TryFind(key, out var location, txn.TransactionId))
+            return false;
 
         // Notify secondary indexes BEFORE deleting document from storage
-        // (so indexes can still read properties if needed)
         var entity = FindByLocation(location, txn);
         if (entity != null)
         {
             _indexManager.DeleteFromAll(entity, location, txn);
-        }
-        else
-        {
-             // Entity might have been deleted concurrently or index is stale
         }
 
         // Read page
@@ -1367,38 +1559,6 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
-        }
-    }
-
-    /// <summary>
-    /// Deletes multiple documents in a single transaction.
-    /// Efficiently updates storage and index.
-    /// </summary>
-    public int DeleteBulk(IEnumerable<TId> ids, ITransaction? transaction = null)
-    {
-        if (ids == null) throw new ArgumentNullException(nameof(ids));
-
-        int deleteCount = 0;
-        using var txn = transaction ?? _storage.BeginTransaction();
-        try
-        {
-            foreach (var id in ids)
-            {
-                var key = _mapper.ToIndexKey(id);
-                if (_primaryIndex.TryFind(key, out var location, txn.TransactionId))
-                {
-                    if (DeleteInternal(id, location, txn))
-                        deleteCount++;
-                }
-            }
-
-            if (transaction == null) txn.Commit();
-            return deleteCount;
-        }
-        catch
-        {
-            if (transaction == null) txn.Rollback();
-            throw;
         }
     }
 

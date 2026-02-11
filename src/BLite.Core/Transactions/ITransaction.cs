@@ -31,6 +31,11 @@ public interface ITransaction : IDisposable
     void Commit();
 
     /// <summary>
+    /// Asynchronously commits the transaction, making all changes permanent.
+    /// </summary>
+    Task CommitAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// Rolls back the transaction, discarding all changes.
     /// Called automatically on Dispose() if Commit() was not called.
     /// </summary>

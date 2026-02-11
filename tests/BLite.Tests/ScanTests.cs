@@ -109,6 +109,17 @@ namespace BLite.Tests
         }
 
         [Fact]
+        public void Repro_Insert_Loop_Hang()
+        {
+            // Reproduce hang reported by user at 501 documents
+            int count = 600;
+            for (int i = 0; i < count; i++)
+            {
+                _collection.Insert(new TestDocument { Name = $"User_{i}", Age = i });
+            }
+        }
+
+        [Fact]
         public void ParallelScan_FindsMatchingDocuments()
         {
             // Arrange
