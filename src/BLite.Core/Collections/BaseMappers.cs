@@ -21,7 +21,7 @@ public abstract class DocumentMapperBase<TId, T> : IDocumentMapper<TId, T> where
     public virtual IndexKey ToIndexKey(TId id) => IndexKey.Create(id);
     public virtual TId FromIndexKey(IndexKey key) => key.As<TId>();
     
-    public virtual IEnumerable<string> UsedKeys => GetSchema().Fields.Select(f => f.Name);
+    public virtual IEnumerable<string> UsedKeys => GetSchema().GetAllKeys();
     public virtual BsonSchema GetSchema() => BsonSchemaGenerator.FromType<T>();
 }
 

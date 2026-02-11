@@ -77,4 +77,19 @@ public partial class BsonSchema
 
     public override bool Equals(object? obj) => Equals(obj as BsonSchema);
     public override int GetHashCode() => (int)GetHash();
+
+    public IEnumerable<string> GetAllKeys()
+    {
+        foreach (var field in Fields)
+        {
+            yield return field.Name;
+            if (field.NestedSchema != null)
+            {
+                foreach (var nestedKey in field.NestedSchema.GetAllKeys())
+                {
+                    yield return nestedKey;
+                }
+            }
+        }
+    }
 }

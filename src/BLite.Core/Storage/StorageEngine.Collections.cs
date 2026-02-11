@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using BLite.Bson;
 using BLite.Core.Indexing;
+using BLite.Core.Collections;
 
 namespace BLite.Core.Storage;
 
@@ -180,5 +181,14 @@ public sealed partial class StorageEngine
         
         header.WriteTo(buffer);
         WritePageImmediate(1, buffer);
+    }
+
+    /// <summary>
+    /// Registers all BSON keys used by a set of mappers into the global dictionary.
+    /// </summary>
+    public void RegisterMappers(IEnumerable<IDocumentMapper> mappers)
+    {
+        var allKeys = mappers.SelectMany(m => m.UsedKeys).Distinct();
+        RegisterKeys(allKeys);
     }
 }

@@ -174,4 +174,16 @@ public sealed partial class StorageEngine
             return true;
         }
     }
+
+    /// <summary>
+    /// Registers a set of keys in the global dictionary.
+    /// Ensures all keys are assigned an ID and persisted.
+    /// </summary>
+    public void RegisterKeys(IEnumerable<string> keys)
+    {
+        foreach (var key in keys)
+        {
+            GetOrAddDictionaryEntry(key);
+        }
+    }
 }

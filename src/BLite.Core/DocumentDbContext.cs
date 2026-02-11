@@ -40,6 +40,7 @@ public abstract partial class DocumentDbContext : IDisposable
     }
     
     private readonly IReadOnlyDictionary<Type, object> _model;
+    private readonly List<IDocumentMapper> _registeredMappers = new();
 
     /// <summary>
     /// Override to configure the model using Fluent API.
@@ -67,6 +68,7 @@ public abstract partial class DocumentDbContext : IDisposable
             customName = builder?.CollectionName;
         }
 
+        _registeredMappers.Add(mapper);
         var collection = new DocumentCollection<TId, T>(_storage, mapper, customName);
 
         // Apply configurations from ModelBuilder
@@ -77,6 +79,8 @@ public abstract partial class DocumentDbContext : IDisposable
                 collection.ApplyIndexBuilder(indexBuilder);
             }
         }
+
+        _storage.RegisterMappers(_registeredMappers);
 
         return collection;
     }
