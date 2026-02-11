@@ -22,10 +22,8 @@ public class UserMapper : ObjectIdMapperBase<User>
 {
     public override string CollectionName => "users";
 
-    public override int Serialize(User entity, Span<byte> buffer)
+    public override int Serialize(User entity, BsonSpanWriter writer)
     {
-        var writer = new BsonSpanWriter(buffer);
-        
         // Begin document
         var sizePos = writer.BeginDocument();
         
@@ -40,16 +38,15 @@ public class UserMapper : ObjectIdMapperBase<User>
         return writer.Position;
     }
 
-    public override User Deserialize(ReadOnlySpan<byte> buffer)
+    public override User Deserialize(BsonSpanReader reader)
     {
-        var reader = new BsonSpanReader(buffer);
         var user = new User();
         
         // Read document size
         reader.ReadDocumentSize();
         
         // Read fields
-        while (reader.Position < buffer.Length)
+        while (reader.Remaining > 0)
         {
             var type = reader.ReadBsonType();
             if (type == BsonType.EndOfDocument)

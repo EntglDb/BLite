@@ -1,11 +1,25 @@
 using BLite.Bson;
 using BLite.Core.Storage;
+using System.Collections.Concurrent;
+
+// Shared dictionaries for demo
+var keyMap = new ConcurrentDictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+var keys = new ConcurrentDictionary<ushort, string>();
+
+// Pre-register some keys
+ushort nextId = 1;
+foreach (var k in new[] { "_id", "name", "age", "active", "title", "timestamp", "score" })
+{
+    keyMap[k] = nextId;
+    keys[nextId] = k;
+    nextId++;
+}
 
 // Example 1: Creating and reading BSON documents
 Console.WriteLine("=== DocumentDb Demo ===\n");
 
 // 1. Create a BSON document using builder
-var document = BsonDocument.Create(builder =>
+var document = BsonDocument.Create(keyMap, builder =>
 {
     builder
         .AddObjectId("_id", ObjectId.NewObjectId())
@@ -30,7 +44,7 @@ Console.WriteLine();
 
 // 3. Manual BSON writing for zero-allocation scenarios
 Span<byte> buffer = stackalloc byte[512];
-var writer = new BsonSpanWriter(buffer);
+var writer = new BsonSpanWriter(buffer, keyMap);
 
 var sizePos = writer.BeginDocument();
 writer.WriteString("title", "High Performance BSON");
@@ -41,8 +55,8 @@ writer.EndDocument(sizePos);
 Console.WriteLine($"Manual BSON document: {writer.Position} bytes");
 
 // 4. Read it back
-var reader = new BsonSpanReader(buffer[..writer.Position]);
-varium = reader.ReadDocumentSize();
+var reader = new BsonSpanReader(buffer[..writer.Position], keys);
+var docSize = reader.ReadDocumentSize();
 Console.WriteLine($"Reading document of {docSize} bytes...");
 
 while (reader.Remaining > 1)
@@ -51,7 +65,7 @@ while (reader.Remaining > 1)
     if (type == BsonType.EndOfDocument)
         break;
 
-    var fieldName = reader.ReadCString();
+    var fieldName = reader.ReadElementHeader();
     
     switch (type)
     {

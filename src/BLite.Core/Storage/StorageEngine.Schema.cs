@@ -24,7 +24,7 @@ public sealed partial class StorageEngine
             int used = PageSize - 32 - header.FreeBytes;
             if (used > 0)
             {
-                var reader = new BsonSpanReader(buffer.AsSpan(32, used));
+                var reader = new BsonSpanReader(buffer.AsSpan(32, used), GetKeyReverseMap());
                 while (reader.Remaining >= 4)
                 {
                     var docSize = reader.PeekInt32();
@@ -50,7 +50,7 @@ public sealed partial class StorageEngine
         
         // Serialize schema to temporary buffer to calculate size
         var tempBuffer = new byte[PageSize];
-        var tempWriter = new BsonSpanWriter(tempBuffer);
+        var tempWriter = new BsonSpanWriter(tempBuffer, GetKeyMap());
         schema.ToBson(ref tempWriter);
         var schemaSize = tempWriter.Position;
 

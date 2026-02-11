@@ -45,8 +45,10 @@ public static class BsonSchemaGenerator
 
     private static void AddField(BsonSchema schema, string name, Type type)
     {
-        // Convention: Id -> _id for root document
-        if (name.Equals("Id", StringComparison.OrdinalIgnoreCase))
+        name = name.ToLowerInvariant();
+
+        // Convention: id -> _id for root document
+        if (name.Equals("id", StringComparison.OrdinalIgnoreCase))
         {
             name = "_id";
         }

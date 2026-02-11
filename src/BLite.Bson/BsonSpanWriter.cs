@@ -11,10 +11,12 @@ public ref struct BsonSpanWriter
 {
     private Span<byte> _buffer;
     private int _position;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ushort> _keyMap;
 
-    public BsonSpanWriter(Span<byte> buffer)
+    public BsonSpanWriter(Span<byte> buffer, System.Collections.Concurrent.ConcurrentDictionary<string, ushort> keyMap)
     {
         _buffer = buffer;
+        _keyMap = keyMap;
         _position = 0;
     }
 
@@ -48,7 +50,14 @@ public ref struct BsonSpanWriter
     {
         _buffer[_position] = (byte)type;
         _position++;
-        WriteCString(name);
+
+        if (!_keyMap.TryGetValue(name, out var id))
+        {
+            throw new InvalidOperationException($"BSON Key '{name}' not found in dictionary cache. Ensure all keys are registered before serialization.");
+        }
+
+        BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), id);
+        _position += 2;
     }
 
     /// <summary>

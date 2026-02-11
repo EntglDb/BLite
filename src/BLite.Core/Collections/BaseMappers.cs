@@ -13,8 +13,8 @@ namespace BLite.Core.Collections;
 public abstract class DocumentMapperBase<TId, T> : IDocumentMapper<TId, T> where T : class
 {
     public abstract string CollectionName { get; }
-    public abstract int Serialize(T entity, Span<byte> buffer);
-    public abstract T Deserialize(ReadOnlySpan<byte> buffer);
+    public abstract int Serialize(T entity, BsonSpanWriter writer);
+    public abstract T Deserialize(BsonSpanReader reader);
     public abstract TId GetId(T entity);
     public abstract void SetId(T entity, TId id);
 

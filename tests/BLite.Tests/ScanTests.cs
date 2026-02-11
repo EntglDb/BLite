@@ -30,23 +30,23 @@ namespace BLite.Tests
             public override ObjectId GetId(TestDocument entity) => entity.Id;
             public override void SetId(TestDocument entity, ObjectId id) => entity.Id = id;
 
-            public override int Serialize(TestDocument entity, Span<byte> destination)
+            public override IEnumerable<string> UsedKeys => new[] { "_id", "name", "age" };
+
+            public override int Serialize(TestDocument entity, BsonSpanWriter writer)
             {
-                var writer = new BsonSpanWriter(destination);
                 var sizePos = writer.BeginDocument();
                 writer.WriteObjectId("_id", entity.Id);
                 if (entity.Name != null)
-                    writer.WriteString("Name", entity.Name);
+                    writer.WriteString("name", entity.Name);
                 else
-                    writer.WriteNull("Name");
-                writer.WriteInt32("Age", entity.Age);
+                    writer.WriteNull("name");
+                writer.WriteInt32("age", entity.Age);
                 writer.EndDocument(sizePos);
                 return writer.Position;
             }
 
-            public override TestDocument Deserialize(ReadOnlySpan<byte> source)
+            public override TestDocument Deserialize(BsonSpanReader reader)
             {
-                var reader = new BsonSpanReader(source);
                 reader.ReadDocumentSize();
                 var doc = new TestDocument();
 
@@ -55,11 +55,11 @@ namespace BLite.Tests
                     var type = reader.ReadBsonType();
                     if (type == 0) break;
 
-                    var name = reader.ReadCString();
+                    var name = reader.ReadElementHeader();
 
                     if (name == "_id") doc.Id = reader.ReadObjectId();
-                    else if (name == "Name") doc.Name = reader.ReadString();
-                    else if (name == "Age") doc.Age = reader.ReadInt32();
+                    else if (name == "name") doc.Name = reader.ReadString();
+                    else if (name == "age") doc.Age = reader.ReadInt32();
                     else reader.SkipValue(type);
                 }
                 return doc;
@@ -136,9 +136,9 @@ namespace BLite.Tests
                     var type = reader.ReadBsonType();
                     if (type == 0) break; // End of doc
                     
-                    var name = reader.ReadCString();
+                    var name = reader.ReadElementHeader();
                     
-                    if (name == "Age")
+                    if (name == "age")
                     {
                         return reader.ReadInt32();
                     }

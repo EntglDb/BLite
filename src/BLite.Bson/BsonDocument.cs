@@ -7,15 +7,18 @@ namespace BLite.Bson;
 public sealed class BsonDocument
 {
     private readonly Memory<byte> _rawData;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, string>? _keys;
     
-    public BsonDocument(Memory<byte> rawBsonData)
+    public BsonDocument(Memory<byte> rawBsonData, System.Collections.Concurrent.ConcurrentDictionary<ushort, string>? keys = null)
     {
         _rawData = rawBsonData;
+        _keys = keys;
     }
 
-    public BsonDocument(byte[] rawBsonData)
+    public BsonDocument(byte[] rawBsonData, System.Collections.Concurrent.ConcurrentDictionary<ushort, string>? keys = null)
     {
         _rawData = rawBsonData;
+        _keys = keys;
     }
 
     /// <summary>
@@ -31,7 +34,7 @@ public sealed class BsonDocument
     /// <summary>
     /// Creates a reader for this document
     /// </summary>
-    public BsonSpanReader GetReader() => new BsonSpanReader(_rawData.Span);
+    public BsonSpanReader GetReader() => new BsonSpanReader(_rawData.Span, _keys ?? new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>());
 
     /// <summary>
     /// Tries to get a field value by name.
@@ -41,15 +44,14 @@ public sealed class BsonDocument
     {
         value = null;
         var reader = GetReader();
-        reader.ReadDocumentSize();
-
+        fieldName = fieldName.ToLowerInvariant();
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
             if (type == BsonType.EndOfDocument)
                 break;
 
-            var name = reader.ReadCString();
+            var name = reader.ReadElementHeader();
             
             if (name == fieldName && type == BsonType.String)
             {
@@ -70,15 +72,14 @@ public sealed class BsonDocument
     {
         value = 0;
         var reader = GetReader();
-        reader.ReadDocumentSize();
-
+        fieldName = fieldName.ToLowerInvariant();
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
             if (type == BsonType.EndOfDocument)
                 break;
 
-            var name = reader.ReadCString();
+            var name = reader.ReadElementHeader();
             
             if (name == fieldName && type == BsonType.Int32)
             {
@@ -99,15 +100,14 @@ public sealed class BsonDocument
     {
         value = default;
         var reader = GetReader();
-        reader.ReadDocumentSize();
-
+        fieldName = fieldName.ToLowerInvariant();
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
             if (type == BsonType.EndOfDocument)
                 break;
 
-            var name = reader.ReadCString();
+            var name = reader.ReadElementHeader();
             
             if (name == fieldName && type == BsonType.ObjectId)
             {
@@ -124,9 +124,9 @@ public sealed class BsonDocument
     /// <summary>
     /// Creates a new BsonDocument from field values using a builder pattern
     /// </summary>
-    public static BsonDocument Create(Action<BsonDocumentBuilder> buildAction)
+    public static BsonDocument Create(System.Collections.Concurrent.ConcurrentDictionary<string, ushort> keyMap, Action<BsonDocumentBuilder> buildAction)
     {
-        var builder = new BsonDocumentBuilder();
+        var builder = new BsonDocumentBuilder(keyMap);
         buildAction(builder);
         return builder.Build();
     }
@@ -139,17 +139,19 @@ public sealed class BsonDocumentBuilder
 {
     private byte[] _buffer = new byte[1024]; // Start with 1KB
     private int _position;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ushort> _keyMap;
 
-    public BsonDocumentBuilder()
+    public BsonDocumentBuilder(System.Collections.Concurrent.ConcurrentDictionary<string, ushort> keyMap)
     {
-        var writer = new BsonSpanWriter(_buffer);
+        _keyMap = keyMap;
+        var writer = new BsonSpanWriter(_buffer, _keyMap);
         _position = writer.Position;
     }
 
     public BsonDocumentBuilder AddString(string name, string value)
     {
         EnsureCapacity(256); // Conservative estimate
-        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..));
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
         writer.WriteString(name, value);
         _position += writer.Position;
         return this;
@@ -158,7 +160,7 @@ public sealed class BsonDocumentBuilder
     public BsonDocumentBuilder AddInt32(string name, int value)
     {
         EnsureCapacity(64);
-        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..));
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
         writer.WriteInt32(name, value);
         _position += writer.Position;
         return this;
@@ -167,7 +169,7 @@ public sealed class BsonDocumentBuilder
     public BsonDocumentBuilder AddInt64(string name, long value)
     {
         EnsureCapacity(64);
-        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..));
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
         writer.WriteInt64(name, value);
         _position += writer.Position;
         return this;
@@ -176,7 +178,7 @@ public sealed class BsonDocumentBuilder
     public BsonDocumentBuilder AddBoolean(string name, bool value)
     {
         EnsureCapacity(64);
-        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..));
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
         writer.WriteBoolean(name, value);
         _position += writer.Position;
         return this;
@@ -185,7 +187,7 @@ public sealed class BsonDocumentBuilder
     public BsonDocumentBuilder AddObjectId(string name, ObjectId value)
     {
         EnsureCapacity(64);
-        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..));
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
         writer.WriteObjectId(name, value);
         _position += writer.Position;
         return this;
@@ -194,7 +196,7 @@ public sealed class BsonDocumentBuilder
     public BsonDocument Build()
     {
         var finalBuffer = new byte[_position + 5]; // Size header + content + end marker
-        var writer = new BsonSpanWriter(finalBuffer);
+        var writer = new BsonSpanWriter(finalBuffer, _keyMap);
         
         var sizePos = writer.BeginDocument();
         

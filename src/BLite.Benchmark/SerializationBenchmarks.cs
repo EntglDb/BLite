@@ -24,6 +24,29 @@ public class SerializationBenchmarks
     
     private byte[] _serializeBuffer = Array.Empty<byte>();
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ushort> _keyMap = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, string> _keys = new();
+
+    static SerializationBenchmarks()
+    {
+        ushort id = 1;
+        string[] initialKeys = { "_id", "firstname", "lastname", "age", "bio", "createdat", "balance", "homeaddress", "street", "city", "zipcode", "employmenthistory", "companyname", "title", "durationyears", "tags" };
+        foreach (var key in initialKeys)
+        {
+            _keyMap[key] = id;
+            _keys[id] = key;
+            id++;
+        }
+        // Add some indices for arrays
+        for (int i = 0; i < 100; i++)
+        {
+            var s = i.ToString();
+            _keyMap[s] = id;
+            _keys[id] = s;
+            id++;
+        }
+    }
+
     [GlobalSetup]
     public void Setup()
     {
@@ -36,16 +59,18 @@ public class SerializationBenchmarks
         
         // Pre-allocate buffer for BSON serialization
         _serializeBuffer = new byte[8192];
-        
+
+        var writer = new BsonSpanWriter(_serializeBuffer, _keyMap);
+
         // Single item data
-        var len = _mapper.Serialize(_person, _serializeBuffer);
+        var len = _mapper.Serialize(_person, writer);
         _bsonData = _serializeBuffer.AsSpan(0, len).ToArray();
         _jsonData = JsonSerializer.SerializeToUtf8Bytes(_person);
 
         // List data
         foreach (var p in _people)
         {
-            len = _mapper.Serialize(p, _serializeBuffer);
+            len = _mapper.Serialize(p, writer);
             _bsonDataList.Add(_serializeBuffer.AsSpan(0, len).ToArray());
             _jsonDataList.Add(JsonSerializer.SerializeToUtf8Bytes(p));
         }
@@ -87,7 +112,8 @@ public class SerializationBenchmarks
     [BenchmarkCategory("Single")]
     public void Serialize_Bson()
     {
-        _mapper.Serialize(_person, _serializeBuffer);
+        var writer = new BsonSpanWriter(_serializeBuffer, _keyMap);
+        _mapper.Serialize(_person, writer);
     }
 
     [Benchmark(Description = "Serialize Single (JSON)")]
@@ -101,7 +127,8 @@ public class SerializationBenchmarks
     [BenchmarkCategory("Single")]
     public Person Deserialize_Bson()
     {
-        return _mapper.Deserialize(_bsonData);
+        var reader = new BsonSpanReader(_bsonData, _keys);
+        return _mapper.Deserialize(reader);
     }
 
     [Benchmark(Description = "Deserialize Single (JSON)")]
@@ -117,7 +144,8 @@ public class SerializationBenchmarks
     {
         foreach (var p in _people)
         {
-            _mapper.Serialize(p, _serializeBuffer);
+            var writer = new BsonSpanWriter(_serializeBuffer, _keyMap);
+            _mapper.Serialize(p, writer);
         }
     }
 
@@ -137,7 +165,8 @@ public class SerializationBenchmarks
     {
         foreach (var data in _bsonDataList)
         {
-            _mapper.Deserialize(data);
+            var reader = new BsonSpanReader(data, _keys);
+            _mapper.Deserialize(reader);
         }
     }
 

@@ -23,41 +23,39 @@ public class IndexDirectionTests : IDisposable
         public override int GetId(Person entity) => entity.Id;
         public override void SetId(Person entity, int id) => entity.Id = id;
         public override string CollectionName => "people";
+        public override IEnumerable<string> UsedKeys => new[] { "id", "name", "age" };
 
-        public override int Serialize(Person entity, Span<byte> buffer)
+        public override int Serialize(Person entity, BsonSpanWriter writer)
         {
-            var writer = new BsonSpanWriter(buffer);
-
             // Begin document
             var sizePos = writer.BeginDocument();
-            writer.WriteInt32("Id", entity.Id);
-            writer.WriteString("Name", entity.Name);
-            writer.WriteInt32("Age", entity.Age);
+            writer.WriteInt32("id", entity.Id);
+            writer.WriteString("name", entity.Name);
+            writer.WriteInt32("age", entity.Age);
             writer.EndDocument(sizePos);
             return writer.Position;
         }
 
-        public override Person Deserialize(ReadOnlySpan<byte> buffer)
+        public override Person Deserialize(BsonSpanReader reader)
         {
-            var reader = new BsonSpanReader(buffer);
             var person = new Person();
             reader.ReadDocumentSize();
-            while (reader.Position < buffer.Length)
+            while (reader.Remaining > 0)
             {
                 var type = reader.ReadBsonType();
                 if (type == BsonType.EndOfDocument)
                     break;
 
-                var fieldName = reader.ReadCString();
+                var fieldName = reader.ReadElementHeader();
                 switch (fieldName)
                 {
-                    case "Id":
+                    case "id":
                         person.Id = reader.ReadInt32();
                         break;
-                    case "Name":
+                    case "name":
                         person.Name = reader.ReadString();
                         break;
-                    case "Age":
+                    case "age":
                         person.Age = reader.ReadInt32();
                         break;
                     default:

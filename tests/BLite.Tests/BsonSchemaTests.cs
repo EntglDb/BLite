@@ -28,10 +28,10 @@ public class BsonSchemaTests
         var idField = schema.Fields.First(f => f.Name == "_id");
         Assert.Equal(BsonType.ObjectId, idField.Type);
 
-        var nameField = schema.Fields.First(f => f.Name == "Name");
+        var nameField = schema.Fields.First(f => f.Name == "name");
         Assert.Equal(BsonType.String, nameField.Type);
 
-        var ageField = schema.Fields.First(f => f.Name == "Age");
+        var ageField = schema.Fields.First(f => f.Name == "age");
         Assert.Equal(BsonType.Int32, ageField.Type);
     }
 
@@ -46,11 +46,11 @@ public class BsonSchemaTests
     {
         var schema = BsonSchemaGenerator.FromType<CollectionEntity>();
 
-        var tags = schema.Fields.First(f => f.Name == "Tags");
+        var tags = schema.Fields.First(f => f.Name == "tags");
         Assert.Equal(BsonType.Array, tags.Type);
         Assert.Equal(BsonType.String, tags.ArrayItemType);
 
-        var scores = schema.Fields.First(f => f.Name == "Scores");
+        var scores = schema.Fields.First(f => f.Name == "scores");
         Assert.Equal(BsonType.Array, scores.Type);
         Assert.Equal(BsonType.Int32, scores.ArrayItemType);
     }
@@ -65,7 +65,7 @@ public class BsonSchemaTests
     {
         var schema = BsonSchemaGenerator.FromType<NestedEntity>();
         
-        var parent = schema.Fields.First(f => f.Name == "Parent");
+        var parent = schema.Fields.First(f => f.Name == "parent");
         Assert.Equal(BsonType.Document, parent.Type);
         Assert.NotNull(parent.NestedSchema);
         Assert.Contains(parent.NestedSchema.Fields, f => f.Name == "_id");
@@ -81,7 +81,7 @@ public class BsonSchemaTests
     {
         var schema = BsonSchemaGenerator.FromType<ComplexCollectionEntity>();
         
-        var items = schema.Fields.First(f => f.Name == "Items");
+        var items = schema.Fields.First(f => f.Name == "items");
         Assert.Equal(BsonType.Array, items.Type);
         // Assert.Equal(BsonType.Document, items.ArrayItemType); // Wait, my generator logic might return Array here? No, item type logic...
         

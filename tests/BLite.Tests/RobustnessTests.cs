@@ -30,7 +30,7 @@ public class RobustnessTests
         var schema = BsonSchemaGenerator.FromType<RobustEntity>();
         
         // 1. Nullable Value Types in List
-        var nullableInts = schema.Fields.First(f => f.Name == "NullableInts");
+        var nullableInts = schema.Fields.First(f => f.Name == "nullableints");
         Assert.Equal(BsonType.Array, nullableInts.Type);
         Assert.Equal(BsonType.Int32, nullableInts.ArrayItemType);
         // Note: Current Schema doesn't capture "ItemIsNullable", but verifying it doesn't crash/return Undefined
@@ -38,23 +38,23 @@ public class RobustnessTests
         // 2. Dictionary (likely treated as Array of KVPs currently, or Undefined if structs fail)
         // With current logic: Dictionary implements IEnumerable<KVP>. KVP is struct. 
         // If generator doesn't handle structs as Documents, item type might be Undefined.
-        var map = schema.Fields.First(f => f.Name == "Map");
+        var map = schema.Fields.First(f => f.Name == "map");
         Assert.Equal(BsonType.Array, map.Type);
         
         // 3. IEnumerable property
-        var enumerable = schema.Fields.First(f => f.Name == "EnumerableStrings");
+        var enumerable = schema.Fields.First(f => f.Name == "enumerablestrings");
         Assert.Equal(BsonType.Array, enumerable.Type);
         Assert.Equal(BsonType.String, enumerable.ArrayItemType);
 
         // 4. Struct
-        var location = schema.Fields.First(f => f.Name == "Location");
+        var location = schema.Fields.First(f => f.Name == "location");
         // Structs should be treated as Documents in BSON if not primitive
         Assert.Equal(BsonType.Document, location.Type); 
         Assert.NotNull(location.NestedSchema);
-        Assert.Contains(location.NestedSchema.Fields, f => f.Name == "X");
+        Assert.Contains(location.NestedSchema.Fields, f => f.Name == "x");
 
         // 5. Nullable Struct
-        var nullableLocation = schema.Fields.First(f => f.Name == "NullableLocation");
+        var nullableLocation = schema.Fields.First(f => f.Name == "nullablelocation");
         Assert.Equal(BsonType.Document, nullableLocation.Type);
         Assert.True(nullableLocation.IsNullable);
         Assert.NotNull(nullableLocation.NestedSchema);

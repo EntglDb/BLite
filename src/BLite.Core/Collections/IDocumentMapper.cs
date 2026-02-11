@@ -21,8 +21,8 @@ public interface IDocumentMapper
 /// </summary>
 public interface IDocumentMapper<TId, T> : IDocumentMapper where T : class
 {
-    int Serialize(T entity, Span<byte> buffer);
-    T Deserialize(ReadOnlySpan<byte> buffer);
+    int Serialize(T entity, BsonSpanWriter writer);
+    T Deserialize(BsonSpanReader reader);
     
     TId GetId(T entity);
     void SetId(T entity, TId id);

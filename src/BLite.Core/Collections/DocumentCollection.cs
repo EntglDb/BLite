@@ -73,6 +73,9 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         {
             _indexManager.SetPrimaryRootPageId(_primaryIndex.RootPageId);
         }
+
+        // Register keys used by the mapper to ensure they are available for compression
+        _storage.RegisterKeys(_mapper.UsedKeys);
     }
 
     private void EnsureSchema()
@@ -330,7 +333,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
             // For now, skip overflow documents in scan optimization 
             var data = buffer.AsSpan(slot.Offset, slot.Length);
-            var reader = new BsonSpanReader(data);
+            var reader = new BsonSpanReader(data, _storage.GetKeyReverseMap());
 
             if (predicate(reader))
             {
@@ -1020,7 +1023,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
                         currentOverflowPageId = overflowHeader.NextOverflowPage;
                     }
 
-                    return _mapper.Deserialize(fullBuffer.AsSpan(0, totalLength));
+                    return _mapper.Deserialize(new BsonSpanReader(fullBuffer.AsSpan(0, totalLength), _storage.GetKeyReverseMap()));
                 }
                 finally
                 {
@@ -1035,7 +1038,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             }
 
             var docData = buffer.AsSpan(slot.Offset, slot.Length);
-            return _mapper.Deserialize(docData);
+            return _mapper.Deserialize(new BsonSpanReader(docData, _storage.GetKeyReverseMap()));
         }
         finally
         {
@@ -1495,7 +1498,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             var buffer = ArrayPool<byte>.Shared.Rent(size);
             try
             {
-                int bytesWritten = _mapper.Serialize(entity, buffer);
+                int bytesWritten = _mapper.Serialize(entity, new BsonSpanWriter(buffer, _storage.GetKeyMap()));
                 
                 // Inject schema version if available
                 if (CurrentSchemaVersion != null)
@@ -1536,17 +1539,18 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         
         int version = CurrentSchemaVersion.Value.Version;
         
-        // BSON element for _v (Int32):
+        // BSON element for _v (Int32) with Compressed Key:
         // Type (1 byte: 0x10)
-        // Key ("_v", 3 bytes: 0x5F, 0x76, 0x00)
+        // Key ID (2 bytes, little-endian)
         // Value (4 bytes: int32)
-        // Total = 8 bytes
+        // Total = 7 bytes
         
         int pos = bytesWritten - 1; // Position of old 0x00 terminator
         buffer[pos++] = 0x10; // Int32
-        buffer[pos++] = 0x5F; // '_'
-        buffer[pos++] = 0x76; // 'v'
-        buffer[pos++] = 0x00; // key terminator
+        
+        ushort versionKeyId = _storage.GetOrAddDictionaryEntry("_v");
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(pos, 2), versionKeyId);
+        pos += 2;
         
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(pos, 4), version);
         pos += 4;

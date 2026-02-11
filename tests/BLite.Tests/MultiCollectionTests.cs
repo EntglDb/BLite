@@ -82,8 +82,8 @@ public class MultiCollectionTests : IDisposable
 public class PersonMapper : ObjectIdMapperBase<MultiCollectionTests.Person>
 {
     public override string CollectionName => "People"; // Should be overridden by model!
-    public override int Serialize(MultiCollectionTests.Person entity, Span<byte> buffer) => 0;
-    public override MultiCollectionTests.Person Deserialize(ReadOnlySpan<byte> buffer) => new();
+    public override int Serialize(MultiCollectionTests.Person entity, BsonSpanWriter writer) => 0;
+    public override MultiCollectionTests.Person Deserialize(BsonSpanReader reader) => new();
     public override BLite.Bson.ObjectId GetId(MultiCollectionTests.Person entity) => default;
     public override void SetId(MultiCollectionTests.Person entity, BLite.Bson.ObjectId id) { }
 }
@@ -91,8 +91,8 @@ public class PersonMapper : ObjectIdMapperBase<MultiCollectionTests.Person>
 public class ProductMapper : ObjectIdMapperBase<MultiCollectionTests.Product>
 {
     public override string CollectionName => "Products"; // Should be overridden by model!
-    public override int Serialize(MultiCollectionTests.Product entity, Span<byte> buffer) => 0;
-    public override MultiCollectionTests.Product Deserialize(ReadOnlySpan<byte> buffer) => new();
+    public override int Serialize(MultiCollectionTests.Product entity, BsonSpanWriter writer) => 0;
+    public override MultiCollectionTests.Product Deserialize(BsonSpanReader reader) => new();
     public override BLite.Bson.ObjectId GetId(MultiCollectionTests.Product entity) => default;
     public override void SetId(MultiCollectionTests.Product entity, BLite.Bson.ObjectId id) { }
 }

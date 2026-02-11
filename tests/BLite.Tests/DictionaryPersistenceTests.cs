@@ -43,8 +43,8 @@ public class DictionaryPersistenceTests : IDisposable
         public override BsonSchema GetSchema() => new BsonSchema { Title = _collectionName };
         public override ObjectId GetId(Dictionary<string, object> entity) => throw new NotImplementedException();
         public override void SetId(Dictionary<string, object> entity, ObjectId id) => throw new NotImplementedException();
-        public override int Serialize(Dictionary<string, object> entity, Span<byte> buffer) => throw new NotImplementedException();
-        public override Dictionary<string, object> Deserialize(ReadOnlySpan<byte> buffer) => throw new NotImplementedException();
+        public override int Serialize(Dictionary<string, object> entity, BsonSpanWriter writer) => throw new NotImplementedException();
+        public override Dictionary<string, object> Deserialize(BsonSpanReader reader) => throw new NotImplementedException();
     }
 
     [Fact]
@@ -110,8 +110,8 @@ public class DictionaryPersistenceTests : IDisposable
 
         public override ObjectId GetId(object entity) => throw new NotImplementedException();
         public override void SetId(object entity, ObjectId id) => throw new NotImplementedException();
-        public override int Serialize(object entity, Span<byte> buffer) => throw new NotImplementedException();
-        public override object Deserialize(ReadOnlySpan<byte> buffer) => throw new NotImplementedException();
+        public override int Serialize(object entity, BsonSpanWriter writer) => throw new NotImplementedException();
+        public override object Deserialize(BsonSpanReader reader) => throw new NotImplementedException();
     }
 
     [Fact]

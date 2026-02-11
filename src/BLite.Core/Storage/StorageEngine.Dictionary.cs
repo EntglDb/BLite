@@ -5,7 +5,7 @@ namespace BLite.Core.Storage;
 
 public sealed partial class StorageEngine
 {
-    private readonly ConcurrentDictionary<string, ushort> _dictionaryCache = new();
+    private readonly ConcurrentDictionary<string, ushort> _dictionaryCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<ushort, string> _dictionaryReverseCache = new();
     private uint _dictionaryRootPageId;
     private ushort _nextDictionaryId;
@@ -59,13 +59,25 @@ public sealed partial class StorageEngine
             ushort maxId = DictionaryPage.ReservedValuesEnd;
             foreach (var (key, val) in DictionaryPage.FindAllGlobal(this, _dictionaryRootPageId))
             {
-                _dictionaryCache[key] = val;
-                _dictionaryReverseCache[val] = key;
+                var lowerKey = key.ToLowerInvariant();
+                _dictionaryCache[lowerKey] = val;
+                _dictionaryReverseCache[val] = lowerKey;
                 if (val > maxId) maxId = val;
             }
             _nextDictionaryId = (ushort)(maxId + 1);
         }
+
+        // Pre-register internal keys used for Schema persistence
+        RegisterKeys(new[] { "_id", "t", "_v", "f", "n", "b", "s", "a" });
+        
+        // Pre-register common array indices to avoid mapping during high-frequency writes
+        var indices = new List<string>(101);
+        for (int i = 0; i <= 100; i++) indices.Add(i.ToString());
+        RegisterKeys(indices);
     }
+
+    public ConcurrentDictionary<string, ushort> GetKeyMap() => _dictionaryCache;
+    public ConcurrentDictionary<ushort, string> GetKeyReverseMap() => _dictionaryReverseCache;
 
     /// <summary>
     /// Gets the ID for a dictionary key, creating it if it doesn't exist.
@@ -73,6 +85,7 @@ public sealed partial class StorageEngine
     /// </summary>
     public ushort GetOrAddDictionaryEntry(string key)
     {
+        key = key.ToLowerInvariant();
         if (_dictionaryCache.TryGetValue(key, out var id))
         {
             return id;
@@ -183,7 +196,7 @@ public sealed partial class StorageEngine
     {
         foreach (var key in keys)
         {
-            GetOrAddDictionaryEntry(key);
+            GetOrAddDictionaryEntry(key.ToLowerInvariant());
         }
     }
 }

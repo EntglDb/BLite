@@ -27,12 +27,12 @@ internal static class BsonExpressionEvaluator
                 // Check if member is property of parameter
                 if (member.Expression == expression.Parameters[0])
                 {
-                    var propertyName = member.Member.Name;
+                    var propertyName = member.Member.Name.ToLowerInvariant();
                     var value = constant.Value;
                     
                     // Handle Id mapping?
-                    // If property is "Id", Bson field is "_id"
-                    if (propertyName == "Id") propertyName = "_id";
+                    // If property is "id", Bson field is "_id"
+                    if (propertyName == "id") propertyName = "_id";
 
                     return CreatePredicate(propertyName, value, nodeType);
                 }
@@ -65,7 +65,7 @@ internal static class BsonExpressionEvaluator
                     var type = reader.ReadBsonType();
                     if (type == 0) break;
                     
-                    var name = reader.ReadCString();
+                    var name = reader.ReadElementHeader();
                     
                     if (name == propertyName)
                     {

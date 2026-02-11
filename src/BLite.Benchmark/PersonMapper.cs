@@ -13,46 +13,45 @@ public class PersonMapper : ObjectIdMapperBase<Person>
 
     public override void SetId(Person entity, ObjectId id) => entity.Id = id;
 
-    public override int Serialize(Person entity, Span<byte> buffer)
+    public override int Serialize(Person entity, BsonSpanWriter writer)
     {
-        var writer = new BsonSpanWriter(buffer);
         var sizePos = writer.BeginDocument();
         
         writer.WriteObjectId("_id", entity.Id);
-        writer.WriteString("FirstName", entity.FirstName);
-        writer.WriteString("LastName", entity.LastName);
-        writer.WriteInt32("Age", entity.Age);
+        writer.WriteString("firstname", entity.FirstName);
+        writer.WriteString("lastname", entity.LastName);
+        writer.WriteInt32("age", entity.Age);
         if (entity.Bio != null)
-            writer.WriteString("Bio", entity.Bio);
+            writer.WriteString("bio", entity.Bio);
         else
-            writer.WriteNull("Bio");
+            writer.WriteNull("bio");
 
-        writer.WriteInt64("CreatedAt", entity.CreatedAt.Ticks);
+        writer.WriteInt64("createdat", entity.CreatedAt.Ticks);
         
         // Complex fields
-        writer.WriteDouble("Balance", (double)entity.Balance);
+        writer.WriteDouble("balance", (double)entity.Balance);
         
         // Nested Object: Address
-        var addrPos = writer.BeginDocument("HomeAddress");
-        writer.WriteString("Street", entity.HomeAddress.Street);
-        writer.WriteString("City", entity.HomeAddress.City);
-        writer.WriteString("ZipCode", entity.HomeAddress.ZipCode);
+        var addrPos = writer.BeginDocument("homeaddress");
+        writer.WriteString("street", entity.HomeAddress.Street);
+        writer.WriteString("city", entity.HomeAddress.City);
+        writer.WriteString("zipcode", entity.HomeAddress.ZipCode);
         writer.EndDocument(addrPos);
         
         // Collection: EmploymentHistory
-        var histPos = writer.BeginArray("EmploymentHistory");
+        var histPos = writer.BeginArray("employmenthistory");
         for (int i = 0; i < entity.EmploymentHistory.Count; i++)
         {
             var item = entity.EmploymentHistory[i];
             // Array elements are keys "0", "1", "2"...
             var itemPos = writer.BeginDocument(i.ToString());
             
-            writer.WriteString("CompanyName", item.CompanyName);
-            writer.WriteString("Title", item.Title);
-            writer.WriteInt32("DurationYears", item.DurationYears);
+            writer.WriteString("companyname", item.CompanyName);
+            writer.WriteString("title", item.Title);
+            writer.WriteInt32("durationyears", item.DurationYears);
             
             // Nested Collection: Tags
-            var tagsPos = writer.BeginArray("Tags");
+            var tagsPos = writer.BeginArray("tags");
             for (int j = 0; j < item.Tags.Count; j++)
             {
                 writer.WriteString(j.ToString(), item.Tags[j]);
@@ -68,9 +67,8 @@ public class PersonMapper : ObjectIdMapperBase<Person>
         return writer.Position;
     }
 
-    public override Person Deserialize(ReadOnlySpan<byte> data)
+    public override Person Deserialize(BsonSpanReader reader)
     {
-        var reader = new BsonSpanReader(data);
         var person = new Person();
         
         reader.ReadDocumentSize();
@@ -81,44 +79,44 @@ public class PersonMapper : ObjectIdMapperBase<Person>
             if (type == BsonType.EndOfDocument)
                 break;
                 
-            var name = reader.ReadCString();
+            var name = reader.ReadElementHeader();
             
             switch (name)
             {
                 case "_id": person.Id = reader.ReadObjectId(); break;
-                case "FirstName": person.FirstName = reader.ReadString(); break;
-                case "LastName": person.LastName = reader.ReadString(); break;
-                case "Age": person.Age = reader.ReadInt32(); break;
-                case "Bio": 
+                case "firstname": person.FirstName = reader.ReadString(); break;
+                case "lastname": person.LastName = reader.ReadString(); break;
+                case "age": person.Age = reader.ReadInt32(); break;
+                case "bio": 
                     if (type == BsonType.Null) person.Bio = null;
                     else person.Bio = reader.ReadString(); 
                     break;
-                case "CreatedAt": person.CreatedAt = new DateTime(reader.ReadInt64()); break;
-                case "Balance": person.Balance = (decimal)reader.ReadDouble(); break;
+                case "createdat": person.CreatedAt = new DateTime(reader.ReadInt64()); break;
+                case "balance": person.Balance = (decimal)reader.ReadDouble(); break;
                 
-                case "HomeAddress":
+                case "homeaddress":
                     reader.ReadDocumentSize(); // Enter document
                     while (reader.Remaining > 0)
                     {
                         var addrType = reader.ReadBsonType();
                         if (addrType == BsonType.EndOfDocument) break;
-                        var addrName = reader.ReadCString();
+                        var addrName = reader.ReadElementHeader();
                         
                         // We assume strict schema for benchmark speed, but should handle skipping
-                        if (addrName == "Street") person.HomeAddress.Street = reader.ReadString();
-                        else if (addrName == "City") person.HomeAddress.City = reader.ReadString();
-                        else if (addrName == "ZipCode") person.HomeAddress.ZipCode = reader.ReadString();
+                        if (addrName == "street") person.HomeAddress.Street = reader.ReadString();
+                        else if (addrName == "city") person.HomeAddress.City = reader.ReadString();
+                        else if (addrName == "zipcode") person.HomeAddress.ZipCode = reader.ReadString();
                         else reader.SkipValue(addrType);
                     }
                     break;
                     
-                case "EmploymentHistory":
+                case "employmenthistory":
                     reader.ReadDocumentSize(); // Enter Array
                     while (reader.Remaining > 0)
                     {
                         var arrType = reader.ReadBsonType();
                         if (arrType == BsonType.EndOfDocument) break;
-                        reader.ReadCString(); // Array index "0", "1"... ignore
+                        reader.ReadElementHeader(); // Array index "0", "1"... ignore
                         
                         // Read WorkHistory item
                         var workItem = new WorkHistory();
@@ -127,19 +125,19 @@ public class PersonMapper : ObjectIdMapperBase<Person>
                         {
                             var itemType = reader.ReadBsonType();
                             if (itemType == BsonType.EndOfDocument) break;
-                            var itemName = reader.ReadCString();
+                            var itemName = reader.ReadElementHeader();
                             
-                            if (itemName == "CompanyName") workItem.CompanyName = reader.ReadString();
-                            else if (itemName == "Title") workItem.Title = reader.ReadString();
-                            else if (itemName == "DurationYears") workItem.DurationYears = reader.ReadInt32();
-                            else if (itemName == "Tags")
+                            if (itemName == "companyname") workItem.CompanyName = reader.ReadString();
+                            else if (itemName == "title") workItem.Title = reader.ReadString();
+                            else if (itemName == "durationyears") workItem.DurationYears = reader.ReadInt32();
+                            else if (itemName == "tags")
                             {
                                 reader.ReadDocumentSize(); // Enter Tags Array
                                 while (reader.Remaining > 0)
                                 {
                                     var tagType = reader.ReadBsonType();
                                     if (tagType == BsonType.EndOfDocument) break;
-                                    reader.ReadCString(); // Index
+                                    reader.ReadElementHeader(); // Index
                                     if (tagType == BsonType.String)
                                         workItem.Tags.Add(reader.ReadString());
                                     else

@@ -26,7 +26,7 @@ public class StorageEngineDictionaryTests
                 Assert.True(id > DictionaryPage.ReservedValuesEnd);
                 
                 var key = storage.GetDictionaryKey(id);
-                Assert.Equal("TestKey", key);
+                Assert.Equal("testkey", key);
             }
         }
         finally { Cleanup(path); }
@@ -54,8 +54,8 @@ public class StorageEngineDictionaryTests
                 Assert.Equal(id1, val1);
                 Assert.Equal(id2, val2);
                 
-                Assert.Equal("Key1", storage.GetDictionaryKey(val1));
-                Assert.Equal("Key2", storage.GetDictionaryKey(val2));
+                Assert.Equal("key1", storage.GetDictionaryKey(val1));
+                Assert.Equal("key2", storage.GetDictionaryKey(val2));
             }
         }
         finally { Cleanup(path); }
@@ -90,7 +90,7 @@ public class StorageEngineDictionaryTests
                     Assert.Equal(expectedIds[key], id);
                     
                     var loadedKey = storage.GetDictionaryKey(id);
-                    Assert.Equal(key, loadedKey);
+                    Assert.Equal(key.ToLowerInvariant(), loadedKey);
                 }
                 
                 // Add new one

@@ -53,10 +53,22 @@ public class SchemaPersistenceTests : IDisposable
         };
 
         var buffer = new byte[1024];
-        var writer = new BsonSpanWriter(buffer);
+        var keyMap = new System.Collections.Concurrent.ConcurrentDictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+        var keys = new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>();
+        
+        // Manual registration for schema keys
+        ushort id = 1;
+        foreach (var k in new[] { "person", "id", "name", "age", "address", "city", "fields", "title", "type", "isnullable", "nestedschema", "t", "v", "f", "n", "b", "s", "a", "_v", "0", "1", "2", "3", "4", "5" })
+        {
+            keyMap[k] = id;
+            keys[id] = k;
+            id++;
+        }
+
+        var writer = new BsonSpanWriter(buffer, keyMap);
         schema.ToBson(ref writer);
 
-        var reader = new BsonSpanReader(buffer.AsSpan(0, writer.Position));
+        var reader = new BsonSpanReader(buffer.AsSpan(0, writer.Position), keys);
         var roundTrip = BsonSchema.FromBson(ref reader);
 
         Assert.Equal(schema.Title, roundTrip.Title);
@@ -118,16 +130,16 @@ public class SchemaPersistenceTests : IDisposable
         private readonly string _name;
         public TestMapper(string name) => _name = name;
         public override string CollectionName => _name;
-        public override int Serialize(T entity, Span<byte> buffer)
+        public override int Serialize(T entity, BsonSpanWriter writer)
         {
-            var writer = new BsonSpanWriter(buffer);
             var size = writer.BeginDocument();
             // Write a dummy field to make it non-empty if needed
             writer.WriteString("dummy", "value");
             writer.EndDocument(size);
             return writer.Position;
         }
-        public override T Deserialize(ReadOnlySpan<byte> buffer) => null!;
+        public override IEnumerable<string> UsedKeys => new[] { "dummy", "_v" };
+        public override T Deserialize(BsonSpanReader reader) => null!;
         public override TId GetId(T entity) => default!;
         public override void SetId(T entity, TId id) { }
     }
@@ -196,7 +208,7 @@ public class SchemaPersistenceTests : IDisposable
             Assert.Equal(1, coll.CurrentSchemaVersion!.Value.Version);
 
             // Verify that the document in storage contains _v
-            var meta = _storage.GetCollectionMetadata("Person");
+            var meta = _storage.GetCollectionMetadata("person"); // person lowercase
             Assert.NotNull(meta);
 
             // Get location from primary index (internal access enabled by InternalsVisibleTo)
@@ -213,13 +225,19 @@ public class SchemaPersistenceTests : IDisposable
             // Print some info if it fails (using Assert messages)
             string hex = BitConverter.ToString(docData.ToArray()).Replace("-", "");
             
-            // Look for _v (0x10 5F 76 00)
-            bool found = hex.Contains("105F7600");
-            Assert.True(found, $"Document should contain _v field (105F7600). Raw BSON: {hex}");
+            // Look for _v (BsonType.Int32 + 2-byte ID)
+            ushort vId = _storage.GetKeyMap()["_v"];
+            string vIdHex = vId.ToString("X4");
+            // Reverse endian for hex string check (ushort is LE)
+            string vIdHexLE = vIdHex.Substring(2, 2) + vIdHex.Substring(0, 2);
+            string pattern = "10" + vIdHexLE;
+            
+            bool found = hex.Contains(pattern);
+            Assert.True(found, $"Document should contain _v field ({pattern}). Raw BSON: {hex}");
 
             // Verify the value (1) follows the key
-            int index = hex.IndexOf("105F7600");
-            string valueHex = hex.Substring(index + 8, 8); // 4 bytes = 8 hex chars
+            int index = hex.IndexOf(pattern);
+            string valueHex = hex.Substring(index + 6, 8); // 4 bytes = 8 hex chars (pattern is 6 hex chars: 10 + ID_LE)
             Assert.Equal("01000000", valueHex);
         }
     }

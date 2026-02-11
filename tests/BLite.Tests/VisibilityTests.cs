@@ -33,15 +33,15 @@ public class VisibilityTests
     {
         var schema = BsonSchemaGenerator.FromType<VisibilityEntity>();
         
-        Assert.Contains(schema.Fields, f => f.Name == "NormalProp");
-        Assert.Contains(schema.Fields, f => f.Name == "PrivateSetProp");
-        Assert.Contains(schema.Fields, f => f.Name == "InitProp");
+        Assert.Contains(schema.Fields, f => f.Name == "normalprop");
+        Assert.Contains(schema.Fields, f => f.Name == "privatesetprop");
+        Assert.Contains(schema.Fields, f => f.Name == "initprop");
 
         // Verify assumption about fields
-        // Current implementation uses GetProperties, so PublicField might be missing.
+        // Current implementation uses GetProperties, so publicfield might be missing.
         // We will assert current status and then fix if requested/failed.
-        Assert.Contains(schema.Fields, f => f.Name == "PublicField"); // This will likely fail currently
+        Assert.Contains(schema.Fields, f => f.Name == "publicfield"); // This will likely fail currently
         
-        Assert.DoesNotContain(schema.Fields, f => f.Name == "_privateField");
+        Assert.DoesNotContain(schema.Fields, f => f.Name == "_privatefield");
     }
 }

@@ -8,6 +8,12 @@ namespace BLite.Tests;
 
 public class SchemaTests
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ushort> _testKeyMap = new(StringComparer.OrdinalIgnoreCase);
+    static SchemaTests()
+    {
+        ushort id = 1;
+        foreach (var k in new[] { "_id", "name", "address", "city", "street" }) _testKeyMap[k] = id++;
+    }
     // 1. Manual User Entity
     public class User
     {
@@ -27,9 +33,9 @@ public class SchemaTests
     {
         public static BsonDocument Serialize(Address addr)
         {
-            var doc = new BsonDocumentBuilder();
-            if (addr.City != null) doc.AddString("City", addr.City);
-            if (addr.Street != null) doc.AddString("Street", addr.Street);
+            var doc = new BsonDocumentBuilder(_testKeyMap);
+            if (addr.City != null) doc.AddString("city", addr.City);
+            if (addr.Street != null) doc.AddString("street", addr.Street);
             return doc.Build();
         }
 
@@ -37,10 +43,10 @@ public class SchemaTests
 
         public static BsonDocument GetSchemaManifest()
         {
-            return BsonDocument.Create(b =>
+            return BsonDocument.Create(_testKeyMap, b =>
             {
-                b.AddString("City", "String");
-                b.AddString("Street", "String");
+                b.AddString("city", "String");
+                b.AddString("street", "String");
             });
         }
     }
@@ -53,13 +59,13 @@ public class SchemaTests
         public override int GetId(User entity) => entity.Id;
         public override void SetId(User entity, int id) => entity.Id = id;
 
-        public override int Serialize(User entity, Span<byte> buffer)
+        public override int Serialize(User entity, BsonSpanWriter writer)
         {
             // Dummy implementation for Schema test
             return 0;
         }
 
-        public override User Deserialize(ReadOnlySpan<byte> buffer)
+        public override User Deserialize(BsonSpanReader reader)
         {
              // Dummy implementation
              return new User();
@@ -69,7 +75,7 @@ public class SchemaTests
         {
             get
             {
-                var keys = new List<string> { "_id", "Name", "Address" };
+                var keys = new List<string> { "_id", "name", "address" };
                 // In manual implementation, we decide if we expose nested keys strictly or just top level.
                 // The requirement mentions 'UsedKeys' which usually implies indexes.
                 // But for schema, GetSchemaManifest is the authority.
@@ -91,18 +97,18 @@ public class SchemaTests
             // Name
             schema.Fields.Add(new BsonField 
             { 
-                Name = "Name", 
+                Name = "name", 
                 Type = BsonType.String 
             });
 
             // Address (Nested)
             var addressSchema = new BsonSchema { Title = "Address" };
-            addressSchema.Fields.Add(new BsonField { Name = "City", Type = BsonType.String });
-            addressSchema.Fields.Add(new BsonField { Name = "Street", Type = BsonType.String });
+            addressSchema.Fields.Add(new BsonField { Name = "city", Type = BsonType.String });
+            addressSchema.Fields.Add(new BsonField { Name = "street", Type = BsonType.String });
 
             schema.Fields.Add(new BsonField 
             { 
-                Name = "Address", 
+                Name = "address", 
                 Type = BsonType.Document,
                 NestedSchema = addressSchema
             });
@@ -118,8 +124,8 @@ public class SchemaTests
         var keys = mapper.UsedKeys.ToList();
         
         Assert.Contains("_id", keys);
-        Assert.Contains("Name", keys);
-        Assert.Contains("Address", keys);
+        Assert.Contains("name", keys);
+        Assert.Contains("address", keys);
     }
     
     [Fact]
@@ -132,14 +138,14 @@ public class SchemaTests
         Assert.NotNull(idField);
         Assert.Equal(BsonType.Int32, idField.Type);
         
-        var nameField = schema.Fields.FirstOrDefault(f => f.Name == "Name");
+        var nameField = schema.Fields.FirstOrDefault(f => f.Name == "name");
         Assert.NotNull(nameField);
         Assert.Equal(BsonType.String, nameField.Type);
 
-        var addressField = schema.Fields.FirstOrDefault(f => f.Name == "Address");
+        var addressField = schema.Fields.FirstOrDefault(f => f.Name == "address");
         Assert.NotNull(addressField);
         Assert.Equal(BsonType.Document, addressField.Type);
         Assert.NotNull(addressField.NestedSchema);
-        Assert.Contains(addressField.NestedSchema.Fields, f => f.Name == "City");
+        Assert.Contains(addressField.NestedSchema.Fields, f => f.Name == "city");
     }
 }

@@ -11,11 +11,13 @@ public ref struct BsonSpanReader
 {
     private ReadOnlySpan<byte> _buffer;
     private int _position;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, string> _keys;
 
-    public BsonSpanReader(ReadOnlySpan<byte> buffer)
+    public BsonSpanReader(ReadOnlySpan<byte> buffer, System.Collections.Concurrent.ConcurrentDictionary<ushort, string> keys)
     {
         _buffer = buffer;
         _position = 0;
+        _keys = keys;
     }
 
     public int Position => _position;
@@ -264,7 +266,18 @@ public ref struct BsonSpanReader
 
     public string ReadElementHeader()
     {
-        return ReadCString();
+        if (Remaining < 2)
+            throw new InvalidOperationException("Not enough bytes to read BSON element key ID");
+
+        var id = BinaryPrimitives.ReadUInt16LittleEndian(_buffer.Slice(_position, 2));
+        _position += 2;
+
+        if (!_keys.TryGetValue(id, out var key))
+        {
+            throw new InvalidOperationException($"BSON Key ID {id} not found in reverse key dictionary.");
+        }
+
+        return key;
     }
 
     public ReadOnlySpan<byte> RemainingBytes() => _buffer[_position..];
