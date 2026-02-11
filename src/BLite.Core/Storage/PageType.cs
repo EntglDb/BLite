@@ -30,5 +30,8 @@ public enum PageType : byte
     Free = 10,
 
     /// <summary>Dictionary page for string interning</summary>
-    Dictionary = 7
+    Dictionary = 7,
+
+    /// <summary>Schema versioning page</summary>
+    Schema = 8
 }

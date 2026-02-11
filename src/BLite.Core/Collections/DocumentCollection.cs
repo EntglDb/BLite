@@ -32,11 +32,11 @@ public class DocumentCollection<T> : DocumentCollection<ObjectId, T> where T : c
 /// </summary>
 /// <typeparam name="TId">Type of the primary key</typeparam>
 /// <typeparam name="T">Type of the entity</typeparam>
-public class DocumentCollection<TId, T> where T : class
+public class DocumentCollection<TId, T> : IDisposable where T : class
 {
     private readonly StorageEngine _storage;
     private readonly IDocumentMapper<TId, T> _mapper;
-    private readonly BTreeIndex _primaryIndex;
+    internal readonly BTreeIndex _primaryIndex;
     private readonly CollectionIndexManager<TId, T> _indexManager;
     private readonly string _collectionName;
 
@@ -45,6 +45,8 @@ public class DocumentCollection<TId, T> where T : class
 
     // Current page for inserts (optimization)
     private uint _currentDataPage;
+
+    public SchemaVersion? CurrentSchemaVersion { get; private set; }
 
     private const int MaxDocumentSizeForSinglePage = 15000; // ~15KB for 16KB pages
 
@@ -58,6 +60,9 @@ public class DocumentCollection<TId, T> where T : class
         _indexManager = new CollectionIndexManager<TId, T>(_storage, _mapper, _collectionName);
         _freeSpaceMap = new Dictionary<uint, ushort>();
 
+        // Ensure schema is persisted and versioned
+        EnsureSchema();
+
         // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
         // Use persisted root page ID if available
         var indexOptions = IndexOptions.CreateBTree("_id");
@@ -67,6 +72,36 @@ public class DocumentCollection<TId, T> where T : class
         if (_indexManager.PrimaryRootPageId != _primaryIndex.RootPageId)
         {
             _indexManager.SetPrimaryRootPageId(_primaryIndex.RootPageId);
+        }
+    }
+
+    private void EnsureSchema()
+    {
+        var currentSchema = _mapper.GetSchema();
+        var metadata = _indexManager.GetMetadata();
+        
+        var persistedSchemas = _storage.GetSchemas(metadata.SchemaRootPageId);
+        var latestPersisted = persistedSchemas.Count > 0 ? persistedSchemas[persistedSchemas.Count - 1] : null;
+
+        if (latestPersisted == null || !currentSchema.Equals(latestPersisted))
+        {
+            // Assign next version number
+            int nextVersion = persistedSchemas.Count + 1;
+            currentSchema.Version = nextVersion;
+
+            var newRootId = _storage.AppendSchema(metadata.SchemaRootPageId, currentSchema);
+            if (newRootId != metadata.SchemaRootPageId)
+            {
+                metadata.SchemaRootPageId = newRootId;
+                _storage.SaveCollectionMetadata(metadata);
+            }
+
+            CurrentSchemaVersion = new SchemaVersion(nextVersion, currentSchema.GetHash());
+        }
+        else
+        {
+            // Latest persisted is same as current structure
+            CurrentSchemaVersion = new SchemaVersion(latestPersisted.Version ?? persistedSchemas.Count, latestPersisted.GetHash());
         }
     }
 
@@ -1461,6 +1496,17 @@ public class DocumentCollection<TId, T> where T : class
             try
             {
                 int bytesWritten = _mapper.Serialize(entity, buffer);
+                
+                // Inject schema version if available
+                if (CurrentSchemaVersion != null)
+                {
+                    if (bytesWritten + 8 > buffer.Length)
+                    {
+                        throw new IndexOutOfRangeException("Not enough space for version field");
+                    }
+                    AppendVersionField(buffer, ref bytesWritten);
+                }
+
                 rentedBuffer = buffer;
                 return bytesWritten;
             }
@@ -1478,5 +1524,44 @@ public class DocumentCollection<TId, T> where T : class
 
         rentedBuffer = null!; // specific compiler satisfaction, though we throw
         throw new InvalidOperationException($"Document too large. Maximum size allowed is 16MB.");
+    }
+
+    /// <summary>
+    /// Manually appends the _v field to a serialized BSON document.
+    /// Assumes there is enough space in the buffer.
+    /// </summary>
+    private void AppendVersionField(byte[] buffer, ref int bytesWritten)
+    {
+        if (CurrentSchemaVersion == null) return;
+        
+        int version = CurrentSchemaVersion.Value.Version;
+        
+        // BSON element for _v (Int32):
+        // Type (1 byte: 0x10)
+        // Key ("_v", 3 bytes: 0x5F, 0x76, 0x00)
+        // Value (4 bytes: int32)
+        // Total = 8 bytes
+        
+        int pos = bytesWritten - 1; // Position of old 0x00 terminator
+        buffer[pos++] = 0x10; // Int32
+        buffer[pos++] = 0x5F; // '_'
+        buffer[pos++] = 0x76; // 'v'
+        buffer[pos++] = 0x00; // key terminator
+        
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(pos, 4), version);
+        pos += 4;
+        
+        buffer[pos++] = 0x00; // new document terminator
+        
+        bytesWritten = pos;
+        
+        // Update total size (first 4 bytes)
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(0, 4), bytesWritten);
+    }
+
+    public void Dispose()
+    {
+        _indexManager.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

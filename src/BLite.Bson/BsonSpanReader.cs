@@ -245,4 +245,27 @@ public ref struct BsonSpanReader
                 throw new NotSupportedException($"Skipping type {type} not supported");
         }
     }
+
+    public byte ReadByte()
+    {
+        if (Remaining < 1)
+            throw new InvalidOperationException("Not enough bytes to read byte");
+        var value = _buffer[_position];
+        _position++;
+        return value;
+    }
+
+    public int PeekInt32()
+    {
+        if (Remaining < 4)
+            throw new InvalidOperationException("Not enough bytes to peek Int32");
+        return BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position, 4));
+    }
+
+    public string ReadElementHeader()
+    {
+        return ReadCString();
+    }
+
+    public ReadOnlySpan<byte> RemainingBytes() => _buffer[_position..];
 }

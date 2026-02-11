@@ -20,6 +20,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     private readonly object _lock = new();
     private bool _disposed;
     private readonly string _collectionName;
+    private CollectionMetadata _metadata;
 
     public CollectionIndexManager(StorageEngine storage, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
@@ -28,8 +29,16 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         _collectionName = collectionName ?? _mapper.CollectionName;
         _indexes = new Dictionary<string, CollectionSecondaryIndex<TId, T>>(StringComparer.OrdinalIgnoreCase);
         
-        // Load existing index definitions from metadata page
-        LoadMetadata();
+        // Load existing metadata via storage
+        _metadata = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
+        
+        // Initialize indexes from metadata
+        foreach (var idxMeta in _metadata.Indexes)
+        {
+            var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type);
+            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
+            _indexes[idxMeta.Name] = index;
+        }
     }
 
     /// <summary>
@@ -56,7 +65,8 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             _indexes[definition.Name] = secondaryIndex;
             
             // Persist metadata
-            SaveMetadataToPage();
+            UpdateMetadata();
+            _storage.SaveCollectionMetadata(_metadata);
 
             return secondaryIndex;
         }
@@ -156,7 +166,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 
                 // TODO: Free pages used by index in PageFile
                 
-                SaveMetadataToPage(); // Save metadata after dropping index
+                SaveMetadata(); // Save metadata after dropping index
                 return true;
             }
 
@@ -323,275 +333,63 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         return $"idx_{string.Join("_", propertyPaths)}";
     }
 
-    public uint PrimaryRootPageId { get; private set; }
-
-    public void SetPrimaryRootPageId(uint pageId)
-    {
-        lock (_lock)
-        {
-            if (PrimaryRootPageId != pageId)
-            {
-                PrimaryRootPageId = pageId;
-                SaveMetadataToPage();
-            }
-        }
-    }
-
-    private void SaveMetadata()
-    {
-        SaveMetadataToPage();
-    }
-
-    private void LoadMetadata()
-    {
-        var buffer = new byte[_storage.PageSize];
-        _storage.ReadPage(1, null, buffer);
-        
-        var header = SlottedPageHeader.ReadFrom(buffer);
-        if (header.PageType != PageType.Collection || header.SlotCount == 0) 
-            return;
-
-        // Iterate all slots to find the one for this collection
-        for (ushort i = 0; i < header.SlotCount; i++)
-        {
-            var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
-            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
-            
-            if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
-
-            var dataSpan = buffer.AsSpan(slot.Offset, slot.Length);
-            
-            // Format: [NameLength:int] [Name:string] [Metadata...]
-            // Peek name to see if it matches
-            try
-            {
-                using var stream = new MemoryStream(dataSpan.ToArray());
-                using var reader = new BinaryReader(stream);
-
-                var name = reader.ReadString();
-                if (!string.Equals(name, _collectionName, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue; // Not our collection
-                }
-
-                // Match! Load metadata
-                PrimaryRootPageId = reader.ReadUInt32();
-                var indexCount = reader.ReadInt32();
-                
-                for (int j = 0; j < indexCount; j++)
-                {
-                    var idxName = reader.ReadString();
-                    var isUnique = reader.ReadBoolean();
-                    var type = (IndexType)reader.ReadByte();
-                    
-                    var pathCount = reader.ReadInt32();
-                    var paths = new string[pathCount];
-                    for (int k = 0; k < pathCount; k++)
-                        paths[k] = reader.ReadString();
-                    
-                    var definition = RebuildDefinition(idxName, paths, isUnique, type);
-                    var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
-                    _indexes[idxName] = index;
-                }
-                return; // Found and loaded
-            }
-            catch
-            {
-                // Ignore malformed slots
-            }
-        }
-    }
-
     private CollectionIndexDefinition<T> RebuildDefinition(string name, string[] paths, bool isUnique, IndexType type)
     {
-        // Dynamic expression building: u => new { u.Prop1, u.Prop2 } or u => u.Prop1
         var param = Expression.Parameter(typeof(T), "u");
         Expression body;
         
         if (paths.Length == 1)
         {
-            // Simple property: u.Age
             body = Expression.PropertyOrField(param, paths[0]);
         }
         else
         {
-            // Compound: new { u.Prop1, u.Prop2 } - Anonymous types are hard to generate dynamically
-            // Alternative: Return object[] or Tuple? 
-            // CollectionIndexDefinition expects Func<T, object>.
-            // IndexOptions expects object key.
-            // Check BTreeIndex: it converts key to IndexKey (byte[]).
-            // Mappers handle extraction.
-            
-            // Wait, existing behavior uses anonymous types for compound keys?
-            // "Expression must be a property accessor ... or anonymous type"
-            
-            // For BTreeIndex, the KeySelector returns the key value(s).
-            // If we have multiple paths, we probably want to return an array or similar container 
-            // that the Mapper can understand? 
-            // Actually, `CollectionSecondaryIndex` uses `KeySelector` to get the object, 
-            // then uses `_mapper.GetIndexKey(obj)`? No, `_mapper` is generally for documents.
-            // Let's check `CollectionSecondaryIndex.cs`:
-            // `var key = _mapper.GetIndexKey(doc, _definition.PropertyPaths);` 
-            // Wait, does it use the Selector?
-            // `ExtractKey(T document)` uses `_definition.KeySelector(document)`.
-            // Then it converts that object to `IndexKey`.
-            
-            // If we can't easily reconstruct the anonymous type expression, 
-            // we can build an expression that returns `object[]` or just `object` of the property.
-            // The serialization to IndexKey must handle object[].
-            
-            // Let's assume for now 1 property is 99% of cases.
-            // For multiple, we'll try to support it.
-            
-            body = Expression.PropertyOrField(param, paths[0]);
+            body = Expression.NewArrayInit(typeof(object), 
+                paths.Select(p => Expression.Convert(Expression.PropertyOrField(param, p), typeof(object))));
         }
         
-        // Convert to object
         var objectBody = Expression.Convert(body, typeof(object));
         var lambda = Expression.Lambda<Func<T, object>>(objectBody, param);
         
         return new CollectionIndexDefinition<T>(name, paths, lambda, isUnique, type);
     }
 
-    // ... RebuildDefinition ...
+    public uint PrimaryRootPageId => _metadata.PrimaryRootPageId;
 
-    private void SaveMetadataToPage()
+    public void SetPrimaryRootPageId(uint pageId)
     {
-        // 1. Serialize Metadata
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-        
         lock (_lock)
         {
-            writer.Write(_collectionName); // Tag payload with collection name
-            writer.Write(PrimaryRootPageId);
-            writer.Write(_indexes.Count);
-            foreach (var idx in _indexes.Values)
+            if (_metadata.PrimaryRootPageId != pageId)
             {
-                var def = idx.Definition;
-                writer.Write(def.Name); 
-                writer.Write(def.IsUnique);
-                writer.Write((byte)def.Type);
-                
-                writer.Write(def.PropertyPaths.Length);
-                foreach (var path in def.PropertyPaths)
-                {
-                    writer.Write(path);
-                }
+                _metadata.PrimaryRootPageId = pageId;
+                _storage.SaveCollectionMetadata(_metadata);
             }
         }
-        
-        var newData = stream.ToArray();
-        
-        // 2. Update Page 1
-        // We need to lock the file/page to avoid race conditions if multiple collections save metadata
-        // For now, we rely on WritePageImmediate being atomic for disk io, but Read-Modify-Write is racy.
-        // In a real DB, we'd lock the page. Here we'll do a simple Read-Modify-Write loop.
-        
-        var buffer = new byte[_storage.PageSize];
-        _storage.ReadPage(1, null, buffer);
-        
-        var header = SlottedPageHeader.ReadFrom(buffer);
-        
-        // Identify existing slot index
-        int existingSlotIndex = -1;
-        
-        for (ushort i = 0; i < header.SlotCount; i++)
+    }
+
+    private void UpdateMetadata()
+    {
+        _metadata.Indexes.Clear();
+        foreach (var index in _indexes.Values)
         {
-            var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
-            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
-            if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
-            
-            // Check name
-             try
+            var def = index.Definition;
+            _metadata.Indexes.Add(new IndexMetadata
             {
-                var slotSpan = buffer.AsSpan(slot.Offset, slot.Length);
-                // Peek name
-                // We can't use BinaryReader nicely on Span in older .NET, but we can do string match manually
-                // Or just fast-path: name is length-prefixed string. 
-                // Read length (7-bit encoded int... tricky).
-                // Let's rely on BinaryReader over buffer stream slice.
-                using var ms = new MemoryStream(buffer, slot.Offset, slot.Length, false);
-                using var reader = new BinaryReader(ms);
-                var name = reader.ReadString();
-                
-                if (string.Equals(name, _collectionName, StringComparison.OrdinalIgnoreCase))
-                {
-                    existingSlotIndex = i;
-                    break;
-                }
-            } 
-            catch { }
+                Name = def.Name,
+                IsUnique = def.IsUnique,
+                Type = def.Type,
+                PropertyPaths = def.PropertyPaths
+            });
         }
-        
-        // If found, mark as deleted (simplest update strategy)
-        if (existingSlotIndex >= 0)
-        {
-             var slotOffset = SlottedPageHeader.Size + (existingSlotIndex * SlotEntry.Size);
-             var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
-             slot.Flags |= SlotFlags.Deleted;
-             slot.WriteTo(buffer.AsSpan(slotOffset));
-        }
-        
-        // Insert new data
-        // Find free space (simplified: append to end of free space, if fits)
-        // Note: Compact is not implemented here. If we run out of space on Page 1, we fail.
-        // Page 1 is 16KB (usually). Metadata is small. Should be fine for many collections.
-        
-        if (header.AvailableFreeSpace < newData.Length + SlotEntry.Size)
-        {
-            // Try to compact? Or just throw.
-            throw new InvalidOperationException("Not enough space in Metadata Page (Page 1) to save collection metadata.");
-        }
-        
-        // Write data at FreeSpaceEnd - Length (grows down? No, Header says FreeSpaceEnd points to start of data payload usually? 
-        // Wait, Slot architecture usually: Header | Slots -> ... <- Data | End
-        // Let's check DocumentCollection.InsertIntoPage logic:
-        // "Write document at end of used space (grows up)" -> "docOffset = header.FreeSpaceEnd - data.Length;"
-        // And FreeSpaceEnd is initialized to PageSize. So it grows DOWN.
-        // FreeSpaceStart grows UP (slots).
-        
-        int docOffset = header.FreeSpaceEnd - newData.Length;
-        newData.CopyTo(buffer.AsSpan(docOffset));
-        
-        // Write slot
-        // Reuse existing slot index if we deleted it? 
-        // For simplicity, append new slot unless we want to scan for deleted ones.
-        // If we marked existingSlotIndex as deleted, we can reuse it IF it's consistent.
-        // But reusing slot index requires updating the Slot entry which is at a fixed position. 
-        // Yes, we can reuse existingSlotIndex.
-        
-        ushort slotIndex;
-        if (existingSlotIndex >= 0)
-        {
-            slotIndex = (ushort)existingSlotIndex;
-        }
-        else
-        {
-             slotIndex = header.SlotCount;
-             header.SlotCount++;
-        }
-        
-        var newSlotEntryOffset = SlottedPageHeader.Size + (slotIndex * SlotEntry.Size);
-        var newSlot = new SlotEntry
-        {
-            Offset = (ushort)docOffset,
-            Length = (ushort)newData.Length,
-            Flags = SlotFlags.None
-        };
-        newSlot.WriteTo(buffer.AsSpan(newSlotEntryOffset));
-        
-        // Update header
-        header.FreeSpaceEnd = (ushort)docOffset;
-        // If we added a new slot, check if FreeSpaceStart needs update
-        if (existingSlotIndex == -1)
-        {
-             header.FreeSpaceStart = (ushort)(SlottedPageHeader.Size + (header.SlotCount * SlotEntry.Size));
-        }
-        
-        header.WriteTo(buffer);
-        
-        _storage.WritePageImmediate(1, buffer);
+    }
+
+    public CollectionMetadata GetMetadata() => _metadata;
+
+    private void SaveMetadata()
+    {
+        UpdateMetadata();
+        _storage.SaveCollectionMetadata(_metadata);
     }
 
     public void Dispose()
@@ -599,8 +397,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         if (_disposed)
             return;
             
-        // Save metadata on close? Or only on mod?
-        // Better to save on modification (CreateIndex/DropIndex).
+        // No auto-save on dispose to avoid unnecessary I/O if no changes
         
         lock (_lock)
         {

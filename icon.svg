@@ -1,0 +1,17 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Sfondo professionale scuro -->
+  <rect width="512" height="512" fill="#0F0F0F"/>
+  
+  <!-- Orizzonte (Asintoto y) -->
+  <line x1="64" y1="360" x2="448" y2="360" stroke="#333" stroke-width="1" />
+
+  <!-- L'Aurora: Curva Gaussiana (Blite) con altezza basata sulla sezione aurea -->
+  <!-- Picco impostato a y = 279.1 (360 - 80.9) -->
+  <path d="M 64 360 
+           C 140 360, 180 279.1, 256 279.1 
+           C 332 279.1, 372 360, 448 360" 
+        fill="#641E16" fill-opacity="0.8" />
+  
+  <!-- Il Sole Nascente: Altezza 50 unità (raggio 50) -->
+  <path d="M 206 360 A 50 50 0 0 1 306 360" fill="#E74C3C" />
+</svg>
