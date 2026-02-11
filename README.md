@@ -43,7 +43,8 @@ var users = collection.AsQueryable()
 ```
 
 - **Optimized**: Uses B-Tree indexes for `=`, `>`, `<`, `Between`, and `StartsWith`.
-- **Smart Scans**: Fallback to **Raw BSON Scanning** (predicates evaluated on raw bytes) when no index is available.
+- **Hybrid Execution**: Combines storage-level optimization with in-memory LINQ to Objects.
+- **Advanced Features**: Full support for `GroupBy`, `Join`, `Select` (including anonymous types), and Aggregations (`Count`, `Sum`, `Min`, `Max`, `Average`).
 
 ### 🔍 Advanced Indexing
 - **B-Tree Indexes**: Logarithmic time complexity for lookups.
@@ -97,8 +98,8 @@ We are actively building the core. Here is where we stand:
 - ✅ **Core Storage**: Paged I/O, WAL, Transactions.
 - ✅ **BSON Engine**: Zero-copy Reader/Writer.
 - ✅ **Indexing**: B-Tree implementation.
-- ✅ **Query Engine**: Basic LINQ (Where, OrderBy, Select, Page).
-- 🚧 **Advanced LINQ**: GroupBy, Joins, Aggregations (Coming Soon).
+- ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
+- ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
 - 🚧 **Source Generators**: Auto-map POCO/DDD classes (Nested Objects, Collections, Value Objects).
 - 🚧 **Async I/O**: `ToListAsync`, `FirstAsync` (Coming Soon).
 
