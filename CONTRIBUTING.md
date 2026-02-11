@@ -10,7 +10,7 @@ By participating in this project, you are expected to uphold our Code of Conduct
 
 ### Reporting Bugs
 
-This section guides you through submitting a bug report for DocumentDb. Following these guidelines helps maintainers and the community understand your report, reproduce the behavior, and find related reports.
+This section guides you through submitting a bug report for BLite. Following these guidelines helps maintainers and the community understand your report, reproduce the behavior, and find related reports.
 
 - **Check existing issues**: Verify that your issue hasn't already been reported.
 - **Use a clear title**: Describe the problem concisely.

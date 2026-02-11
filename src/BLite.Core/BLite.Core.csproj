@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\BLite.Bson\BLite.Bson.csproj" />
+  </ItemGroup>
+
+</Project>
+

@@ -1,4 +1,4 @@
-# ⚡ DocumentDb
+# ⚡ BLite
 ### High-Performance BSON Database Engine for .NET 10
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
@@ -6,17 +6,17 @@
 ![Platform](https://img.shields.io/badge/platform-.NET%2010-purple)
 ![Status](https://img.shields.io/badge/status-active%20development-orange)
 
-**DocumentDb** is an embedded, ACID-compliant, document-oriented database built from scratch for **maximum performance** and **zero allocation**. It leverages modern .NET features like `Span<T>`, `Memory<T>`, and Source Generators to eliminate runtime overhead.
+**BLite** is an embedded, ACID-compliant, document-oriented database built from scratch for **maximum performance** and **zero allocation**. It leverages modern .NET features like `Span<T>`, `Memory<T>`, and Source Generators to eliminate runtime overhead.
 
 > **Note**: Currently targets **.NET 10** to maximize performance with `Span<T>` and modern hardware intrinsics. Future support for `.netstandard2.1` is being evaluated.
 
 ---
 
-## 🚀 Why DocumentDb?
+## 🚀 Why BLite?
 
 Most embedded databases for .NET are either wrappers around C libraries (SQLite, RocksDB) or legacy C# codebases burdened by heavy GC pressure.
 
-**DocumentDb is different:**
+**BLite is different:**
 - **Zero Allocation**: I/O and interaction paths use `Span<byte>` and `stackalloc`. No heap allocations for reads/writes.
 - **Type-Safe**: No reflection. All serialization code is generated at compile-time.
 - **Developer Experience**: Full LINQ provider (`IQueryable`) that feels like Entity Framework but runs on bare metal.
@@ -128,7 +128,7 @@ We are actively building the core. Here is where we stand:
 We welcome contributions! This is a great project to learn about database internals, B-Trees, and high-performance .NET.
 
 ### How to Build
-1. **Clone**: `git clone https://github.com/mrdevrobot/DocumentDb.git`
+1. **Clone**: `git clone https://github.com/mrdevrobot/BLite.git`
 2. **Build**: `dotnet build`
 3. **Test**: `dotnet test` (We have comprehensive tests for Storage, Indexing, and LINQ).
 
