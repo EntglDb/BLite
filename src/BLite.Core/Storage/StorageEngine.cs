@@ -13,7 +13,7 @@ namespace BLite.Core.Storage;
 /// - Commit: Flush to WAL, clear cache
 /// - Checkpoint: Merge WAL ? PageFile periodically
 /// </summary>
-public sealed class StorageEngine : IDisposable
+public sealed partial class StorageEngine : IDisposable
 {
     private readonly PageFile _pageFile;
     private readonly WriteAheadLog _wal;
@@ -57,6 +57,8 @@ public sealed class StorageEngine : IDisposable
         {
             Recover();
         }
+        
+        InitializeDictionary();
         
         // Create and start checkpoint manager
         // _checkpointManager = new Transactions.CheckpointManager(this);

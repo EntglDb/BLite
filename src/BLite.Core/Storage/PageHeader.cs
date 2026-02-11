@@ -34,15 +34,10 @@ public struct PageHeader
     [FieldOffset(19)]
     public uint Checksum;
     
-    /// <summary>Reserved for future use - padding to 32 bytes</summary>
+    /// <summary>Dictionary Root Page ID (Only used in Page 0 / File Header)</summary>
     [FieldOffset(23)]
-    private byte _reserved1;
-    [FieldOffset(24)]
-    private byte _reserved2;
-    [FieldOffset(25)]
-    private byte _reserved3;
-    [FieldOffset(26)]
-    private byte _reserved4;
+    public uint DictionaryRootPageId;
+
     [FieldOffset(27)]
     private byte _reserved5;
     [FieldOffset(28)]

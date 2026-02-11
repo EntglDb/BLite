@@ -1,7 +1,7 @@
-using System;
-using System.Buffers;
 using BLite.Bson;
 using BLite.Core.Indexing;
+using System;
+using System.Buffers;
 
 namespace BLite.Core.Collections;
 
@@ -20,6 +20,16 @@ public interface IDocumentMapper<TId, T> where T : class
     
     IndexKey ToIndexKey(TId id);
     TId FromIndexKey(IndexKey key);
+    
+    /// <summary>
+    /// Gets a list of all BSON keys used by this mapper.
+    /// </summary>
+    IEnumerable<string> UsedKeys { get; }
+
+    /// <summary>
+    /// Returns a BSON schema describing the mapped entity.
+    /// </summary>
+    BsonSchema GetSchema();
 }
 
 /// <summary>

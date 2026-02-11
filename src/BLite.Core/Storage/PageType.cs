@@ -27,5 +27,8 @@ public enum PageType : byte
     Overflow = 6,
 
     /// <summary>Page marked as free/reusable</summary>
-    Free = 10
+    Free = 10,
+
+    /// <summary>Dictionary page for string interning</summary>
+    Dictionary = 7
 }

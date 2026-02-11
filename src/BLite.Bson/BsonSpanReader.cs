@@ -130,6 +130,21 @@ public ref struct BsonSpanReader
         return value;
     }
 
+    public decimal ReadDecimal128()
+    {
+        if (Remaining < 16)
+            throw new InvalidOperationException("Not enough bytes to read Decimal128");
+
+        var bits = new int[4];
+        bits[0] = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position, 4));
+        bits[1] = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position + 4, 4));
+        bits[2] = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position + 8, 4));
+        bits[3] = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position + 12, 4));
+        _position += 16;
+
+        return new decimal(bits);
+    }
+
     public bool ReadBoolean()
     {
         if (Remaining < 1)
@@ -216,6 +231,9 @@ public ref struct BsonSpanReader
             case BsonType.Int64:
             case BsonType.Timestamp:
                 _position += 8;
+                break;
+            case BsonType.Decimal128:
+                _position += 16;
                 break;
             case BsonType.Int32:
                 _position += 4;

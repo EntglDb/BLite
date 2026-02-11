@@ -75,6 +75,43 @@ public class BsonSpanReaderWriterTests
     }
 
     [Fact]
+    public void ReadWrite_Double()
+    {
+        var buffer = new byte[256];
+        var writer = new BsonSpanWriter(buffer);
+
+        writer.WriteDouble("val", 123.456);
+
+        var reader = new BsonSpanReader(buffer);
+        var type = reader.ReadBsonType();
+        var name = reader.ReadCString();
+        var val = reader.ReadDouble();
+
+        Assert.Equal(BsonType.Double, type);
+        Assert.Equal("val", name);
+        Assert.Equal(123.456, val);
+    }
+
+    [Fact]
+    public void ReadWrite_Decimal128_RoundTrip()
+    {
+        var buffer = new byte[256];
+        var writer = new BsonSpanWriter(buffer);
+
+        decimal original = 123456.789m;
+        writer.WriteDecimal128("dec", original);
+
+        var reader = new BsonSpanReader(buffer);
+        var type = reader.ReadBsonType();
+        var name = reader.ReadCString();
+        var val = reader.ReadDecimal128();
+
+        Assert.Equal(BsonType.Decimal128, type);
+        Assert.Equal("dec", name);
+        Assert.Equal(original, val);
+    }
+
+    [Fact]
     public void WriteAndRead_DateTime()
     {
         Span<byte> buffer = stackalloc byte[256];

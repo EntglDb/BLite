@@ -112,6 +112,19 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+    public void WriteDecimal128(string name, decimal value)
+    {
+        WriteElementHeader(BsonType.Decimal128, name);
+        // Note: usage of C# decimal bits for round-trip fidelity within BLite.
+        // This makes it compatible with BLite Reader but strictly speaking not standard IEEE 754-2008 Decimal128.
+        var bits = decimal.GetBits(value);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), bits[0]);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position + 4, 4), bits[1]);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position + 8, 4), bits[2]);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position + 12, 4), bits[3]);
+        _position += 16;
+    }
+
     public void WriteBoolean(string name, bool value)
     {
         WriteElementHeader(BsonType.Boolean, name);

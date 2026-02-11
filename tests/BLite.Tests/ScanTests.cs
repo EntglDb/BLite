@@ -24,14 +24,13 @@ namespace BLite.Tests
             public int Age { get; set; }
         }
 
-        public class TestDocumentMapper : IDocumentMapper<TestDocument>
+        public class TestDocumentMapper : ObjectIdMapperBase<TestDocument>
         {
-            public string CollectionName => "users";
+            public override string CollectionName => "users";
+            public override ObjectId GetId(TestDocument entity) => entity.Id;
+            public override void SetId(TestDocument entity, ObjectId id) => entity.Id = id;
 
-            public ObjectId GetId(TestDocument entity) => entity.Id;
-            public void SetId(TestDocument entity, ObjectId id) => entity.Id = id;
-
-            public int Serialize(TestDocument entity, Span<byte> destination)
+            public override int Serialize(TestDocument entity, Span<byte> destination)
             {
                 var writer = new BsonSpanWriter(destination);
                 var sizePos = writer.BeginDocument();
@@ -45,7 +44,7 @@ namespace BLite.Tests
                 return writer.Position;
             }
 
-            public TestDocument Deserialize(ReadOnlySpan<byte> source)
+            public override TestDocument Deserialize(ReadOnlySpan<byte> source)
             {
                 var reader = new BsonSpanReader(source);
                 reader.ReadDocumentSize();
@@ -66,8 +65,8 @@ namespace BLite.Tests
                 return doc;
             }
 
-            public IndexKey ToIndexKey(ObjectId id) => new IndexKey(id);
-            public ObjectId FromIndexKey(IndexKey key) => new ObjectId(key.Data);
+            public override IndexKey ToIndexKey(ObjectId id) => new IndexKey(id);
+            public override ObjectId FromIndexKey(IndexKey key) => new ObjectId(key.Data);
         }
 
         public ScanTests()

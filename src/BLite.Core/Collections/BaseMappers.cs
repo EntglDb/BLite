@@ -2,6 +2,8 @@ using System;
 using System.Buffers;
 using BLite.Bson;
 using BLite.Core.Indexing;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace BLite.Core.Collections;
 
@@ -18,6 +20,9 @@ public abstract class DocumentMapperBase<TId, T> : IDocumentMapper<TId, T> where
 
     public virtual IndexKey ToIndexKey(TId id) => IndexKey.Create(id);
     public virtual TId FromIndexKey(IndexKey key) => key.As<TId>();
+    
+    public virtual IEnumerable<string> UsedKeys => GetSchema().Fields.Select(f => f.Name);
+    public virtual BsonSchema GetSchema() => BsonSchemaGenerator.FromType<T>();
 }
 
 /// <summary>
