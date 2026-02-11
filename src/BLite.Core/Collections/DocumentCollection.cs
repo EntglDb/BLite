@@ -350,7 +350,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// </summary>
     public IQueryable<T> AsQueryable()
     {
-        return new BTreeQueryable<T>(new BTreeQueryProvider(this));
+        return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this));
     }
 
     /// <summary>

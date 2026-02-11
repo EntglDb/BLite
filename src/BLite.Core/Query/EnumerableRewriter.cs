@@ -42,7 +42,8 @@ internal class EnumerableRewriter : ExpressionVisitor
                 // Strip Quote from lambda arguments
                 if (arg is UnaryExpression quote && quote.NodeType == ExpressionType.Quote)
                 {
-                    arg = quote.Operand;
+                    var lambda = (LambdaExpression)quote.Operand;
+                    arg = Expression.Constant(lambda.Compile());
                 }
                 args[i] = arg;
             }
