@@ -21,179 +21,10 @@ public class PrimaryKeyTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
-    public class IntEntity
-    {
-        public int Id { get; set; }
-        public string? Name { get; set; }
-    }
-
-    public class IntMapper : Int32MapperBase<IntEntity>
-    {
-        public override string CollectionName => "int_entities";
-        public override int GetId(IntEntity entity) => entity.Id;
-        public override void SetId(IntEntity entity, int id) => entity.Id = id;
-        public override IEnumerable<string> UsedKeys => new[] { "id", "name" };
-
-        public override int Serialize(IntEntity entity, BsonSpanWriter writer)
-        {
-            var sizePos = writer.BeginDocument();
-            writer.WriteInt32("id", entity.Id);
-            writer.WriteString("name", entity.Name ?? "");
-            writer.EndDocument(sizePos);
-            return writer.Position;
-        }
-
-        public override IntEntity Deserialize(BsonSpanReader reader)
-        {
-            var entity = new IntEntity();
-            reader.ReadDocumentSize();
-            while (reader.Remaining > 0)
-            {
-                var type = reader.ReadBsonType();
-                if (type == BsonType.EndOfDocument)
-                    break;
-                var name = reader.ReadElementHeader();
-                switch (name)
-                {
-                    case "id":
-                        entity.Id = reader.ReadInt32();
-                        break;
-                    case "name":
-                        entity.Name = reader.ReadString();
-                        break;
-                    default:
-                        reader.SkipValue(type);
-                        break;
-                }
-            }
-            return entity;
-        }
-    }
-
-    public class StringEntity
-    {
-        public required string Id { get; set; }
-        public string? Value { get; set; }
-    }
-
-    public class StringMapper : StringMapperBase<StringEntity>
-    {
-        public override string CollectionName => "string_entities";
-        public override string GetId(StringEntity entity) => entity.Id;
-        public override void SetId(StringEntity entity, string id) => entity.Id = id;
-        public override IEnumerable<string> UsedKeys => new[] { "id", "value" };
-
-        public override int Serialize(StringEntity entity, BsonSpanWriter writer)
-        {
-            var sizePos = writer.BeginDocument();
-            writer.WriteString("id", entity.Id);
-            writer.WriteString("value", entity.Value ?? "");
-            writer.EndDocument(sizePos);
-            return writer.Position;
-        }
-
-        public override StringEntity Deserialize(BsonSpanReader reader)
-        {
-            reader.ReadDocumentSize();
-            string id = string.Empty;
-            string value = string.Empty;
-            while (reader.Remaining > 0)
-            {
-                var type = reader.ReadBsonType();
-                if (type == BsonType.EndOfDocument)
-                    break;
-                var name = reader.ReadElementHeader();
-                switch (name)
-                {
-                    case "id":
-                        id = reader.ReadString();
-                        break;
-                    case "value":
-                        value = reader.ReadString();
-                        break;
-                    default:
-                        reader.SkipValue(type);
-                        break;
-                }
-            }
-            return new StringEntity { Id = id, Value = value };
-        }
-    }
-
-    public class GuidEntity
-    {
-        public Guid Id { get; set; }
-        public string? Name { get; set; }
-    }
-
-    public class GuidMapper : GuidMapperBase<GuidEntity>
-    {
-        public override string CollectionName => "guid_entities";
-        public override Guid GetId(GuidEntity entity) => entity.Id;
-        public override void SetId(GuidEntity entity, Guid id) => entity.Id = id;
-        public override IEnumerable<string> UsedKeys => new[] { "id", "name" };
-
-        public override int Serialize(GuidEntity entity, BsonSpanWriter writer)
-        {
-            var sizePos = writer.BeginDocument();
-            writer.WriteString("id", entity.Id.ToString());
-            writer.WriteString("name", entity.Name ?? "");
-            writer.EndDocument(sizePos);
-            return writer.Position;
-        }
-
-        public override GuidEntity Deserialize(BsonSpanReader reader)
-        {
-            var entity = new GuidEntity();
-            reader.ReadDocumentSize();
-            while (reader.Remaining > 0)
-            {
-                var type = reader.ReadBsonType();
-                if (type == BsonType.EndOfDocument)
-                    break;
-                var name = reader.ReadElementHeader();
-                switch (name)
-                {
-                    case "id":
-                        entity.Id = Guid.Parse(reader.ReadString());
-                        break;
-                    case "name":
-                        entity.Name = reader.ReadString();
-                        break;
-                    default:
-                        reader.SkipValue(type);
-                        break;
-                }
-            }
-            return entity;
-        }
-    }
-
-    public class PrimaryKeyDbContext : DocumentDbContext
-    {
-        public DocumentCollection<int, IntEntity> IntEntities { get; private set; }
-        public DocumentCollection<string, StringEntity> StringEntities { get; private set; }
-        public DocumentCollection<Guid, GuidEntity> GuidEntities { get; private set; }
-
-        public PrimaryKeyDbContext(string path) : base(path)
-        {
-            IntEntities = CreateCollection(new IntMapper());
-            StringEntities = CreateCollection(new StringMapper());
-            GuidEntities = CreateCollection(new GuidMapper());
-        }
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            modelBuilder.Entity<IntEntity>().HasKey(e => e.Id);
-            modelBuilder.Entity<StringEntity>().HasKey(e => e.Id);
-            modelBuilder.Entity<GuidEntity>().HasKey(e => e.Id);
-        }
-    }
-
     [Fact]
     public void Test_Int_PrimaryKey()
     {
-        using var db = new PrimaryKeyDbContext(_dbPath);
+        using var db = new TestDbContext(_dbPath);
 
         var entity = new IntEntity { Id = 1, Name = "Test 1" };
         db.IntEntities.Insert(entity);
@@ -216,7 +47,7 @@ public class PrimaryKeyTests : IDisposable
     [Fact]
     public void Test_String_PrimaryKey()
     {
-        using var db = new PrimaryKeyDbContext(_dbPath);
+        using var db = new TestDbContext(_dbPath);
 
         var entity = new StringEntity { Id = "key1", Value = "Value 1" };
         db.StringEntities.Insert(entity);
@@ -233,7 +64,7 @@ public class PrimaryKeyTests : IDisposable
     [Fact]
     public void Test_Guid_PrimaryKey()
     {
-        using var db = new PrimaryKeyDbContext(_dbPath);
+        using var db = new TestDbContext(_dbPath);
 
         var id = Guid.NewGuid();
         var entity = new GuidEntity { Id = id, Name = "Guid Test" };

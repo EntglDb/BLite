@@ -11,77 +11,12 @@ public class IndexDirectionTests : IDisposable
 {
     private readonly string _dbPath = "index_direction_tests.db";
 
-    public class Person
-    {
-        public int Id { get; set; }
-        public string Name { get; set; } = string.Empty;
-        public int Age { get; set; }
-    }
-
-    public class PersonMapper : Int32MapperBase<Person>
-    {
-        public override int GetId(Person entity) => entity.Id;
-        public override void SetId(Person entity, int id) => entity.Id = id;
-        public override string CollectionName => "people";
-        public override IEnumerable<string> UsedKeys => new[] { "id", "name", "age" };
-
-        public override int Serialize(Person entity, BsonSpanWriter writer)
-        {
-            // Begin document
-            var sizePos = writer.BeginDocument();
-            writer.WriteInt32("id", entity.Id);
-            writer.WriteString("name", entity.Name);
-            writer.WriteInt32("age", entity.Age);
-            writer.EndDocument(sizePos);
-            return writer.Position;
-        }
-
-        public override Person Deserialize(BsonSpanReader reader)
-        {
-            var person = new Person();
-            reader.ReadDocumentSize();
-            while (reader.Remaining > 0)
-            {
-                var type = reader.ReadBsonType();
-                if (type == BsonType.EndOfDocument)
-                    break;
-
-                var fieldName = reader.ReadElementHeader();
-                switch (fieldName)
-                {
-                    case "id":
-                        person.Id = reader.ReadInt32();
-                        break;
-                    case "name":
-                        person.Name = reader.ReadString();
-                        break;
-                    case "age":
-                        person.Age = reader.ReadInt32();
-                        break;
-                    default:
-                        // Skip unknown fields
-                        reader.SkipValue(type);
-                        break;
-                }
-
-            }
-            return person;
-        }
-    }
-
-    public class TestContext : DocumentDbContext
-    {
-        public TestContext(string path) : base(path) { }
-
-        public DocumentCollection<int, Person> People => CreateCollection(new PersonMapper());
-    }
-
-    private readonly TestContext _db;
+    private readonly TestDbContext _db;
 
     public IndexDirectionTests()
     {
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        _db = new TestContext(_dbPath);
+        _db = new TestDbContext(_dbPath);
         // _db.Database.EnsureCreated(); // Not needed/doesn't exist? StorageEngine handles creation.
     }
 

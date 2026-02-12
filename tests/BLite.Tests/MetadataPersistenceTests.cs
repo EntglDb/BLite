@@ -3,6 +3,7 @@ using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 
 namespace BLite.Tests;
@@ -25,7 +26,7 @@ public class MetadataPersistenceTests : IDisposable
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             // Disable auto-checkpoint to ensure cleaner test tracing, though not strictly required
-            var mapper = new UserMapper();
+            var mapper = new BLite_Tests_UserMapper();
             var indexManager = new CollectionIndexManager<ObjectId,User>(storage, mapper, nameof(User));
             
             // Create 2 indexes
@@ -36,7 +37,7 @@ public class MetadataPersistenceTests : IDisposable
         // 2. Re-open storage and verify indexes exist
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
-            var mapper = new UserMapper();
+            var mapper = new BLite_Tests_UserMapper();
             // Assuming Page 1 was allocated above in clean DB
             var indexManager = new CollectionIndexManager<ObjectId,User>(storage, mapper, nameof(User));
             
@@ -63,7 +64,7 @@ public class MetadataPersistenceTests : IDisposable
         // 1. Create index
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
-            var mapper = new UserMapper();
+            var mapper = new BLite_Tests_UserMapper();
             var collection = new DocumentCollection<ObjectId, User>(storage, mapper);
             
             collection.EnsureIndex(u => u.Age);
@@ -72,7 +73,7 @@ public class MetadataPersistenceTests : IDisposable
         // 2. Re-open and EnsureIndex again - should be fast/no-op
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
-            var mapper = new UserMapper();
+            var mapper = new BLite_Tests_UserMapper();
             var collection = new DocumentCollection<ObjectId, User>(storage, mapper);
             
             // Use reflection or diagnostic to check if it triggered rebuild?

@@ -22,7 +22,7 @@ public abstract partial class DocumentDbContext : IDisposable
         : this(databasePath, PageFileConfig.Default)
     {
     }
-    
+
     /// <summary>
     /// Creates a new database context with custom configuration
     /// </summary>
@@ -37,8 +37,14 @@ public abstract partial class DocumentDbContext : IDisposable
         var modelBuilder = new ModelBuilder();
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
+        InitializeCollections();
     }
-    
+
+    protected virtual void InitializeCollections()
+    {
+        // Derived classes can override to initialize collections
+    }
+
     private readonly IReadOnlyDictionary<Type, object> _model;
     private readonly List<IDocumentMapper> _registeredMappers = new();
 

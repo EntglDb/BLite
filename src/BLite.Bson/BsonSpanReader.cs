@@ -166,6 +166,11 @@ public ref struct BsonSpanReader
         return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).UtcDateTime;
     }
 
+    public Guid ReadGuid()
+    {
+        return Guid.Parse(ReadString());
+    }
+
     /// <summary>
     /// Reads a BSON ObjectId (12 bytes)
     /// </summary>

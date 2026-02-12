@@ -2,6 +2,7 @@ using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 
 namespace BLite.Tests;
@@ -16,7 +17,7 @@ public class InsertBulkTests : IDisposable
     {
         _testFile = Path.GetTempFileName();
         _storage = new StorageEngine(_testFile, PageFileConfig.Default);
-        var mapper = new UserMapper();
+        var mapper = new BLite_Tests_UserMapper();
         _collection = new DocumentCollection<User>(_storage, mapper);
     }
 

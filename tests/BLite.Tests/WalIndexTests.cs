@@ -1,9 +1,10 @@
 using BLite.Bson;
+using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
-using BLite.Core;
+using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using System.Buffers;
 using Xunit;
 using Xunit.Abstractions;
@@ -27,7 +28,7 @@ public class WalIndexTests : IDisposable
         
         _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
         
-        var mapper = new UserMapper();
+        var mapper = new BLite_Tests_UserMapper();
         // 1. Ensure index on "Age"
         _collection = new DocumentCollection<User>(_storage, mapper);
         _collection.EnsureIndex(u => u.Age);

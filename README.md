@@ -56,6 +56,12 @@ var users = collection.AsQueryable()
 - **Durable**: WAL ensures data safety even in power loss.
 - **Isolated**: Snapshot isolation allowing concurrent readers and writers.
 
+### 🔌 Intelligent Source Generation
+- **Zero Reflection**: Mappers are generated at compile-time for zero overhead.
+- **Nested Objects & Collections**: Full support for complex graphs and deep nesting.
+- **Lowercase Policy**: BSON keys are automatically persisted as `lowercase` for consistency.
+- **Custom Overrides**: Use `[BsonProperty]` or `[JsonPropertyName]` for manual field naming.
+
 ---
 
 ## 📦 Quick Start
@@ -66,48 +72,46 @@ var users = collection.AsQueryable()
 ### 2. Basic Usage
 
 ```csharp
-// 1. Initialize Engine
-using var storage = new StorageEngine("mydb.data");
-
-// 2. Define your Data
+// 1. Define your Entities
 public class User 
 { 
     public ObjectId Id { get; set; } 
     public string Name { get; set; } 
 }
 
-// 3. Get Collection (Mapper auto-generated via Source Generator)
-var users = new DocumentCollection<User>(storage, new UserMapper(), "users");
+// 2. Define your DbContext (Source Generator will produce InitializeCollections)
+public partial class MyDbContext : DocumentDbContext
+{
+    public DocumentCollection<ObjectId, User> Users { get; set; } = null!;
 
-// 4. Index & Query
-users.EnsureIndex(u => u.Name, "idx_name");
+    public MyDbContext(string path) : base(path) 
+    {
+        InitializeCollections();
+    }
+}
 
-users.Insert(new User { Name = "Alice" });
+// 3. Use naturally
+using var db = new MyDbContext("mydb.db");
+db.Users.Insert(new User { Name = "Alice" });
 
-var results = users.AsQueryable()
+var results = db.Users.AsQueryable()
     .Where(u => u.Name == "Alice")
     .ToList();
-
-// 5. Async Operations
-// Parallel non-blocking I/O
-await users.InsertAsync(new User { Name = "Bob" });
-
-var count = await users.UpdateBulkAsync(manyUsers);
 ```
 
 ---
 
-## �️ Roadmap & Status
+## 🗺️ Roadmap & Status
 
 We are actively building the core. Here is where we stand:
 
 - ✅ **Core Storage**: Paged I/O, WAL, Transactions.
-- ✅ **BSON Engine**: Zero-copy Reader/Writer.
+- ✅ **BSON Engine**: Zero-copy Reader/Writer with lowercase policy.
 - ✅ **Indexing**: B-Tree implementation.
 - ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
 - ✅ **Async I/O**: Full `async`/`await` support for CRUD and Bulk operations.
-- 🚧 **Source Generators**: Auto-map POCO/DDD classes (Nested Objects, Collections, Value Objects).
+- ✅ **Source Generators**: Auto-map POCO/DDD classes (Nested Objects, Collections, Value Objects).
 
 ## 🔮 Future Vision
 

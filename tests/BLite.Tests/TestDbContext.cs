@@ -1,6 +1,7 @@
 using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Collections;
+using BLite.Core.Metadata;
 
 namespace BLite.Tests;
 
@@ -8,12 +9,35 @@ namespace BLite.Tests;
 /// Test context with manual collection initialization
 /// (Source Generator will automate this in the future)
 /// </summary>
-public class TestDbContext : DocumentDbContext
+public partial class TestDbContext : DocumentDbContext
 {
-    public DocumentCollection<ObjectId,User> Users { get; private set; } = null!;
-    
+    public DocumentCollection<ObjectId, User> Users { get; set; } = null!;
+    public DocumentCollection<ObjectId, ComplexUser> ComplexUsers { get; set; } = null!;
+    public DocumentCollection<int, AutoInitEntity> AutoInitEntities { get; set; } = null!;
+    public DocumentCollection<int, Person> People { get; set; } = null!;
+    public DocumentCollection<int, Product> Products { get; set; } = null!;
+    public DocumentCollection<int, IntEntity> IntEntities { get; set; } = null!;
+    public DocumentCollection<string, StringEntity> StringEntities { get; set; } = null!;
+    public DocumentCollection<Guid, GuidEntity> GuidEntities { get; set; } = null!;
+    public DocumentCollection<int, AsyncDoc> AsyncDocs { get; set; } = null!;
+    public DocumentCollection<int, SchemaUser> SchemaUsers { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
-        Users = CreateCollection(new UserMapper());
+        InitializeCollections();
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<User>().ToCollection("users");
+        modelBuilder.Entity<ComplexUser>().ToCollection("complex_users");
+        modelBuilder.Entity<AutoInitEntity>().ToCollection("auto_init_entities");
+        modelBuilder.Entity<Person>().ToCollection("people_collection").HasIndex(p => p.Age);
+        modelBuilder.Entity<Product>().ToCollection("products_collection").HasIndex(p => p.Price);
+        modelBuilder.Entity<IntEntity>().HasKey(e => e.Id);
+        modelBuilder.Entity<StringEntity>().HasKey(e => e.Id);
+        modelBuilder.Entity<GuidEntity>().HasKey(e => e.Id);
+        modelBuilder.Entity<AsyncDoc>().ToCollection("async_docs");
+        modelBuilder.Entity<SchemaUser>().ToCollection("schema_users").HasKey(e => e.Id);
     }
 }

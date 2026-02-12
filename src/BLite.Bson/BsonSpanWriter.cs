@@ -149,6 +149,11 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+    public void WriteGuid(string name, Guid value)
+    {
+        WriteString(name, value.ToString());
+    }
+
     public void WriteObjectId(string name, ObjectId value)
     {
         WriteElementHeader(BsonType.ObjectId, name);
