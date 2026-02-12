@@ -18,6 +18,20 @@ namespace BLite.SourceGenerators
                 FullTypeName = SyntaxHelper.GetFullName(entityType),
                 CollectionName = entityType.Name.ToLowerInvariant() + "s"
             };
+
+            var tableAttr = AttributeHelper.GetAttribute(entityType, "Table");
+            if (tableAttr != null)
+            {
+                var tableName = tableAttr.ConstructorArguments.Length > 0 ? tableAttr.ConstructorArguments[0].Value?.ToString() : null;
+                var schema = AttributeHelper.GetNamedArgumentValue(tableAttr, "Schema");
+                
+                var collectionName = !string.IsNullOrEmpty(tableName) ? tableName! : entityInfo.Name;
+                if (!string.IsNullOrEmpty(schema))
+                {
+                    collectionName = $"{schema}.{collectionName}";
+                }
+                entityInfo.CollectionName = collectionName;
+            }
             
             // Analyze properties of the root entity
             AnalyzeProperties(entityType, entityInfo.Properties);
@@ -64,15 +78,24 @@ namespace BLite.SourceGenerators
                 if (AttributeHelper.ShouldIgnore(prop))
                     continue;
 
+                var columnAttr = AttributeHelper.GetAttribute(prop, "Column");
+                var bsonFieldName = AttributeHelper.GetAttributeStringValue(prop, "BsonProperty") ?? 
+                                    AttributeHelper.GetAttributeStringValue(prop, "JsonPropertyName");
+
+                if (bsonFieldName == null && columnAttr != null)
+                {
+                    bsonFieldName = columnAttr.ConstructorArguments.Length > 0 ? columnAttr.ConstructorArguments[0].Value?.ToString() : null;
+                }
+                
                 var propInfo = new PropertyInfo
                 {
                     Name = prop.Name,
                     TypeName = SyntaxHelper.GetTypeName(prop.Type),
-                    BsonFieldName = AttributeHelper.GetAttributeStringValue(prop, "BsonProperty") ?? 
-                                    AttributeHelper.GetAttributeStringValue(prop, "JsonPropertyName") ?? 
-                                    prop.Name.ToLowerInvariant(),
+                    BsonFieldName = bsonFieldName ?? prop.Name.ToLowerInvariant(),
+                    ColumnTypeName = columnAttr != null ? AttributeHelper.GetNamedArgumentValue(columnAttr, "TypeName") : null,
                     IsNullable = SyntaxHelper.IsNullableType(prop.Type),
                     IsKey = AttributeHelper.IsKey(prop),
+                    IsRequired = AttributeHelper.HasAttribute(prop, "Required"),
                     
                     HasPublicSetter = prop.SetMethod?.DeclaredAccessibility == Accessibility.Public,
                     HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
@@ -81,7 +104,32 @@ namespace BLite.SourceGenerators
                         : null
                 };
 
-                // Check for Collection
+                // MaxLength / MinLength
+                propInfo.MaxLength = AttributeHelper.GetAttributeIntValue(prop, "MaxLength");
+                propInfo.MinLength = AttributeHelper.GetAttributeIntValue(prop, "MinLength");
+                
+                var stringLengthAttr = AttributeHelper.GetAttribute(prop, "StringLength");
+                if (stringLengthAttr != null)
+                {
+                    if (stringLengthAttr.ConstructorArguments.Length > 0 && stringLengthAttr.ConstructorArguments[0].Value is int max)
+                        propInfo.MaxLength = max;
+                    
+                    var minLenStr = AttributeHelper.GetNamedArgumentValue(stringLengthAttr, "MinimumLength");
+                    if (int.TryParse(minLenStr, out var min))
+                        propInfo.MinLength = min;
+                }
+
+                // Range
+                var rangeAttr = AttributeHelper.GetAttribute(prop, "Range");
+                if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
+                {
+                    if (rangeAttr.ConstructorArguments[0].Value is double dmin) propInfo.RangeMin = dmin;
+                    else if (rangeAttr.ConstructorArguments[0].Value is int imin) propInfo.RangeMin = (double)imin;
+                    
+                    if (rangeAttr.ConstructorArguments[1].Value is double dmax) propInfo.RangeMax = dmax;
+                    else if (rangeAttr.ConstructorArguments[1].Value is int imax) propInfo.RangeMax = (double)imax;
+                }
+
                 if (SyntaxHelper.IsCollectionType(prop.Type, out var itemType))
                 {
                     propInfo.IsCollection = true;

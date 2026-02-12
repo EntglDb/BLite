@@ -98,6 +98,25 @@ var area = db.Stores.AsQueryable()
 - **Lowercase Policy**: BSON keys are automatically persisted as `lowercase` for consistency.
 - **Custom Overrides**: Use `[BsonProperty]` or `[JsonPropertyName]` for manual field naming.
 
+### 🏷️ Supported Attributes
+BLite supports standard .NET Data Annotations for mapping and validation:
+
+| Attribute | Category | Description |
+| :--- | :--- | :--- |
+| `[Table("name")]` | Mapping | Sets the collection name. Supports `Schema="s"` for `s.name` grouping. |
+| `[Column("name")]` | Mapping | Maps property to a specific BSON field name. |
+| `[Column(TypeName="...")]`| Mapping | Handles special types (e.g., `geopoint` for coordinate tuples). |
+| `[Key]` | Identity | Explicitly marks the primary key (maps to `_id`). |
+| `[NotMapped]` | Mapping | Excludes property from BSON serialization. |
+| `[Required]` | Validation | Ensures string is not null/empty or nullable type is not null. |
+| `[StringLength(max)]` | Validation | Validates string length (supports `MinimumLength`). |
+| `[MaxLength(n)]` | Validation | Validates maximum string length. |
+| `[MinLength(n)]` | Validation | Validates minimum string length. |
+| `[Range(min, max)]` | Validation | Validates numeric values stay within the specified range. |
+
+> [!IMPORTANT]
+> Validation attributes (`[Required]`, `[Range]`, etc.) throw a `System.ComponentModel.DataAnnotations.ValidationException` during serialization if rules are violated.
+
 ---
 
 ## 📦 Quick Start

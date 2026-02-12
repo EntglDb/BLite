@@ -75,7 +75,7 @@ namespace BLite.SourceGenerators
                 if (prop.IsKey && prop.Name == "Id")
                 {
                     // Use dynamic write method for Id based on its type
-                    var idWriteMethod = GetPrimitiveWriteMethod(prop.TypeName, allowKey: true);
+                    var idWriteMethod = GetPrimitiveWriteMethod(prop, allowKey: true);
                     if (idWriteMethod != null)
                     {
                         sb.AppendLine($"            writer.{idWriteMethod}(\"_id\", entity.Id);");
@@ -87,6 +87,7 @@ namespace BLite.SourceGenerators
                     continue;
                 }
                 
+                GenerateValidation(sb, prop);
                 GenerateWriteProperty(sb, prop, mapperNamespace);
             }
             
@@ -94,6 +95,39 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"            writer.EndDocument(startingPos);");
             sb.AppendLine($"            return writer.Position;");
             sb.AppendLine($"        }}");
+        }
+            
+        private static void GenerateValidation(StringBuilder sb, PropertyInfo prop)
+        {
+            var isString = prop.TypeName == "string" || prop.TypeName == "String";
+
+            if (prop.IsRequired)
+            {
+                if (isString)
+                {
+                    sb.AppendLine($"            if (string.IsNullOrEmpty(entity.{prop.Name})) throw new global::System.ComponentModel.DataAnnotations.ValidationException(\"Property {prop.Name} is required.\");");
+                }
+                else if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            if (entity.{prop.Name} == null) throw new global::System.ComponentModel.DataAnnotations.ValidationException(\"Property {prop.Name} is required.\");");
+                }
+            }
+
+            if (prop.MaxLength.HasValue && isString)
+            {
+                sb.AppendLine($"            if ((entity.{prop.Name}?.Length ?? 0) > {prop.MaxLength}) throw new global::System.ComponentModel.DataAnnotations.ValidationException(\"Property {prop.Name} exceeds max length {prop.MaxLength}.\");");
+            }
+            if (prop.MinLength.HasValue && isString)
+            {
+                sb.AppendLine($"            if ((entity.{prop.Name}?.Length ?? 0) < {prop.MinLength}) throw new global::System.ComponentModel.DataAnnotations.ValidationException(\"Property {prop.Name} is below min length {prop.MinLength}.\");");
+            }
+
+            if (prop.RangeMin.HasValue || prop.RangeMax.HasValue)
+            {
+                var minStr = prop.RangeMin?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "double.MinValue";
+                var maxStr = prop.RangeMax?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "double.MaxValue";
+                sb.AppendLine($"            if ((double)entity.{prop.Name} < {minStr} || (double)entity.{prop.Name} > {maxStr}) throw new global::System.ComponentModel.DataAnnotations.ValidationException(\"Property {prop.Name} is outside range [{minStr}, {maxStr}].\");");
+            }
         }
 
         private static void GenerateWriteProperty(StringBuilder sb, PropertyInfo prop, string mapperNamespace)
@@ -121,7 +155,9 @@ namespace BLite.SourceGenerators
                  }
                  else
                  {
-                     var writeMethod = GetPrimitiveWriteMethod(prop.CollectionItemType!);
+                     // Simplified: pass a dummy PropertyInfo with the item type for primitive collection items
+                     var dummyProp = new PropertyInfo { TypeName = prop.CollectionItemType! };
+                     var writeMethod = GetPrimitiveWriteMethod(dummyProp);
                      if (writeMethod != null)
                      {
                         sb.AppendLine($"                writer.{writeMethod}(i.ToString(), item);");
@@ -148,7 +184,7 @@ namespace BLite.SourceGenerators
             }
             else
             {
-                var writeMethod = GetPrimitiveWriteMethod(prop.TypeName, allowKey: false);
+                var writeMethod = GetPrimitiveWriteMethod(prop, allowKey: false);
                 if (writeMethod != null)
                 {
                     sb.AppendLine($"            writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
@@ -259,17 +295,17 @@ namespace BLite.SourceGenerators
                  }
                  else
                  {
-                     var readMethod = GetPrimitiveReadMethod(prop.CollectionItemType!);
+                     var readMethod = GetPrimitiveReadMethod(new PropertyInfo { TypeName = prop.CollectionItemType! });
                       if (readMethod != null)
                       {
                           var cast = (prop.CollectionItemType == "float" || prop.CollectionItemType == "Single") ? "(float)" : "";
                           sb.AppendLine($"                            var item = {cast}reader.{readMethod}();");
                           sb.AppendLine($"                            {localVar}.Add(item);");
                       }
-                     else
-                     {
-                         sb.AppendLine($"                            reader.SkipValue(itemType);");
-                     }
+                      else
+                      {
+                          sb.AppendLine($"                            reader.SkipValue(itemType);");
+                      }
                  }
                  sb.AppendLine($"                        }}");
              }
@@ -288,7 +324,7 @@ namespace BLite.SourceGenerators
              }
              else
              {
-                 var readMethod = GetPrimitiveReadMethod(prop.TypeName);
+                 var readMethod = GetPrimitiveReadMethod(prop);
                  if (readMethod != null)
                 {
                     var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
@@ -350,8 +386,14 @@ namespace BLite.SourceGenerators
             }
         }
 
-        private static string? GetPrimitiveWriteMethod(string typeName, bool allowKey = false)
+        private static string? GetPrimitiveWriteMethod(PropertyInfo prop, bool allowKey = false)
         {
+            var typeName = prop.TypeName;
+            if (prop.ColumnTypeName == "point" || prop.ColumnTypeName == "coordinate" || prop.ColumnTypeName == "geopoint")
+            {
+                return "WriteCoordinates";
+            }
+
             if (typeName.Contains("double") && typeName.Contains(",") && typeName.StartsWith("(") && typeName.EndsWith(")"))
             {
                 // Likely a (double, double) tuple - use specialized WriteCoordinates
@@ -381,8 +423,14 @@ namespace BLite.SourceGenerators
             }
         }
         
-        private static string? GetPrimitiveReadMethod(string typeName)
+        private static string? GetPrimitiveReadMethod(PropertyInfo prop)
         {
+            var typeName = prop.TypeName;
+            if (prop.ColumnTypeName == "point" || prop.ColumnTypeName == "coordinate" || prop.ColumnTypeName == "geopoint")
+            {
+                return "ReadCoordinates";
+            }
+
             if (typeName.Contains("double") && typeName.Contains(",") && typeName.StartsWith("(") && typeName.EndsWith(")"))
             {
                 // Likely a (double, double) tuple - use specialized ReadCoordinates

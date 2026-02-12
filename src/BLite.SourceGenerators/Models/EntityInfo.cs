@@ -23,6 +23,7 @@ namespace BLite.SourceGenerators.Models
         public string Name { get; set; } = "";
         public string TypeName { get; set; } = "";
         public string BsonFieldName { get; set; } = "";
+        public string? ColumnTypeName { get; set; }
         public bool IsNullable { get; set; }
         
         public bool HasPublicSetter { get; set; }
@@ -30,6 +31,12 @@ namespace BLite.SourceGenerators.Models
         public string? BackingFieldName { get; set; }
         
         public bool IsKey { get; set; }
+        public bool IsRequired { get; set; }
+        public int? MaxLength { get; set; }
+        public int? MinLength { get; set; }
+        public double? RangeMin { get; set; }
+        public double? RangeMax { get; set; }
+
         public bool IsCollection { get; set; }
         public bool IsArray { get; set; }
         public string? CollectionItemType { get; set; }
