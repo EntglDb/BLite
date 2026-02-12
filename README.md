@@ -119,6 +119,15 @@ BLite supports standard .NET Data Annotations for mapping and validation:
 
 ---
 
+## 📚 Documentation
+
+For in-depth technical details, see the complete specification documents:
+
+- **[RFC.md](RFC.md)** - Full architectural specification covering storage engine, indexing, transactions, WAL protocol, and query processing
+- **[C-BSON.md](C-BSON.md)** - Detailed wire format specification for BLite's Compressed BSON format, including hex dumps and performance analysis
+
+---
+
 ## 📦 Quick Start
 
 ### 1. Installation
