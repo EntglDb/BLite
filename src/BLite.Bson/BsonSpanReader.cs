@@ -132,6 +132,31 @@ public ref struct BsonSpanReader
         return value;
     }
 
+    /// <summary>
+    /// Reads spatial coordinates from a BSON array [X, Y].
+    /// Returns a (double, double) tuple.
+    /// </summary>
+    public (double, double) ReadCoordinates()
+    {
+        // Skip array size (4 bytes)
+        _position += 4;
+
+        // Skip element 0 header: Type(1) + Name("0\0") (3 bytes)
+        _position += 3;
+        var x = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
+        _position += 8;
+
+        // Skip element 1 header: Type(1) + Name("1\0") (3 bytes)
+        _position += 3;
+        var y = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
+        _position += 8;
+
+        // Skip end of array marker (1 byte)
+        _position++;
+
+        return (x, y);
+    }
+
     public decimal ReadDecimal128()
     {
         if (Remaining < 16)

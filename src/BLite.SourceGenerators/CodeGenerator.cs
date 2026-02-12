@@ -352,6 +352,12 @@ namespace BLite.SourceGenerators
 
         private static string? GetPrimitiveWriteMethod(string typeName, bool allowKey = false)
         {
+            if (typeName.Contains("double") && typeName.Contains(",") && typeName.StartsWith("(") && typeName.EndsWith(")"))
+            {
+                // Likely a (double, double) tuple - use specialized WriteCoordinates
+                return "WriteCoordinates";
+            }
+
             switch (typeName)
             {
                 case "int": 
@@ -377,6 +383,12 @@ namespace BLite.SourceGenerators
         
         private static string? GetPrimitiveReadMethod(string typeName)
         {
+            if (typeName.Contains("double") && typeName.Contains(",") && typeName.StartsWith("(") && typeName.EndsWith(")"))
+            {
+                // Likely a (double, double) tuple - use specialized ReadCoordinates
+                return "ReadCoordinates";
+            }
+
              switch (typeName)
             {
                 case "int": 

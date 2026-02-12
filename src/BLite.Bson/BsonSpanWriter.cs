@@ -121,6 +121,38 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+    /// <summary>
+    /// Writes spatial coordinates as a BSON array [X, Y].
+    /// Optimized for (double, double) tuples.
+    /// </summary>
+    public void WriteCoordinates(string name, (double, double) coordinates)
+    {
+        WriteElementHeader(BsonType.Array, name);
+        
+        var startPos = _position;
+        _position += 4; // Placeholder for array size
+
+        // Element 0: X
+        _buffer[_position++] = (byte)BsonType.Double;
+        _buffer[_position++] = 0x30; // '0'
+        _buffer[_position++] = 0x00; // Null
+        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), coordinates.Item1);
+        _position += 8;
+
+        // Element 1: Y
+        _buffer[_position++] = (byte)BsonType.Double;
+        _buffer[_position++] = 0x31; // '1'
+        _buffer[_position++] = 0x00; // Null
+        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), coordinates.Item2);
+        _position += 8;
+
+        _buffer[_position++] = 0x00; // End of array marker
+
+        // Patch array size
+        var size = _position - startPos;
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(startPos, 4), size);
+    }
+
     public void WriteDecimal128(string name, decimal value)
     {
         WriteElementHeader(BsonType.Decimal128, name);

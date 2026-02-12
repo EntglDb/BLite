@@ -23,6 +23,7 @@ public class IndexMetadata
     public string[] PropertyPaths { get; set; } = Array.Empty<string>();
     public int Dimensions { get; set; }
     public VectorMetric Metric { get; set; }
+    public uint RootPageId { get; set; }
 }
 
 public sealed partial class StorageEngine
@@ -67,7 +68,8 @@ public sealed partial class StorageEngine
                     {
                         Name = reader.ReadString(),
                         IsUnique = reader.ReadBoolean(),
-                        Type = (IndexType)reader.ReadByte()
+                        Type = (IndexType)reader.ReadByte(),
+                        RootPageId = reader.ReadUInt32()
                     };
                     
                     var pathCount = reader.ReadInt32();
@@ -108,6 +110,7 @@ public sealed partial class StorageEngine
             writer.Write(idx.Name);
             writer.Write(idx.IsUnique);
             writer.Write((byte)idx.Type);
+            writer.Write(idx.RootPageId);
             writer.Write(idx.PropertyPaths.Length);
             foreach (var path in idx.PropertyPaths)
             {

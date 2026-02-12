@@ -15,7 +15,10 @@ public enum IndexType : byte
     Unique = 3,
 
     /// <summary>Vector index (HNSW) for similarity search</summary>
-    Vector = 4
+    Vector = 4,
+
+    /// <summary>Geospatial index (R-Tree) for spatial queries</summary>
+    Spatial = 5
 }
 
 /// <summary>
@@ -79,5 +82,12 @@ public readonly struct IndexOptions
         Metric = metric,
         M = m,
         EfConstruction = ef
+    };
+
+    public static IndexOptions CreateSpatial(params string[] fields) => new()
+    {
+        Type = IndexType.Spatial,
+        Unique = false,
+        Fields = fields
     };
 }

@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Core.Indexing.Internal;
 
 namespace BLite.Core.Indexing;
 
@@ -17,6 +18,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     private readonly CollectionIndexDefinition<T> _definition;
     private readonly BTreeIndex? _btreeIndex;
     private readonly VectorSearchIndex? _vectorIndex;
+    private readonly RTreeIndex? _spatialIndex;
     private readonly IDocumentMapper<TId, T> _mapper;
     private bool _disposed;
 
@@ -30,10 +32,13 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     /// </summary>
     public BTreeIndex? BTreeIndex => _btreeIndex;
 
+    public uint RootPageId => _btreeIndex?.RootPageId ?? _vectorIndex?.RootPageId ?? _spatialIndex?.RootPageId ?? 0;
+
     public CollectionSecondaryIndex(
         CollectionIndexDefinition<T> definition,
         StorageEngine storage,
-        IDocumentMapper<TId, T> mapper)
+        IDocumentMapper<TId, T> mapper,
+        uint rootPageId = 0)
     {
         _definition = definition ?? throw new ArgumentNullException(nameof(definition));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
@@ -42,13 +47,21 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         
         if (indexOptions.Type == IndexType.Vector)
         {
-            _vectorIndex = new VectorSearchIndex(storage, indexOptions);
+            _vectorIndex = new VectorSearchIndex(storage, indexOptions, rootPageId);
             _btreeIndex = null;
+            _spatialIndex = null;
+        }
+        else if (indexOptions.Type == IndexType.Spatial)
+        {
+            _spatialIndex = new RTreeIndex(storage, indexOptions, rootPageId);
+            _btreeIndex = null;
+            _vectorIndex = null;
         }
         else
         {
-            _btreeIndex = new BTreeIndex(storage, indexOptions);
+            _btreeIndex = new BTreeIndex(storage, indexOptions, rootPageId);
             _vectorIndex = null;
+            _spatialIndex = null;
         }
     }
 
@@ -81,6 +94,14 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
                 {
                     _vectorIndex.Insert(v, location, transaction);
                 }
+            }
+        }
+        else if (_spatialIndex != null)
+        {
+            // Geospatial Index Support
+            if (keyValue is ValueTuple<double, double> t)
+            {
+                _spatialIndex.Insert(GeoBox.FromPoint(new GeoPoint(t.Item1, t.Item2)), location, transaction);
             }
         }
         else if (_btreeIndex != null)
@@ -188,15 +209,39 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         return null;
     }
 
-    /// <summary>
-    /// Performs similarity search (only for vector indexes)
-    /// </summary>
     public IEnumerable<VectorSearchResult> VectorSearch(float[] query, int k, int efSearch = 100, ITransaction? transaction = null)
     {
         if (_vectorIndex == null)
             throw new InvalidOperationException("This index is not a vector index.");
             
         return _vectorIndex.Search(query, k, efSearch, transaction);
+    }
+
+    /// <summary>
+    /// Performs geospatial distance search
+    /// </summary>
+    public IEnumerable<DocumentLocation> Near((double Latitude, double Longitude) center, double radiusKm, ITransaction? transaction = null)
+    {
+        if (_spatialIndex == null)
+            throw new InvalidOperationException("This index is not a spatial index.");
+
+        var queryBox = SpatialMath.BoundingBox(center.Latitude, center.Longitude, radiusKm);
+        foreach (var loc in _spatialIndex.Search(queryBox, transaction))
+        {
+            yield return loc;
+        }
+    }
+
+    /// <summary>
+    /// Performs geospatial bounding box search
+    /// </summary>
+    public IEnumerable<DocumentLocation> Within((double Latitude, double Longitude) min, (double Latitude, double Longitude) max, ITransaction? transaction = null)
+    {
+        if (_spatialIndex == null)
+            throw new InvalidOperationException("This index is not a spatial index.");
+
+        var area = new GeoBox(min.Latitude, min.Longitude, max.Latitude, max.Longitude);
+        return _spatialIndex.Search(area, transaction);
     }
 
     /// <summary>

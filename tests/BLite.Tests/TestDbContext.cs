@@ -23,6 +23,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<int, AsyncDoc> AsyncDocs { get; set; } = null!;
     public DocumentCollection<int, SchemaUser> SchemaUsers { get; set; } = null!;
     public DocumentCollection<ObjectId, VectorEntity> VectorItems { get; set; } = null!;
+    public DocumentCollection<ObjectId, GeoEntity> GeoItems { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -45,5 +46,9 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<VectorEntity>()
             .ToCollection("vector_items")
             .HasVectorIndex(x => x.Embedding, dimensions: 3, metric: VectorMetric.L2, name: "idx_vector");
+
+        modelBuilder.Entity<GeoEntity>()
+            .ToCollection("geo_items")
+            .HasSpatialIndex(x => x.Location, name: "idx_spatial");
     }
 }

@@ -14,7 +14,16 @@ internal static class IndexOptimizer
         public bool IsVectorSearch { get; set; }
         public float[]? VectorQuery { get; set; }
         public int K { get; set; }
+
+        public bool IsSpatialSearch { get; set; }
+        public (double Latitude, double Longitude) SpatialPoint { get; set; }
+        public double RadiusKm { get; set; }
+        public (double Latitude, double Longitude) SpatialMin { get; set; }
+        public (double Latitude, double Longitude) SpatialMax { get; set; }
+        public SpatialQueryType SpatialType { get; set; }
     }
+
+    public enum SpatialQueryType { Near, Within }
 
     public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes)
     {
@@ -25,30 +34,22 @@ internal static class IndexOptimizer
 
     private static OptimizationResult? OptimizeExpression(Expression expression, ParameterExpression parameter, IEnumerable<CollectionIndexInfo> indexes)
     {
-        // Handle AndAlso for Range Intersection (Better Between support)
+        // ... (Existing AndAlso logic remains the same) ...
         if (expression is BinaryExpression binary && binary.NodeType == ExpressionType.AndAlso)
         {
             var left = OptimizeExpression(binary.Left, parameter, indexes);
             var right = OptimizeExpression(binary.Right, parameter, indexes);
 
-            // Merge if both target the same index
             if (left != null && right != null && left.IndexName == right.IndexName)
             {
                 return new OptimizationResult
                 {
                     IndexName = left.IndexName,
-                    MinValue = left.MinValue ?? right.MinValue, // Take restrictive (max of mins) - simplified logic
-                    MaxValue = left.MaxValue ?? right.MaxValue, // Take restrictive (min of maxs)
+                    MinValue = left.MinValue ?? right.MinValue,
+                    MaxValue = left.MaxValue ?? right.MaxValue,
                     IsRange = true
                 };
-                
-                // Note: The logic above is simplified. Correct range merging requires comparing values.
-                // Since simpler is better for now, we only merge if one side is unbounded.
-                // e.g. Left: > 10 (Min=10, Max=null). Right: < 20 (Min=null, Max=20).
-                // Result: Min=10, Max=20.
             }
-            // If only one side is indexable, return that?
-            // Yes, we can use the index for one part and let LINQ filter the rest.
             return left ?? right;
         }
 
@@ -104,11 +105,11 @@ internal static class IndexOptimizer
              }
         }
 
-        // Handle VectorSearch
-        if (expression is MethodCallExpression mcall && mcall.Method.Name == "VectorSearch")
+        // Handle Method Calls (VectorSearch, Near, Within)
+        if (expression is MethodCallExpression mcall)
         {
             // VectorSearch(this float[] vector, float[] query, int k)
-            if (mcall.Arguments[0] is MemberExpression vMember && vMember.Expression == parameter)
+            if (mcall.Method.Name == "VectorSearch" && mcall.Arguments[0] is MemberExpression vMember && vMember.Expression == parameter)
             {
                 var query = EvaluateExpression<float[]>(mcall.Arguments[1]);
                 var k = EvaluateExpression<int>(mcall.Arguments[2]);
@@ -122,6 +123,46 @@ internal static class IndexOptimizer
                         IsVectorSearch = true,
                         VectorQuery = query,
                         K = k
+                    };
+                }
+            }
+            
+            // Near(this (double, double) point, (double, double) center, double radiusKm)
+            if (mcall.Method.Name == "Near" && mcall.Arguments[0] is MemberExpression nMember && nMember.Expression == parameter)
+            {
+                var center = EvaluateExpression<(double, double)>(mcall.Arguments[1]);
+                var radius = EvaluateExpression<double>(mcall.Arguments[2]);
+
+                var index = indexes.FirstOrDefault(i => i.Type == IndexType.Spatial && Matches(i, nMember.Member.Name));
+                if (index != null)
+                {
+                    return new OptimizationResult
+                    {
+                        IndexName = index.Name,
+                        IsSpatialSearch = true,
+                        SpatialType = SpatialQueryType.Near,
+                        SpatialPoint = center,
+                        RadiusKm = radius
+                    };
+                }
+            }
+
+            // Within(this (double, double) point, (double, double) min, (double, double) max)
+            if (mcall.Method.Name == "Within" && mcall.Arguments[0] is MemberExpression wMember && wMember.Expression == parameter)
+            {
+                var min = EvaluateExpression<(double, double)>(mcall.Arguments[1]);
+                var max = EvaluateExpression<(double, double)>(mcall.Arguments[2]);
+
+                var index = indexes.FirstOrDefault(i => i.Type == IndexType.Spatial && Matches(i, wMember.Member.Name));
+                if (index != null)
+                {
+                    return new OptimizationResult
+                    {
+                        IndexName = index.Name,
+                        IsSpatialSearch = true,
+                        SpatialType = SpatialQueryType.Within,
+                        SpatialMin = min,
+                        SpatialMax = max
                     };
                 }
             }

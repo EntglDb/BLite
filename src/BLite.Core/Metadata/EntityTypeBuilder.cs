@@ -29,6 +29,12 @@ public class EntityTypeBuilder<T> where T : class
         return this;
     }
 
+    public EntityTypeBuilder<T> HasSpatialIndex<TKey>(Expression<Func<T, TKey>> keySelector, string? name = null)
+    {
+        Indexes.Add(new IndexBuilder<T>(keySelector, name, false, IndexType.Spatial));
+        return this;
+    }
+
     public EntityTypeBuilder<T> HasKey<TKey>(Expression<Func<T, TKey>> keySelector)
     {
         PrimaryKeySelector = keySelector;

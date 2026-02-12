@@ -65,6 +65,28 @@ var results = db.Items.AsQueryable()
     .ToList();
 ```
 
+### 🌍 High-Performance Geospatial Indexing
+BLite features a built-in R-Tree implementation for lightning-fast proximity and bounding box searches.
+
+- **Zero-Allocation**: Uses coordinate tuples `(double, double)` and `Span`-based BSON arrays.
+- **LINQ Integrated**: Search naturally using `.Near()` and `.Within()`.
+
+```csharp
+// 1. Configure spatial index (uses R-Tree internally)
+modelBuilder.Entity<Store>()
+    .HasSpatialIndex(x => x.Location);
+
+// 2. Proximity Search (Find stores within 5km)
+var stores = db.Stores.AsQueryable()
+    .Where(s => s.Location.Near((45.4642, 9.1899), 5.0))
+    .ToList();
+
+// 3. Bounding Box Search
+var area = db.Stores.AsQueryable()
+    .Where(s => s.Location.Within((45.0, 9.0), (46.0, 10.0)))
+    .ToList();
+```
+
 ### 🛡️ Transactions & ACID
 - **Atomic**: Multi-document transactions.
 - **Durable**: WAL ensures data safety even in power loss.
@@ -123,6 +145,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **BSON Engine**: Zero-copy Reader/Writer with lowercase policy.
 - ✅ **Indexing**: B-Tree implementation.
 - ✅ **Vector Search**: HNSW implementation for Similarity Search.
+- ✅ **Geospatial Indexing**: Optimized R-Tree with zero-allocation tuple API.
 - ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
 - ✅ **Async I/O**: Full `async`/`await` support for CRUD and Bulk operations.
@@ -131,8 +154,6 @@ We are actively building the core. Here is where we stand:
 ## 🔮 Future Vision
 
 ### 1. Advanced Querying & Specialized Indices
-- **Geospatial (The Location Layer)**:
-  - R-Tree or S2 Geometry index for GeoJSON coordinates.
 - **Graph Traversals**:
   - Specialized index for "links" (Document IDs) for $O(1)$ navigation without full scans.
 

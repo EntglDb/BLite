@@ -36,5 +36,8 @@ public enum PageType : byte
     Schema = 8,
 
     /// <summary>HNSW Vector index page</summary>
-    Vector = 9
+    Vector = 9,
+
+    /// <summary>GEO Spatial index page</summary>
+    Spatial = 11
 }

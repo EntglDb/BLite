@@ -108,4 +108,11 @@ namespace BLite.Tests
         public string Title { get; set; } = "";
         public float[] Embedding { get; set; } = Array.Empty<float>();
     }
+
+    public class GeoEntity
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = "";
+        public (double Latitude, double Longitude) Location { get; set; }
+    }
 }

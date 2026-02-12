@@ -36,8 +36,27 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         foreach (var idxMeta in _metadata.Indexes)
         {
             var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type, idxMeta.Dimensions, idxMeta.Metric);
-            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
+            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId);
             _indexes[idxMeta.Name] = index;
+        }
+    }
+
+    private void UpdateMetadata()
+    {
+        _metadata.Indexes.Clear();
+        foreach (var index in _indexes.Values)
+        {
+            var info = index.GetInfo();
+            _metadata.Indexes.Add(new IndexMetadata
+            {
+                Name = info.Name,
+                IsUnique = info.IsUnique,
+                Type = info.Type,
+                PropertyPaths = info.PropertyPaths,
+                Dimensions = index.Definition.Dimensions,
+                Metric = index.Definition.Metric,
+                RootPageId = index.RootPageId
+            });
         }
     }
 
@@ -183,7 +202,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             {
                 body = Expression.Convert(body, typeof(object));
             }
-            
+
             var lambda = Expression.Lambda<Func<T, object>>(body, keySelector.Parameters);
 
             var definition = new CollectionIndexDefinition<T>(indexName, propertyPaths, lambda, false, IndexType.Vector, false, dimensions, metric);
@@ -191,7 +210,30 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         }
     }
 
+    public CollectionSecondaryIndex<TId, T> CreateSpatialIndexUntyped(
+        LambdaExpression keySelector,
+        string? name = null)
+    {
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var indexName = name ?? GenerateIndexName(propertyPaths);
 
+        lock (_lock)
+        {
+            if (_indexes.TryGetValue(indexName, out var existing))
+                return existing;
+
+            var body = keySelector.Body;
+            if (body.Type != typeof(object))
+            {
+                body = Expression.Convert(body, typeof(object));
+            }
+            
+            var lambda = Expression.Lambda<Func<T, object>>(body, keySelector.Parameters);
+
+            var definition = new CollectionIndexDefinition<T>(indexName, propertyPaths, lambda, false, IndexType.Spatial);
+            return CreateIndex(definition);
+        }
+    }
 
     /// <summary>
     /// Drops an existing index by name
@@ -411,24 +453,6 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 _metadata.PrimaryRootPageId = pageId;
                 _storage.SaveCollectionMetadata(_metadata);
             }
-        }
-    }
-
-    private void UpdateMetadata()
-    {
-        _metadata.Indexes.Clear();
-        foreach (var index in _indexes.Values)
-        {
-            var def = index.Definition;
-            _metadata.Indexes.Add(new IndexMetadata
-            {
-                Name = def.Name,
-                IsUnique = def.IsUnique,
-                Type = def.Type,
-                PropertyPaths = def.PropertyPaths,
-                Dimensions = def.Dimensions,
-                Metric = def.Metric
-            });
         }
     }
 

@@ -57,12 +57,17 @@ namespace BLite.SourceGenerators.Helpers
                 namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
             {
                 var underlyingType = namedType.TypeArguments[0];
-                return underlyingType.Name + "?";
+                return GetTypeName(underlyingType) + "?";
             }
             
             if (type is IArrayTypeSymbol arrayType)
             {
                 return GetTypeName(arrayType.ElementType) + "[]";
+            }
+
+            if (type is INamedTypeSymbol nt && nt.IsTupleType)
+            {
+                return type.ToDisplayString();
             }
             
             return type.Name;
@@ -122,6 +127,9 @@ namespace BLite.SourceGenerators.Helpers
                 
             if (type.TypeKind == TypeKind.Enum)
                 return true;
+
+            if (type is INamedTypeSymbol nt && nt.IsTupleType)
+                return true;
                 
             return false;
         }
@@ -132,6 +140,7 @@ namespace BLite.SourceGenerators.Helpers
             if (type.SpecialType == SpecialType.System_String) return false;
             if (IsCollectionType(type, out _)) return false;
             if (type.SpecialType == SpecialType.System_Object) return false;
+            if (type is INamedTypeSymbol nt && nt.IsTupleType) return false;
             
             return type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct;
         }

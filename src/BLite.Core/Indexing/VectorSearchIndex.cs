@@ -29,6 +29,8 @@ public sealed class VectorSearchIndex
         _rootPageId = rootPageId;
     }
 
+    public uint RootPageId => _rootPageId;
+
     public void Insert(float[] vector, DocumentLocation docLocation, ITransaction? transaction = null)
     {
         if (vector.Length != _options.Dimensions)

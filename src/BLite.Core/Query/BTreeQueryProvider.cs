@@ -2,6 +2,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Core.Collections;
+using static BLite.Core.Query.IndexOptimizer;
 
 namespace BLite.Core.Query;
 
@@ -59,6 +60,12 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
              if (indexOpt.IsVectorSearch)
              {
                  sourceData = _collection.VectorSearch(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K);
+             }
+             else if (indexOpt.IsSpatialSearch)
+             {
+                 sourceData = indexOpt.SpatialType == SpatialQueryType.Near 
+                     ? _collection.Near(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm)
+                     : _collection.Within(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax);
              }
              else
              {

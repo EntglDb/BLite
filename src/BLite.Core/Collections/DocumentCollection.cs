@@ -89,7 +89,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     {
         var currentSchema = _mapper.GetSchema();
         var metadata = _indexManager.GetMetadata();
-        
+
         var persistedSchemas = _storage.GetSchemas(metadata.SchemaRootPageId);
         var latestPersisted = persistedSchemas.Count > 0 ? persistedSchemas[persistedSchemas.Count - 1] : null;
 
@@ -266,15 +266,19 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // Use the IndexManager directly to ensure the index exists
         // We need to convert the LambdaExpression to a typed expression if possible, 
         // or add an untyped CreateIndex to IndexManager.
-        
+
         // For now, let's use a dynamic approach or cast if we know it's Func<T, object>
         if (builder.Type == IndexType.Vector)
         {
             _indexManager.CreateVectorIndexUntyped(builder.KeySelector, builder.Dimensions, builder.Metric, builder.Name);
         }
+        else if (builder.Type == IndexType.Spatial)
+        {
+            _indexManager.CreateSpatialIndexUntyped(builder.KeySelector, builder.Name);
+        }
         else if (builder.KeySelector is System.Linq.Expressions.Expression<Func<T, object>> selector)
         {
-             _indexManager.EnsureIndex(selector, builder.Name, builder.IsUnique);
+            _indexManager.EnsureIndex(selector, builder.Name, builder.IsUnique);
         }
         else
         {
@@ -303,7 +307,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         {
             pageResults.Clear();
             ScanPage(pageId, txnId, buffer, predicate, pageResults, transaction);
-            
+
             foreach (var doc in pageResults)
             {
                 yield return doc;
@@ -324,23 +328,23 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
         var txnId = transaction?.TransactionId ?? 0;
         var pageCount = (int)_storage.PageCount;
-        
+
         if (degreeOfParallelism <= 0)
             degreeOfParallelism = Environment.ProcessorCount;
 
         return Partitioner.Create(0, pageCount)
             .AsParallel()
             .WithDegreeOfParallelism(degreeOfParallelism)
-            .SelectMany(range => 
+            .SelectMany(range =>
             {
                 var localBuffer = new byte[_storage.PageSize];
                 var localResults = new List<T>();
-                
+
                 for (int i = range.Item1; i < range.Item2; i++)
                 {
                     ScanPage((uint)i, txnId, localBuffer, predicate, localResults, transaction);
                 }
-                return localResults; 
+                return localResults;
                 // Wait: SelectMany iterates the returned IEnumerable. 
                 // If I return localResults here, it means for each range, I return a LIST of all results in that range.
                 // But localResults is cleared in the loop!
@@ -406,16 +410,16 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// </summary>
     public IEnumerable<T> QueryIndex(string indexName, object? minKey, object? maxKey, bool ascending = true, ITransaction? transaction = null)
     {
-         var index = GetIndex(indexName);
-         if (index == null) throw new ArgumentException($"Index {indexName} not found");
-         
-         var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
-         
-         foreach (var location in index.Range(minKey, maxKey, direction, transaction))
-         {
-             var doc = FindByLocation(location, transaction);
-             if (doc != null) yield return doc;
-         }
+        var index = GetIndex(indexName);
+        if (index == null) throw new ArgumentException($"Index {indexName} not found");
+
+        var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
+
+        foreach (var location in index.Range(minKey, maxKey, direction, transaction))
+        {
+            var doc = FindByLocation(location, transaction);
+            if (doc != null) yield return doc;
+        }
     }
 
     /// <summary>
@@ -483,7 +487,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         {
             if (freeBytes >= requiredBytes)
             {
-                 if (!_storage.IsPageLocked(pageId, txnId))
+                if (!_storage.IsPageLocked(pageId, txnId))
                     return pageId;
             }
         }
@@ -676,12 +680,12 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // 2. Build Overflow Chain (Reverse Order)
         // We must ensure that pages closer to Primary are FULL (PageSize-Header),
         // and only the last page (tail) is partial. This matches FindByLocation greedy reading.
-        
+
         uint nextOverflowPageId = 0;
         int overflowChunkSize = _storage.PageSize - SlottedPageHeader.Size;
         int totalOverflowBytes = data.Length - maxPrimaryPayload;
-        
-        if (totalOverflowBytes > 0) 
+
+        if (totalOverflowBytes > 0)
         {
             int tailSize = totalOverflowBytes % overflowChunkSize;
             int fullPages = totalOverflowBytes / overflowChunkSize;
@@ -699,7 +703,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             }
             else if (fullPages > 0)
             {
-                 // If no tail, nextId starts at 0.
+                // If no tail, nextId starts at 0.
             }
 
             // 2b. Handle Full Pages (Reverse order)
@@ -1361,7 +1365,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // Retrieve old version for index updates
         var oldEntity = FindByLocation(oldLocation, txn);
         if (oldEntity == null) return false;
-        
+
         // Read old page
         var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
@@ -1387,8 +1391,8 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             else
             {
                 // Delete old + insert new
-                DeleteCore(id, txn); 
-                
+                DeleteCore(id, txn);
+
                 DocumentLocation newLocation;
                 if (bytesWritten + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
                 {
@@ -1674,7 +1678,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         for (int i = 0; i < steps.Length; i++)
         {
             int size = steps[i];
-            
+
             // Ensure we at least cover PageSize (unlikely to be > 64KB but safe)
             if (size < _storage.PageSize) size = _storage.PageSize;
 
@@ -1682,7 +1686,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             try
             {
                 int bytesWritten = _mapper.Serialize(entity, new BsonSpanWriter(buffer, _storage.GetKeyMap()));
-                
+
                 // Inject schema version if available
                 if (CurrentSchemaVersion != null)
                 {
@@ -1719,29 +1723,29 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     private void AppendVersionField(byte[] buffer, ref int bytesWritten)
     {
         if (CurrentSchemaVersion == null) return;
-        
+
         int version = CurrentSchemaVersion.Value.Version;
-        
+
         // BSON element for _v (Int32) with Compressed Key:
         // Type (1 byte: 0x10)
         // Key ID (2 bytes, little-endian)
         // Value (4 bytes: int32)
         // Total = 7 bytes
-        
+
         int pos = bytesWritten - 1; // Position of old 0x00 terminator
         buffer[pos++] = 0x10; // Int32
-        
+
         ushort versionKeyId = _storage.GetOrAddDictionaryEntry("_v");
         BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(pos, 2), versionKeyId);
         pos += 2;
-        
+
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(pos, 4), version);
         pos += 4;
-        
+
         buffer[pos++] = 0x00; // new document terminator
-        
+
         bytesWritten = pos;
-        
+
         // Update total size (first 4 bytes)
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(0, 4), bytesWritten);
     }
@@ -1751,8 +1755,9 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// </summary>
     public IEnumerable<T> VectorSearch(string indexName, float[] query, int k, int efSearch = 100, ITransaction? transaction = null)
     {
-        var index = GetIndex(indexName);
-        if (index == null) throw new ArgumentException($"Index {indexName} not found");
+        var index = _indexManager.GetIndex(indexName);
+        if (index == null)
+            throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
 
         foreach (var result in index.VectorSearch(query, k, efSearch, transaction))
         {
@@ -1761,6 +1766,37 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         }
     }
 
+    /// <summary>
+    /// Performs a geospatial proximity search using a specific index.
+    /// </summary>
+    public IEnumerable<T> Near(string indexName, (double Latitude, double Longitude) center, double radiusKm, ITransaction? transaction = null)
+    {
+        var index = _indexManager.GetIndex(indexName);
+        if (index == null)
+            throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
+
+        foreach (var loc in index.Near(center, radiusKm, transaction))
+        {
+            var doc = FindByLocation(loc, transaction);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// Performs a geospatial bounding box search using a specific index.
+    /// </summary>
+    public IEnumerable<T> Within(string indexName, (double Latitude, double Longitude) min, (double Latitude, double Longitude) max, ITransaction? transaction = null)
+    {
+        var index = _indexManager.GetIndex(indexName);
+        if (index == null)
+            throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
+
+        foreach (var loc in index.Within(min, max, transaction))
+        {
+            var doc = FindByLocation(loc, transaction);
+            if (doc != null) yield return doc;
+        }
+    }
     public void Dispose()
     {
         _indexManager.Dispose();
