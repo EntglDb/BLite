@@ -21,6 +21,8 @@ public class IndexMetadata
     public bool IsUnique { get; set; }
     public IndexType Type { get; set; }
     public string[] PropertyPaths { get; set; } = Array.Empty<string>();
+    public int Dimensions { get; set; }
+    public VectorMetric Metric { get; set; }
 }
 
 public sealed partial class StorageEngine
@@ -73,6 +75,12 @@ public sealed partial class StorageEngine
                     for (int k = 0; k < pathCount; k++)
                         idx.PropertyPaths[k] = reader.ReadString();
                         
+                    if (idx.Type == IndexType.Vector)
+                    {
+                        idx.Dimensions = reader.ReadInt32();
+                        idx.Metric = (VectorMetric)reader.ReadByte();
+                    }
+                    
                     metadata.Indexes.Add(idx);
                 }
                 return metadata;
@@ -104,6 +112,12 @@ public sealed partial class StorageEngine
             foreach (var path in idx.PropertyPaths)
             {
                 writer.Write(path);
+            }
+            
+            if (idx.Type == IndexType.Vector)
+            {
+                writer.Write(idx.Dimensions);
+                writer.Write((byte)idx.Metric);
             }
         }
         

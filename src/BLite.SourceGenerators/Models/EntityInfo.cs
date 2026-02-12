@@ -31,6 +31,7 @@ namespace BLite.SourceGenerators.Models
         
         public bool IsKey { get; set; }
         public bool IsCollection { get; set; }
+        public bool IsArray { get; set; }
         public string? CollectionItemType { get; set; }
         
         public bool IsNestedObject { get; set; }

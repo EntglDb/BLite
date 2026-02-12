@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Metadata;
+using BLite.Core.Indexing;
 
 namespace BLite.Tests;
 
@@ -21,6 +22,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<Guid, GuidEntity> GuidEntities { get; set; } = null!;
     public DocumentCollection<int, AsyncDoc> AsyncDocs { get; set; } = null!;
     public DocumentCollection<int, SchemaUser> SchemaUsers { get; set; } = null!;
+    public DocumentCollection<ObjectId, VectorEntity> VectorItems { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -39,5 +41,9 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<GuidEntity>().HasKey(e => e.Id);
         modelBuilder.Entity<AsyncDoc>().ToCollection("async_docs");
         modelBuilder.Entity<SchemaUser>().ToCollection("schema_users").HasKey(e => e.Id);
+        
+        modelBuilder.Entity<VectorEntity>()
+            .ToCollection("vector_items")
+            .HasVectorIndex(x => x.Embedding, dimensions: 3, metric: VectorMetric.L2, name: "idx_vector");
     }
 }

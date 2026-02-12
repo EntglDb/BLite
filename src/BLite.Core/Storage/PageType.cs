@@ -33,5 +33,8 @@ public enum PageType : byte
     Dictionary = 7,
 
     /// <summary>Schema versioning page</summary>
-    Schema = 8
+    Schema = 8,
+
+    /// <summary>HNSW Vector index page</summary>
+    Vector = 9
 }

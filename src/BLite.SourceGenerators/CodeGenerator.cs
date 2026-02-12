@@ -104,7 +104,8 @@ namespace BLite.SourceGenerators
             {
                  var arrayVar = $"{prop.Name.ToLower()}Array";
                  sb.AppendLine($"            var {arrayVar}Pos = writer.BeginArray(\"{fieldName}\");");
-                 sb.AppendLine($"            for (int i = 0; i < entity.{prop.Name}.Count; i++)");
+                 var countSource = prop.IsArray ? "Length" : "Count";
+                 sb.AppendLine($"            for (int i = 0; i < entity.{prop.Name}.{countSource}; i++)");
                  sb.AppendLine($"            {{");
                  sb.AppendLine($"                var item = entity.{prop.Name}[i];");
                  
@@ -227,7 +228,9 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"            {{");
             foreach(var prop in entity.Properties)
             {
-                sb.AppendLine($"                {prop.Name} = {prop.Name.ToLower()},");
+                var val = prop.Name.ToLower();
+                if (prop.IsArray) val += ".ToArray()"; // Simplified: convert list to array
+                sb.AppendLine($"                {prop.Name} = {val},");
             }
             sb.AppendLine($"            }};");
             sb.AppendLine($"        }}");
@@ -257,11 +260,12 @@ namespace BLite.SourceGenerators
                  else
                  {
                      var readMethod = GetPrimitiveReadMethod(prop.CollectionItemType!);
-                     if (readMethod != null)
-                     {
-                         sb.AppendLine($"                            var item = reader.{readMethod}();");
-                         sb.AppendLine($"                            {localVar}.Add(item);");
-                     }
+                      if (readMethod != null)
+                      {
+                          var cast = (prop.CollectionItemType == "float" || prop.CollectionItemType == "Single") ? "(float)" : "";
+                          sb.AppendLine($"                            var item = {cast}reader.{readMethod}();");
+                          sb.AppendLine($"                            {localVar}.Add(item);");
+                      }
                      else
                      {
                          sb.AppendLine($"                            reader.SkipValue(itemType);");
@@ -286,9 +290,10 @@ namespace BLite.SourceGenerators
              {
                  var readMethod = GetPrimitiveReadMethod(prop.TypeName);
                  if (readMethod != null)
-                 {
-                     sb.AppendLine($"                        {localVar} = reader.{readMethod}();");
-                 }
+                {
+                    var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
+                    sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}();");
+                }
                  else
                  {
                      sb.AppendLine($"                        reader.SkipValue({bsonTypeVar});");
@@ -359,6 +364,8 @@ namespace BLite.SourceGenerators
                 case "Boolean": return "WriteBoolean";
                 case "double": 
                 case "Double": return "WriteDouble";
+                case "float":
+                case "Single": return "WriteDouble"; // Map float to double in BSON
                 case "decimal": 
                 case "Decimal": return "WriteDecimal128"; // Corrected Name
                 case "DateTime": return "WriteDateTime";
@@ -382,6 +389,8 @@ namespace BLite.SourceGenerators
                 case "Boolean": return "ReadBoolean";
                 case "double": 
                 case "Double": return "ReadDouble";
+                case "float":
+                case "Single": return "ReadDouble"; // Map float to double in BSON
                 case "decimal": 
                 case "Decimal": return "ReadDecimal128"; // Corrected Name
                 case "DateTime": return "ReadDateTime";

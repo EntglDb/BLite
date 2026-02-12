@@ -188,6 +188,26 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Creates a vector (HNSW) index for similarity search.
+    /// </summary>
+    public CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(
+        System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+        int dimensions,
+        VectorMetric metric = VectorMetric.Cosine,
+        string? name = null)
+    {
+        if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
+
+        using (var txn = _storage.BeginTransaction())
+        {
+            var index = _indexManager.CreateVectorIndex(keySelector, dimensions, metric, name);
+            RebuildIndex(index, txn);
+            txn.Commit();
+            return index;
+        }
+    }
+
+    /// <summary>
     /// Ensures that an index exists on the specified property.
     /// If the index already exists, it is returned without modification (idempotent).
     /// If it doesn't exist, it is created and populated.
@@ -248,11 +268,14 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         // or add an untyped CreateIndex to IndexManager.
         
         // For now, let's use a dynamic approach or cast if we know it's Func<T, object>
-        if (builder.KeySelector is System.Linq.Expressions.Expression<Func<T, object>> selector)
+        if (builder.Type == IndexType.Vector)
+        {
+            _indexManager.CreateVectorIndexUntyped(builder.KeySelector, builder.Dimensions, builder.Metric, builder.Name);
+        }
+        else if (builder.KeySelector is System.Linq.Expressions.Expression<Func<T, object>> selector)
         {
              _indexManager.EnsureIndex(selector, builder.Name, builder.IsUnique);
         }
-
         else
         {
             // Try to rebuild the expression or use untyped version
@@ -1721,6 +1744,21 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         
         // Update total size (first 4 bytes)
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(0, 4), bytesWritten);
+    }
+
+    /// <summary>
+    /// Performs similarity search using a vector index.
+    /// </summary>
+    public IEnumerable<T> VectorSearch(string indexName, float[] query, int k, int efSearch = 100, ITransaction? transaction = null)
+    {
+        var index = GetIndex(indexName);
+        if (index == null) throw new ArgumentException($"Index {indexName} not found");
+
+        foreach (var result in index.VectorSearch(query, k, efSearch, transaction))
+        {
+            var doc = FindByLocation(result.Location, transaction);
+            if (doc != null) yield return doc;
+        }
     }
 
     public void Dispose()

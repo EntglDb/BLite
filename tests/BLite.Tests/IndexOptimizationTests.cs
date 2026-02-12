@@ -101,7 +101,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = new[] { "Name" } }
+                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = new[] { "Name" }, Type = IndexType.BTree }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Name.StartsWith("Ali");

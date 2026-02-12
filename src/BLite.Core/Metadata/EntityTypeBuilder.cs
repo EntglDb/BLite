@@ -23,6 +23,12 @@ public class EntityTypeBuilder<T> where T : class
         return this;
     }
 
+    public EntityTypeBuilder<T> HasVectorIndex<TKey>(Expression<Func<T, TKey>> keySelector, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
+    {
+        Indexes.Add(new IndexBuilder<T>(keySelector, name, false, IndexType.Vector, dimensions, metric));
+        return this;
+    }
+
     public EntityTypeBuilder<T> HasKey<TKey>(Expression<Func<T, TKey>> keySelector)
     {
         PrimaryKeySelector = keySelector;
@@ -63,11 +69,17 @@ public class IndexBuilder<T>
     public LambdaExpression KeySelector { get; }
     public string? Name { get; }
     public bool IsUnique { get; }
+    public IndexType Type { get; }
+    public int Dimensions { get; }
+    public VectorMetric Metric { get; }
 
-    public IndexBuilder(LambdaExpression keySelector, string? name, bool unique)
+    public IndexBuilder(LambdaExpression keySelector, string? name, bool unique, IndexType type = IndexType.BTree, int dimensions = 0, VectorMetric metric = VectorMetric.Cosine)
     {
         KeySelector = keySelector;
         Name = name;
         IsUnique = unique;
+        Type = type;
+        Dimensions = dimensions;
+        Metric = metric;
     }
 }

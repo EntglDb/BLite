@@ -101,4 +101,11 @@ namespace BLite.Tests
         public string Name { get; set; } = "";
         public Address Address { get; set; } = new();
     }
+
+    public class VectorEntity
+    {
+        public ObjectId Id { get; set; }
+        public string Title { get; set; } = "";
+        public float[] Embedding { get; set; } = Array.Empty<float>();
+    }
 }

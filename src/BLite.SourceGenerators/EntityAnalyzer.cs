@@ -85,6 +85,7 @@ namespace BLite.SourceGenerators
                 if (SyntaxHelper.IsCollectionType(prop.Type, out var itemType))
                 {
                     propInfo.IsCollection = true;
+                    propInfo.IsArray = prop.Type is IArrayTypeSymbol;
                     if (itemType != null)
                     {
                         propInfo.CollectionItemType = SyntaxHelper.GetTypeName(itemType);

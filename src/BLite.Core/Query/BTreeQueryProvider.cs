@@ -56,7 +56,14 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes());
         if (indexOpt != null)
         {
-             sourceData = _collection.QueryIndex(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue);
+             if (indexOpt.IsVectorSearch)
+             {
+                 sourceData = _collection.VectorSearch(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K);
+             }
+             else
+             {
+                 sourceData = _collection.QueryIndex(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue);
+             }
         }
         
         // B. Try Scan Optimization (if no index used)

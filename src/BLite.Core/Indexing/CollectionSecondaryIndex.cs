@@ -15,7 +15,8 @@ namespace BLite.Core.Indexing;
 public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : class
 {
     private readonly CollectionIndexDefinition<T> _definition;
-    private readonly BTreeIndex _btreeIndex;
+    private readonly BTreeIndex? _btreeIndex;
+    private readonly VectorSearchIndex? _vectorIndex;
     private readonly IDocumentMapper<TId, T> _mapper;
     private bool _disposed;
 
@@ -27,7 +28,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     /// <summary>
     /// Gets the underlying BTree index (for advanced scenarios)
     /// </summary>
-    public BTreeIndex BTreeIndex => _btreeIndex;
+    public BTreeIndex? BTreeIndex => _btreeIndex;
 
     public CollectionSecondaryIndex(
         CollectionIndexDefinition<T> definition,
@@ -37,9 +38,18 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         _definition = definition ?? throw new ArgumentNullException(nameof(definition));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         
-        // Create underlying BTree index using converted options
         var indexOptions = definition.ToIndexOptions();
-        _btreeIndex = new BTreeIndex(storage, indexOptions);
+        
+        if (indexOptions.Type == IndexType.Vector)
+        {
+            _vectorIndex = new VectorSearchIndex(storage, indexOptions);
+            _btreeIndex = null;
+        }
+        else
+        {
+            _btreeIndex = new BTreeIndex(storage, indexOptions);
+            _vectorIndex = null;
+        }
     }
 
     /// <summary>
@@ -58,17 +68,29 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         if (keyValue == null)
             return; // Skip null keys
         
-        // Convert CLR object to IndexKey
-        var userKey = ConvertToIndexKey(keyValue);
-        
-        // Get document ID
-        var documentId = _mapper.GetId(document);
-        
-        // Create composite key (UserKey + DocumentIdKey) for uniqueness
-        var compositeKey = CreateCompositeKey(userKey, _mapper.ToIndexKey(documentId));
-        
-        // Insert into underlying BTree with composite key and location
-        _btreeIndex.Insert(compositeKey, location, transaction?.TransactionId);
+        if (_vectorIndex != null)
+        {
+            // Vector Index Support
+            if (keyValue is float[] singleVector)
+            {
+                _vectorIndex.Insert(singleVector, location, transaction);
+            }
+            else if (keyValue is IEnumerable<float[]> vectors)
+            {
+                foreach (var v in vectors)
+                {
+                    _vectorIndex.Insert(v, location, transaction);
+                }
+            }
+        }
+        else if (_btreeIndex != null)
+        {
+            // BTree Index logic
+            var userKey = ConvertToIndexKey(keyValue);
+            var documentId = _mapper.GetId(document);
+            var compositeKey = CreateCompositeKey(userKey, _mapper.ToIndexKey(documentId));
+            _btreeIndex.Insert(compositeKey, location, transaction?.TransactionId);
+        }
     }
 
     /// <summary>
@@ -102,7 +124,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         {
             var oldUserKey = ConvertToIndexKey(oldKey);
             var oldCompositeKey = CreateCompositeKey(oldUserKey, _mapper.ToIndexKey(documentId));
-            _btreeIndex.Delete(oldCompositeKey, oldLocation, transaction?.TransactionId);
+            _btreeIndex?.Delete(oldCompositeKey, oldLocation, transaction?.TransactionId);
         }
         
         // Insert new entry if it has a key
@@ -110,7 +132,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         {
             var newUserKey = ConvertToIndexKey(newKey);
             var newCompositeKey = CreateCompositeKey(newUserKey, _mapper.ToIndexKey(documentId));
-            _btreeIndex.Insert(newCompositeKey, newLocation, transaction?.TransactionId);
+            _btreeIndex?.Insert(newCompositeKey, newLocation, transaction?.TransactionId);
         }
     }
 
@@ -135,7 +157,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         
         // Create composite key and delete
         var compositeKey = CreateCompositeKey(userKey, _mapper.ToIndexKey(documentId));
-        _btreeIndex.Delete(compositeKey, location, transaction?.TransactionId);
+        _btreeIndex?.Delete(compositeKey, location, transaction?.TransactionId);
     }
 
     /// <summary>
@@ -149,18 +171,32 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         if (key == null)
             return null;
         
-        var userKey = ConvertToIndexKey(key);
+        if (_vectorIndex != null && key is float[] query)
+        {
+            return _vectorIndex.Search(query, 1, transaction: transaction).FirstOrDefault().Location;
+        }
+
+        if (_btreeIndex != null)
+        {
+            var userKey = ConvertToIndexKey(key);
+            var minComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: true);
+            var maxComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: false);
+            var firstEntry = _btreeIndex.Range(minComposite, maxComposite, IndexDirection.Forward, transaction?.TransactionId).FirstOrDefault();
+            return firstEntry.Location.PageId == 0 ? null : (DocumentLocation?)firstEntry.Location;
+        }
         
-        // Use range query with composite key boundaries to find ANY document with this key
-        // Min: (userKey, ObjectId.Empty)
-        // Max: (userKey, ObjectId.MaxValue)
-        var minComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: true);
-        var maxComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: false);
-        
-        // WAL-aware read: BTreeIndex.Range now accepts transaction parameter
-        var firstEntry = _btreeIndex.Range(minComposite, maxComposite, IndexDirection.Forward, transaction?.TransactionId).FirstOrDefault();
-        
-        return firstEntry.Location.PageId == 0 ? null : (DocumentLocation?)firstEntry.Location;
+        return null;
+    }
+
+    /// <summary>
+    /// Performs similarity search (only for vector indexes)
+    /// </summary>
+    public IEnumerable<VectorSearchResult> VectorSearch(float[] query, int k, int efSearch = 100, ITransaction? transaction = null)
+    {
+        if (_vectorIndex == null)
+            throw new InvalidOperationException("This index is not a vector index.");
+            
+        return _vectorIndex.Search(query, k, efSearch, transaction);
     }
 
     /// <summary>
@@ -172,6 +208,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     /// <returns>Enumerable of document locations in key order</returns>
     public IEnumerable<DocumentLocation> Range(object? minKey, object? maxKey, IndexDirection direction = IndexDirection.Forward, ITransaction? transaction = null)
     {
+        if (_btreeIndex == null) yield break;
+        
         // Handle unbounded ranges
         IndexKey actualMinKey;
         IndexKey actualMaxKey;

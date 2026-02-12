@@ -30,6 +30,12 @@ public sealed class CollectionIndexDefinition<T> where T : class
     /// Type of index structure (from existing IndexType enum)
     /// </summary>
     public IndexType Type { get; }
+
+    /// <summary>Vector dimensions (only for Vector index)</summary>
+    public int Dimensions { get; }
+
+    /// <summary>Distance metric (only for Vector index)</summary>
+    public VectorMetric Metric { get; }
     
     /// <summary>
     /// Compiled function to extract the index key from a document.
@@ -62,7 +68,9 @@ public sealed class CollectionIndexDefinition<T> where T : class
         Expression<Func<T, object>> keySelectorExpression,
         bool isUnique = false,
         IndexType type = IndexType.BTree,
-        bool isPrimary = false)
+        bool isPrimary = false,
+        int dimensions = 0,
+        VectorMetric metric = VectorMetric.Cosine)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Index name cannot be empty", nameof(name));
@@ -77,6 +85,8 @@ public sealed class CollectionIndexDefinition<T> where T : class
         IsUnique = isUnique;
         Type = type;
         IsPrimary = isPrimary;
+        Dimensions = dimensions;
+        Metric = metric;
     }
     
     /// <summary>
@@ -88,7 +98,9 @@ public sealed class CollectionIndexDefinition<T> where T : class
         {
             Type = Type,
             Unique = IsUnique,
-            Fields = PropertyPaths
+            Fields = PropertyPaths,
+            Dimensions = Dimensions,
+            Metric = Metric
         };
     }
     

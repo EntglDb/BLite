@@ -11,6 +11,9 @@ internal static class IndexOptimizer
         public object? MinValue { get; set; }
         public object? MaxValue { get; set; }
         public bool IsRange { get; set; }
+        public bool IsVectorSearch { get; set; }
+        public float[]? VectorQuery { get; set; }
+        public int K { get; set; }
     }
 
     public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes)
@@ -87,14 +90,8 @@ internal static class IndexOptimizer
              if (member.Expression == parameter && call.Arguments[0] is ConstantExpression constant && constant.Value is string prefix)
              {
                  var index = indexes.FirstOrDefault(i => Matches(i, member.Member.Name));
-                 if (index != null)
+                 if (index != null && index.Type == IndexType.BTree)
                  {
-                     // StartsWith("A") -> Range ["A", "B")
-                     // Actually prefix match: Min="A", Max="A" + MaxChar?
-                     // Or just Min="A" and Scan forward until mismatch?
-                     // BTreeIndex Range allows precise control?
-                     // For now, Min="A", Max=IncrementLastChar("A")
-                     
                      var nextPrefix = IncrementPrefix(prefix);
                      return new OptimizationResult 
                      { 
@@ -105,6 +102,29 @@ internal static class IndexOptimizer
                      };
                  }
              }
+        }
+
+        // Handle VectorSearch
+        if (expression is MethodCallExpression mcall && mcall.Method.Name == "VectorSearch")
+        {
+            // VectorSearch(this float[] vector, float[] query, int k)
+            if (mcall.Arguments[0] is MemberExpression vMember && vMember.Expression == parameter)
+            {
+                var query = EvaluateExpression<float[]>(mcall.Arguments[1]);
+                var k = EvaluateExpression<int>(mcall.Arguments[2]);
+                
+                var index = indexes.FirstOrDefault(i => i.Type == IndexType.Vector && Matches(i, vMember.Member.Name));
+                if (index != null)
+                {
+                    return new OptimizationResult
+                    {
+                        IndexName = index.Name,
+                        IsVectorSearch = true,
+                        VectorQuery = query,
+                        K = k
+                    };
+                }
+            }
         }
 
         return null;
@@ -118,10 +138,23 @@ internal static class IndexOptimizer
         return prefix.Substring(0, prefix.Length - 1) + (char)(lastChar + 1);
     }
 
+    private static T EvaluateExpression<T>(Expression expression)
+    {
+        if (expression is ConstantExpression constant)
+        {
+            return (T)constant.Value!;
+        }
+
+        // Evaluate more complex expressions (closures, properties, etc.)
+        var lambda = Expression.Lambda(expression);
+        var compiled = lambda.Compile();
+        return (T)compiled.DynamicInvoke()!;
+    }
+
     private static bool Matches(CollectionIndexInfo index, string propertyName)
     {
         if (index.PropertyPaths == null || index.PropertyPaths.Length == 0) return false;
-        return string.Equals(index.PropertyPaths[0], propertyName, StringComparison.OrdinalIgnoreCase);
+        return index.PropertyPaths[0].Equals(propertyName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static (string? propertyName, object? value, ExpressionType op) ParseSimplePredicate(Expression expression, ParameterExpression parameter)

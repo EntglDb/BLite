@@ -35,7 +35,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         // Initialize indexes from metadata
         foreach (var idxMeta in _metadata.Indexes)
         {
-            var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type);
+            var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type, idxMeta.Dimensions, idxMeta.Metric);
             var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
             _indexes[idxMeta.Name] = index;
         }
@@ -111,6 +111,25 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         return CreateIndex(definition);
     }
 
+    public CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(Expression<Func<T, TKey>> keySelector, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
+    {
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var indexName = name ?? GenerateIndexName(propertyPaths);
+
+        lock (_lock)
+        {
+            if (_indexes.TryGetValue(indexName, out var existing))
+                return existing;
+
+            var param = Expression.Parameter(typeof(T), "u");
+            var body = Expression.Convert(keySelector.Body, typeof(object));
+            var lambda = Expression.Lambda<Func<T, object>>(body, param);
+
+            var definition = new CollectionIndexDefinition<T>(indexName, propertyPaths, lambda, false, IndexType.Vector, false, dimensions, metric);
+            return CreateIndex(definition);
+        }
+    }
+
     public CollectionSecondaryIndex<TId, T> EnsureIndex(
         Expression<Func<T, object>> keySelector,
         string? name = null,
@@ -143,6 +162,33 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         var lambda = Expression.Lambda<Func<T, object>>(body, keySelector.Parameters);
 
         return EnsureIndex(lambda, name, unique);
+    }
+
+    public CollectionSecondaryIndex<TId, T> CreateVectorIndexUntyped(
+        LambdaExpression keySelector,
+        int dimensions,
+        VectorMetric metric = VectorMetric.Cosine,
+        string? name = null)
+    {
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var indexName = name ?? GenerateIndexName(propertyPaths);
+
+        lock (_lock)
+        {
+            if (_indexes.TryGetValue(indexName, out var existing))
+                return existing;
+
+            var body = keySelector.Body;
+            if (body.Type != typeof(object))
+            {
+                body = Expression.Convert(body, typeof(object));
+            }
+            
+            var lambda = Expression.Lambda<Func<T, object>>(body, keySelector.Parameters);
+
+            var definition = new CollectionIndexDefinition<T>(indexName, propertyPaths, lambda, false, IndexType.Vector, false, dimensions, metric);
+            return CreateIndex(definition);
+        }
     }
 
 
@@ -333,7 +379,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         return $"idx_{string.Join("_", propertyPaths)}";
     }
 
-    private CollectionIndexDefinition<T> RebuildDefinition(string name, string[] paths, bool isUnique, IndexType type)
+    private CollectionIndexDefinition<T> RebuildDefinition(string name, string[] paths, bool isUnique, IndexType type, int dimensions = 0, VectorMetric metric = VectorMetric.Cosine)
     {
         var param = Expression.Parameter(typeof(T), "u");
         Expression body;
@@ -351,7 +397,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         var objectBody = Expression.Convert(body, typeof(object));
         var lambda = Expression.Lambda<Func<T, object>>(objectBody, param);
         
-        return new CollectionIndexDefinition<T>(name, paths, lambda, isUnique, type);
+        return new CollectionIndexDefinition<T>(name, paths, lambda, isUnique, type, false, dimensions, metric);
     }
 
     public uint PrimaryRootPageId => _metadata.PrimaryRootPageId;
@@ -379,7 +425,9 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 Name = def.Name,
                 IsUnique = def.IsUnique,
                 Type = def.Type,
-                PropertyPaths = def.PropertyPaths
+                PropertyPaths = def.PropertyPaths,
+                Dimensions = def.Dimensions,
+                Metric = def.Metric
             });
         }
     }
@@ -423,7 +471,7 @@ public static class ExpressionAnalyzer
     /// Extracts property paths from a lambda expression.
     /// Supports simple property access (p => p.Age) and anonymous types (p => new { p.City, p.Age }).
     /// </summary>
-    public static string[] ExtractPropertyPaths<T, TKey>(Expression<Func<T, TKey>> expression)
+    public static string[] ExtractPropertyPaths(LambdaExpression expression)
     {
         if (expression.Body is MemberExpression memberExpr)
         {
