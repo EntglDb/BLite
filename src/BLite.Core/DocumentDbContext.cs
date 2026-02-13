@@ -13,6 +13,7 @@ namespace BLite.Core;
 public abstract partial class DocumentDbContext : IDisposable
 {
     public readonly StorageEngine _storage;
+    internal readonly CDC.ChangeStreamDispatcher _cdc;
     public bool _disposed;
     
     /// <summary>
@@ -32,6 +33,8 @@ public abstract partial class DocumentDbContext : IDisposable
             throw new ArgumentNullException(nameof(databasePath));
 
         _storage = new StorageEngine(databasePath, config);
+        _cdc = new CDC.ChangeStreamDispatcher();
+        _storage.RegisterCdc(_cdc);
 
         // Initialize model before collections
         var modelBuilder = new ModelBuilder();
@@ -99,6 +102,7 @@ public abstract partial class DocumentDbContext : IDisposable
         _disposed = true;
         
         _storage?.Dispose();
+        _cdc?.Dispose();
         
         GC.SuppressFinalize(this);
     }

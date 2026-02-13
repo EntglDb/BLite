@@ -13,6 +13,7 @@ public sealed class Transaction : ITransaction
     private readonly IsolationLevel _isolationLevel;
     private readonly DateTime _startTime;
     private readonly StorageEngine _storage;
+    private readonly List<CDC.InternalChangeEvent> _pendingChanges = new();
     private TransactionState _state;
     private bool _disposed;
 
@@ -25,6 +26,11 @@ public sealed class Transaction : ITransaction
         _isolationLevel = isolationLevel;
         _startTime = DateTime.UtcNow;
         _state = TransactionState.Active;
+    }
+
+    internal void AddChange(CDC.InternalChangeEvent change)
+    {
+        _pendingChanges.Add(change);
     }
 
     public ulong TransactionId => _transactionId;
@@ -76,6 +82,15 @@ public sealed class Transaction : ITransaction
         _storage.CommitTransaction(_transactionId);
 
         _state = TransactionState.Committed;
+
+        // Publish CDC events after successful commit
+        if (_pendingChanges.Count > 0 && _storage.Cdc != null)
+        {
+            foreach (var change in _pendingChanges)
+            {
+                _storage.Cdc.Publish(change);
+            }
+        }
     }
 
     public async Task CommitAsync(CancellationToken ct = default)
@@ -87,6 +102,15 @@ public sealed class Transaction : ITransaction
         await _storage.CommitTransactionAsync(_transactionId, ct);
 
         _state = TransactionState.Committed;
+
+        // Publish CDC events after successful commit
+        if (_pendingChanges.Count > 0 && _storage.Cdc != null)
+        {
+            foreach (var change in _pendingChanges)
+            {
+                _storage.Cdc.Publish(change);
+            }
+        }
     }
 
     /// <summary>
@@ -114,6 +138,7 @@ public sealed class Transaction : ITransaction
         if (_state == TransactionState.Committed)
             throw new InvalidOperationException("Cannot rollback committed transaction");
 
+        _pendingChanges.Clear();
         _storage.RollbackTransaction(_transactionId);
         _state = TransactionState.Aborted;
         

@@ -1,9 +1,11 @@
 <Solution>
   <Folder Name="/Elementi di soluzione/">
+    <File Path="C-BSON.md" />
     <File Path="CONTRIBUTING.md" />
     <File Path="Directory.Build.props" />
     <File Path="LICENSE.txt" />
     <File Path="README.md" />
+    <File Path="RFC.md" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/BLite.Benchmark/BLite.Benchmark.csproj" />

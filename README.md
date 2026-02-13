@@ -87,6 +87,27 @@ var area = db.Stores.AsQueryable()
     .ToList();
 ```
 
+### 📡 Change Data Capture (CDC)
+Real-time event streaming for database changes with transactional consistency.
+
+- **Zero-Allocation**: Events are only captured when watchers exist; no overhead when disabled.
+- **Transactional**: Events fire only after successful commit, never on rollback.
+- **Scalable**: Uses Channel-per-subscriber architecture to support thousands of concurrent listeners.
+
+```csharp
+// Watch for changes in a collection
+using var subscription = db.People.Watch(capturePayload: true)
+    .Subscribe(e => 
+    {
+        Console.WriteLine($"{e.Type}: {e.DocumentId}");
+        if (e.Entity != null) 
+            Console.WriteLine($"  Name: {e.Entity.Name}");
+    });
+
+// Perform operations - events fire after commit
+db.People.Insert(new Person { Id = 1, Name = "Alice" });
+```
+
 ### 🛡️ Transactions & ACID
 - **Atomic**: Multi-document transactions.
 - **Durable**: WAL ensures data safety even in power loss.

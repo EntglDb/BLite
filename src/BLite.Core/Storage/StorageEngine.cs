@@ -17,6 +17,7 @@ public sealed partial class StorageEngine : IDisposable
 {
     private readonly PageFile _pageFile;
     private readonly WriteAheadLog _wal;
+    private CDC.ChangeStreamDispatcher? _cdc;
     
     // WAL cache: TransactionId → (PageId → PageData)
     // Stores uncommitted writes for "Read Your Own Writes" isolation
@@ -112,4 +113,11 @@ public sealed partial class StorageEngine : IDisposable
         _pageFile?.Dispose();
         _commitLock?.Dispose();
     }
+
+    internal void RegisterCdc(CDC.ChangeStreamDispatcher cdc)
+    {
+        _cdc = cdc;
+    }
+
+    internal CDC.ChangeStreamDispatcher? Cdc => _cdc;
 }
