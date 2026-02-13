@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>BLite</PackageId>
+    <Version>1.0.0</Version>
+    <Description>High-Performance BSON Database Engine for .NET 10</Description>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>false</SuppressDependenciesWhenPacking>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\BLite.Bson\BLite.Bson.csproj" />
+    <ProjectReference Include="..\BLite.SourceGenerators\BLite.SourceGenerators.csproj" 
+                      OutputItemType="Analyzer" 
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="_._" Pack="true" PackagePath="lib/net10.0/_._" />
+  </ItemGroup>
+
+</Project>
