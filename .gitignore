@@ -1,7 +1,38 @@
+# .NET
 bin/
 obj/
-*.user
 .vs/
 .vscode/
+*.user
+*.suo
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# BenchmarkDotNet
 BenchmarkDotNet.Artifacts/
 
+# Node.js / Web
+node_modules/
+dist/
+build/
+.output/
+.nuxt/
+.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Environmental Variables
+.env
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
