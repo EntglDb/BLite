@@ -1,0 +1,116 @@
+/* BLite "Red Dawn" Design System */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* Colors - Red Dawn Theme */
+  --bg-primary: #0F0F0F;
+  --bg-secondary: #1a1414;
+  --bg-glass: rgba(15, 15, 15, 0.7);
+
+  --text-primary: #f2f2f4;
+  --text-secondary: #a1a1aa;
+  --text-muted: #52525b;
+
+  /* Brand Accents - Red Dawn */
+  --blite-red: #E74C3C;
+  --blite-red-dark: #641E16;
+  --blite-red-glow: #c0392b;
+  --accent-secondary: #06b6d4;
+  /* Cyan for contrast */
+  --accent-tech-blue: #3b82f6;
+
+  /* Surface */
+  --border-color: #27272a;
+  --surface-hover: #18181b;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Layout */
+  --container-width: 1200px;
+  --header-height: 70px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+/* Utilities */
+.container {
+  max-width: var(--container-width);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-gradient {
+  background: linear-gradient(135deg, var(--blite-red) 0%, var(--blite-red-glow) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.title-gradient {
+  background: linear-gradient(135deg, #fff 0%, var(--blite-red) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.glass-panel {
+  background: var(--bg-glass);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.6s ease-out forwards;
+}
+
+@keyframes glowPulse {
+
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+}

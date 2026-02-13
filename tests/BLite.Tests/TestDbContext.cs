@@ -50,5 +50,9 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<GeoEntity>()
             .ToCollection("geo_items")
             .HasSpatialIndex(x => x.Location, name: "idx_spatial");
+
+        modelBuilder.Entity<Order>()
+            .HasKey(x => x.Id)
+            .HasConversion<OrderIdConverter>();
     }
 }

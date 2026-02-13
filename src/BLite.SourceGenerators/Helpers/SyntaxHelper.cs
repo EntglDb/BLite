@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace BLite.SourceGenerators.Helpers
@@ -44,6 +45,28 @@ namespace BLite.SourceGenerators.Helpers
             }
             return null;
         }
+
+        public static string? GetPropertyName(ExpressionSyntax? expression)
+        {
+            if (expression == null) return null;
+            if (expression is LambdaExpressionSyntax lambda)
+            {
+                return GetPropertyName(lambda.Body as ExpressionSyntax);
+            }
+            if (expression is MemberAccessExpressionSyntax memberAccess)
+            {
+                return memberAccess.Name.Identifier.Text;
+            }
+            if (expression is PrefixUnaryExpressionSyntax prefixUnary && prefixUnary.Operand is MemberAccessExpressionSyntax prefixMember)
+            {
+                return prefixMember.Name.Identifier.Text;
+            }
+             if (expression is PostfixUnaryExpressionSyntax postfixUnary && postfixUnary.Operand is MemberAccessExpressionSyntax postfixMember)
+            {
+                return postfixMember.Name.Identifier.Text;
+            }
+            return null;
+        }
         
         public static string GetFullName(INamedTypeSymbol symbol)
         {
@@ -70,7 +93,7 @@ namespace BLite.SourceGenerators.Helpers
                 return type.ToDisplayString();
             }
             
-            return type.Name;
+            return type.ToDisplayString();
         }
 
         public static bool IsNullableType(ITypeSymbol type)
@@ -127,7 +150,7 @@ namespace BLite.SourceGenerators.Helpers
                 
             if (type.TypeKind == TypeKind.Enum)
                 return true;
-
+ 
             if (type is INamedTypeSymbol nt && nt.IsTupleType)
                 return true;
                 

@@ -13,17 +13,16 @@ namespace BLite.SourceGenerators
         {
             var sb = new StringBuilder();
             var mapperName = GetMapperName(entity.FullTypeName);
+            var keyProp = entity.Properties.FirstOrDefault(p => p.IsKey);
             var isRoot = entity.IdProperty != null;
             
             // Class Declaration
             if (isRoot)
             {
-                var keyProp = entity.Properties.FirstOrDefault(p => p.IsKey);
-                var keyType = keyProp?.TypeName ?? "ObjectId";
-                var baseClass = GetBaseMapperClass(keyType);
+                var baseClass = GetBaseMapperClass(keyProp);
                 // Ensure FullTypeName has global:: prefix if not already present (assuming FullTypeName is fully qualified)
                 var entityType = $"global::{entity.FullTypeName}";
-                sb.AppendLine($"    public class {mapperName} : global::BLite.Core.Collections.{baseClass}<{entityType}>");
+                sb.AppendLine($"    public class {mapperName} : global::BLite.Core.Collections.{baseClass}{entityType}>");
             }
             else
             {
@@ -32,11 +31,22 @@ namespace BLite.SourceGenerators
             
             sb.AppendLine($"    {{");
             
+            // Converter instance
+            if (keyProp?.ConverterTypeName != null)
+            {
+                sb.AppendLine($"        private readonly global::{keyProp.ConverterTypeName} _idConverter = new();");
+                sb.AppendLine();
+            }
+
             // Collection Name (only for root)
             if (isRoot)
             {
                 sb.AppendLine($"        public override string CollectionName => \"{entity.CollectionName}\";");
                 sb.AppendLine();
+            }
+            else if (entity.Properties.All(p => !p.IsKey))
+            {
+                sb.AppendLine($"// #warning Entity '{entity.Name}' has no defined primary key. Mapper may not support all features.");
             }
 
             // Serialize Method
@@ -72,17 +82,27 @@ namespace BLite.SourceGenerators
             
             foreach (var prop in entity.Properties)
             {
-                if (prop.IsKey && prop.Name == "Id")
+                if (prop.IsKey && (prop.Name == "Id" || prop.Name == "_id"))
                 {
-                    // Use dynamic write method for Id based on its type
-                    var idWriteMethod = GetPrimitiveWriteMethod(prop, allowKey: true);
-                    if (idWriteMethod != null)
+                    if (prop.ConverterTypeName != null)
                     {
-                        sb.AppendLine($"            writer.{idWriteMethod}(\"_id\", entity.Id);");
+                        var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
+                        var idWriteMethod = GetPrimitiveWriteMethod(providerProp, allowKey: true);
+                        sb.AppendLine($"            writer.{idWriteMethod}(\"_id\", _idConverter.ConvertToProvider(entity.{prop.Name}));");
                     }
                     else
                     {
-                         sb.AppendLine($"            // Unsupported Id type: {prop.TypeName}");
+                        // Use dynamic write method for Id based on its type
+                        var idWriteMethod = GetPrimitiveWriteMethod(prop, allowKey: true);
+                        if (idWriteMethod != null)
+                        {
+                            sb.AppendLine($"            writer.{idWriteMethod}(\"_id\", entity.{prop.Name});");
+                        }
+                        else
+                        {
+                            sb.AppendLine($"#warning Unsupported Id type for '{prop.Name}': {prop.TypeName}. Serialization of '_id' will fail.");
+                            sb.AppendLine($"            // Unsupported Id type: {prop.TypeName}");
+                        }
                     }
                     continue;
                 }
@@ -187,10 +207,25 @@ namespace BLite.SourceGenerators
                 var writeMethod = GetPrimitiveWriteMethod(prop, allowKey: false);
                 if (writeMethod != null)
                 {
-                    sb.AppendLine($"            writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
+                    if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String")
+                    {
+                        sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                        sb.AppendLine($"            {{");
+                        sb.AppendLine($"                writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
+                        sb.AppendLine($"            }}");
+                        sb.AppendLine($"            else");
+                        sb.AppendLine($"            {{");
+                        sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                        sb.AppendLine($"            }}");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"            writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
+                    }
                 }
                 else
                 {
+                    sb.AppendLine($"#warning Property '{prop.Name}' of type '{prop.TypeName}' is not directly supported and has no converter. It will be skipped during serialization.");
                     sb.AppendLine($"            // Unsupported type: {prop.TypeName} for {prop.Name}");
                 }
             }
@@ -214,9 +249,8 @@ namespace BLite.SourceGenerators
             // Declare temp variables for all properties
             foreach(var prop in entity.Properties)
             {
-                var type = prop.IsKey ? (prop.TypeName == "ObjectId" ? "global::BLite.Bson.ObjectId" : prop.TypeName) : prop.TypeName;
-                if (prop.TypeName == "Guid") type = "global::System.Guid";
-                if (prop.TypeName == "DateTime") type = "global::System.DateTime";
+                var baseType = QualifyType(prop.TypeName.TrimEnd('?'));
+
                  // Handle collections init
                 if (prop.IsCollection)
                 {
@@ -226,7 +260,7 @@ namespace BLite.SourceGenerators
                 }
                 else
                 {
-                    sb.AppendLine($"            {type} {prop.Name.ToLower()} = default;");
+                    sb.AppendLine($"            {baseType}? {prop.Name.ToLower()} = default;");
                 }
             }
             
@@ -266,7 +300,7 @@ namespace BLite.SourceGenerators
             {
                 var val = prop.Name.ToLower();
                 if (prop.IsArray) val += ".ToArray()"; // Simplified: convert list to array
-                sb.AppendLine($"                {prop.Name} = {val},");
+                sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
             }
             sb.AppendLine($"            }};");
             sb.AppendLine($"        }}");
@@ -309,6 +343,12 @@ namespace BLite.SourceGenerators
                  }
                  sb.AppendLine($"                        }}");
              }
+             else if (prop.IsKey && prop.ConverterTypeName != null)
+             {
+                 var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
+                 var readMethod = GetPrimitiveReadMethod(providerProp);
+                 sb.AppendLine($"                        {localVar} = _idConverter.ConvertFromProvider(reader.{readMethod}());");
+             }
              else if (prop.IsNestedObject)
              {
                  sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
@@ -326,10 +366,10 @@ namespace BLite.SourceGenerators
              {
                  var readMethod = GetPrimitiveReadMethod(prop);
                  if (readMethod != null)
-                {
+                 {
                     var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
                     sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}();");
-                }
+                 }
                  else
                  {
                      sb.AppendLine($"                        reader.SkipValue({bsonTypeVar});");
@@ -366,24 +406,49 @@ namespace BLite.SourceGenerators
             }
 
             var entityType = $"global::{entity.FullTypeName}";
-            sb.AppendLine($"        public override {keyType} GetId({entityType} entity) => entity.Id;");
-            sb.AppendLine($"        public override void SetId({entityType} entity, {keyType} id) => entity.Id = id;");
+            var qualifiedKeyType = keyType.StartsWith("global::") ? keyType : (keyProp?.ConverterTypeName != null ? $"global::{keyProp.TypeName}" : keyType);
+            
+            var propName = keyProp?.Name ?? "Id";
+            sb.AppendLine($"        public override {qualifiedKeyType} GetId({entityType} entity) => entity.{propName};");
+            sb.AppendLine($"        public override void SetId({entityType} entity, {qualifiedKeyType} id) => entity.{propName} = id;");
+
+            if (keyProp?.ConverterTypeName != null)
+            {
+                var providerType = keyProp.ProviderTypeName ?? "string";
+                // Normalize providerType
+                switch (providerType)
+                {
+                    case "Int32": providerType = "int"; break;
+                    case "Int64": providerType = "long"; break;
+                    case "String": providerType = "string"; break;
+                    case "Guid": providerType = "global::System.Guid"; break;
+                    case "ObjectId": providerType = "global::BLite.Bson.ObjectId"; break;
+                }
+
+                sb.AppendLine();
+                sb.AppendLine($"        public override global::BLite.Core.Indexing.IndexKey ToIndexKey({qualifiedKeyType} id) => ");
+                sb.AppendLine($"            global::BLite.Core.Indexing.IndexKey.Create(_idConverter.ConvertToProvider(id));");
+                sb.AppendLine();
+                sb.AppendLine($"        public override {qualifiedKeyType} FromIndexKey(global::BLite.Core.Indexing.IndexKey key) => ");
+                sb.AppendLine($"            _idConverter.ConvertFromProvider(key.As<{providerType}>());");
+            }
         }
 
-        private static string GetBaseMapperClass(string keyType)
+        private static string GetBaseMapperClass(PropertyInfo? keyProp)
         {
-            switch (keyType)
+            if (keyProp?.ConverterTypeName != null)
             {
-                case "int": 
-                case "Int32": return "Int32MapperBase";
-                case "long": 
-                case "Int64": return "Int64MapperBase";
-                case "string": 
-                case "String": return "StringMapperBase";
-                case "Guid": return "GuidMapperBase";
-                case "ObjectId": return "ObjectIdMapperBase";
-                default: return "ObjectIdMapperBase"; 
+                return $"DocumentMapperBase<global::{keyProp.TypeName}, ";
             }
+
+            var keyType = keyProp?.TypeName ?? "ObjectId";
+            if (keyType.EndsWith("Int32") || keyType == "int") return "Int32MapperBase<";
+            if (keyType.EndsWith("Int64") || keyType == "long") return "Int64MapperBase<";
+            if (keyType.EndsWith("String") || keyType == "string") return "StringMapperBase<";
+            if (keyType.EndsWith("Guid")) return "GuidMapperBase<";
+            if (keyType.EndsWith("ObjectId")) return "ObjectIdMapperBase<";
+
+            return "ObjectIdMapperBase<";
         }
 
         private static string? GetPrimitiveWriteMethod(PropertyInfo prop, bool allowKey = false)
@@ -396,31 +461,23 @@ namespace BLite.SourceGenerators
 
             if (typeName.Contains("double") && typeName.Contains(",") && typeName.StartsWith("(") && typeName.EndsWith(")"))
             {
-                // Likely a (double, double) tuple - use specialized WriteCoordinates
                 return "WriteCoordinates";
             }
 
-            switch (typeName)
-            {
-                case "int": 
-                case "Int32": return "WriteInt32";
-                case "long": 
-                case "Int64": return "WriteInt64";
-                case "string": 
-                case "String": return "WriteString";
-                case "bool": 
-                case "Boolean": return "WriteBoolean";
-                case "double": 
-                case "Double": return "WriteDouble";
-                case "float":
-                case "Single": return "WriteDouble"; // Map float to double in BSON
-                case "decimal": 
-                case "Decimal": return "WriteDecimal128"; // Corrected Name
-                case "DateTime": return "WriteDateTime";
-                case "Guid": return "WriteGuid"; // We need to Ensure WriteGuid exists or map to String/Binary
-                case "ObjectId": return allowKey ? "WriteObjectId" : "WriteObjectId"; 
-                default: return null;
-            }
+            var cleanType = typeName.TrimEnd('?').Trim();
+
+            if (cleanType.EndsWith("Int32") || cleanType == "int") return "WriteInt32";
+            if (cleanType.EndsWith("Int64") || cleanType == "long") return "WriteInt64";
+            if (cleanType.EndsWith("String") || cleanType == "string") return "WriteString";
+            if (cleanType.EndsWith("Boolean") || cleanType == "bool") return "WriteBoolean";
+            if (cleanType.EndsWith("Single") || cleanType == "float") return "WriteDouble";
+            if (cleanType.EndsWith("Double") || cleanType == "double") return "WriteDouble";
+            if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return "WriteDecimal128";
+            if (cleanType.EndsWith("DateTime")) return "WriteDateTime";
+            if (cleanType.EndsWith("Guid")) return "WriteGuid";
+            if (cleanType.EndsWith("ObjectId")) return "WriteObjectId";
+
+            return null;
         }
         
         private static string? GetPrimitiveReadMethod(PropertyInfo prop)
@@ -433,30 +490,88 @@ namespace BLite.SourceGenerators
 
             if (typeName.Contains("double") && typeName.Contains(",") && typeName.StartsWith("(") && typeName.EndsWith(")"))
             {
-                // Likely a (double, double) tuple - use specialized ReadCoordinates
                 return "ReadCoordinates";
             }
 
-             switch (typeName)
+            var cleanType = typeName.TrimEnd('?').Trim();
+
+            if (cleanType.EndsWith("Int32") || cleanType == "int") return "ReadInt32";
+            if (cleanType.EndsWith("Int64") || cleanType == "long") return "ReadInt64";
+            if (cleanType.EndsWith("String") || cleanType == "string") return "ReadString";
+            if (cleanType.EndsWith("Boolean") || cleanType == "bool") return "ReadBoolean";
+            if (typeName.EndsWith("Single") || typeName == "float") return "ReadDouble";
+            if (typeName.EndsWith("Double") || typeName == "double") return "ReadDouble";
+            if (typeName.EndsWith("Decimal") || typeName == "decimal") return "ReadDecimal128";
+            if (typeName.EndsWith("DateTime")) return "ReadDateTime";
+            if (typeName.EndsWith("Guid")) return "ReadGuid";
+            if (typeName.EndsWith("ObjectId")) return "ReadObjectId";
+
+            return null;
+        }
+
+        private static string QualifyType(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "object";
+            if (typeName.StartsWith("global::")) return typeName;
+            
+            var isNullable = typeName.EndsWith("?");
+            var baseType = typeName.TrimEnd('?').Trim();
+
+            if (baseType.StartsWith("(") && baseType.EndsWith(")")) return typeName; // Tuple
+
+            switch (baseType)
             {
-                case "int": 
-                case "Int32": return "ReadInt32";
-                case "long": 
-                case "Int64": return "ReadInt64";
-                case "string": 
-                case "String": return "ReadString";
-                case "bool": 
-                case "Boolean": return "ReadBoolean";
-                case "double": 
-                case "Double": return "ReadDouble";
+                case "int":
+                case "long":
+                case "string":
+                case "bool":
+                case "double":
                 case "float":
-                case "Single": return "ReadDouble"; // Map float to double in BSON
-                case "decimal": 
-                case "Decimal": return "ReadDecimal128"; // Corrected Name
-                case "DateTime": return "ReadDateTime";
-                case "Guid": return "ReadGuid"; // We need to Ensure ReadGuid exists
-                case "ObjectId": return "ReadObjectId";
-                default: return null;
+                case "decimal":
+                case "byte":
+                case "sbyte":
+                case "short":
+                case "ushort":
+                case "uint":
+                case "ulong":
+                case "char":
+                case "object":
+                case "dynamic":
+                case "void":
+                    return baseType + (isNullable ? "?" : "");
+                case "Guid": return "global::System.Guid" + (isNullable ? "?" : "");
+                case "DateTime": return "global::System.DateTime" + (isNullable ? "?" : "");
+                case "ObjectId": return "global::BLite.Bson.ObjectId" + (isNullable ? "?" : "");
+                default:
+                    return $"global::{typeName}";
+            }
+        }
+
+        private static bool IsPrimitive(string typeName)
+        {
+            var cleanType = typeName.TrimEnd('?').Trim();
+            if (cleanType.StartsWith("(") && cleanType.EndsWith(")")) return true;
+
+            switch (cleanType)
+            {
+                case "int":
+                case "long":
+                case "string":
+                case "bool":
+                case "double":
+                case "float":
+                case "decimal":
+                case "byte":
+                case "sbyte":
+                case "short":
+                case "ushort":
+                case "uint":
+                case "ulong":
+                case "char":
+                case "object":
+                    return true;
+                default:
+                    return false;
             }
         }
     }

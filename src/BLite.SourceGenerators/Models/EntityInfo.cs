@@ -45,6 +45,8 @@ namespace BLite.SourceGenerators.Models
         public bool IsCollectionItemNested { get; set; }
         public string? NestedTypeName { get; set; }
         public string? NestedTypeFullName { get; set; }
+        public string? ConverterTypeName { get; set; }
+        public string? ProviderTypeName { get; set; }
     }
 
     public class NestedTypeInfo

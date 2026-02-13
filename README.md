@@ -87,17 +87,24 @@ var area = db.Stores.AsQueryable()
     .ToList();
 ```
 
-### 📡 Change Data Capture (CDC)
-Real-time event streaming for database changes with transactional consistency.
-
-- **Zero-Allocation**: Events are only captured when watchers exist; no overhead when disabled.
-- **Transactional**: Events fire only after successful commit, never on rollback.
-- **Scalable**: Uses Channel-per-subscriber architecture to support thousands of concurrent listeners.
+### 🆔 Custom ID Converters (ValueObjects)
+Native support for custom primary key types using `ValueConverter<TModel, TProvider>`. Configure them easily via the Fluent API.
 
 ```csharp
-// Watch for changes in a collection
-using var subscription = db.People.Watch(capturePayload: true)
-    .Subscribe(e => 
+// 1. Define your ValueObject and Converter
+public record OrderId(string Value);
+public class OrderIdConverter : ValueConverter<OrderId, string> { ... }
+
+// 2. Configure in OnModelCreating
+modelBuilder.Entity<Order>()
+    .Property(x => x.Id)
+    .HasConversion<OrderIdConverter>();
+
+// 3. Use it naturally
+var order = collection.FindById(new OrderId("ORD-123"));
+```
+
+### 📡 Change Data Capture (CDC)
     {
         Console.WriteLine($"{e.Type}: {e.DocumentId}");
         if (e.Entity != null) 

@@ -10,6 +10,7 @@ public class EntityTypeBuilder<T> where T : class
     public LambdaExpression? PrimaryKeySelector { get; private set; }
     public bool ValueGeneratedOnAdd { get; private set; }
     public string? PrimaryKeyName { get; private set; }
+    public Dictionary<string, Type> PropertyConverters { get; } = new();
 
     public EntityTypeBuilder<T> ToCollection(string name)
     {
@@ -42,6 +43,15 @@ public class EntityTypeBuilder<T> where T : class
         return this;
     }
 
+    public EntityTypeBuilder<T> HasConversion<TConverter>()
+    {
+        if (!string.IsNullOrEmpty(PrimaryKeyName))
+        {
+            PropertyConverters[PrimaryKeyName] = typeof(TConverter);
+        }
+        return this;
+    }
+
     public PropertyBuilder Property<TProperty>(Expression<Func<T, TProperty>> propertyExpression)
     {
         var propertyName = ExpressionAnalyzer.ExtractPropertyPaths(propertyExpression).FirstOrDefault();
@@ -64,6 +74,15 @@ public class EntityTypeBuilder<T> where T : class
             if (_propertyName == _parent.PrimaryKeyName)
             {
                 _parent.ValueGeneratedOnAdd = true;
+            }
+            return this;
+        }
+
+        public PropertyBuilder HasConversion<TConverter>()
+        {
+            if (!string.IsNullOrEmpty(_propertyName))
+            {
+                _parent.PropertyConverters[_propertyName] = typeof(TConverter);
             }
             return this;
         }
