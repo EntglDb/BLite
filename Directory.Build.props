@@ -6,5 +6,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ImplicitUsings>enable</ImplicitUsings>
+    
+    <!-- NuGet Metadata -->
+    <Version>1.0.0</Version>
+    <Authors>BLite Team</Authors>
+    <Description>High-Performance BSON Database Engine for .NET</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/mrdevrobot/BLite</RepositoryUrl>
+    <PackageTags>database;embedded;bson;nosql;net10;zero-allocation</PackageTags>
   </PropertyGroup>
 </Project>
