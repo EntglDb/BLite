@@ -12,7 +12,6 @@
     <Project Path="src/BLite.Bson/BLite.Bson.csproj" />
     <Project Path="src/BLite.Core/BLite.Core.csproj" />
     <Project Path="src/BLite.Debug/BLite.Debug.csproj" />
-    <Project Path="src/BLite.Generators/BLite.Generators.csproj" />
     <Project Path="src/BLite.SourceGenerators/BLite.SourceGenerators.csproj" />
   </Folder>
   <Folder Name="/tests/">
