@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 using static BLite.Tests.SchemaTests;
@@ -12,23 +13,19 @@ public class BulkOperationsTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly StorageEngine _storage;
-    private readonly DocumentCollection<User> _collection;
+    private readonly TestDbContext _dbContext;
 
     public BulkOperationsTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_bulk_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_bulk_{Guid.NewGuid()}.wal");
         
-        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-
-        var mapper = new BLite_Tests_UserMapper();
-        _collection = new DocumentCollection<User>(_storage, mapper);
+        _dbContext = new TestDbContext(_dbPath);
     }
 
     public void Dispose()
     {
-        _storage.Dispose();
+        _dbContext.Dispose();
     }
 
     [Fact]
@@ -40,7 +37,8 @@ public class BulkOperationsTests : IDisposable
         {
             users.Add(new User { Id = ObjectId.NewObjectId(), Name = $"User {i}", Age = 20 });
         }
-        _collection.InsertBulk(users);
+        _dbContext.Users.InsertBulk(users);
+        _dbContext.SaveChanges();
 
         // Modify users
         foreach (var u in users)
@@ -50,7 +48,8 @@ public class BulkOperationsTests : IDisposable
         }
 
         // Act
-        var updatedCount = _collection.UpdateBulk(users);
+        var updatedCount = _dbContext.Users.UpdateBulk(users);
+        _dbContext.SaveChanges();
 
         // Assert
         Assert.Equal(100, updatedCount);
@@ -58,7 +57,7 @@ public class BulkOperationsTests : IDisposable
         // Verify changes
         foreach (var u in users)
         {
-            var stored = _collection.FindById(u.Id);
+            var stored = _dbContext.Users.FindById(u.Id);
             Assert.NotNull(stored);
             Assert.Equal(30, stored.Age);
             Assert.Equal(u.Name, stored.Name);
@@ -74,12 +73,14 @@ public class BulkOperationsTests : IDisposable
         {
             users.Add(new User { Id = ObjectId.NewObjectId(), Name = $"User {i}", Age = 20 });
         }
-        _collection.InsertBulk(users);
+        _dbContext.Users.InsertBulk(users);
+        _dbContext.SaveChanges();
 
         var idsToDelete = users.Take(50).Select(u => u.Id).ToList();
 
         // Act
-        var deletedCount = _collection.DeleteBulk(idsToDelete);
+        var deletedCount = _dbContext.Users.DeleteBulk(idsToDelete);
+        _dbContext.SaveChanges();
 
         // Assert
         Assert.Equal(50, deletedCount);
@@ -87,19 +88,19 @@ public class BulkOperationsTests : IDisposable
         // Verify deleted
         foreach (var id in idsToDelete)
         {
-            Assert.Null(_collection.FindById(id));
+            Assert.Null(_dbContext.Users.FindById(id));
         }
 
         // Verify remaining
         var remaining = users.Skip(50).ToList();
         foreach (var u in remaining)
         {
-            Assert.NotNull(_collection.FindById(u.Id));
+            Assert.NotNull(_dbContext.Users.FindById(u.Id));
         }
         
         // Verify count
         // Note: Count() is not fully implemented efficiently yet (iterates everything), but FindAll().Count() works
-        Assert.Equal(50, _collection.FindAll().Count());
+        Assert.Equal(50, _dbContext.Users.FindAll().Count());
     }
 
     [Fact]
@@ -107,17 +108,18 @@ public class BulkOperationsTests : IDisposable
     {
         // Arrange
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Txn User", Age = 20 };
-        _collection.Insert(user);
+        _dbContext.Users.Insert(user);
+        _dbContext.SaveChanges();
 
-        Assert.NotNull(_collection.FindById(user.Id));
+        Assert.NotNull(_dbContext.Users.FindById(user.Id));
 
-        using (var txn = _collection.BeginTransaction())
+        using (var txn = _dbContext.BeginTransaction())
         {
-            _collection.DeleteBulk(new[] { user.Id }, txn);
+            _dbContext.Users.DeleteBulk(new[] { user.Id });
             txn.Rollback();
         }
 
         // Assert: Should still exist
-        Assert.NotNull(_collection.FindById(user.Id));
+        Assert.NotNull(_dbContext.Users.FindById(user.Id));
     }
 }

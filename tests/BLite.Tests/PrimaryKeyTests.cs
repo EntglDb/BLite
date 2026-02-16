@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Metadata;
+using BLite.Shared;
 using System;
 using System.Buffers;
 
@@ -28,6 +29,7 @@ public class PrimaryKeyTests : IDisposable
 
         var entity = new IntEntity { Id = 1, Name = "Test 1" };
         db.IntEntities.Insert(entity);
+        db.SaveChanges();
 
         var retrieved = db.IntEntities.FindById(1);
         Assert.NotNull(retrieved);
@@ -51,6 +53,7 @@ public class PrimaryKeyTests : IDisposable
 
         var entity = new StringEntity { Id = "key1", Value = "Value 1" };
         db.StringEntities.Insert(entity);
+        db.SaveChanges();
 
         var retrieved = db.StringEntities.FindById("key1");
         Assert.NotNull(retrieved);
@@ -58,6 +61,7 @@ public class PrimaryKeyTests : IDisposable
         Assert.Equal("Value 1", retrieved.Value);
 
         db.StringEntities.Delete("key1");
+        db.SaveChanges();
         Assert.Null(db.StringEntities.FindById("key1"));
     }
 
@@ -69,12 +73,14 @@ public class PrimaryKeyTests : IDisposable
         var id = Guid.NewGuid();
         var entity = new GuidEntity { Id = id, Name = "Guid Test" };
         db.GuidEntities.Insert(entity);
+        db.SaveChanges();
 
         var retrieved = db.GuidEntities.FindById(id);
         Assert.NotNull(retrieved);
         Assert.Equal(id, retrieved.Id);
 
         db.GuidEntities.Delete(id);
+        db.SaveChanges();
         Assert.Null(db.GuidEntities.FindById(id));
     }
 }

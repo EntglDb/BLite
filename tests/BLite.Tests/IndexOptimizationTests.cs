@@ -21,7 +21,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = new[] { "Age" } }
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Age == 30;
@@ -41,7 +41,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = new[] { "Age" } }
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Age > 25;
@@ -61,7 +61,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = new[] { "Age" } }
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Age < 50;
@@ -81,7 +81,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = new[] { "Age" } }
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Age > 20 && x.Age < 40;
@@ -101,7 +101,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = new[] { "Name" }, Type = IndexType.BTree }
+                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = ["Name"], Type = IndexType.BTree }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Name.StartsWith("Ali");
@@ -122,7 +122,7 @@ namespace BLite.Tests
         {
             var indexes = new List<CollectionIndexInfo>
             {
-                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = new[] { "Age" } }
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Name == "Alice"; // Name is not indexed

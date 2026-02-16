@@ -1,50 +1,14 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
 using BLite.Bson;
-using BLite.Core.Collections;
-using Xunit;
+using BLite.Shared;
+using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 
 namespace BLite.Tests
 {
-    [Table("custom_users", Schema = "test")]
-    public class AnnotatedUser
-    {
-        [Key]
-        public ObjectId Id { get; set; }
-
-        [Required]
-        [Column("display_name")]
-        [StringLength(50, MinimumLength = 3)]
-        public string Name { get; set; } = "";
-
-        [Range(0, 150)]
-        public int Age { get; set; }
-
-        [NotMapped]
-        public string ComputedInfo => $"{Name} ({Age})";
-
-        [Column(TypeName = "geopoint")]
-        public (double Lat, double Lon) Location { get; set; }
-    }
-
-    public partial class TestAttributeContext : global::BLite.Core.DocumentDbContext
-    {
-        public TestAttributeContext() : base("test.db") { }
-
-        public global::BLite.Core.Collections.DocumentCollection<ObjectId, AnnotatedUser> Users { get; set; } = null!;
-        
-        protected override void OnModelCreating(global::BLite.Core.Metadata.ModelBuilder modelBuilder)
-        {
-            modelBuilder.Entity<AnnotatedUser>();
-        }
-    }
-
     public class AttributeTests
     {
         // Use full path for mapper until we are sure of the namespace
-        private global::BLite.Tests.TestAttributeContext_AttributeTests_Mappers.BLite_Tests_AnnotatedUserMapper CreateMapper() => new();
+        private BLite_Shared_AnnotatedUserMapper CreateMapper() => new();
         
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ushort> _keyMap = new(StringComparer.OrdinalIgnoreCase);
         private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, string> _keys = new();
@@ -52,7 +16,7 @@ namespace BLite.Tests
         public AttributeTests()
         {
             ushort id = 1;
-            string[] keys = { "_id", "display_name", "age", "location", "0", "1" };
+            string[] keys = ["_id", "display_name", "age", "location", "0", "1"];
             foreach (var key in keys)
             {
                 _keyMap[key] = id;

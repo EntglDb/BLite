@@ -19,14 +19,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\BLite.Shared\BLite.Shared.csproj" />
     <ProjectReference Include="..\..\src\BLite.Bson\BLite.Bson.csproj" />
     <ProjectReference Include="..\..\src\BLite.Core\BLite.Core.csproj" />
-    <ProjectReference Include="..\..\src\BLite.SourceGenerators\BLite.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <!-- Emit generated files to disk for debugging -->
-    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
-  </PropertyGroup>
 
 </Project>

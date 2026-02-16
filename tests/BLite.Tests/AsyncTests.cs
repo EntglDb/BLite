@@ -2,6 +2,7 @@ using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using Xunit;
 
 namespace BLite.Tests;
@@ -26,12 +27,11 @@ public class AsyncTests : IDisposable
     {
         using (var db = new TestDbContext(_dbPath))
         {
-            using (var txn = await db._storage.BeginTransactionAsync())
+            using (var txn = await db.BeginTransactionAsync())
             {
-                db.AsyncDocs.Insert(new AsyncDoc { Id = 1, Name = "Async1" }, txn);
-                db.AsyncDocs.Insert(new AsyncDoc { Id = 2, Name = "Async2" }, txn);
-                
-                await txn.CommitAsync();
+                db.AsyncDocs.Insert(new AsyncDoc { Id = 1, Name = "Async1" });
+                db.AsyncDocs.Insert(new AsyncDoc { Id = 2, Name = "Async2" });
+                await db.SaveChangesAsync();
             }
         }
 
@@ -50,10 +50,9 @@ public class AsyncTests : IDisposable
     public async Task Async_Transaction_Rollback_Should_Discard_Data()
     {
         using var db = new TestDbContext(_dbPath);
-        using (var txn = await db._storage.BeginTransactionAsync())
+        using (var txn = await db.BeginTransactionAsync())
         {
-            db.AsyncDocs.Insert(new AsyncDoc { Id = 3, Name = "RollbackMe" }, txn);
-            // No CommitAsync call -> Auto Rollback on Dispose
+            db.AsyncDocs.Insert(new AsyncDoc { Id = 3, Name = "RollbackMe" });
         }
 
         var doc = db.AsyncDocs.FindById(3);
@@ -111,13 +110,13 @@ public class AsyncTests : IDisposable
             // Test mix of implicit and explicit transactions
             if (i % 2 == 0)
             {
-                using var txn = await db._storage.BeginTransactionAsync();
+                using var txn = await db.BeginTransactionAsync();
                 for (int j = 0; j < docsPerThread; j++)
                 {
                     int id = (i * docsPerThread) + j + 8000;
-                    await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = id, Name = $"Thread{i}_Doc{j}" }, txn);
+                    await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = id, Name = $"Thread{i}_Doc{j}" });
                 }
-                await txn.CommitAsync();
+                await db.SaveChangesAsync();
             }
             else
             {
@@ -127,6 +126,7 @@ public class AsyncTests : IDisposable
                     int id = (i * docsPerThread) + j + 8000;
                     await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = id, Name = $"Thread{i}_Doc{j}" });
                 }
+                await db.SaveChangesAsync();
             }
         });
         

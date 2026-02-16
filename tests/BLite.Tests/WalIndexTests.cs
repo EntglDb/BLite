@@ -4,6 +4,7 @@ using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using System.Buffers;
 using Xunit;
@@ -15,8 +16,7 @@ public class WalIndexTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private StorageEngine _storage; // Mutable to allow Dispose/Reload
-    private DocumentCollection<User> _collection;
+    private readonly TestDbContext _db;
     private readonly ITestOutputHelper _output;
 
     public WalIndexTests(ITestOutputHelper output)
@@ -25,25 +25,20 @@ public class WalIndexTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_wal_index_{Guid.NewGuid()}.db");
         // WAL defaults to .wal next to db
         _walPath = Path.ChangeExtension(_dbPath, ".wal");
-        
-        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-        
-        var mapper = new BLite_Tests_UserMapper();
-        // 1. Ensure index on "Age"
-        _collection = new DocumentCollection<User>(_storage, mapper);
-        _collection.EnsureIndex(u => u.Age);
+
+        _db = new TestDbContext(_dbPath);
     }
 
     [Fact]
     public void IndexWritesAreLoggedToWal()
     {
         // 2. Start a transaction
-        using var txn = _storage.BeginTransaction();
+        using var txn = _db.BeginTransaction();
         _output.WriteLine($"Started Transaction: {txn.TransactionId}");
         
         // 3. Insert a user
         var user = new User { Name = "Alice", Age = 30 };
-        _collection.Insert(user, txn);
+        _db.Users.Insert(user);
         
         // 4. Commit
         txn.Commit();
@@ -51,7 +46,7 @@ public class WalIndexTests : IDisposable
         
         // 5. Verify WAL
         // Dispose current storage to release file locks, BUT skip checkpoint/truncate
-        _storage.Dispose();
+        _db.Dispose();
         
         Assert.True(File.Exists(_walPath), "WAL file should exist");
         
@@ -97,7 +92,7 @@ public class WalIndexTests : IDisposable
     {
         try 
         { 
-            _storage?.Dispose(); // Safe to call multiple times
+            _db?.Dispose(); // Safe to call multiple times
         } 
         catch {}
         

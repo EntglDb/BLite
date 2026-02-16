@@ -12,7 +12,7 @@ public class BsonSpanReaderWriterTests
     public BsonSpanReaderWriterTests()
     {
         ushort id = 1;
-        string[] initialKeys = { "name", "age", "active", "_id", "val", "dec", "timestamp", "int32", "int64", "double", "data", "child", "value", "0", "1" };
+        string[] initialKeys = ["name", "age", "active", "_id", "val", "dec", "timestamp", "int32", "int64", "double", "data", "child", "value", "0", "1"];
         foreach (var key in initialKeys)
         {
             _keyMap[key] = id;
@@ -191,7 +191,7 @@ public class BsonSpanReaderWriterTests
         Span<byte> buffer = stackalloc byte[256];
         var writer = new BsonSpanWriter(buffer, _keyMap);
         
-        byte[] testData = { 1, 2, 3, 4, 5 };
+        byte[] testData = [1, 2, 3, 4, 5];
         
         var sizePos = writer.BeginDocument();
         writer.WriteBinary("data", testData);

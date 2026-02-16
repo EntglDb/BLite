@@ -3,6 +3,7 @@ using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 
@@ -26,7 +27,7 @@ public class MetadataPersistenceTests : IDisposable
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             // Disable auto-checkpoint to ensure cleaner test tracing, though not strictly required
-            var mapper = new BLite_Tests_UserMapper();
+            var mapper = new BLite_Shared_UserMapper();
             var indexManager = new CollectionIndexManager<ObjectId,User>(storage, mapper, nameof(User));
             
             // Create 2 indexes
@@ -37,7 +38,7 @@ public class MetadataPersistenceTests : IDisposable
         // 2. Re-open storage and verify indexes exist
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
-            var mapper = new BLite_Tests_UserMapper();
+            var mapper = new BLite_Shared_UserMapper();
             // Assuming Page 1 was allocated above in clean DB
             var indexManager = new CollectionIndexManager<ObjectId,User>(storage, mapper, nameof(User));
             
@@ -62,34 +63,30 @@ public class MetadataPersistenceTests : IDisposable
     public void EnsureIndex_DoesNotRecreate_IfIndexExists()
     {
         // 1. Create index
-        using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
-        {
-            var mapper = new BLite_Tests_UserMapper();
-            var collection = new DocumentCollection<ObjectId, User>(storage, mapper);
-            
-            collection.EnsureIndex(u => u.Age);
+        using (var context = new TestDbContext(_dbPath))
+        {            
+            context.Users.EnsureIndex(u => u.Age);
         }
         
         // 2. Re-open and EnsureIndex again - should be fast/no-op
-        using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
+        using (var context = new TestDbContext(_dbPath))
         {
-            var mapper = new BLite_Tests_UserMapper();
-            var collection = new DocumentCollection<ObjectId, User>(storage, mapper);
+            var mapper = new BLite_Shared_UserMapper();
             
             // Use reflection or diagnostic to check if it triggered rebuild?
             // Currently hard to verify "no rebuild" without logs or mocking.
             // But we can verify it doesn't throw and index is still valid.
             
-            var idx = collection.EnsureIndex(u => u.Age);
+            var idx = context.Users.EnsureIndex(u => u.Age);
             Assert.NotNull(idx);
             
             // Verify functioning
-            using var txn = storage.BeginTransaction();
-            collection.Insert(new User { Name = "Bob", Age = 50 }, txn);
+            using var txn = context.BeginTransaction();
+            context.Users.Insert(new User { Name = "Bob", Age = 50 });
             txn.Commit();
             
             // Should find it via index
-            var results = collection.Find(u => u.Age == 50).ToList();
+            var results = context.Users.Find(u => u.Age == 50).ToList();
             Assert.Single(results);
         }
     }

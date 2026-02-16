@@ -1,4 +1,5 @@
 ﻿using BLite.Bson;
+using BLite.Shared;
 using System.Security.Cryptography;
 
 namespace BLite.Tests;
@@ -63,12 +64,13 @@ public class DbContextTests : IDisposable
         using (var db = new TestDbContext(_dbPath))
         {
             db.Users.Insert(new User { Name = "Test", Age = 20 });
+            db.SaveChanges(); // Explicitly save changes to ensure data is in WAL
             var beforeCheckpointTotalUsers = db.Users.FindAll().Count();
-            db._storage.Checkpoint(); // Force checkpoint to ensure data is persisted to main file
+            db.ForceCheckpoint(); // Force checkpoint to ensure data is persisted to main file
             totalUsers = db.Users.FindAll().Count();
             var countedUsers = db.Users.Count();
             Assert.Equal(beforeCheckpointTotalUsers, totalUsers);
-        } // Dispose → Commit → Checkpoint → Write to PageFile
+        } // Dispose → Commit → ForceCheckpoint → Write to PageFile
         
         // Should be able to open again and see persisted data
         using var db2 = new TestDbContext(_dbPath);
@@ -101,7 +103,7 @@ public class DbContextTests : IDisposable
         using (var db = new TestDbContext(dbPath))
         {
             db.Users.Insert(new User { Name = "Test", Age = 42 });
-            db._storage.Checkpoint(); // Forza persistenza
+            db.ForceCheckpoint(); // Forza persistenza
         }
         var afterInsertSize = new FileInfo(dbPath).Length;
         var afterInsertHash = ComputeFileHash(dbPath);

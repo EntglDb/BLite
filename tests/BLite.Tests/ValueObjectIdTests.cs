@@ -2,31 +2,10 @@ using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Metadata;
+using BLite.Shared;
 using Xunit;
 
 namespace BLite.Tests;
-
-public record OrderId(string Value)
-{
-    public OrderId() : this(string.Empty) { }
-}
-
-public class OrderIdConverter : ValueConverter<OrderId, string>
-{
-    public override string ConvertToProvider(OrderId model) => model?.Value ?? string.Empty;
-    public override OrderId ConvertFromProvider(string provider) => new OrderId(provider);
-}
-
-public class Order
-{
-    public OrderId Id { get; set; } = null!;
-    public string CustomerName { get; set; } = "";
-}
-
-public partial class TestDbContext : DocumentDbContext
-{
-    public DocumentCollection<OrderId, Order> Orders { get; set; } = null!;
-}
 
 public class ValueObjectIdTests : IDisposable
 {
@@ -42,10 +21,10 @@ public class ValueObjectIdTests : IDisposable
     [Fact]
     public void Should_Support_ValueObject_Id_Conversion()
     {
-        var order = new Order 
-        { 
-            Id = new OrderId("ORD-123"), 
-            CustomerName = "John Doe" 
+        var order = new Order
+        {
+            Id = new OrderId("ORD-123"),
+            CustomerName = "John Doe"
         };
 
         _db.Orders.Insert(order);

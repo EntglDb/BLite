@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 
@@ -10,22 +11,18 @@ namespace BLite.Tests;
 public class DocumentOverflowTests : IDisposable
 {
     private readonly string _dbPath;
-    private readonly StorageEngine _storage;
-    private readonly DocumentCollection<User> _collection;
+    private readonly TestDbContext _db;
 
     public DocumentOverflowTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_overflow_{Guid.NewGuid()}.db");
         // Use default PageSize (16KB)
-        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-
-        var mapper = new BLite_Tests_UserMapper();
-        _collection = new DocumentCollection<User>(_storage, mapper);
+        _db = new TestDbContext(_dbPath);
     }
 
     public void Dispose()
     {
-        _storage.Dispose();
+        _db.Dispose();
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
@@ -42,8 +39,9 @@ public class DocumentOverflowTests : IDisposable
             Age = 10
         };
 
-        var id = _collection.Insert(user);
-        var retrieved = _collection.FindById(id);
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
+        var retrieved = _db.Users.FindById(id);
         
         Assert.NotNull(retrieved);
         Assert.Equal(largeString, retrieved.Name);
@@ -61,8 +59,9 @@ public class DocumentOverflowTests : IDisposable
             Age = 20
         };
 
-        var id = _collection.Insert(user);
-        var retrieved = _collection.FindById(id);
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
+        var retrieved = _db.Users.FindById(id);
         
         Assert.NotNull(retrieved);
         Assert.Equal(largeString, retrieved.Name);
@@ -80,8 +79,9 @@ public class DocumentOverflowTests : IDisposable
             Age = 30
         };
 
-        var id = _collection.Insert(user);
-        var retrieved = _collection.FindById(id);
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
+        var retrieved = _db.Users.FindById(id);
         
         Assert.NotNull(retrieved);
         Assert.Equal(largeString.Length, retrieved.Name.Length);
@@ -95,16 +95,18 @@ public class DocumentOverflowTests : IDisposable
     {
         // Insert Small
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Small", Age = 1 };
-        var id = _collection.Insert(user);
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
 
         // Update to Huge (3MB)
         var hugeString = new string('U', 3 * 1024 * 1024);
         user.Name = hugeString;
         
-        var updated = _collection.Update(user);
+        var updated = _db.Users.Update(user);
+        _db.SaveChanges();
         Assert.True(updated);
 
-        var retrieved = _collection.FindById(id);
+        var retrieved = _db.Users.FindById(id);
         Assert.NotNull(retrieved);
         Assert.Equal(hugeString.Length, retrieved.Name.Length);
     }
@@ -120,12 +122,12 @@ public class DocumentOverflowTests : IDisposable
             new User { Id = ObjectId.NewObjectId(), Name = new string('H', 3 * 1024 * 1024), Age = 4 } // 3MB
         };
 
-        var ids = _collection.InsertBulk(users);
+        var ids = _db.Users.InsertBulk(users);
         Assert.Equal(4, ids.Count);
 
         foreach (var u in users)
         {
-            var r = _collection.FindById(u.Id);
+            var r = _db.Users.FindById(u.Id);
             Assert.NotNull(r);
             Assert.Equal(u.Name.Length, r.Name.Length);
         }

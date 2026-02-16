@@ -19,7 +19,7 @@ public class SchemaTests
     [Fact]
     public void UsedKeys_ShouldReturnAllKeys()
     {
-        var mapper = new BLite_Tests_ComplexUserMapper();
+        var mapper = new BLite_Shared_ComplexUserMapper();
         var keys = mapper.UsedKeys.ToList();
         
         Assert.Contains("_id", keys);
@@ -36,7 +36,7 @@ public class SchemaTests
     [Fact]
     public void GetSchema_ShouldReturnBsonSchema()
     {
-        var mapper = new BLite_Tests_ComplexUserMapper();
+        var mapper = new BLite_Shared_ComplexUserMapper();
         var schema = mapper.GetSchema();
         
         var idField = schema.Fields.FirstOrDefault(f => f.Name == "_id");

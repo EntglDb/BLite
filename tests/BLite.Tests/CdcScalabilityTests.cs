@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using BLite.Core.CDC;
+using BLite.Shared;
 using Xunit;
 
 namespace BLite.Tests;
@@ -39,6 +40,7 @@ public class CdcScalabilityTests : IDisposable
         // 2. Perform some writes
         _db.People.Insert(new Person { Id = 1, Name = "John", Age = 30 });
         _db.People.Insert(new Person { Id = 2, Name = "Jane", Age = 25 });
+        _db.SaveChanges();
 
         // 3. Wait for events to propagate
         await Task.Delay(1000);
@@ -74,6 +76,7 @@ public class CdcScalabilityTests : IDisposable
 
         // 3. Perform a write
         _db.People.Insert(new Person { Id = 1, Name = "John", Age = 30 });
+        _db.SaveChanges();
 
         // 4. Verification: Fast subscriber should receive it immediately
         await Task.Delay(200);
@@ -82,6 +85,7 @@ public class CdcScalabilityTests : IDisposable
 
         // 5. Perform another write
         _db.People.Insert(new Person { Id = 2, Name = "Jane", Age = 25 });
+        _db.SaveChanges();
 
         // 6. Verification: Fast subscriber should receive second event while slow one is still busy
         await Task.Delay(200);

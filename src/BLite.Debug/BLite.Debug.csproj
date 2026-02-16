@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\BLite.Shared\BLite.Shared.csproj" />
     <ProjectReference Include="..\BLite.Core\BLite.Core.csproj" />
     <ProjectReference Include="..\BLite.Bson\BLite.Bson.csproj" />
   </ItemGroup>

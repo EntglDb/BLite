@@ -8,66 +8,14 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using BLite.Shared;
 
 namespace BLite.Tests
 {
     public class LinqTests : IDisposable
     {
         private readonly string _testFile;
-        private readonly StorageEngine _storage;
-        private readonly DocumentCollection<TestDocument> _collection;
-
-        public class TestDocument
-        {
-            public ObjectId Id { get; set; }
-            public string? Name { get; set; }
-            public int Age { get; set; }
-        }
-
-        public class TestDocumentMapper : ObjectIdMapperBase<TestDocument>
-        {
-            public override string CollectionName => "users";
-            public override ObjectId GetId(TestDocument entity) => entity.Id;
-            public override void SetId(TestDocument entity, ObjectId id) => entity.Id = id;
-
-            public override IEnumerable<string> UsedKeys => new[] { "_id", "name", "age" };
-
-            public override int Serialize(TestDocument entity, BsonSpanWriter writer)
-            {
-                var sizePos = writer.BeginDocument();
-                writer.WriteObjectId("_id", entity.Id);
-                if (entity.Name != null)
-                    writer.WriteString("name", entity.Name);
-                else
-                    writer.WriteNull("name");
-                writer.WriteInt32("age", entity.Age);
-                writer.EndDocument(sizePos);
-                return writer.Position;
-            }
-
-            public override TestDocument Deserialize(BsonSpanReader reader)
-            {
-                reader.ReadDocumentSize();
-                var doc = new TestDocument();
-
-                while (reader.Remaining > 0)
-                {
-                    var type = reader.ReadBsonType();
-                    if (type == 0) break;
-
-                    var name = reader.ReadElementHeader();
-
-                    if (name == "_id") doc.Id = reader.ReadObjectId();
-                    else if (name == "name") doc.Name = reader.ReadString();
-                    else if (name == "age") doc.Age = reader.ReadInt32();
-                    else reader.SkipValue(type);
-                }
-                return doc;
-            }
-
-            public override IndexKey ToIndexKey(ObjectId id) => new IndexKey(id);
-            public override ObjectId FromIndexKey(IndexKey key) => new ObjectId(key.Data);
-        }
+        private readonly TestDbContext _db;
 
         public LinqTests()
         {
@@ -76,23 +24,20 @@ namespace BLite.Tests
             var wal = Path.ChangeExtension(_testFile, ".wal");
             if (File.Exists(wal)) File.Delete(wal);
 
-            var config = new PageFileConfig { PageSize = 4096, InitialFileSize = 4096 * 100 };
-            _storage = new StorageEngine(_testFile, config);
-            
-            var mapper = new TestDocumentMapper();
-            _collection = new DocumentCollection<TestDocument>(_storage, mapper, "users");
+            _db = new TestDbContext(_testFile);
 
             // Seed Data
-            _collection.Insert(new TestDocument { Name = "Alice", Age = 30 });
-            _collection.Insert(new TestDocument { Name = "Bob", Age = 25 });
-            _collection.Insert(new TestDocument { Name = "Charlie", Age = 35 });
-            _collection.Insert(new TestDocument { Name = "Dave", Age = 20 });
-            _collection.Insert(new TestDocument { Name = "Eve", Age = 40 });
+            _db.Users.Insert(new User { Name = "Alice", Age = 30 });
+            _db.Users.Insert(new User { Name = "Bob", Age = 25 });
+            _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
+            _db.Users.Insert(new User { Name = "Dave", Age = 20 });
+            _db.Users.Insert(new User { Name = "Eve", Age = 40 });
+            _db.SaveChanges();
         }
 
         public void Dispose()
         {
-            _storage.Dispose();
+            _db.Dispose();
             if (File.Exists(_testFile)) File.Delete(_testFile);
             var wal = Path.ChangeExtension(_testFile, ".wal");
             if (File.Exists(wal)) File.Delete(wal);
@@ -101,7 +46,7 @@ namespace BLite.Tests
         [Fact]
         public void Where_FiltersDocuments()
         {
-            var query = _collection.AsQueryable().Where(x => x.Age > 28);
+            var query = _db.Users.AsQueryable().Where(x => x.Age > 28);
             var results = query.ToList();
 
             Assert.Equal(3, results.Count); // Alice(30), Charlie(35), Eve(40)
@@ -111,7 +56,7 @@ namespace BLite.Tests
         [Fact]
         public void OrderBy_SortsDocuments()
         {
-            var results = _collection.AsQueryable().OrderBy(x => x.Age).ToList();
+            var results = _db.Users.AsQueryable().OrderBy(x => x.Age).ToList();
 
             Assert.Equal(5, results.Count);
             Assert.Equal("Dave", results[0].Name); // 20
@@ -122,7 +67,7 @@ namespace BLite.Tests
         [Fact]
         public void SkipTake_Pagination()
         {
-            var results = _collection.AsQueryable()
+            var results = _db.Users.AsQueryable()
                 .OrderBy(x => x.Age)
                 .Skip(1)
                 .Take(2)
@@ -136,7 +81,7 @@ namespace BLite.Tests
         [Fact]
         public void Select_Projections()
         {
-            var names = _collection.AsQueryable()
+            var names = _db.Users.AsQueryable()
                 .Where(x => x.Age < 30)
                 .OrderBy(x => x.Age)
                 .Select(x => x.Name)
@@ -150,9 +95,9 @@ namespace BLite.Tests
         public void IndexedWhere_UsedIndex()
         {
             // Create index on Age
-            _collection.EnsureIndex(x => x.Age, "idx_age", false);
+            _db.Users.EnsureIndex(x => x.Age, "idx_age", false);
 
-            var query = _collection.AsQueryable().Where(x => x.Age > 25);
+            var query = _db.Users.AsQueryable().Where(x => x.Age > 25);
             var results = query.ToList();
 
             Assert.Equal(3, results.Count); // Alice(30), Charlie(35), Eve(40)
@@ -162,11 +107,11 @@ namespace BLite.Tests
         [Fact]
         public void StartsWith_UsedIndex()
         {
-             // Create index on Name
-             _collection.EnsureIndex(x => x.Name!, "idx_name", false);
+            // Create index on Name
+            _db.Users.EnsureIndex(x => x.Name!, "idx_name", false);
              
              // StartsWith "Cha" -> Should find "Charlie"
-             var query = _collection.AsQueryable().Where(x => x.Name!.StartsWith("Cha"));
+             var query = _db.Users.AsQueryable().Where(x => x.Name!.StartsWith("Cha"));
              var results = query.ToList();
              
              Assert.Single(results);
@@ -176,14 +121,14 @@ namespace BLite.Tests
         [Fact]
         public void Between_UsedIndex()
         {
-             // Create index on Age
-             _collection.EnsureIndex(x => x.Age, "idx_age_between", false);
+            // Create index on Age
+            _db.Users.EnsureIndex(x => x.Age, "idx_age_between", false);
              
              // Age >= 22 && Age <= 32
              // Alice(30), Bob(25) -> Should be found.
              // Dave(20), Charlie(35), Eve(40) -> excluded.
              
-             var query = _collection.AsQueryable().Where(x => x.Age >= 22 && x.Age <= 32);
+             var query = _db.Users.AsQueryable().Where(x => x.Age >= 22 && x.Age <= 32);
              var results = query.ToList();
              
              Assert.Equal(2, results.Count);
