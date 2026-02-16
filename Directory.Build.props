@@ -1,6 +1,5 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -8,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     
     <!-- NuGet Metadata -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>BLite Team</Authors>
     <Description>High-Performance BSON Database Engine for .NET</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

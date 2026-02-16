@@ -1084,13 +1084,21 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <returns>The document, or null if not found</returns>
     public T? FindById(TId id, ITransaction? transaction = null)
     {
-        using var txn = transaction ?? _storage.BeginTransaction();
-        var key = _mapper.ToIndexKey(id);
+        var txn = transaction ?? _storage.BeginTransaction();
+        var isInternalTxn = transaction == null;
+        try
+        {
+            var key = _mapper.ToIndexKey(id);
 
-        if (!_primaryIndex.TryFind(key, out var location, txn.TransactionId))
-            return null;
+            if (!_primaryIndex.TryFind(key, out var location, txn.TransactionId))
+                return null;
 
-        return FindByLocation(location, txn);
+            return FindByLocation(location, txn);
+        }
+        finally
+        {
+            if (isInternalTxn) txn.Dispose();
+        }
     }
 
 

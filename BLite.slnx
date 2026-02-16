@@ -8,13 +8,14 @@
     <File Path="RFC.md" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/BLite.Benchmark/BLite.Benchmark.csproj" />
     <Project Path="src/BLite.Bson/BLite.Bson.csproj" />
     <Project Path="src/BLite.Core/BLite.Core.csproj" />
-    <Project Path="src/BLite.Debug/BLite.Debug.csproj" />
     <Project Path="src/BLite.SourceGenerators/BLite.SourceGenerators.csproj" />
+    <Project Path="src/BLite/BLite.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="src/BLite.Benchmark/BLite.Benchmark.csproj" />
+    <Project Path="src/BLite.Debug/BLite.Debug.csproj" />
     <Project Path="tests/BLite.Tests/BLite.Tests.csproj" />
   </Folder>
 </Solution>

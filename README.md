@@ -105,6 +105,16 @@ var order = collection.FindById(new OrderId("ORD-123"));
 ```
 
 ### 📡 Change Data Capture (CDC)
+Real-time event streaming for database changes with transactional consistency.
+
+- **Zero-Allocation**: Events are only captured when watchers exist; no overhead when disabled.
+- **Transactional**: Events fire only after successful commit, never on rollback.
+- **Scalable**: Uses Channel-per-subscriber architecture to support thousands of concurrent listeners.
+
+```csharp
+// Watch for changes in a collection
+using var subscription = db.People.Watch(capturePayload: true)
+    .Subscribe(e => 
     {
         Console.WriteLine($"{e.Type}: {e.DocumentId}");
         if (e.Entity != null) 
