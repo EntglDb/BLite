@@ -100,6 +100,7 @@ public class DbContextInfo
                 {
                     if (generatedMappers.Add(entity.FullTypeName))
                     {
+                        entity.IsRootEntity = true; // Mark as root entity
                         sb.AppendLine(CodeGenerator.GenerateMapperClass(entity, mapperNamespace));
                     }
                 }
@@ -114,6 +115,7 @@ public class DbContextInfo
                             Name = nested.Name, 
                             Namespace = nested.Namespace,
                             FullTypeName = nested.FullTypeName, // Ensure FullTypeName is copied
+                            IsRootEntity = false, // Mark as nested entity
                             // Helper to copy properties
                         };
                         nestedEntity.Properties.AddRange(nested.Properties);

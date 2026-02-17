@@ -14,6 +14,13 @@ namespace BLite.SourceGenerators.Models
         public PropertyInfo? IdProperty => Properties.FirstOrDefault(p => p.IsKey);
         public bool AutoId { get; set; }
         
+        /// <summary>
+        /// Indicates if this entity is a root entity (used in a DocumentCollection).
+        /// Root entities have special handling for Id fields (written as "_id" in BSON).
+        /// Nested entities should always have SerializeFields method, even if they have an Id property.
+        /// </summary>
+        public bool IsRootEntity { get; set; }
+        
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();
         public HashSet<string> IgnoredProperties { get; } = new HashSet<string>();

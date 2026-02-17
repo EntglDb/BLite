@@ -24,6 +24,11 @@ public static class BsonSchemaGenerator
 
     private static BsonSchema GenerateSchema(Type type)
     {
+        return GenerateSchema(type, isRoot: true);
+    }
+
+    private static BsonSchema GenerateSchema(Type type, bool isRoot)
+    {
         var schema = new BsonSchema { Title = type.Name };
         var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
         var fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
@@ -33,28 +38,28 @@ public static class BsonSchemaGenerator
             if (prop.GetIndexParameters().Length > 0) continue; // Skip indexers
             if (!prop.CanRead) continue;
 
-            AddField(schema, prop.Name, prop.PropertyType);
+            AddField(schema, prop.Name, prop.PropertyType, isRoot);
         }
 
         foreach (var field in fields)
         {
-            AddField(schema, field.Name, field.FieldType);
+            AddField(schema, field.Name, field.FieldType, isRoot);
         }
 
         return schema;
     }
 
-    private static void AddField(BsonSchema schema, string name, Type type)
+    private static void AddField(BsonSchema schema, string name, Type type, bool isRootSchema)
     {
         name = name.ToLowerInvariant();
 
-        // Convention: id -> _id for root document
-        if (name.Equals("id", StringComparison.OrdinalIgnoreCase))
+        // Convention: id -> _id only for root document, not for nested objects
+        if (isRootSchema && name.Equals("id", StringComparison.OrdinalIgnoreCase))
         {
             name = "_id";
         }
 
-        var (bsonType, nestedSchema, itemType) = GetBsonType(type);
+        var (bsonType, nestedSchema, itemType) = GetBsonType(type, isRootSchema);
 
         schema.Fields.Add(new BsonField
         {
@@ -66,7 +71,7 @@ public static class BsonSchemaGenerator
         });
     }
 
-    private static (BsonType type, BsonSchema? nested, BsonType? itemType) GetBsonType(Type type)
+    private static (BsonType type, BsonSchema? nested, BsonType? itemType) GetBsonType(Type type, bool isRootSchema)
     {
         // Handle Nullable<T>
         type = Nullable.GetUnderlyingType(type) ?? type;
@@ -86,7 +91,7 @@ public static class BsonSchemaGenerator
         if (type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type))
         {
             var itemType = GetCollectionItemType(type);
-            var (itemBsonType, itemNested, _) = GetBsonType(itemType);
+            var (itemBsonType, itemNested, _) = GetBsonType(itemType, isRootSchema: false);
             
             // For arrays, if item is Document, we use NestedSchema to describe the item
             return (BsonType.Array, itemNested, itemBsonType);
@@ -98,7 +103,7 @@ public static class BsonSchemaGenerator
         {
             // Avoid infinite recursion?
             // Simple approach: generating nested schema
-            return (BsonType.Document, FromType(type), null);
+            return (BsonType.Document, GenerateSchema(type, isRoot: false), null);
         }
 
         return (BsonType.Undefined, null, null);

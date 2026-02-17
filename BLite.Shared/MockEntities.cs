@@ -201,4 +201,38 @@ namespace BLite.Shared
         public string Description { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
     }
+
+    // --- Test entities for nested objects with Id fields ---
+
+    /// <summary>
+    /// A nested object that has its own Id field.
+    /// This is used to test that Id in nested objects doesn't cause mapper generation issues.
+    /// </summary>
+    public class ContactInfo
+    {
+        [Key]
+        public int Id { get; set; }
+        public string Email { get; set; } = "";
+        public string Phone { get; set; } = "";
+    }
+
+    /// <summary>
+    /// Root entity with a nested object that has an Id field.
+    /// </summary>
+    public class CustomerWithContact
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = "";
+        public ContactInfo Contact { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Root entity with a collection of nested objects that have Id fields.
+    /// </summary>
+    public class CompanyWithContacts
+    {
+        public ObjectId Id { get; set; }
+        public string CompanyName { get; set; } = "";
+        public List<ContactInfo> Contacts { get; set; } = new();
+    }
 }

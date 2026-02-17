@@ -14,7 +14,7 @@ namespace BLite.SourceGenerators
             var sb = new StringBuilder();
             var mapperName = GetMapperName(entity.FullTypeName);
             var keyProp = entity.Properties.FirstOrDefault(p => p.IsKey);
-            var isRoot = entity.IdProperty != null;
+            var isRoot = entity.IsRootEntity;
             
             // Class Declaration
             if (isRoot)
@@ -78,7 +78,7 @@ namespace BLite.SourceGenerators
             {
                 sb.AppendLine($"        public void SerializeFields({entityType} entity, ref global::BLite.Bson.BsonSpanWriter writer)");
                 sb.AppendLine($"        {{");
-                GenerateFieldWritesCore(sb, entity, mapperNamespace);
+                GenerateFieldWritesCore(sb, entity, mapperNamespace, isRoot: false);
                 sb.AppendLine($"        }}");
                 sb.AppendLine();
             }
@@ -92,18 +92,19 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"        {{");
             sb.AppendLine($"            var startingPos = writer.BeginDocument();");
             sb.AppendLine();
-            GenerateFieldWritesCore(sb, entity, mapperNamespace);
+            GenerateFieldWritesCore(sb, entity, mapperNamespace, isRoot);
             sb.AppendLine();
             sb.AppendLine($"            writer.EndDocument(startingPos);");
             sb.AppendLine($"            return writer.Position;");
             sb.AppendLine($"        }}");
         }
         
-        private static void GenerateFieldWritesCore(StringBuilder sb, EntityInfo entity, string mapperNamespace)
+        private static void GenerateFieldWritesCore(StringBuilder sb, EntityInfo entity, string mapperNamespace, bool isRoot)
         {
             foreach (var prop in entity.Properties)
             {
-                if (prop.IsKey && (prop.Name == "Id" || prop.Name == "_id"))
+                // Only write Id as "_id" for root entities. For nested entities, treat Id as a regular field.
+                if (isRoot && prop.IsKey && (prop.Name == "Id" || prop.Name == "_id"))
                 {
                     if (prop.ConverterTypeName != null)
                     {
@@ -297,7 +298,8 @@ namespace BLite.SourceGenerators
             
             foreach (var prop in entity.Properties)
             {
-                var caseName = prop.IsKey ? "_id" : prop.BsonFieldName;
+                // Only use "_id" for root entities. For nested entities, use the regular BsonFieldName.
+                var caseName = (isRoot && prop.IsKey) ? "_id" : prop.BsonFieldName;
                 sb.AppendLine($"                    case \"{caseName}\":");
                 
                 // Read Logic -> assign to local var

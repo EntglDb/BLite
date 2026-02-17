@@ -32,6 +32,8 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<int, SchemaUser> SchemaUsers { get; set; } = null!;
     public DocumentCollection<ObjectId, VectorEntity> VectorItems { get; set; } = null!;
     public DocumentCollection<ObjectId, GeoEntity> GeoItems { get; set; } = null!;
+    public DocumentCollection<ObjectId, CustomerWithContact> CustomersWithContact { get; set; } = null!;
+    public DocumentCollection<ObjectId, CompanyWithContacts> CompaniesWithContacts { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -67,6 +69,10 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<Order>()
             .HasKey(x => x.Id)
             .HasConversion<OrderIdConverter>();
+        
+        // Test entities for nested objects with Id fields
+        modelBuilder.Entity<CustomerWithContact>().ToCollection("customers_with_contact");
+        modelBuilder.Entity<CompanyWithContacts>().ToCollection("companies_with_contacts");
     }
 
     public void ForceCheckpoint()

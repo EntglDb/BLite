@@ -68,7 +68,8 @@ public class BsonSchemaTests
         var parent = schema.Fields.First(f => f.Name == "parent");
         Assert.Equal(BsonType.Document, parent.Type);
         Assert.NotNull(parent.NestedSchema);
-        Assert.Contains(parent.NestedSchema.Fields, f => f.Name == "_id");
+        // Nested objects should have "id" not "_id"
+        Assert.Contains(parent.NestedSchema.Fields, f => f.Name == "id");
     }
 
     public class ComplexCollectionEntity
@@ -91,6 +92,7 @@ public class BsonSchemaTests
         
         Assert.Equal(BsonType.Document, items.ArrayItemType);
         Assert.NotNull(items.NestedSchema);
-        Assert.Contains(items.NestedSchema.Fields, f => f.Name == "_id");
+        // Nested objects (collection items) should have "id" not "_id"
+        Assert.Contains(items.NestedSchema.Fields, f => f.Name == "id");
     }
 }
