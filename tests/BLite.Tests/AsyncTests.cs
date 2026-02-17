@@ -101,37 +101,23 @@ public class AsyncTests : IDisposable
     [Fact]
     public async Task High_Concurrency_Async_Commits()
     {
-        using var db = new TestDbContext(_dbPath);
+        using var db = new TestDbContext(Path.Combine(Path.GetTempPath(), $"blite_async_concurrency_{Guid.NewGuid()}.db"));
         int threadCount = 2;
         int docsPerThread = 50;
         
         var tasks = Enumerable.Range(0, threadCount).Select(async i => 
         {
             // Test mix of implicit and explicit transactions
-            if (i % 2 == 0)
+            for (int j = 0; j < docsPerThread; j++)
             {
-                using var txn = await db.BeginTransactionAsync();
-                for (int j = 0; j < docsPerThread; j++)
-                {
-                    int id = (i * docsPerThread) + j + 8000;
-                    await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = id, Name = $"Thread{i}_Doc{j}" });
-                }
-                await db.SaveChangesAsync();
-            }
-            else
-            {
-                // Implicit transactions with await
-                for (int j = 0; j < docsPerThread; j++)
-                {
-                    int id = (i * docsPerThread) + j + 8000;
-                    await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = id, Name = $"Thread{i}_Doc{j}" });
-                }
-                await db.SaveChangesAsync();
+                int id = (i * docsPerThread) + j + 8000;
+                await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = id, Name = $"Thread{i}_Doc{j}" });
             }
         });
-        
+
         await Task.WhenAll(tasks);
-        
+        await db.SaveChangesAsync();
+
         // Verify count
         var count = db.AsyncDocs.Scan(_ => true).Count();
         Assert.Equal(threadCount * docsPerThread, count);

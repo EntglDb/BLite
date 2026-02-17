@@ -175,12 +175,14 @@ namespace BLite.Tests
         [Fact]
         public void Select_Anonymous_Complex()
         {
+            BLite.Tests.TestDbContext_TestDbContext_Mappers.BLite_Shared_CityMapper cityMapper = new BLite.Tests.TestDbContext_TestDbContext_Mappers.BLite_Shared_CityMapper();
             var doc = new ComplexDocument
             {
                 Id = ObjectId.NewObjectId(),
                 Title = "Order1",
                 ShippingAddress = new Address {  City = new City { Name = "New York" }, Street = "5th Ave" }
             };
+
 
             _db.ComplexDocuments.Insert(doc);
             _db.SaveChanges();
@@ -192,6 +194,41 @@ namespace BLite.Tests
             Assert.Single(result);
             Assert.Equal("Order1", result[0].Title);
             Assert.Equal("New York", result[0].City.Name);
+        }
+
+        [Fact]
+        public void Select_Project_Nested_Array_Of_Objects()
+        {
+            var doc = new ComplexDocument
+            {
+                Id = ObjectId.NewObjectId(),
+                Title = "Order with Items",
+                ShippingAddress = new Address { City = new City { Name = "Los Angeles" }, Street = "Hollywood Blvd" },
+                Items = new List<OrderItem>
+                {
+                    new OrderItem { Name = "Laptop", Price = 1500 },
+                    new OrderItem { Name = "Mouse", Price = 25 },
+                    new OrderItem { Name = "Keyboard", Price = 75 }
+                }
+            };
+            _db.ComplexDocuments.Insert(doc);
+            _db.SaveChanges();
+
+            // Retrieve the full document and verify Items array
+            var retrieved = _db.ComplexDocuments.FindAll().First();
+
+            Assert.Equal("Order with Items", retrieved.Title);
+            Assert.Equal("Los Angeles", retrieved.ShippingAddress.City.Name);
+            Assert.Equal("Hollywood Blvd", retrieved.ShippingAddress.Street);
+            
+            // Verify array of nested objects
+            Assert.Equal(3, retrieved.Items.Count);
+            Assert.Equal("Laptop", retrieved.Items[0].Name);
+            Assert.Equal(1500, retrieved.Items[0].Price);
+            Assert.Equal("Mouse", retrieved.Items[1].Name);
+            Assert.Equal(25, retrieved.Items[1].Price);
+            Assert.Equal("Keyboard", retrieved.Items[2].Name);
+            Assert.Equal(75, retrieved.Items[2].Price);
         }
     }
 }

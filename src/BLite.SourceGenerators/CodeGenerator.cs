@@ -71,6 +71,19 @@ namespace BLite.SourceGenerators
         private static void GenerateSerializeMethod(StringBuilder sb, EntityInfo entity, bool isRoot, string mapperNamespace)
         {
             var entityType = $"global::{entity.FullTypeName}";
+            
+            // For nested mappers, generate SerializeFields first (writes only fields, no document wrapper)
+            // Note: BsonSpanWriter is a ref struct, so it must be passed by ref
+            if (!isRoot)
+            {
+                sb.AppendLine($"        public void SerializeFields({entityType} entity, ref global::BLite.Bson.BsonSpanWriter writer)");
+                sb.AppendLine($"        {{");
+                GenerateFieldWritesCore(sb, entity, mapperNamespace);
+                sb.AppendLine($"        }}");
+                sb.AppendLine();
+            }
+            
+            // Generate Serialize method (with document wrapper)
             var methodSig = isRoot 
                 ? $"public override int Serialize({entityType} entity, global::BLite.Bson.BsonSpanWriter writer)"
                 : $"public int Serialize({entityType} entity, global::BLite.Bson.BsonSpanWriter writer)";
@@ -79,7 +92,15 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"        {{");
             sb.AppendLine($"            var startingPos = writer.BeginDocument();");
             sb.AppendLine();
-            
+            GenerateFieldWritesCore(sb, entity, mapperNamespace);
+            sb.AppendLine();
+            sb.AppendLine($"            writer.EndDocument(startingPos);");
+            sb.AppendLine($"            return writer.Position;");
+            sb.AppendLine($"        }}");
+        }
+        
+        private static void GenerateFieldWritesCore(StringBuilder sb, EntityInfo entity, string mapperNamespace)
+        {
             foreach (var prop in entity.Properties)
             {
                 if (prop.IsKey && (prop.Name == "Id" || prop.Name == "_id"))
@@ -92,7 +113,6 @@ namespace BLite.SourceGenerators
                     }
                     else
                     {
-                        // Use dynamic write method for Id based on its type
                         var idWriteMethod = GetPrimitiveWriteMethod(prop, allowKey: true);
                         if (idWriteMethod != null)
                         {
@@ -110,11 +130,6 @@ namespace BLite.SourceGenerators
                 GenerateValidation(sb, prop);
                 GenerateWriteProperty(sb, prop, mapperNamespace);
             }
-            
-            sb.AppendLine();
-            sb.AppendLine($"            writer.EndDocument(startingPos);");
-            sb.AppendLine($"            return writer.Position;");
-            sb.AppendLine($"        }}");
         }
             
         private static void GenerateValidation(StringBuilder sb, PropertyInfo prop)
@@ -163,6 +178,7 @@ namespace BLite.SourceGenerators
                  sb.AppendLine($"            {{");
                  sb.AppendLine($"                var item = entity.{prop.Name}[i];");
                  
+                 
                  if (prop.IsCollectionItemNested)
                  {
                      sb.AppendLine($"                // Nested Object in List");
@@ -170,7 +186,7 @@ namespace BLite.SourceGenerators
                      sb.AppendLine($"                var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");
                      
                      sb.AppendLine($"                var itemStartPos = writer.BeginDocument(i.ToString());");
-                     sb.AppendLine($"                {prop.Name.ToLower()}ItemMapper.Serialize(item, writer);");
+                     sb.AppendLine($"                {prop.Name.ToLower()}ItemMapper.SerializeFields(item, ref writer);");
                      sb.AppendLine($"                writer.EndDocument(itemStartPos);");
                  }
                  else
@@ -194,7 +210,7 @@ namespace BLite.SourceGenerators
                 sb.AppendLine($"                var {prop.Name.ToLower()}Pos = writer.BeginDocument(\"{fieldName}\");");
                 var nestedMapperType = GetMapperName(prop.NestedTypeFullName!);
                 sb.AppendLine($"                var {prop.Name.ToLower()}Mapper = new global::{mapperNamespace}.{nestedMapperType}();");
-                sb.AppendLine($"                {prop.Name.ToLower()}Mapper.Serialize(entity.{prop.Name}, writer);");
+                sb.AppendLine($"                {prop.Name.ToLower()}Mapper.SerializeFields(entity.{prop.Name}, ref writer);");
                 sb.AppendLine($"                writer.EndDocument({prop.Name.ToLower()}Pos);");
                 sb.AppendLine($"            }}");
                 sb.AppendLine($"            else");
@@ -234,9 +250,10 @@ namespace BLite.SourceGenerators
         private static void GenerateDeserializeMethod(StringBuilder sb, EntityInfo entity, bool isRoot, string mapperNamespace)
         {
              var entityType = $"global::{entity.FullTypeName}";
+             // Note: BsonSpanReader is a ref struct, so nested mappers must use ref
              var methodSig = isRoot 
                 ? $"public override {entityType} Deserialize(global::BLite.Bson.BsonSpanReader reader)"
-                : $"public {entityType} Deserialize(global::BLite.Bson.BsonSpanReader reader)";
+                : $"public {entityType} Deserialize(ref global::BLite.Bson.BsonSpanReader reader)";
                 
             sb.AppendLine($"        {methodSig}");
             sb.AppendLine($"        {{");
@@ -264,9 +281,12 @@ namespace BLite.SourceGenerators
                 }
             }
             
-            sb.AppendLine($"            reader.ReadDocumentSize();");
+            
+            // Read document size and track boundaries
+            sb.AppendLine($"            var docSize = reader.ReadDocumentSize();");
+            sb.AppendLine($"            var docEndPos = reader.Position + docSize - 4; // -4 because size includes itself");
             sb.AppendLine();
-            sb.AppendLine($"            while (reader.Remaining > 0)");
+            sb.AppendLine($"            while (reader.Position < docEndPos)");
             sb.AppendLine($"            {{");
             sb.AppendLine($"                var bsonType = reader.ReadBsonType();");
             sb.AppendLine($"                if (bsonType == global::BLite.Bson.BsonType.EndOfDocument) break;");
@@ -312,9 +332,11 @@ namespace BLite.SourceGenerators
              
              if (prop.IsCollection)
              {
+                 var arrVar = prop.Name.ToLower();
                  sb.AppendLine($"                        // Read Array {prop.Name}");
-                 sb.AppendLine($"                        reader.ReadDocumentSize();");
-                 sb.AppendLine($"                        while (reader.Remaining > 0)");
+                 sb.AppendLine($"                        var {arrVar}ArrSize = reader.ReadDocumentSize();");
+                 sb.AppendLine($"                        var {arrVar}ArrEndPos = reader.Position + {arrVar}ArrSize - 4;");
+                 sb.AppendLine($"                        while (reader.Position < {arrVar}ArrEndPos)");
                  sb.AppendLine($"                        {{");
                  sb.AppendLine($"                            var itemType = reader.ReadBsonType();");
                  sb.AppendLine($"                            if (itemType == global::BLite.Bson.BsonType.EndOfDocument) break;");
@@ -324,7 +346,7 @@ namespace BLite.SourceGenerators
                  {
                      var nestedMapperTypes = GetMapperName(prop.NestedTypeFullName!);
                      sb.AppendLine($"                            var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");
-                     sb.AppendLine($"                            var item = {prop.Name.ToLower()}ItemMapper.Deserialize(reader);");
+                     sb.AppendLine($"                            var item = {prop.Name.ToLower()}ItemMapper.Deserialize(ref reader);");
                      sb.AppendLine($"                            {localVar}.Add(item);");
                  }
                  else
@@ -359,7 +381,7 @@ namespace BLite.SourceGenerators
                  sb.AppendLine($"                        {{");
                  var nestedMapperType = GetMapperName(prop.NestedTypeFullName!);
                  sb.AppendLine($"                            var {prop.Name.ToLower()}Mapper = new global::{mapperNamespace}.{nestedMapperType}();");
-                 sb.AppendLine($"                            {localVar} = {prop.Name.ToLower()}Mapper.Deserialize(reader);");
+                 sb.AppendLine($"                            {localVar} = {prop.Name.ToLower()}Mapper.Deserialize(ref reader);");
                  sb.AppendLine($"                        }}");
              }
              else
