@@ -1746,9 +1746,11 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <param name="indexName">The name of the spatial index to search within. Cannot be null or empty.</param>
     /// <param name="min">The minimum latitude and longitude coordinates defining one corner of the search rectangle.</param>
     /// <param name="max">The maximum latitude and longitude coordinates defining the opposite corner of the search rectangle.</param>
-    /// <param name="transaction">An optional transaction context to use for the operation. If null, the default transaction is used.</param>
     /// <returns>An enumerable collection of documents of type T that are located within the specified geographic bounds. The
     /// collection is empty if no documents are found.</returns>
+    /// <remarks>
+    /// Transactions are managed implicitly through the collection's <see cref="ITransactionHolder"/>; callers do not supply a transaction parameter.
+    /// </remarks>
     /// <exception cref="ArgumentException">Thrown if indexName is null, empty, or does not correspond to an existing index.</exception>
     public IEnumerable<T> Within(string indexName, (double Latitude, double Longitude) min, (double Latitude, double Longitude) max)
     {
