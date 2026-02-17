@@ -28,6 +28,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<int, IntEntity> IntEntities { get; set; } = null!;
     public DocumentCollection<string, StringEntity> StringEntities { get; set; } = null!;
     public DocumentCollection<Guid, GuidEntity> GuidEntities { get; set; } = null!;
+    public DocumentCollection<string, CustomKeyEntity> CustomKeyEntities { get; set; } = null!;
     public DocumentCollection<int, AsyncDoc> AsyncDocs { get; set; } = null!;
     public DocumentCollection<int, SchemaUser> SchemaUsers { get; set; } = null!;
     public DocumentCollection<ObjectId, VectorEntity> VectorItems { get; set; } = null!;
@@ -50,6 +51,7 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<IntEntity>().HasKey(e => e.Id);
         modelBuilder.Entity<StringEntity>().HasKey(e => e.Id);
         modelBuilder.Entity<GuidEntity>().HasKey(e => e.Id);
+        modelBuilder.Entity<CustomKeyEntity>().HasKey(e => e.Code);
         modelBuilder.Entity<AsyncDoc>().ToCollection("async_docs");
         modelBuilder.Entity<SchemaUser>().ToCollection("schema_users").HasKey(e => e.Id);
         modelBuilder.Entity<TestDocument>();

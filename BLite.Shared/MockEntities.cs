@@ -70,6 +70,16 @@ namespace BLite.Shared
         public string? Name { get; set; }
     }
 
+    /// <summary>
+    /// Entity with string key NOT named "Id" - tests custom key name support
+    /// </summary>
+    public class CustomKeyEntity
+    {
+        [System.ComponentModel.DataAnnotations.Key]
+        public required string Code { get; set; }
+        public string? Description { get; set; }
+    }
+
     // --- Multi-collection / Auto-init entities ---
 
     public class AutoInitEntity

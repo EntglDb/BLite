@@ -83,4 +83,34 @@ public class PrimaryKeyTests : IDisposable
         db.SaveChanges();
         Assert.Null(db.GuidEntities.FindById(id));
     }
+
+    [Fact]
+    public void Test_String_PrimaryKey_With_Custom_Name()
+    {
+        // Test entity with string key NOT named "Id" (named "Code" instead)
+        using var db = new TestDbContext(_dbPath);
+
+        var entity = new CustomKeyEntity { Code = "ABC123", Description = "Test Description" };
+        db.CustomKeyEntities.Insert(entity);
+        db.SaveChanges();
+
+        // Verify retrieval works correctly
+        var retrieved = db.CustomKeyEntities.FindById("ABC123");
+        Assert.NotNull(retrieved);
+        Assert.Equal("ABC123", retrieved.Code);
+        Assert.Equal("Test Description", retrieved.Description);
+
+        // Verify update works
+        entity.Description = "Updated Description";
+        db.CustomKeyEntities.Update(entity);
+        db.SaveChanges();
+
+        retrieved = db.CustomKeyEntities.FindById("ABC123");
+        Assert.Equal("Updated Description", retrieved?.Description);
+
+        // Verify delete works
+        db.CustomKeyEntities.Delete("ABC123");
+        db.SaveChanges();
+        Assert.Null(db.CustomKeyEntities.FindById("ABC123"));
+    }
 }

@@ -103,7 +103,8 @@ namespace BLite.SourceGenerators
         {
             foreach (var prop in entity.Properties)
             {
-                if (prop.IsKey && (prop.Name == "Id" || prop.Name == "_id"))
+                // Handle key property - serialize as "_id" regardless of property name
+                if (prop.IsKey)
                 {
                     if (prop.ConverterTypeName != null)
                     {
