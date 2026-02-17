@@ -143,9 +143,12 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        await _transactionLock.WaitAsync(ct);
+        bool lockAcquired = false;
         try
         {
+            await _transactionLock.WaitAsync(ct);
+            lockAcquired = true;
+            
             if (CurrentTransaction != null)
                 return CurrentTransaction; // Return existing active transaction
             CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
@@ -153,7 +156,8 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         }
         finally
         {
-            _transactionLock.Release();
+            if (lockAcquired)
+                _transactionLock.Release();
         }
     }
 
