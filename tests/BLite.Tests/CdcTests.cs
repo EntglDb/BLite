@@ -78,7 +78,7 @@ public class CdcTests : IDisposable
         using (var txn = _db.BeginTransaction())
         {
             _db.People.Insert(new Person { Id = 2, Name = "Jane" });
-            _db.SaveChanges();
+            txn.Commit();
         }
 
         await Task.Delay(200);
