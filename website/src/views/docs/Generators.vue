@@ -1,11 +1,11 @@
 <template>
   <div class="doc-page">
     <h1>🤖 <span class="title-gradient">Source Generators</span></h1>
-    <p class="lead">Zero-allocation, compile-time BSON mappers with no reflection overhead.</p>
+    <p class="lead">Zero-allocation, compile-time BSON mappers with no reflection overhead. Robust handling of nested objects, collections, and ref structs.</p>
 
     <section>
       <h2>How It Works</h2>
-      <p>BLite uses Roslyn Source Generators to create optimized serialization code at compile-time. This eliminates reflection overhead and enables zero-allocation I/O.</p>
+      <p>BLite uses Roslyn Source Generators to create optimized serialization code at compile-time. This eliminates reflection overhead and enables zero-allocation I/O with correct handling of complex type hierarchies.</p>
       
       <div class="info-box">
         <strong>✨ Automatic:</strong> Generators activate automatically when you add the BLite package. No configuration needed!
@@ -109,11 +109,19 @@
     </section>
 
     <section>
-      <h2>Nested Objects</h2>
+      <h2>Nested Objects & Collections</h2>
+      <p>BLite generators correctly handle deeply nested object graphs, collections, and ref structs:</p>
       <pre><code><span class="keyword">public class</span> <span class="type">Address</span>
 {
     <span class="keyword">public string</span> Street { <span class="keyword">get</span>; <span class="keyword">set</span>; }
     <span class="keyword">public string</span> City { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public</span> (<span class="keyword">double</span> Lat, <span class="keyword">double</span> Lng) Coordinates { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+}
+
+<span class="keyword">public class</span> <span class="type">Order</span>
+{
+    <span class="keyword">public</span> <span class="type">ObjectId</span> Id { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public</span> <span class="type">List</span>&lt;<span class="type">string</span>&gt; Tags { <span class="keyword">get</span>; <span class="keyword">set</span>; }
 }
 
 <span class="keyword">public class</span> <span class="type">Customer</span>
@@ -123,9 +131,24 @@
     
     <span class="keyword">public string</span> Name { <span class="keyword">get</span>; <span class="keyword">set</span>; }
     
-    <span class="comment">// Automatically mapped</span>
+    <span class="comment">// Nested object - automatically mapped</span>
     <span class="keyword">public</span> <span class="type">Address</span> ShippingAddress { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    
+    <span class="comment">// Collection of nested objects - fully supported</span>
+    <span class="keyword">public</span> <span class="type">List</span>&lt;<span class="type">Order</span>&gt; Orders { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    
+    <span class="comment">// Nested collections</span>
+    <span class="keyword">public</span> <span class="type">Dictionary</span>&lt;<span class="keyword">string</span>, <span class="type">List</span>&lt;<span class="keyword">int</span>&gt;&gt; Metadata { <span class="keyword">get</span>; <span class="keyword">set</span>; }
 }</code></pre>
+
+      <div class="info-box success">
+        <strong>✨ Recent Improvements (v1.0.3-1.0.4):</strong>
+        <ul>
+          <li>✅ Corrected mapper generation for nested objects and collections</li>
+          <li>✅ Fixed ref struct handling for nested object serialization</li>
+          <li>✅ Enhanced support for complex type hierarchies</li>
+        </ul>
+      </div>
     </section>
   </div>
 </template>
@@ -149,4 +172,7 @@ pre code { background: none; padding: 0; color: var(--text-secondary); }
 .number { color: #06b6d4; }
 .comment { color: #52525b; font-style: italic; }
 .info-box { padding: 16px 20px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #06b6d4; background: rgba(6, 182, 212, 0.05); }
+.info-box.success { border-left-color: #10b981; background: rgba(16, 185, 129, 0.05); }
+.info-box ul { margin-top: 12px; }
+.info-box li { color: var(--text-secondary); font-size: 0.95rem; }
 </style>

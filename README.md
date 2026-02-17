@@ -129,10 +129,14 @@ db.People.Insert(new Person { Id = 1, Name = "Alice" });
 - **Atomic**: Multi-document transactions.
 - **Durable**: WAL ensures data safety even in power loss.
 - **Isolated**: Snapshot isolation allowing concurrent readers and writers.
+- **Thread-Safe**: Protected with `SemaphoreSlim` to prevent race conditions in concurrent scenarios.
+- **Async-First**: Full async/await support with proper `CancellationToken` handling.
+- **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management (like EF Core).
 
 ### 🔌 Intelligent Source Generation
 - **Zero Reflection**: Mappers are generated at compile-time for zero overhead.
-- **Nested Objects & Collections**: Full support for complex graphs and deep nesting.
+- **Nested Objects & Collections**: Full support for complex graphs, deep nesting, and ref struct handling.
+- **Robust Serialization**: Correctly handles nested objects, collections, and complex type hierarchies.
 - **Lowercase Policy**: BSON keys are automatically persisted as `lowercase` for consistency.
 - **Custom Overrides**: Use `[BsonProperty]` or `[JsonPropertyName]` for manual field naming.
 
@@ -192,13 +196,27 @@ public partial class MyDbContext : DocumentDbContext
     }
 }
 
-// 3. Use naturally
+// 3. Use with Implicit Transactions (Recommended)
 using var db = new MyDbContext("mydb.db");
-db.Users.Insert(new User { Name = "Alice" });
 
+// Operations are tracked automatically
+db.Users.Insert(new User { Name = "Alice" });
+db.Users.Insert(new User { Name = "Bob" });
+
+// Commit all changes at once
+db.SaveChanges();
+
+// 4. Query naturally with LINQ
 var results = db.Users.AsQueryable()
-    .Where(u => u.Name == "Alice")
+    .Where(u => u.Name.StartsWith("A"))
     .AsEnumerable();
+
+// 5. Or use explicit transactions for fine-grained control
+using (var txn = db.BeginTransaction())
+{
+    db.Users.Insert(new User { Name = "Charlie" });
+    txn.Commit(); // Explicit commit
+}
 ```
 
 ---
@@ -207,15 +225,15 @@ var results = db.Users.AsQueryable()
 
 We are actively building the core. Here is where we stand:
 
-- ✅ **Core Storage**: Paged I/O, WAL, Transactions.
+- ✅ **Core Storage**: Paged I/O, WAL, Transactions with thread-safe concurrent access.
 - ✅ **BSON Engine**: Zero-copy Reader/Writer with lowercase policy.
 - ✅ **Indexing**: B-Tree implementation.
 - ✅ **Vector Search**: HNSW implementation for Similarity Search.
 - ✅ **Geospatial Indexing**: Optimized R-Tree with zero-allocation tuple API.
 - ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
-- ✅ **Async I/O**: Full `async`/`await` support for CRUD and Bulk operations.
-- ✅ **Source Generators**: Auto-map POCO/DDD classes (Nested Objects, Collections, Value Objects).
+- ✅ **Async I/O**: Full `async`/`await` support with proper `CancellationToken` handling.
+- ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
 
 ## 🔮 Future Vision
 
