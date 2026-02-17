@@ -2,6 +2,7 @@ using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 
@@ -10,20 +11,17 @@ namespace BLite.Tests;
 public class InsertBulkTests : IDisposable
 {
     private readonly string _testFile;
-    private readonly StorageEngine _storage;
-    private readonly DocumentCollection<User> _collection;
+    private readonly TestDbContext _db;
 
     public InsertBulkTests()
     {
         _testFile = Path.GetTempFileName();
-        _storage = new StorageEngine(_testFile, PageFileConfig.Default);
-        var mapper = new BLite_Tests_UserMapper();
-        _collection = new DocumentCollection<User>(_storage, mapper);
+        _db = new TestDbContext(_testFile);
     }
 
     public void Dispose()
     {
-        _storage.Dispose();
+        _db.Dispose();
     }
 
     [Fact]
@@ -35,9 +33,10 @@ public class InsertBulkTests : IDisposable
             users.Add(new User { Id = BLite.Bson.ObjectId.NewObjectId(), Name = $"User {i}", Age = 20 });
         }
 
-        _collection.InsertBulk(users);
+        _db.Users.InsertBulk(users);
+        _db.SaveChanges();
 
-        var insertedUsers = _collection.FindAll().ToList();
+        var insertedUsers = _db.Users.FindAll().ToList();
 
         Assert.Equal(50, insertedUsers.Count);
     }
@@ -52,8 +51,9 @@ public class InsertBulkTests : IDisposable
             users.Add(new User { Id = BLite.Bson.ObjectId.NewObjectId(), Name = $"User {i} with some long padding text to ensure we fill space {new string('x', 50)}", Age = 20 });
         }
 
-        _collection.InsertBulk(users);
+        _db.Users.InsertBulk(users);
+        _db.SaveChanges();
 
-        Assert.Equal(400, _collection.Count());
+        Assert.Equal(400, _db.Users.Count());
     }
 }

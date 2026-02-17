@@ -3,6 +3,7 @@ using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests;
 
 // Test overflow chains with large document
@@ -17,10 +18,7 @@ try
     if (File.Exists(dbPath)) File.Delete(dbPath);
     if (File.Exists(walPath)) File.Delete(walPath);
 
-    var storage = new StorageEngine(dbPath, PageFileConfig.Default);
-
-    var mapper = new UserMapper();
-    var collection = new DocumentCollection<User>(storage, mapper);
+    var db = new TestDbContext(dbPath);
     
     // Test 1: Insert large document (20KB)
     Console.WriteLine("Test 1: Insert 20KB document");
@@ -30,13 +28,14 @@ try
         Age = 30
     };
     
-    var id = collection.Insert(largeUser);
+    var id = db.Users.Insert(largeUser);
+    db.SaveChanges();
     Console.WriteLine($"  ✅ Inserted large doc: {id}");
     Console.WriteLine($"  Name length: {largeUser.Name.Length} bytes (requires overflow)");
     
     // Test 2: Retrieve large document
     Console.WriteLine("\nTest 2: Retrieve large document");
-    var found = collection.FindById(id);
+    var found = db.Users.FindById(id);
     
     if (found != null && found.Name?.Length == 20_000)
     {
@@ -54,14 +53,15 @@ try
     var small2 = new User { Name = "Charlie", Age = 35 };
     var large2 = new User { Name = new string('Y', 16_000), Age = 40 };
     
-    var id1 = collection.Insert(small1);
-    var id2 = collection.Insert(small2);
-    var id3 = collection.Insert(large2);
-    
+    var id1 = db.Users.Insert(small1);
+    var id2 = db.Users.Insert(small2);
+    var id3 = db.Users.Insert(large2);
+    db.SaveChanges();
+
     Console.WriteLine("  ✅ Inserted: Bob (small), Charlie (small), Dave (30KB large)");
     
     // Test 4: Count
-    var count = collection.Count();
+    var count = db.Users.Count();
     Console.WriteLine($"\nTest 4: Count = {count} (expected 4)");
     if (count == 4)
         Console.WriteLine("  ✅ Count correct!");
@@ -71,7 +71,7 @@ try
     // Test 5: FindAll
     Console.WriteLine("\nTest 5: FindAll (iterate all docs)");
     int foundCount = 0;
-    foreach (var u in collection.FindAll())
+    foreach (var u in db.Users.FindAll())
     {
         foundCount++;
         Console.WriteLine($"  - Name[{u.Name.Length} chars], Age {u.Age}");
@@ -80,11 +80,11 @@ try
     
     // Test 6: Delete large document
     Console.WriteLine("\nTest 6: Delete large document");
-    var deleted = collection.Delete(id);
+    var deleted = db.Users.Delete(id);
     if (deleted)
     {
         Console.WriteLine("  ✅ Deleted large doc");
-        var stillExists = collection.FindById(id);
+        var stillExists = db.Users.FindById(id);
         if (stillExists == null)
             Console.WriteLine("  ✅ Confirmed deletion (not found)");
         else
@@ -99,7 +99,8 @@ try
         Name = new string('Z', 20_000), 
         Age = 99
     };
-    var newId = collection.Insert(recycledUser);
+    var newId = db.Users.Insert(recycledUser);
+    db.SaveChanges();
     
     // We can't easily check page ID without exposing it. 
     // But we can check if the file size grew? Or just trust the logging if we added logging.

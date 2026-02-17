@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 
 namespace BLite.Tests;
@@ -10,18 +11,14 @@ public class DocumentCollectionTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly StorageEngine _storage;
-    private readonly DocumentCollection<User> _collection;
+    private readonly TestDbContext _db;
 
     public DocumentCollectionTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_collection_{Guid.NewGuid()}.wal");
         
-        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-
-        var mapper = new BLite_Tests_UserMapper();
-        _collection = new DocumentCollection<User>(_storage, mapper);
+        _db = new TestDbContext(_dbPath);
     }
 
     [Fact]
@@ -31,8 +28,9 @@ public class DocumentCollectionTests : IDisposable
         var user = new User { Name = "Alice", Age = 30 };
         
         // Act
-        var id = _collection.Insert(user);
-        var found = _collection.FindById(id);
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
+        var found = _db.Users.FindById(id);
         
         // Assert
         Assert.NotNull(found);
@@ -45,7 +43,7 @@ public class DocumentCollectionTests : IDisposable
     public void FindById_Returns_Null_When_Not_Found()
     {
         // Act
-        var found = _collection.FindById(ObjectId.NewObjectId());
+        var found = _db.Users.FindById(ObjectId.NewObjectId());
         
         // Assert
         Assert.Null(found);
@@ -55,12 +53,13 @@ public class DocumentCollectionTests : IDisposable
     public void FindAll_Returns_All_Entities()
     {
         // Arrange
-        _collection.Insert(new User { Name = "Alice", Age = 30 });
-        _collection.Insert(new User { Name = "Bob", Age = 25 });
-        _collection.Insert(new User { Name = "Charlie", Age = 35 });
-        
+        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
+        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
+        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
+        _db.SaveChanges();
+
         // Act
-        var all = _collection.FindAll().ToList();
+        var all = _db.Users.FindAll().ToList();
         
         // Assert
         Assert.Equal(3, all.Count);
@@ -74,16 +73,18 @@ public class DocumentCollectionTests : IDisposable
     {
         // Arrange
         var user = new User { Name = "Alice", Age = 30 };
-        var id = _collection.Insert(user);
-        
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
+
         // Act
         user.Age = 31;
-        var updated = _collection.Update(user);
-        
+        var updated = _db.Users.Update(user);
+        _db.SaveChanges();
+
         // Assert
         Assert.True(updated);
         
-        var found = _collection.FindById(id);
+        var found = _db.Users.FindById(id);
         Assert.NotNull(found);
         Assert.Equal(31, found.Age);
     }
@@ -95,7 +96,8 @@ public class DocumentCollectionTests : IDisposable
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Ghost", Age = 99 };
         
         // Act
-        var updated = _collection.Update(user);
+        var updated = _db.Users.Update(user);
+        _db.SaveChanges();
         
         // Assert
         Assert.False(updated);
@@ -106,22 +108,25 @@ public class DocumentCollectionTests : IDisposable
     {
         // Arrange
         var user = new User { Name = "Alice", Age = 30 };
-        var id = _collection.Insert(user);
+        var id = _db.Users.Insert(user);
+        _db.SaveChanges();
         
         // Act
-        var deleted = _collection.Delete(id);
-        
+        var deleted = _db.Users.Delete(id);
+        _db.SaveChanges();
+
         // Assert
         Assert.True(deleted);
-        Assert.Null(_collection.FindById(id));
+        Assert.Null(_db.Users.FindById(id));
     }
 
     [Fact]
     public void Delete_Returns_False_When_Not_Found()
     {
         // Act
-        var deleted = _collection.Delete(ObjectId.NewObjectId());
-        
+        var deleted = _db.Users.Delete(ObjectId.NewObjectId());
+        _db.SaveChanges();
+
         // Assert
         Assert.False(deleted);
     }
@@ -130,11 +135,12 @@ public class DocumentCollectionTests : IDisposable
     public void Count_Returns_Correct_Count()
     {
         // Arrange
-        _collection.Insert(new User { Name = "Alice", Age = 30 });
-        _collection.Insert(new User { Name = "Bob", Age = 25 });
-        
+        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
+        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
+        _db.SaveChanges();
+
         // Act
-        var count = _collection.Count();
+        var count = _db.Users.Count();
         
         // Assert
         Assert.Equal(2, count);
@@ -144,12 +150,13 @@ public class DocumentCollectionTests : IDisposable
     public void Find_With_Predicate_Filters_Correctly()
     {
         // Arrange
-        _collection.Insert(new User { Name = "Alice", Age = 30 });
-        _collection.Insert(new User { Name = "Bob", Age = 25 });
-        _collection.Insert(new User { Name = "Charlie", Age = 35 });
-        
+        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
+        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
+        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
+        _db.SaveChanges();
+
         // Act
-        var over30 = _collection.Find(u => u.Age > 30).ToList();
+        var over30 = _db.Users.Find(u => u.Age > 30).ToList();
         
         // Assert
         Assert.Single(over30);
@@ -168,11 +175,12 @@ public class DocumentCollectionTests : IDisposable
         };
         
         // Act
-        var count = _collection.InsertBulk(users);
-        
+        var count = _db.Users.InsertBulk(users);
+        _db.SaveChanges();
+
         // Assert
         Assert.Equal(3, count.Count);
-        Assert.Equal(3, _collection.Count());
+        Assert.Equal(3, _db.Users.Count());
     }
 
     [Fact]
@@ -183,12 +191,13 @@ public class DocumentCollectionTests : IDisposable
         var user = new User { Id = id, Name = "SpecifiedID", Age = 40 };
 
         // Act
-        var insertedId = _collection.Insert(user);
+        var insertedId = _db.Users.Insert(user);
+        _db.SaveChanges();
 
         // Assert
         Assert.Equal(id, insertedId);
         
-        var found = _collection.FindById(id);
+        var found = _db.Users.FindById(id);
         Assert.NotNull(found);
         Assert.Equal(id, found.Id);
         Assert.Equal("SpecifiedID", found.Name);
@@ -196,6 +205,6 @@ public class DocumentCollectionTests : IDisposable
 
     public void Dispose()
     {
-        _storage?.Dispose();
+        _db?.Dispose();
     }
 }

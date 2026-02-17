@@ -10,12 +10,23 @@ namespace BLite.Core;
 /// Inherit and add DocumentCollection{T} properties for your entities.
 /// Use partial class for Source Generator integration.
 /// </summary>
-public abstract partial class DocumentDbContext : IDisposable
+public abstract partial class DocumentDbContext : IDisposable, ITransactionHolder
 {
-    public readonly StorageEngine _storage;
+    protected readonly StorageEngine _storage;
     internal readonly CDC.ChangeStreamDispatcher _cdc;
-    public bool _disposed;
-    
+    protected bool _disposed;
+    private readonly SemaphoreSlim _transactionLock = new SemaphoreSlim(1, 1);
+    public ITransaction? CurrentTransaction
+    {
+        get
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(DocumentDbContext));
+            return field != null && (field.State == TransactionState.Active) ? field : null;
+        }
+        private set;
+    }
+
     /// <summary>
     /// Creates a new database context with default configuration
     /// </summary>
@@ -57,7 +68,7 @@ public abstract partial class DocumentDbContext : IDisposable
     protected virtual void OnModelCreating(ModelBuilder modelBuilder)
     {
     }
-    
+
     /// <summary>
     /// Helper to create a DocumentCollection instance with custom TId.
     /// Used by derived classes in InitializeCollections for typed primary keys.
@@ -67,7 +78,7 @@ public abstract partial class DocumentDbContext : IDisposable
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-        
+
         string? customName = null;
         EntityTypeBuilder<T>? builder = null;
 
@@ -78,7 +89,7 @@ public abstract partial class DocumentDbContext : IDisposable
         }
 
         _registeredMappers.Add(mapper);
-        var collection = new DocumentCollection<TId, T>(_storage, mapper, customName);
+        var collection = new DocumentCollection<TId, T>(_storage, this, mapper, customName);
 
         // Apply configurations from ModelBuilder
         if (builder != null)
@@ -93,27 +104,103 @@ public abstract partial class DocumentDbContext : IDisposable
 
         return collection;
     }
-    
+
     public void Dispose()
     {
         if (_disposed)
             return;
-        
+
         _disposed = true;
-        
+
         _storage?.Dispose();
         _cdc?.Dispose();
-        
+        _transactionLock?.Dispose();
+
         GC.SuppressFinalize(this);
     }
 
     public ITransaction BeginTransaction()
     {
-        return _storage.BeginTransaction();
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+        
+        _transactionLock.Wait();
+        try
+        {
+            if (CurrentTransaction != null)
+                return CurrentTransaction; // Return existing active transaction
+            CurrentTransaction = _storage.BeginTransaction();
+            return CurrentTransaction;
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
     }
 
     public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
-        return await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+        
+        bool lockAcquired = false;
+        try
+        {
+            await _transactionLock.WaitAsync(ct);
+            lockAcquired = true;
+            
+            if (CurrentTransaction != null)
+                return CurrentTransaction; // Return existing active transaction
+            CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            return CurrentTransaction;
+        }
+        finally
+        {
+            if (lockAcquired)
+                _transactionLock.Release();
+        }
+    }
+
+    public ITransaction GetCurrentTransactionOrStart()
+    {
+        return BeginTransaction();
+    }
+
+    public async Task<ITransaction> GetCurrentTransactionOrStartAsync()
+    {
+        return await BeginTransactionAsync();
+    }
+
+    public void SaveChanges()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+        if (CurrentTransaction != null)
+        {
+            try
+            {
+                CurrentTransaction.Commit();
+            }
+            finally
+            {
+                CurrentTransaction = null;
+            }
+        }
+    }
+    public async Task SaveChangesAsync(CancellationToken ct = default)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+        if (CurrentTransaction != null)
+        {
+            try
+            {
+                await CurrentTransaction.CommitAsync(ct);
+            }
+            finally
+            {
+                CurrentTransaction = null;
+            }
+        }
     }
 }

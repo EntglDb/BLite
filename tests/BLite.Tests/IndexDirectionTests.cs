@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
+using BLite.Shared;
 using System;
 using Xunit;
 
@@ -34,13 +35,14 @@ public class IndexDirectionTests : IDisposable
 
         var people = Enumerable.Range(1, 100).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
         collection.InsertBulk(people);
+        _db.SaveChanges();
 
         // Scan Forward
         var results = index.Range(10, 20, IndexDirection.Forward).ToList();
 
         Assert.Equal(11, results.Count); // 10 to 20 inclusive
-        Assert.Equal(10, collection.FindByLocation(results.First(), null)!.Age); // First is 10
-        Assert.Equal(20, collection.FindByLocation(results.Last(), null)!.Age);  // Last is 20
+        Assert.Equal(10, collection.FindByLocation(results.First())!.Age); // First is 10
+        Assert.Equal(20, collection.FindByLocation(results.Last())!.Age);  // Last is 20
     }
 
     [Fact]
@@ -51,13 +53,14 @@ public class IndexDirectionTests : IDisposable
 
         var people = Enumerable.Range(1, 100).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
         collection.InsertBulk(people);
+        _db.SaveChanges();
 
         // Scan Backward
         var results = index.Range(10, 20, IndexDirection.Backward).ToList();
 
         Assert.Equal(11, results.Count); // 10 to 20 inclusive
-        Assert.Equal(20, collection.FindByLocation(results.First(), null)!.Age); // First is 20 (Reverse)
-        Assert.Equal(10, collection.FindByLocation(results.Last(), null)!.Age);  // Last is 10
+        Assert.Equal(20, collection.FindByLocation(results.First())!.Age); // First is 20 (Reverse)
+        Assert.Equal(10, collection.FindByLocation(results.Last())!.Age);  // Last is 10
     }
 
     [Fact]
@@ -72,6 +75,7 @@ public class IndexDirectionTests : IDisposable
         var count = 1000;
         var people = Enumerable.Range(1, count).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
         collection.InsertBulk(people);
+        _db.SaveChanges();
 
         // Scan ALL Backward
         var results = index.Range(null, null, IndexDirection.Backward).ToList();

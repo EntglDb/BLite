@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using BLite.Tests.TestDbContext_TestDbContext_Mappers;
 using Xunit;
 
@@ -11,45 +12,43 @@ public class DocumentCollectionDeleteTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly string _walPath;
-    private readonly StorageEngine _storage;
-    private readonly DocumentCollection<User> _collection;
+    private readonly TestDbContext _dbContext;
 
     public DocumentCollectionDeleteTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_delete_{Guid.NewGuid()}.db");
         _walPath = Path.Combine(Path.GetTempPath(), $"test_delete_{Guid.NewGuid()}.wal");
 
-        _storage = new StorageEngine(_dbPath, PageFileConfig.Default);
-
-        var mapper = new BLite_Tests_UserMapper();
-        _collection = new DocumentCollection<User>(_storage, mapper);
+        _dbContext = new TestDbContext(_dbPath);
     }
 
     public void Dispose()
     {
-        _storage.Dispose();
+        _dbContext.Dispose();
     }
 
     [Fact]
     public void Delete_RemovesDocumentAndIndexEntry()
     {
         var user = new User { Id = ObjectId.NewObjectId(), Name = "To Delete", Age = 10 };
-        _collection.Insert(user);
+        _dbContext.Users.Insert(user);
+        _dbContext.SaveChanges();
 
         // Verify inserted
-        Assert.NotNull(_collection.FindById(user.Id));
+        Assert.NotNull(_dbContext.Users.FindById(user.Id));
 
         // Delete
-        var deleted = _collection.Delete(user.Id);
+        var deleted = _dbContext.Users.Delete(user.Id);
+        _dbContext.SaveChanges();
 
         // Assert
         Assert.True(deleted, "Delete returned false");
 
         // Verify deleted from storage
-        Assert.Null(_collection.FindById(user.Id));
+        Assert.Null(_dbContext.Users.FindById(user.Id));
 
         // Verify Index is clean (FindAll uses index scan)
-        var all = _collection.FindAll();
+        var all = _dbContext.Users.FindAll();
         Assert.Empty(all);
     }
 
@@ -57,7 +56,8 @@ public class DocumentCollectionDeleteTests : IDisposable
     public void Delete_NonExistent_ReturnsFalse()
     {
         var id = ObjectId.NewObjectId();
-        var deleted = _collection.Delete(id);
+        var deleted = _dbContext.Users.Delete(id);
+        _dbContext.SaveChanges();
         Assert.False(deleted);
     }
 
@@ -65,28 +65,16 @@ public class DocumentCollectionDeleteTests : IDisposable
     public void Delete_WithTransaction_CommitsSuccessfully()
     {
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Txn Delete", Age = 20 };
-        _collection.Insert(user);
+        _dbContext.Users.Insert(user);
+        _dbContext.SaveChanges();
 
-        using (var txn = _collection.BeginTransaction())
+        using (var txn = _dbContext.BeginTransaction())
         {
-            _collection.Delete(user.Id); // Should use txn internally if passed? 
-                                         // Wait, DocumentCollection.Delete(id) creates its own internal transaction if not passed.
-                                         // But if we want to comprise it in a larger txn, we need Delete(id, txn) overload?
-                                         // Checking DocumentCollection.cs... Delete(ObjectId id) does NOT take a transaction.
-                                         // It creates one internally.
-
-            // So we cannot test external transaction for Delete yet unless we verify Delete creates its own.
-            // But Insert(user) was auto-committed.
-
-            // Step back: DocumentCollection.Delete implementation:
-            // var txn = _txnManager.BeginTransaction();
-            // ...
-            // txn.Commit();
-
-            // So it effectively wraps in a transaction.
+            _dbContext.Users.Delete(user.Id);
+            _dbContext.SaveChanges();
         }
 
         // Verify
-        Assert.Null(_collection.FindById(user.Id));
+        Assert.Null(_dbContext.Users.FindById(user.Id));
     }
 }

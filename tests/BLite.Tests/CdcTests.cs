@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core.CDC;
 using BLite.Core.Transactions;
+using BLite.Shared;
 using Xunit;
 
 namespace BLite.Tests;
@@ -28,6 +29,7 @@ public class CdcTests : IDisposable
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
         _db.People.Insert(person);
+        _db.SaveChanges();
 
         // Wait for event (it's async via Channel)
         await Task.Delay(200);
@@ -47,6 +49,7 @@ public class CdcTests : IDisposable
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
         _db.People.Insert(person);
+        _db.SaveChanges();
 
         await Task.Delay(200);
 
@@ -60,9 +63,9 @@ public class CdcTests : IDisposable
         var events = new List<ChangeStreamEvent<int, Person>>();
         using var subscription = _db.People.Watch(capturePayload: true).Subscribe(e => events.Add(e));
 
-        using (var txn = _db._storage.BeginTransaction())
+        using (var txn = _db.BeginTransaction())
         {
-            _db.People.Insert(new Person { Id = 1, Name = "John" }, txn);
+            _db.People.Insert(new Person { Id = 1, Name = "John" });
             await Task.Delay(50);
             Assert.Empty(events); // Not committed yet
 
@@ -72,9 +75,9 @@ public class CdcTests : IDisposable
         await Task.Delay(200);
         Assert.Empty(events); // Rolled back
 
-        using (var txn = _db._storage.BeginTransaction())
+        using (var txn = _db.BeginTransaction())
         {
-            _db.People.Insert(new Person { Id = 2, Name = "Jane" }, txn);
+            _db.People.Insert(new Person { Id = 2, Name = "Jane" });
             txn.Commit();
         }
 
@@ -91,11 +94,14 @@ public class CdcTests : IDisposable
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
         _db.People.Insert(person);
-        
+        _db.SaveChanges();
+
         person.Name = "Johnny";
         _db.People.Update(person);
-        
+        _db.SaveChanges();
+
         _db.People.Delete(1);
+        _db.SaveChanges();
 
         await Task.Delay(300);
 
