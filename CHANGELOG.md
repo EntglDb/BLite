@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.0.4"></a>
+## [1.0.4](https://www.github.com/EntglDb/BLite/releases/tag/v1.0.4) (2026-02-17)
+
+### Bug Fixes
+
+* **source-generators:** correct ref struct handling for nested object serialization ([079d8c0](https://www.github.com/EntglDb/BLite/commit/079d8c0a5acb6f24820fc0f01f4be2c8fe6c8bb6))
+
 <a name="1.0.3"></a>
 ## [1.0.3](https://www.github.com/EntglDb/BLite/releases/tag/v1.0.3) (2026-02-17)
 
