@@ -235,7 +235,10 @@ public class NestedObjectWithIdTests : IDisposable
         bool foundIdField = false;
         bool foundUnderscoreIdField = false;
         
-        while (reader.Position < docSize + 4 - 4) // -4 for size itself
+        // ReadDocumentSize returns the full document size including the 4-byte size field itself
+        // Position is already advanced by 4 bytes after ReadDocumentSize
+        // So we read until position reaches the original position + docSize - 4
+        while (reader.Position < docSize - 4)
         {
             var bsonType = reader.ReadBsonType();
             if (bsonType == BsonType.EndOfDocument) break;
