@@ -151,13 +151,32 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-        CurrentTransaction?.Commit();
+        if (CurrentTransaction != null)
+        {
+            try
+            {
+                CurrentTransaction.Commit();
+            }
+            finally
+            {
+                CurrentTransaction = null;
+            }
+        }
     }
     public async Task SaveChangesAsync(CancellationToken ct = default)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         if (CurrentTransaction != null)
-            await CurrentTransaction.CommitAsync(ct);
+        {
+            try
+            {
+                await CurrentTransaction.CommitAsync(ct);
+            }
+            finally
+            {
+                CurrentTransaction = null;
+            }
+        }
     }
 }
