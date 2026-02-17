@@ -12,6 +12,7 @@
     <Description>High-Performance BSON Database Engine for .NET</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <RepositoryUrl>https://github.com/EntglDb/BLite</RepositoryUrl>
     <PackageTags>database;embedded;bson;nosql;net10;zero-allocation</PackageTags>
   </PropertyGroup>
