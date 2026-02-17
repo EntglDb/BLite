@@ -6,13 +6,13 @@
     <Description>High-Performance BSON Database Engine for .NET 10</Description>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>false</SuppressDependenciesWhenPacking>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\BLite.Core\BLite.Core.csproj" />
     <ProjectReference Include="..\BLite.Bson\BLite.Bson.csproj" />
-    <ProjectReference Include="..\BLite.SourceGenerators\BLite.SourceGenerators.csproj" 
-                      PrivateAssets="none" />
+    <ProjectReference Include="..\BLite.SourceGenerators\BLite.SourceGenerators.csproj" PrivateAssets="none" />
   </ItemGroup>
 
   <ItemGroup>
