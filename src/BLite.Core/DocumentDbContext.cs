@@ -15,6 +15,7 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
     protected readonly StorageEngine _storage;
     internal readonly CDC.ChangeStreamDispatcher _cdc;
     protected bool _disposed;
+    private readonly SemaphoreSlim _transactionLock = new SemaphoreSlim(1, 1);
     public ITransaction? CurrentTransaction
     {
         get
@@ -113,6 +114,7 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
 
         _storage?.Dispose();
         _cdc?.Dispose();
+        _transactionLock?.Dispose();
 
         GC.SuppressFinalize(this);
     }
@@ -121,20 +123,38 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-        if (CurrentTransaction != null)
-            return CurrentTransaction; // Return existing active transaction
-        CurrentTransaction = _storage.BeginTransaction();
-        return CurrentTransaction;
+        
+        _transactionLock.Wait();
+        try
+        {
+            if (CurrentTransaction != null)
+                return CurrentTransaction; // Return existing active transaction
+            CurrentTransaction = _storage.BeginTransaction();
+            return CurrentTransaction;
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
     }
 
     public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-        if (CurrentTransaction != null)
-            return CurrentTransaction; // Return existing active transaction
-        CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        return CurrentTransaction;
+        
+        await _transactionLock.WaitAsync(ct);
+        try
+        {
+            if (CurrentTransaction != null)
+                return CurrentTransaction; // Return existing active transaction
+            CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            return CurrentTransaction;
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
     }
 
     public ITransaction GetCurrentTransactionOrStart()
