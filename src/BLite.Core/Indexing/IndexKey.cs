@@ -1,4 +1,6 @@
 using BLite.Bson;
+using System;
+using System.Linq;
 
 namespace BLite.Core.Indexing;
 

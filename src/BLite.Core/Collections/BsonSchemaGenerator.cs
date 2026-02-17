@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using BLite.Bson;
+using System;
 
 namespace BLite.Core.Collections;
 

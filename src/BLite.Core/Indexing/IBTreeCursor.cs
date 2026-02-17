@@ -1,4 +1,5 @@
 using BLite.Core.Indexing;
+using System;
 
 namespace BLite.Core.Indexing;
 

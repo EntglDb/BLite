@@ -1,3 +1,5 @@
+using System;
+
 namespace BLite.Bson;
 
 /// <summary>

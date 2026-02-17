@@ -12,6 +12,9 @@ using System.Runtime.InteropServices;
 using System.Linq;
 using System.Linq.Expressions;
 using BLite.Core.Query;
+using System.Collections.Generic;
+using System;
+using System.Threading;
 
 [assembly: InternalsVisibleTo("BLite.Tests")]
 

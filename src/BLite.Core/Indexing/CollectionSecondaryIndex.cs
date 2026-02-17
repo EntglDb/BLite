@@ -3,6 +3,9 @@ using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using BLite.Core.Indexing.Internal;
+using System;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace BLite.Core.Indexing;
 

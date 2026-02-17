@@ -1,6 +1,8 @@
 using System.Buffers;
 using BLite.Core.Storage;
 using BLite.Bson;
+using System.Collections.Generic;
+using System;
 
 namespace BLite.Core.Indexing;
 

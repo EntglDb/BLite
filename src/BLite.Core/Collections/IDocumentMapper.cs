@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.Indexing;
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 
 namespace BLite.Core.Collections;
 
