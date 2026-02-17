@@ -23,7 +23,12 @@ jobs:
       run: dotnet restore
       
     - name: Build
-      run: dotnet build --no-restore -c Release
+      run: |
+        dotnet build src/BLite.Bson/BLite.Bson.csproj --no-restore -c Release
+        dotnet build src/BLite.Core/BLite.Core.csproj --no-restore -c Release
+        dotnet build src/BLite.SourceGenerators/BLite.SourceGenerators.csproj --no-restore -c Release
+        dotnet build src/BLite/BLite.csproj --no-restore -c Release
+        dotnet build tests/BLite.Tests/BLite.Tests.csproj --no-restore -c Release
       
     - name: Test
       run: dotnet test tests/BLite.Tests/BLite.Tests.csproj --no-build -c Release
