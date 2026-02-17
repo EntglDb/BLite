@@ -8,17 +8,18 @@ using BLite.SourceGenerators.Models;
 
 namespace BLite.SourceGenerators
 {
-    public class DbContextInfo
-    {
-        public string ClassName { get; set; } = "";
-        public string FullClassName => string.IsNullOrEmpty(Namespace) ? ClassName : $"{Namespace}.{ClassName}";
-        public string Namespace { get; set; } = "";
-        public string FilePath { get; set; } = "";
-        public bool IsNested { get; set; }
-        public bool IsPartial { get; set; }
-        public List<EntityInfo> Entities { get; set; } = new List<EntityInfo>();
-        public Dictionary<string, NestedTypeInfo> GlobalNestedTypes { get; set; } = new Dictionary<string, NestedTypeInfo>();
-    }
+public class DbContextInfo
+{
+    public string ClassName { get; set; } = "";
+    public string FullClassName => string.IsNullOrEmpty(Namespace) ? ClassName : $"{Namespace}.{ClassName}";
+    public string Namespace { get; set; } = "";
+    public string FilePath { get; set; } = "";
+    public bool IsNested { get; set; }
+    public bool IsPartial { get; set; }
+    public bool HasBaseDbContext { get; set; } // True if inherits from another DbContext (not DocumentDbContext directly)
+    public List<EntityInfo> Entities { get; set; } = new List<EntityInfo>();
+    public Dictionary<string, NestedTypeInfo> GlobalNestedTypes { get; set; } = new Dictionary<string, NestedTypeInfo>();
+}
 
     [Generator]
     public class MapperGenerator : IIncrementalGenerator
@@ -41,6 +42,8 @@ namespace BLite.SourceGenerators
 
                 var sb = new StringBuilder();
                 sb.AppendLine($"// Found DbContext: {dbContext.ClassName}");
+                sb.AppendLine($"// BaseType: {(dbContext.HasBaseDbContext ? "inherits from another DbContext" : "inherits from DocumentDbContext directly")}");
+                
                 
                 foreach (var entity in dbContext.Entities)
                 {
@@ -132,6 +135,12 @@ namespace BLite.SourceGenerators
                     sb.AppendLine($"        protected override void InitializeCollections()");
                     sb.AppendLine($"        {{");
                     
+                    // Call base.InitializeCollections() if this context inherits from another DbContext
+                    if (dbContext.HasBaseDbContext)
+                    {
+                        sb.AppendLine($"            base.InitializeCollections();");
+                    }
+                    
                     foreach(var entity in dbContext.Entities)
                     {
                         if (!string.IsNullOrEmpty(entity.CollectionPropertyName))
@@ -207,13 +216,20 @@ namespace BLite.SourceGenerators
             if (!SyntaxHelper.InheritsFrom(classSymbol, "DocumentDbContext"))
                 return null;
             
+            // Check if this context inherits from another DbContext (not DocumentDbContext directly)
+            var baseType = classSymbol.BaseType;
+            bool hasBaseDbContext = baseType != null && 
+                                    baseType.Name != "DocumentDbContext" && 
+                                    SyntaxHelper.InheritsFrom(baseType, "DocumentDbContext");
+            
             var info = new DbContextInfo
             {
                 ClassName = classSymbol.Name,
                 Namespace = classSymbol.ContainingNamespace.ToDisplayString(),
                 FilePath = classDecl.SyntaxTree.FilePath,
                 IsNested = classSymbol.ContainingType != null,
-                IsPartial = classDecl.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword))
+                IsPartial = classDecl.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)),
+                HasBaseDbContext = hasBaseDbContext
             };
             
             // Analyze OnModelCreating to find entities
@@ -301,15 +317,15 @@ namespace BLite.SourceGenerators
                                         else if (converterType != null)
                                         {
                                             // Fallback: search deeper in base types
-                                            var baseType = converterType.BaseType;
-                                            while (baseType != null)
+                                            var converterBaseType = converterType.BaseType;
+                                            while (converterBaseType != null)
                                             {
-                                                if (baseType.Name == "ValueConverter" && baseType.TypeArguments.Length == 2)
+                                                if (converterBaseType.Name == "ValueConverter" && converterBaseType.TypeArguments.Length == 2)
                                                 {
-                                                    prop.ProviderTypeName = baseType.TypeArguments[1].Name;
+                                                    prop.ProviderTypeName = converterBaseType.TypeArguments[1].Name;
                                                     break;
                                                 }
-                                                baseType = baseType.BaseType;
+                                                converterBaseType = converterBaseType.BaseType;
                                             }
                                         }
                                     }

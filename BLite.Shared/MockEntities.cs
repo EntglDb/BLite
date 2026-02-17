@@ -191,4 +191,14 @@ namespace BLite.Shared
         public string Name { get; set; } = string.Empty;
         public int Age { get; set; }
     }
+
+    /// <summary>
+    /// Entity used to test DbContext inheritance
+    /// </summary>
+    public class ExtendedEntity
+    {
+        public int Id { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
+    }
 }
