@@ -35,10 +35,14 @@ jobs:
       
     - name: Pack
       run: |
-        # Strip 'v' from tag name if present
-        VERSION=${GITHUB_REF#refs/tags/}
-        VERSION=${VERSION#v}
-        if [ "$VERSION" = "" ]; then VERSION="1.0.0-dev"; fi
+        # Extract version from tag, handling both tag push and workflow_dispatch
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${VERSION#v}
+        else
+          # For workflow_dispatch, use default development version
+          VERSION="1.0.0-dev"
+        fi
         echo "Packing version: $VERSION"
         
         # Pack individual projects that should be published to NuGet
