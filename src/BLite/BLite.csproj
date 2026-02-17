@@ -3,9 +3,14 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <PackageId>BLite</PackageId>
+    <Version>1.0.4</Version>
+    <Authors>BLite Team</Authors>
     <Description>High-Performance BSON Database Engine for .NET 10</Description>
-    <IncludeBuildOutput>false</IncludeBuildOutput>
-    <SuppressDependenciesWhenPacking>false</SuppressDependenciesWhenPacking>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <RepositoryUrl>https://github.com/EntglDb/BLite</RepositoryUrl>
+    <PackageTags>database;embedded;bson;nosql;net10;zero-allocation</PackageTags>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
 
