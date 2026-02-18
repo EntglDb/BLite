@@ -119,11 +119,13 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
 
     /// <summary>
     /// Gets a collection for managing documents of type T, identified by keys of type TId.
+    /// Override is generated automatically by the Source Generator for partial DbContext classes.
     /// </summary>
     /// <typeparam name="TId">The type of the unique identifier for documents in the collection.</typeparam>
     /// <typeparam name="T">The type of the document to be managed. Must be a reference type.</typeparam>
     /// <returns>A DocumentCollection<TId, T> instance for performing operations on documents of type T.</returns>
-    public abstract DocumentCollection<TId, T> Set<TId, T>() where T : class;
+    public virtual DocumentCollection<TId, T> Set<TId, T>() where T : class
+        => throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
 
     public void Dispose()
     {

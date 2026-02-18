@@ -138,3 +138,92 @@ public class SetMethodTests : IDisposable
         Assert.Equal(9.99m, found.Price);
     }
 }
+
+public class SetMethodInheritanceTests : IDisposable
+{
+    private readonly string _dbPath;
+    private readonly TestExtendedDbContext _db;
+
+    public SetMethodInheritanceTests()
+    {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"blite_set_inherit_{Guid.NewGuid()}.db");
+        _db = new TestExtendedDbContext(_dbPath);
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
+        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+    }
+
+    [Fact]
+    public void Set_OwnCollection_ReturnsCorrectInstance()
+    {
+        var collection = _db.Set<int, ExtendedEntity>();
+        Assert.NotNull(collection);
+        Assert.Same(_db.ExtendedEntities, collection);
+    }
+
+    [Fact]
+    public void Set_ParentCollection_ReturnsCorrectInstance()
+    {
+        var collection = _db.Set<ObjectId, User>();
+        Assert.NotNull(collection);
+        Assert.Same(_db.Users, collection);
+    }
+
+    [Fact]
+    public void Set_ParentShorthand_ReturnsCorrectInstance()
+    {
+        var collection = _db.Set<User>();
+        Assert.NotNull(collection);
+        Assert.Same(_db.Users, collection);
+    }
+
+    [Fact]
+    public void Set_ParentIntCollection_ReturnsCorrectInstance()
+    {
+        Assert.Same(_db.People, _db.Set<int, Person>());
+        Assert.Same(_db.Products, _db.Set<int, Product>());
+    }
+
+    [Fact]
+    public void Set_ParentCustomKey_ReturnsCorrectInstance()
+    {
+        var collection = _db.Set<OrderId, Order>();
+        Assert.NotNull(collection);
+        Assert.Same(_db.Orders, collection);
+    }
+
+    [Fact]
+    public void Set_UnregisteredEntity_ThrowsInvalidOperationException()
+    {
+        Assert.Throws<InvalidOperationException>(() => _db.Set<ObjectId, Address>());
+    }
+
+    [Fact]
+    public void Set_OwnCollection_CanPerformOperations()
+    {
+        var entities = _db.Set<int, ExtendedEntity>();
+
+        var entity = new ExtendedEntity { Id = 1, Description = "Test", CreatedAt = DateTime.UtcNow };
+        entities.Insert(entity);
+
+        var found = entities.FindById(1);
+        Assert.NotNull(found);
+        Assert.Equal("Test", found.Description);
+    }
+
+    [Fact]
+    public void Set_ParentCollection_CanPerformOperations()
+    {
+        var users = _db.Set<User>();
+
+        var user = new User { Name = "Bob", Age = 25 };
+        var id = users.Insert(user);
+
+        var found = users.FindById(id);
+        Assert.NotNull(found);
+        Assert.Equal("Bob", found.Name);
+    }
+}
