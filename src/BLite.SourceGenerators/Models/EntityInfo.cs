@@ -10,6 +10,7 @@ namespace BLite.SourceGenerators.Models
         public string FullTypeName { get; set; } = "";
         public string CollectionName { get; set; } = "";
         public string? CollectionPropertyName { get; set; }
+        public string? CollectionIdTypeFullName { get; set; }
         
         public PropertyInfo? IdProperty => Properties.FirstOrDefault(p => p.IsKey);
         public bool AutoId { get; set; }

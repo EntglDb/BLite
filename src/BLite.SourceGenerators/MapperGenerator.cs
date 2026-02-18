@@ -151,6 +151,38 @@ public class DbContextInfo
                     }
                     
                     sb.AppendLine($"        }}");
+                    sb.AppendLine();
+
+                    // Generate Set<TId, T>() override
+                    var collectionsWithProperties = dbContext.Entities
+                        .Where(e => !string.IsNullOrEmpty(e.CollectionPropertyName) && !string.IsNullOrEmpty(e.CollectionIdTypeFullName))
+                        .ToList();
+
+                    if (collectionsWithProperties.Any())
+                    {
+                        sb.AppendLine($"        public override global::BLite.Core.Collections.DocumentCollection<TId, T> Set<TId, T>()");
+                        sb.AppendLine($"        {{");
+
+                        foreach (var entity in collectionsWithProperties)
+                        {
+                            var entityTypeStr = $"global::{entity.FullTypeName}";
+                            var idTypeStr = entity.CollectionIdTypeFullName;
+                            sb.AppendLine($"            if (typeof(TId) == typeof({idTypeStr}) && typeof(T) == typeof({entityTypeStr}))");
+                            sb.AppendLine($"                return (global::BLite.Core.Collections.DocumentCollection<TId, T>)(object)this.{entity.CollectionPropertyName};");
+                        }
+
+                        if (dbContext.HasBaseDbContext)
+                        {
+                            sb.AppendLine($"            return base.Set<TId, T>();");
+                        }
+                        else
+                        {
+                            sb.AppendLine($"            throw new global::System.InvalidOperationException($\"No collection registered for entity type '{{typeof(T).Name}}' with key type '{{typeof(TId).Name}}'.\");");
+                        }
+
+                        sb.AppendLine($"        }}");
+                    }
+
                     sb.AppendLine($"    }}");
                     sb.AppendLine($"}}");
                 }
@@ -353,6 +385,7 @@ public class DbContextInfo
                         if (entityInfo != null)
                         {
                             entityInfo.CollectionPropertyName = prop.Name;
+                            entityInfo.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                         }
                     }
                 }

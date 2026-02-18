@@ -6,6 +6,7 @@ using System.Threading;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using BLite.Bson;
 
 namespace BLite.Core;
 
@@ -108,6 +109,21 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
 
         return collection;
     }
+
+    /// <summary>
+    /// Gets the document collection for the specified entity type using an ObjectId as the key.
+    /// </summary>
+    /// <typeparam name="T">The type of entity to retrieve the document collection for. Must be a reference type.</typeparam>
+    /// <returns>A DocumentCollection<ObjectId, T> instance for the specified entity type.</returns>
+    public DocumentCollection<ObjectId, T> Set<T>() where T : class => Set<ObjectId, T>();
+
+    /// <summary>
+    /// Gets a collection for managing documents of type T, identified by keys of type TId.
+    /// </summary>
+    /// <typeparam name="TId">The type of the unique identifier for documents in the collection.</typeparam>
+    /// <typeparam name="T">The type of the document to be managed. Must be a reference type.</typeparam>
+    /// <returns>A DocumentCollection<TId, T> instance for performing operations on documents of type T.</returns>
+    public abstract DocumentCollection<TId, T> Set<TId, T>() where T : class;
 
     public void Dispose()
     {
