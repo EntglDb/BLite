@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.1.0"></a>
+## [1.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.1.0) (2026-02-18)
+
+### Features
+
+* adds Set<TId, T> to DocumentDbContext ([f3a6b5d](https://www.github.com/EntglDb/BLite/commit/f3a6b5d645cc1f5fb0d0526307a81cd730d3fb4e))
+
 <a name="1.0.5"></a>
 ## [1.0.5](https://www.github.com/EntglDb/BLite/releases/tag/v1.0.5) (2026-02-17)
 
