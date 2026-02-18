@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.1.1"></a>
+## [1.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.1.1) (2026-02-18)
+
+### Bug Fixes
+
+* inheritance of dbcontext for set method ([dd59f8f](https://www.github.com/EntglDb/BLite/commit/dd59f8f621df4874709d0dd8fda91e895ab01920))
+
 <a name="1.1.0"></a>
 ## [1.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.1.0) (2026-02-18)
 

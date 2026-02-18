@@ -9,7 +9,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     
     <PackageId>BLite.Bson</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Authors>BLite Team</Authors>
     <Description>BSON Serialization Library for High-Performance Database Engine</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
