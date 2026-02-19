@@ -76,7 +76,7 @@
       <h2>Supported Types</h2>
       <ul>
         <li><strong>Primitives:</strong> <code>int</code>, <code>long</code>, <code>double</code>, <code>decimal</code>, <code>bool</code>, <code>string</code></li>
-        <li><strong>DateTime:</strong> <code>DateTime</code>, <code>DateTimeOffset</code></li>
+        <li><strong>Temporal Types:</strong> <code>DateTime</code>, <code>DateTimeOffset</code>, <code>TimeSpan</code>, <code>DateOnly</code>, <code>TimeOnly</code></li>
         <li><strong>Collections:</strong> <code>List&lt;T&gt;</code>, <code>T[]</code>, <code>Dictionary&lt;string, T&gt;</code></li>
         <li><strong>BLite Types:</strong> <code>ObjectId</code>, <code>BsonDocument</code></li>
         <li><strong>Nested Objects:</strong> Automatic recursive mapping</li>
@@ -168,8 +168,10 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.2.1):</strong>
+        <strong>✨ Recent Improvements (v1.3.0):</strong>
         <ul>
+          <li>✅ Full temporal type support: <code>DateTimeOffset</code>, <code>TimeSpan</code>, <code>DateOnly</code>, <code>TimeOnly</code></li>
+          <li>✅ Improved nullable property handling in generated deserializers</li>
           <li>✅ Nullable string Id properties inherited from base classes (<code>BaseEntity&lt;string, T&gt;</code>)</li>
           <li>✅ Property inheritance from base classes</li>
           <li>✅ Private and init-only setters via Expression Trees</li>
