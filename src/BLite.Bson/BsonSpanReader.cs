@@ -192,6 +192,42 @@ public ref struct BsonSpanReader
         return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).UtcDateTime;
     }
 
+    /// <summary>
+    /// Reads a BSON DateTime as DateTimeOffset (UTC milliseconds since Unix epoch)
+    /// </summary>
+    public DateTimeOffset ReadDateTimeOffset()
+    {
+        var milliseconds = ReadInt64();
+        return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
+    }
+
+    /// <summary>
+    /// Reads a TimeSpan from BSON Int64 (ticks)
+    /// </summary>
+    public TimeSpan ReadTimeSpan()
+    {
+        var ticks = ReadInt64();
+        return TimeSpan.FromTicks(ticks);
+    }
+
+    /// <summary>
+    /// Reads a DateOnly from BSON Int32 (day number)
+    /// </summary>
+    public DateOnly ReadDateOnly()
+    {
+        var dayNumber = ReadInt32();
+        return DateOnly.FromDayNumber(dayNumber);
+    }
+
+    /// <summary>
+    /// Reads a TimeOnly from BSON Int64 (ticks)
+    /// </summary>
+    public TimeOnly ReadTimeOnly()
+    {
+        var ticks = ReadInt64();
+        return new TimeOnly(ticks);
+    }
+
     public Guid ReadGuid()
     {
         return Guid.Parse(ReadString());

@@ -395,4 +395,31 @@ namespace BLite.Shared
         public string Name { get; set; } = string.Empty;
         public int Value { get; set; }
     }
+
+    /// <summary>
+    /// Entity for testing temporal types: DateTimeOffset, TimeSpan, DateOnly, TimeOnly
+    /// </summary>
+    public class TemporalEntity
+    {
+        [Key]
+        public ObjectId Id { get; set; }
+        
+        public string Name { get; set; } = string.Empty;
+        
+        // DateTime types
+        public DateTime CreatedAt { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+        public DateTimeOffset? LastAccessedAt { get; set; }
+        
+        // TimeSpan
+        public TimeSpan Duration { get; set; }
+        public TimeSpan? OptionalDuration { get; set; }
+        
+        // DateOnly and TimeOnly (.NET 6+)
+        public DateOnly BirthDate { get; set; }
+        public DateOnly? Anniversary { get; set; }
+        
+        public TimeOnly OpeningTime { get; set; }
+        public TimeOnly? ClosingTime { get; set; }
+    }
 }

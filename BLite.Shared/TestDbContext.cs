@@ -48,6 +48,9 @@ public partial class TestDbContext : DocumentDbContext
     
     // Nullable String Id Test (UuidEntity scenario with inheritance)
     public DocumentCollection<string, MockCounter> MockCounters { get; set; } = null!;
+    
+    // Temporal Types Test (DateTimeOffset, TimeSpan, DateOnly, TimeOnly)
+    public DocumentCollection<ObjectId, TemporalEntity> TemporalEntities { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -99,6 +102,9 @@ public partial class TestDbContext : DocumentDbContext
         
         // Nullable String Id Test (UuidEntity scenario)
         modelBuilder.Entity<MockCounter>().ToCollection("mock_counters").HasKey(e => e.Id);
+        
+        // Temporal Types Test
+        modelBuilder.Entity<TemporalEntity>().ToCollection("temporal_entities").HasKey(e => e.Id);
     }
 
     public void ForceCheckpoint()

@@ -159,7 +159,8 @@ namespace BLite.SourceGenerators.Helpers
             
             var typeName = type.Name;
             if (typeName == "Guid" || typeName == "DateTime" || typeName == "DateTimeOffset" || 
-                typeName == "TimeSpan" || typeName == "Decimal" || typeName == "ObjectId")
+                typeName == "TimeSpan" || typeName == "DateOnly" || typeName == "TimeOnly" || 
+                typeName == "Decimal" || typeName == "ObjectId")
                 return true;
                 
             if (type.TypeKind == TypeKind.Enum)

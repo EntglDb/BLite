@@ -182,6 +182,35 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+    public void WriteDateTimeOffset(string name, DateTimeOffset value)
+    {
+        WriteElementHeader(BsonType.DateTime, name);
+        var milliseconds = value.ToUnixTimeMilliseconds();
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), milliseconds);
+        _position += 8;
+    }
+
+    public void WriteTimeSpan(string name, TimeSpan value)
+    {
+        WriteElementHeader(BsonType.Int64, name);
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value.Ticks);
+        _position += 8;
+    }
+
+    public void WriteDateOnly(string name, DateOnly value)
+    {
+        WriteElementHeader(BsonType.Int32, name);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), value.DayNumber);
+        _position += 4;
+    }
+
+    public void WriteTimeOnly(string name, TimeOnly value)
+    {
+        WriteElementHeader(BsonType.Int64, name);
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value.Ticks);
+        _position += 8;
+    }
+
     public void WriteGuid(string name, Guid value)
     {
         WriteString(name, value.ToString());

@@ -468,7 +468,15 @@ namespace BLite.SourceGenerators
                             // Otherwise keep as List (works for List<T>, IList<T>, ICollection<T>, IEnumerable<T>)
                         }
                     }
-                    sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
+                    // For nullable properties, don't use ?? default! since null is a valid value
+                    if (prop.IsNullable)
+                    {
+                        sb.AppendLine($"                {prop.Name} = {val},");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
+                    }
                 }
                 sb.AppendLine($"            }};");
             }
@@ -709,7 +717,11 @@ namespace BLite.SourceGenerators
             if (cleanType.EndsWith("Single") || cleanType == "float") return "WriteDouble";
             if (cleanType.EndsWith("Double") || cleanType == "double") return "WriteDouble";
             if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return "WriteDecimal128";
-            if (cleanType.EndsWith("DateTime")) return "WriteDateTime";
+            if (cleanType.EndsWith("DateTime") && !cleanType.EndsWith("DateTimeOffset")) return "WriteDateTime";
+            if (cleanType.EndsWith("DateTimeOffset")) return "WriteDateTimeOffset";
+            if (cleanType.EndsWith("TimeSpan")) return "WriteTimeSpan";
+            if (cleanType.EndsWith("DateOnly")) return "WriteDateOnly";
+            if (cleanType.EndsWith("TimeOnly")) return "WriteTimeOnly";
             if (cleanType.EndsWith("Guid")) return "WriteGuid";
             if (cleanType.EndsWith("ObjectId")) return "WriteObjectId";
 
@@ -738,7 +750,11 @@ namespace BLite.SourceGenerators
             if (cleanType.EndsWith("Single") || cleanType == "float") return "ReadDouble";
             if (cleanType.EndsWith("Double") || cleanType == "double") return "ReadDouble";
             if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return "ReadDecimal128";
-            if (cleanType.EndsWith("DateTime")) return "ReadDateTime";
+            if (cleanType.EndsWith("DateTime") && !cleanType.EndsWith("DateTimeOffset")) return "ReadDateTime";
+            if (cleanType.EndsWith("DateTimeOffset")) return "ReadDateTimeOffset";
+            if (cleanType.EndsWith("TimeSpan")) return "ReadTimeSpan";
+            if (cleanType.EndsWith("DateOnly")) return "ReadDateOnly";
+            if (cleanType.EndsWith("TimeOnly")) return "ReadTimeOnly";
             if (cleanType.EndsWith("Guid")) return "ReadGuid";
             if (cleanType.EndsWith("ObjectId")) return "ReadObjectId";
 
@@ -759,6 +775,10 @@ namespace BLite.SourceGenerators
             if (cleanType.EndsWith("Double") || cleanType == "double") return true;
             if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return true;
             if (cleanType.EndsWith("DateTime")) return true;
+            if (cleanType.EndsWith("DateTimeOffset")) return true;
+            if (cleanType.EndsWith("TimeSpan")) return true;
+            if (cleanType.EndsWith("DateOnly")) return true;
+            if (cleanType.EndsWith("TimeOnly")) return true;
             if (cleanType.EndsWith("Guid")) return true;
             if (cleanType.EndsWith("ObjectId")) return true;
             
@@ -798,6 +818,10 @@ namespace BLite.SourceGenerators
                     return baseType + (isNullable ? "?" : "");
                 case "Guid": return "global::System.Guid" + (isNullable ? "?" : "");
                 case "DateTime": return "global::System.DateTime" + (isNullable ? "?" : "");
+                case "DateTimeOffset": return "global::System.DateTimeOffset" + (isNullable ? "?" : "");
+                case "TimeSpan": return "global::System.TimeSpan" + (isNullable ? "?" : "");
+                case "DateOnly": return "global::System.DateOnly" + (isNullable ? "?" : "");
+                case "TimeOnly": return "global::System.TimeOnly" + (isNullable ? "?" : "");
                 case "ObjectId": return "global::BLite.Bson.ObjectId" + (isNullable ? "?" : "");
                 default:
                     return $"global::{typeName}";
