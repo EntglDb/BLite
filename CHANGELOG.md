@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.2.0"></a>
+## [1.2.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.2.0) (2026-02-19)
+
+### Features
+
+* **source-generator:** add circular reference and N-N relationship tests ([d48c8fc](https://www.github.com/EntglDb/BLite/commit/d48c8fc471c9428fdf9b44ce8f8cf194d1c4dbfd))
+* **source-generator:** add private setter/constructor support via Expression Trees ([3d017ba](https://www.github.com/EntglDb/BLite/commit/3d017ba9d8335e8f3ba103872e3740423a3dc414))
+* **source-generator:** improve property and collection analysis ([9506d1f](https://www.github.com/EntglDb/BLite/commit/9506d1fb2a76e3f563ca930503fde3365e98d399))
+
 <a name="1.1.1"></a>
 ## [1.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.1.1) (2026-02-18)
 
