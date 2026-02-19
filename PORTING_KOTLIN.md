@@ -14,7 +14,7 @@ This document analyzes the feasibility of porting BLite to Kotlin, targeting And
 | **Concurrency** (lock, async) | **Coroutines** + `Mutex` + `Channel` | ✅ Excellent | Kotlin coroutines are arguably better than C# async/await |
 | **Generics with constraints** | Reified generics (inline functions), `where` | ✅ Good | `reified` type parameters give runtime type access without reflection |
 | **NativeAOT / Trimming** | Kotlin/Native (LLVM), GraalVM native-image | ✅ Feasible | Kotlin/Native compiles to native binaries via LLVM |
-| **DbContext pattern** | Custom implementation | ✅ Feasible | Kotlin's DSL builders make this very ergonomic |
+| **DocumentDbContext** | `DocumentDatabase` (Room-inspired) | ✅ Excellent | Room's `@Database` pattern is universally known in Kotlin/Android |
 | **Annotations** (`[BCollection]`, `[BIndex]`) | Kotlin annotations (`@BCollection`) | ✅ Feasible | First-class annotation support, processed by KSP |
 | **ACID Transactions** | Custom WAL implementation | ✅ Feasible | Same approach as .NET version |
 | **B-Tree / Hash / R-Tree Indexes** | Custom implementation | ✅ Feasible | Pure algorithmic code |
@@ -120,7 +120,7 @@ blite-kotlin/                        # Root project
 │   ├── commonMain/
 │   │   ├── BLiteDatabase.kt        # Database entry point
 │   │   ├── DocumentCollection.kt   # Collection<T>
-│   │   ├── DocumentDbContext.kt     # Base context class
+│   │   ├── DocumentDatabase.kt      # Base database class (Room-inspired)
 │   │   ├── storage/
 │   │   │   ├── PageFile.kt         # expect class for file I/O
 │   │   │   ├── StorageEngine.kt    # Core engine
@@ -145,7 +145,7 @@ blite-kotlin/                        # Root project
     └── jvmMain/
         ├── BLiteSymbolProcessor.kt  # Main KSP processor
         ├── MapperGenerator.kt       # Generates serializer/deserializer
-        ├── ContextGenerator.kt      # Generates DbContext impl
+        ├── DatabaseGenerator.kt     # Generates DocumentDatabase impl
         └── IndexGenerator.kt        # Generates index key extractors
 ```
 
@@ -174,13 +174,25 @@ data class Address(
 )
 ```
 
-### DbContext
+### Database
+
+In the Kotlin/Android ecosystem, the concept equivalent to .NET's `DbContext` is Room's `@Database`. Every Kotlin/Android developer recognizes this pattern instantly. BLite Kotlin adopts the same naming convention — `DocumentDatabase` with `@BLiteDatabase` — while keeping the API simpler (no DAO layer, direct collection access, like EF Core).
+
+| Concept | EF Core (.NET) | Room (Android) | BLite .NET | BLite Kotlin |
+|---|---|---|---|---|
+| Base class | `DbContext` | `RoomDatabase()` | `DocumentDbContext` | `DocumentDatabase` |
+| Annotation | None (convention) | `@Database` | `[BLiteContext]` | `@BLiteDatabase` |
+| Data access | `DbSet<T>` properties | DAO interfaces | `DocumentCollection<T>` | `DocumentCollection<T>` |
+| Code gen | Runtime reflection | KSP (compile-time) | Roslyn (compile-time) | KSP (compile-time) |
+| Intermediate layer | No | Yes (DAO) | No | No |
+
+The key insight: we take **Room's familiarity** (`@Database` + abstract class + KSP) but keep **EF Core's simplicity** (collections directly on the class, no DAO boilerplate). The word "Database" is preferred over "Context" because in Android, `Context` refers to `android.content.Context` — using it would create confusion.
 
 ```kotlin
 import com.blite.annotations.*
 
-@BLiteContext
-abstract class AppDbContext : DocumentDbContext() {
+@BLiteDatabase
+abstract class AppDatabase : DocumentDatabase() {
     abstract val customers: DocumentCollection<Customer>
     abstract val products: DocumentCollection<Product>
 }
@@ -190,7 +202,7 @@ abstract class AppDbContext : DocumentDbContext() {
 
 ```kotlin
 suspend fun main() {
-    val db = AppDbContext.open("myapp.db")
+    val db = AppDatabase.open("myapp.db")
 
     val customer = Customer(
         name = "Mario Rossi",
@@ -243,6 +255,11 @@ db.transaction {
     products.delete(obsoleteProduct.id)
     // auto-commit on success, auto-rollback on exception
 }
+
+// Open database — familiar to any Room developer
+val db = AppDatabase.open("myapp.db")
+// vs Room:
+// val db = Room.databaseBuilder(context, AppDatabase::class.java, "myapp.db").build()
 ```
 
 This is arguably **more ergonomic than the C# version** thanks to Kotlin's receiver lambdas and infix functions.
