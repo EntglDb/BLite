@@ -19,7 +19,7 @@ namespace BLite.SourceGenerators
             // Class Declaration
             if (isRoot)
             {
-                var baseClass = GetBaseMapperClass(keyProp);
+                var baseClass = GetBaseMapperClass(keyProp, entity);
                 // Ensure FullTypeName has global:: prefix if not already present (assuming FullTypeName is fully qualified)
                 var entityType = $"global::{entity.FullTypeName}";
                 sb.AppendLine($"    public class {mapperName} : global::BLite.Core.Collections.{baseClass}{entityType}>");
@@ -576,7 +576,22 @@ namespace BLite.SourceGenerators
         private static void GenerateIdAccessors(StringBuilder sb, EntityInfo entity)
         {
             var keyProp = entity.Properties.FirstOrDefault(p => p.IsKey);
-            var keyType = keyProp?.TypeName ?? "ObjectId";
+            
+            // Use CollectionIdTypeFullName if available (from DocumentCollection<TId, T> declaration)
+            string keyType;
+            if (!string.IsNullOrEmpty(entity.CollectionIdTypeFullName))
+            {
+                // Remove "global::" prefix if present
+                keyType = entity.CollectionIdTypeFullName!.Replace("global::", "");
+            }
+            else
+            {
+                keyType = keyProp?.TypeName ?? "ObjectId";
+            }
+            
+            // Normalize keyType - remove nullable suffix for the methods
+            // We expect Id to have a value during serialization/deserialization
+            keyType = keyType.TrimEnd('?');
             
             // Normalize keyType
              switch (keyType)
@@ -593,10 +608,20 @@ namespace BLite.SourceGenerators
             }
 
             var entityType = $"global::{entity.FullTypeName}";
-            var qualifiedKeyType = keyType.StartsWith("global::") ? keyType : (keyProp?.ConverterTypeName != null ? $"global::{keyProp.TypeName}" : keyType);
+            var qualifiedKeyType = keyType.StartsWith("global::") ? keyType : (keyProp?.ConverterTypeName != null ? $"global::{keyProp.TypeName.TrimEnd('?')}" : keyType);
             
             var propName = keyProp?.Name ?? "Id";
-            sb.AppendLine($"        public override {qualifiedKeyType} GetId({entityType} entity) => entity.{propName};");
+            
+            // GetId can return nullable if the property is nullable, but we add ! to assert non-null
+            // This helps catch bugs where entities are created without an Id
+            if (keyProp?.IsNullable == true)
+            {
+                sb.AppendLine($"        public override {qualifiedKeyType} GetId({entityType} entity) => entity.{propName}!;");
+            }
+            else
+            {
+                sb.AppendLine($"        public override {qualifiedKeyType} GetId({entityType} entity) => entity.{propName};");
+            }
             
             // If the ID property has a private or init-only setter, use the compiled setter
             if (entity.HasPrivateSetters && keyProp != null && (!keyProp.HasPublicSetter || keyProp.HasInitOnlySetter))
@@ -630,19 +655,34 @@ namespace BLite.SourceGenerators
             }
         }
 
-        private static string GetBaseMapperClass(PropertyInfo? keyProp)
+        private static string GetBaseMapperClass(PropertyInfo? keyProp, EntityInfo entity)
         {
             if (keyProp?.ConverterTypeName != null)
             {
                 return $"DocumentMapperBase<global::{keyProp.TypeName}, ";
             }
 
-            var keyType = keyProp?.TypeName ?? "ObjectId";
-            if (keyType.EndsWith("Int32") || keyType == "int") return "Int32MapperBase<";
-            if (keyType.EndsWith("Int64") || keyType == "long") return "Int64MapperBase<";
-            if (keyType.EndsWith("String") || keyType == "string") return "StringMapperBase<";
-            if (keyType.EndsWith("Guid")) return "GuidMapperBase<";
-            if (keyType.EndsWith("ObjectId")) return "ObjectIdMapperBase<";
+            // Use CollectionIdTypeFullName if available (from DocumentCollection<TId, T> declaration)
+            string keyType;
+            if (!string.IsNullOrEmpty(entity.CollectionIdTypeFullName))
+            {
+                // Remove "global::" prefix if present
+                keyType = entity.CollectionIdTypeFullName!.Replace("global::", "");
+            }
+            else
+            {
+                keyType = keyProp?.TypeName ?? "ObjectId";
+            }
+            
+            // Normalize type by removing nullable suffix (?) for comparison
+            // At serialization time, we expect the Id to always have a value
+            var normalizedKeyType = keyType.TrimEnd('?');
+            
+            if (normalizedKeyType.EndsWith("Int32") || normalizedKeyType == "int") return "Int32MapperBase<";
+            if (normalizedKeyType.EndsWith("Int64") || normalizedKeyType == "long") return "Int64MapperBase<";
+            if (normalizedKeyType.EndsWith("String") || normalizedKeyType == "string") return "StringMapperBase<";
+            if (normalizedKeyType.EndsWith("Guid")) return "GuidMapperBase<";
+            if (normalizedKeyType.EndsWith("ObjectId")) return "ObjectIdMapperBase<";
 
             return "ObjectIdMapperBase<";
         }

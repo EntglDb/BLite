@@ -45,6 +45,9 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, Employee> Employees { get; set; } = null!;
     public DocumentCollection<ObjectId, CategoryRef> CategoryRefs { get; set; } = null!;
     public DocumentCollection<ObjectId, ProductRef> ProductRefs { get; set; } = null!;
+    
+    // Nullable String Id Test (UuidEntity scenario with inheritance)
+    public DocumentCollection<string, MockCounter> MockCounters { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -93,6 +96,9 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<Employee>().ToCollection("employees");
         modelBuilder.Entity<CategoryRef>().ToCollection("category_refs");
         modelBuilder.Entity<ProductRef>().ToCollection("product_refs");
+        
+        // Nullable String Id Test (UuidEntity scenario)
+        modelBuilder.Entity<MockCounter>().ToCollection("mock_counters").HasKey(e => e.Id);
     }
 
     public void ForceCheckpoint()

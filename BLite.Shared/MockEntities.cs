@@ -345,4 +345,54 @@ namespace BLite.Shared
         public decimal Price { get; set; }
         public List<ObjectId>? CategoryIds { get; set; } // Only IDs - no embedding
     }
+
+    // ========================================
+    // Nullable String Key Test (UuidEntity scenario)
+    // ========================================
+
+    /// <summary>
+    /// Base entity class that simulates CleanCore's BaseEntity{TId, TEntity}
+    /// This is the root of the hierarchy that causes the generator bug
+    /// </summary>
+    public abstract class MockBaseEntity<TId, TEntity>
+        where TId : IEquatable<TId>
+        where TEntity : class
+    {
+        [System.ComponentModel.DataAnnotations.Key]
+        public virtual TId? Id { get; set; }
+
+        protected MockBaseEntity() { }
+        
+        protected MockBaseEntity(TId? id)
+        {
+            Id = id;
+        }
+    }
+
+    /// <summary>
+    /// Simulates CleanCore's UuidEntity{TEntity} which inherits from BaseEntity{string, TEntity}
+    /// Tests the bug where generator incorrectly chooses ObjectIdMapperBase instead of StringMapperBase
+    /// when the Id property is inherited and nullable
+    /// </summary>
+    public abstract class MockUuidEntity<TEntity> : MockBaseEntity<string, TEntity>
+        where TEntity : class
+    {
+        protected MockUuidEntity() : base() { }
+        
+        protected MockUuidEntity(string? id) : base(id) { }
+    }
+
+    /// <summary>
+    /// Concrete entity that inherits from MockUuidEntity, simulating Counter from CleanCore
+    /// This is the actual entity that will be stored in the collection
+    /// </summary>
+    public class MockCounter : MockUuidEntity<MockCounter>
+    {
+        public MockCounter() : base() { }
+        
+        public MockCounter(string? id) : base(id) { }
+        
+        public string Name { get; set; } = string.Empty;
+        public int Value { get; set; }
+    }
 }
