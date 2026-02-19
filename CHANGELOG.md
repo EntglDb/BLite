@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.3.0"></a>
+## [1.3.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.3.0) (2026-02-19)
+
+### Features
+
+* **bson:** add support for DateTimeOffset, TimeSpan, DateOnly and TimeOnly ([43f92a9](https://www.github.com/EntglDb/BLite/commit/43f92a9f0954135ebeab276eabb1668f20cdc399))
+
 <a name="1.2.1"></a>
 ## [1.2.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.2.1) (2026-02-19)
 
