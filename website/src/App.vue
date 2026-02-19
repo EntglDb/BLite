@@ -13,6 +13,7 @@ import { RouterView } from 'vue-router'
         <nav>
           <router-link to="/">Home</router-link>
           <router-link to="/docs">Docs</router-link>
+          <router-link to="/comparisons">Comparisons</router-link>
           <a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link">GitHub ↗</a>
         </nav>
       </div>

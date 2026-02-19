@@ -1,5 +1,6 @@
 <template>
-  <div class="doc-page">
+  <div class="comparisons-page">
+    <div class="container">
     <h1>⚖️ <span class="title-gradient">Comparisons & Positioning</span></h1>
     <p class="lead">How BLite fits in the .NET embedded database landscape — and why it's unlike anything else available today.</p>
 
@@ -358,11 +359,13 @@ dotnet add package BLite.SourceGenerators</code></pre>
       <pre><code>dotnet add package EntglDb.Persistence.BLite</code></pre>
       <p>Check the <router-link to="/docs/getting-started">Getting Started</router-link> guide for a full walkthrough.</p>
     </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.doc-page { max-width: 900px; }
+.comparisons-page { padding: 48px 0 80px; }
+.container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
 h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 16px; }
 .lead { font-size: 1.2rem; color: var(--text-secondary); margin-bottom: 48px; line-height: 1.7; }
 section { margin-bottom: 48px; }

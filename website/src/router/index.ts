@@ -44,9 +44,13 @@ const router = createRouter({
                 { path: 'spatial', component: Spatial },
                 { path: 'architecture', component: Architecture },
                 { path: 'converters', component: Converters },
-                { path: 'benchmarks', component: Benchmarks },
-                { path: 'comparisons', component: Comparisons }
+                { path: 'benchmarks', component: Benchmarks }
             ]
+        },
+        {
+            path: '/comparisons',
+            name: 'comparisons',
+            component: Comparisons
         }
     ]
 })
