@@ -196,22 +196,30 @@ namespace BLite.SourceGenerators
             
             if (prop.IsCollection)
             {
-                 var arrayVar = $"{prop.Name.ToLower()}Array";
-                 sb.AppendLine($"            var {arrayVar}Pos = writer.BeginArray(\"{fieldName}\");");
-                 sb.AppendLine($"            var {prop.Name.ToLower()}Index = 0;");
-                 sb.AppendLine($"            foreach (var item in entity.{prop.Name})");
-                 sb.AppendLine($"            {{");
+                // Add null check for nullable collections
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                    sb.AppendLine($"            {{");
+                }
+                
+                var arrayVar = $"{prop.Name.ToLower()}Array";
+                var indent = prop.IsNullable ? "    " : "";
+                sb.AppendLine($"            {indent}var {arrayVar}Pos = writer.BeginArray(\"{fieldName}\");");
+                sb.AppendLine($"            {indent}var {prop.Name.ToLower()}Index = 0;");
+                sb.AppendLine($"            {indent}foreach (var item in entity.{prop.Name})");
+                sb.AppendLine($"            {indent}{{");
                  
                  
                  if (prop.IsCollectionItemNested)
                  {
-                     sb.AppendLine($"                // Nested Object in List");
+                     sb.AppendLine($"            {indent}    // Nested Object in List");
                      var nestedMapperTypes = GetMapperName(prop.NestedTypeFullName!);
-                     sb.AppendLine($"                var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");
+                     sb.AppendLine($"            {indent}    var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");
                      
-                     sb.AppendLine($"                var itemStartPos = writer.BeginDocument({prop.Name.ToLower()}Index.ToString());");
-                     sb.AppendLine($"                {prop.Name.ToLower()}ItemMapper.SerializeFields(item, ref writer);");
-                     sb.AppendLine($"                writer.EndDocument(itemStartPos);");
+                     sb.AppendLine($"            {indent}    var itemStartPos = writer.BeginDocument({prop.Name.ToLower()}Index.ToString());");
+                     sb.AppendLine($"            {indent}    {prop.Name.ToLower()}ItemMapper.SerializeFields(item, ref writer);");
+                     sb.AppendLine($"            {indent}    writer.EndDocument(itemStartPos);");
                  }
                  else
                  {
@@ -220,13 +228,23 @@ namespace BLite.SourceGenerators
                      var writeMethod = GetPrimitiveWriteMethod(dummyProp);
                      if (writeMethod != null)
                      {
-                        sb.AppendLine($"                writer.{writeMethod}({prop.Name.ToLower()}Index.ToString(), item);");
+                        sb.AppendLine($"            {indent}    writer.{writeMethod}({prop.Name.ToLower()}Index.ToString(), item);");
                      }
                  }
-                 sb.AppendLine($"                {prop.Name.ToLower()}Index++;");
+                 sb.AppendLine($"            {indent}    {prop.Name.ToLower()}Index++;");
                  
-                 sb.AppendLine($"            }}");
-                 sb.AppendLine($"            writer.EndArray({arrayVar}Pos);");
+                 sb.AppendLine($"            {indent}}}");
+                 sb.AppendLine($"            {indent}writer.EndArray({arrayVar}Pos);");
+                 
+                 // Close the null check if block
+                 if (prop.IsNullable)
+                 {
+                     sb.AppendLine($"            }}");
+                     sb.AppendLine($"            else");
+                     sb.AppendLine($"            {{");
+                     sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                     sb.AppendLine($"            }}");
+                 }
             }
             else if (prop.IsNestedObject)
             {
@@ -252,7 +270,13 @@ namespace BLite.SourceGenerators
                     {
                         sb.AppendLine($"            if (entity.{prop.Name} != null)");
                         sb.AppendLine($"            {{");
-                        sb.AppendLine($"                writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
+                        // For nullable value types, use .Value to unwrap
+                        // String is a reference type and doesn't need .Value
+                        var isValueTypeNullable = prop.IsNullable && IsValueType(prop.TypeName);
+                        var valueAccess = isValueTypeNullable 
+                            ? $"entity.{prop.Name}.Value" 
+                            : $"entity.{prop.Name}";
+                        sb.AppendLine($"                writer.{writeMethod}(\"{fieldName}\", {valueAccess});");
                         sb.AppendLine($"            }}");
                         sb.AppendLine($"            else");
                         sb.AppendLine($"            {{");
@@ -515,7 +539,23 @@ namespace BLite.SourceGenerators
                  if (readMethod != null)
                  {
                     var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
-                    sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}();");
+                    
+                    // Handle nullable types - check for null in BSON stream
+                    if (prop.IsNullable)
+                    {
+                        sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                        sb.AppendLine($"                        {{");
+                        sb.AppendLine($"                            {localVar} = null;");
+                        sb.AppendLine($"                        }}");
+                        sb.AppendLine($"                        else");
+                        sb.AppendLine($"                        {{");
+                        sb.AppendLine($"                            {localVar} = {cast}reader.{readMethod}();");
+                        sb.AppendLine($"                        }}");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}();");
+                    }
                  }
                  else
                  {
@@ -655,14 +695,35 @@ namespace BLite.SourceGenerators
             if (cleanType.EndsWith("Int64") || cleanType == "long") return "ReadInt64";
             if (cleanType.EndsWith("String") || cleanType == "string") return "ReadString";
             if (cleanType.EndsWith("Boolean") || cleanType == "bool") return "ReadBoolean";
-            if (typeName.EndsWith("Single") || typeName == "float") return "ReadDouble";
-            if (typeName.EndsWith("Double") || typeName == "double") return "ReadDouble";
-            if (typeName.EndsWith("Decimal") || typeName == "decimal") return "ReadDecimal128";
-            if (typeName.EndsWith("DateTime")) return "ReadDateTime";
-            if (typeName.EndsWith("Guid")) return "ReadGuid";
-            if (typeName.EndsWith("ObjectId")) return "ReadObjectId";
+            if (cleanType.EndsWith("Single") || cleanType == "float") return "ReadDouble";
+            if (cleanType.EndsWith("Double") || cleanType == "double") return "ReadDouble";
+            if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return "ReadDecimal128";
+            if (cleanType.EndsWith("DateTime")) return "ReadDateTime";
+            if (cleanType.EndsWith("Guid")) return "ReadGuid";
+            if (cleanType.EndsWith("ObjectId")) return "ReadObjectId";
 
             return null;
+        }
+
+        private static bool IsValueType(string typeName)
+        {
+            // Check if the type is a value type (struct) that requires .Value unwrapping when nullable
+            // String is a reference type and doesn't need .Value
+            var cleanType = typeName.TrimEnd('?').Trim();
+            
+            // Common value types
+            if (cleanType.EndsWith("Int32") || cleanType == "int") return true;
+            if (cleanType.EndsWith("Int64") || cleanType == "long") return true;
+            if (cleanType.EndsWith("Boolean") || cleanType == "bool") return true;
+            if (cleanType.EndsWith("Single") || cleanType == "float") return true;
+            if (cleanType.EndsWith("Double") || cleanType == "double") return true;
+            if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return true;
+            if (cleanType.EndsWith("DateTime")) return true;
+            if (cleanType.EndsWith("Guid")) return true;
+            if (cleanType.EndsWith("ObjectId")) return true;
+            
+            // String and other reference types
+            return false;
         }
 
         private static string QualifyType(string typeName)

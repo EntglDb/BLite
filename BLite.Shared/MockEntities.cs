@@ -301,4 +301,48 @@ namespace BLite.Shared
         public int Age { get; init; }
         public DateTime CreatedAt { get; init; }
     }
+
+    // ========================================
+    // Circular Reference Test Entities
+    // ========================================
+
+    /// <summary>
+    /// Employee with self-referencing via ObjectIds (organizational hierarchy)
+    /// Tests: self-reference using referencing (BEST PRACTICE)
+    /// Recommended: Avoids embedding which can lead to large/circular documents
+    /// </summary>
+    public class Employee
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Department { get; set; } = string.Empty;
+        public ObjectId? ManagerId { get; set; } // Reference to manager
+        public List<ObjectId>? DirectReportIds { get; set; } // References to direct reports (best practice)
+    }
+
+    /// <summary>
+    /// Category with referenced products (N-N using ObjectId references)
+    /// Tests: N-N relationships using referencing (BEST PRACTICE for Cosmos DB)
+    /// Recommended: Avoids large documents, better for queries and updates
+    /// </summary>
+    public class CategoryRef
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public List<ObjectId>? ProductIds { get; set; } // Only IDs - no embedding
+    }
+
+    /// <summary>
+    /// Product with referenced categories (N-N using ObjectId references)
+    /// Tests: N-N relationships using referencing (BEST PRACTICE for Cosmos DB)
+    /// Recommended: Avoids large documents, better for queries and updates
+    /// </summary>
+    public class ProductRef
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public List<ObjectId>? CategoryIds { get; set; } // Only IDs - no embedding
+    }
 }
