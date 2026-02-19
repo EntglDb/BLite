@@ -14,7 +14,8 @@ const docSections = [
   { path: '/docs/spatial', label: 'Spatial Indexing', icon: '🌍' },
   { path: '/docs/architecture', label: 'Architecture', icon: '🏗️' },
   { path: '/docs/converters', label: 'Custom ID Converters', icon: '🆔' },
-  { path: '/docs/benchmarks', label: 'Benchmarks', icon: '⚡' }
+  { path: '/docs/benchmarks', label: 'Benchmarks', icon: '⚡' },
+  { path: '/docs/comparisons', label: 'Comparisons', icon: '⚖️' }
 ]
 
 const isActive = (path: string) => route.path === path

@@ -12,6 +12,7 @@ import Spatial from '../views/docs/Spatial.vue'
 import Architecture from '../views/docs/Architecture.vue'
 import Converters from '../views/docs/Converters.vue'
 import Benchmarks from '../views/docs/Benchmarks.vue'
+import Comparisons from '../views/docs/Comparisons.vue'
 
 const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
@@ -43,7 +44,8 @@ const router = createRouter({
                 { path: 'spatial', component: Spatial },
                 { path: 'architecture', component: Architecture },
                 { path: 'converters', component: Converters },
-                { path: 'benchmarks', component: Benchmarks }
+                { path: 'benchmarks', component: Benchmarks },
+                { path: 'comparisons', component: Comparisons }
             ]
         }
     ]
