@@ -142,7 +142,7 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.2.0):</strong>
+        <strong>✨ Recent Improvements (v1.2.1):</strong>
         <ul>
           <li>✅ Property inheritance from base classes</li>
           <li>✅ Private and init-only setters via Expression Trees</li>
