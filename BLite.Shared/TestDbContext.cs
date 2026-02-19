@@ -33,6 +33,11 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<int, SchemaUser> SchemaUsers { get; set; } = null!;
     public DocumentCollection<ObjectId, VectorEntity> VectorItems { get; set; } = null!;
     public DocumentCollection<ObjectId, GeoEntity> GeoItems { get; set; } = null!;
+    
+    // Source Generator Feature Tests
+    public DocumentCollection<ObjectId, DerivedEntity> DerivedEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithComputedProperties> ComputedPropertyEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithAdvancedCollections> AdvancedCollectionEntities { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -69,6 +74,11 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<Order>()
             .HasKey(x => x.Id)
             .HasConversion<OrderIdConverter>();
+
+        // Source Generator Feature Tests
+        modelBuilder.Entity<DerivedEntity>().ToCollection("derived_entities");
+        modelBuilder.Entity<EntityWithComputedProperties>().ToCollection("computed_property_entities");
+        modelBuilder.Entity<EntityWithAdvancedCollections>().ToCollection("advanced_collection_entities");
     }
 
     public void ForceCheckpoint()

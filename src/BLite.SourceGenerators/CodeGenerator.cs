@@ -174,10 +174,9 @@ namespace BLite.SourceGenerators
             {
                  var arrayVar = $"{prop.Name.ToLower()}Array";
                  sb.AppendLine($"            var {arrayVar}Pos = writer.BeginArray(\"{fieldName}\");");
-                 var countSource = prop.IsArray ? "Length" : "Count";
-                 sb.AppendLine($"            for (int i = 0; i < entity.{prop.Name}.{countSource}; i++)");
+                 sb.AppendLine($"            var {prop.Name.ToLower()}Index = 0;");
+                 sb.AppendLine($"            foreach (var item in entity.{prop.Name})");
                  sb.AppendLine($"            {{");
-                 sb.AppendLine($"                var item = entity.{prop.Name}[i];");
                  
                  
                  if (prop.IsCollectionItemNested)
@@ -186,7 +185,7 @@ namespace BLite.SourceGenerators
                      var nestedMapperTypes = GetMapperName(prop.NestedTypeFullName!);
                      sb.AppendLine($"                var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");
                      
-                     sb.AppendLine($"                var itemStartPos = writer.BeginDocument(i.ToString());");
+                     sb.AppendLine($"                var itemStartPos = writer.BeginDocument({prop.Name.ToLower()}Index.ToString());");
                      sb.AppendLine($"                {prop.Name.ToLower()}ItemMapper.SerializeFields(item, ref writer);");
                      sb.AppendLine($"                writer.EndDocument(itemStartPos);");
                  }
@@ -197,9 +196,10 @@ namespace BLite.SourceGenerators
                      var writeMethod = GetPrimitiveWriteMethod(dummyProp);
                      if (writeMethod != null)
                      {
-                        sb.AppendLine($"                writer.{writeMethod}(i.ToString(), item);");
+                        sb.AppendLine($"                writer.{writeMethod}({prop.Name.ToLower()}Index.ToString(), item);");
                      }
                  }
+                 sb.AppendLine($"                {prop.Name.ToLower()}Index++;");
                  
                  sb.AppendLine($"            }}");
                  sb.AppendLine($"            writer.EndArray({arrayVar}Pos);");
@@ -320,7 +320,46 @@ namespace BLite.SourceGenerators
             foreach(var prop in entity.Properties)
             {
                 var val = prop.Name.ToLower();
-                if (prop.IsArray) val += ".ToArray()"; // Simplified: convert list to array
+                if (prop.IsCollection)
+                {
+                    // Convert to appropriate collection type
+                    if (prop.IsArray)
+                    {
+                        val += ".ToArray()";
+                    }
+                    else if (prop.CollectionConcreteTypeName != null)
+                    {
+                        var concreteType = prop.CollectionConcreteTypeName;
+                        var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
+                        
+                        // Check if it needs conversion from List
+                        if (concreteType.Contains("HashSet"))
+                        {
+                            val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
+                        }
+                        else if (concreteType.Contains("ISet"))
+                        {
+                            val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
+                        }
+                        else if (concreteType.Contains("LinkedList"))
+                        {
+                            val = $"new global::System.Collections.Generic.LinkedList<{itemType}>({val})";
+                        }
+                        else if (concreteType.Contains("Queue"))
+                        {
+                            val = $"new global::System.Collections.Generic.Queue<{itemType}>({val})";
+                        }
+                        else if (concreteType.Contains("Stack"))
+                        {
+                            val = $"new global::System.Collections.Generic.Stack<{itemType}>({val})";
+                        }
+                        else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
+                        {
+                            val += ".AsReadOnly()";
+                        }
+                        // Otherwise keep as List (works for List<T>, IList<T>, ICollection<T>, IEnumerable<T>)
+                    }
+                }
                 sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
             }
             sb.AppendLine($"            }};");

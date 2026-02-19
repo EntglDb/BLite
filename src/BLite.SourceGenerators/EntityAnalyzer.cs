@@ -69,14 +69,29 @@ namespace BLite.SourceGenerators
 
         private static void AnalyzeProperties(INamedTypeSymbol typeSymbol, List<PropertyInfo> properties)
         {
-            var sourceProps = typeSymbol.GetMembers()
-                .OfType<IPropertySymbol>()
-                .Where(p => p.DeclaredAccessibility == Accessibility.Public && !p.IsStatic);
-                
-            foreach (var prop in sourceProps)
+            // Collect properties from the entire inheritance hierarchy
+            var seenProperties = new HashSet<string>();
+            var currentType = typeSymbol;
+            
+            while (currentType != null && currentType.SpecialType != SpecialType.System_Object)
             {
-                if (AttributeHelper.ShouldIgnore(prop))
-                    continue;
+                var sourceProps = currentType.GetMembers()
+                    .OfType<IPropertySymbol>()
+                    .Where(p => p.DeclaredAccessibility == Accessibility.Public && !p.IsStatic);
+                    
+                foreach (var prop in sourceProps)
+                {
+                    // Skip if already seen (overridden property in derived class takes precedence)
+                    if (!seenProperties.Add(prop.Name))
+                        continue;
+                        
+                    if (AttributeHelper.ShouldIgnore(prop))
+                        continue;
+                    
+                    // Skip computed getter-only properties (no setter, no backing field)
+                    bool isReadOnlyGetter = prop.SetMethod == null && !SyntaxHelper.HasBackingField(prop);
+                    if (isReadOnlyGetter)
+                        continue;
 
                 var columnAttr = AttributeHelper.GetAttribute(prop, "Column");
                 var bsonFieldName = AttributeHelper.GetAttributeStringValue(prop, "BsonProperty") ?? 
@@ -87,22 +102,24 @@ namespace BLite.SourceGenerators
                     bsonFieldName = columnAttr.ConstructorArguments.Length > 0 ? columnAttr.ConstructorArguments[0].Value?.ToString() : null;
                 }
                 
-                var propInfo = new PropertyInfo
-                {
-                    Name = prop.Name,
-                    TypeName = SyntaxHelper.GetTypeName(prop.Type),
-                    BsonFieldName = bsonFieldName ?? prop.Name.ToLowerInvariant(),
-                    ColumnTypeName = columnAttr != null ? AttributeHelper.GetNamedArgumentValue(columnAttr, "TypeName") : null,
-                    IsNullable = SyntaxHelper.IsNullableType(prop.Type),
-                    IsKey = AttributeHelper.IsKey(prop),
-                    IsRequired = AttributeHelper.HasAttribute(prop, "Required"),
-                    
-                    HasPublicSetter = prop.SetMethod?.DeclaredAccessibility == Accessibility.Public,
-                    HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
-                    BackingFieldName = (prop.SetMethod?.DeclaredAccessibility != Accessibility.Public) 
-                        ? $"<{prop.Name}>k__BackingField" 
-                        : null
-                };
+                    var propInfo = new PropertyInfo
+                    {
+                        Name = prop.Name,
+                        TypeName = SyntaxHelper.GetTypeName(prop.Type),
+                        BsonFieldName = bsonFieldName ?? prop.Name.ToLowerInvariant(),
+                        ColumnTypeName = columnAttr != null ? AttributeHelper.GetNamedArgumentValue(columnAttr, "TypeName") : null,
+                        IsNullable = SyntaxHelper.IsNullableType(prop.Type),
+                        IsKey = AttributeHelper.IsKey(prop),
+                        IsRequired = AttributeHelper.HasAttribute(prop, "Required"),
+                        
+                        HasPublicSetter = prop.SetMethod?.DeclaredAccessibility == Accessibility.Public,
+                        HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
+                        HasAnySetter = prop.SetMethod != null,
+                        IsReadOnlyGetter = isReadOnlyGetter,
+                        BackingFieldName = (prop.SetMethod?.DeclaredAccessibility != Accessibility.Public) 
+                            ? $"<{prop.Name}>k__BackingField" 
+                            : null
+                    };
 
                 // MaxLength / MinLength
                 propInfo.MaxLength = AttributeHelper.GetAttributeIntValue(prop, "MaxLength");
@@ -130,32 +147,39 @@ namespace BLite.SourceGenerators
                     else if (rangeAttr.ConstructorArguments[1].Value is int imax) propInfo.RangeMax = (double)imax;
                 }
 
-                if (SyntaxHelper.IsCollectionType(prop.Type, out var itemType))
-                {
-                    propInfo.IsCollection = true;
-                    propInfo.IsArray = prop.Type is IArrayTypeSymbol;
-                    if (itemType != null)
+                    if (SyntaxHelper.IsCollectionType(prop.Type, out var itemType))
                     {
-                        propInfo.CollectionItemType = SyntaxHelper.GetTypeName(itemType);
+                        propInfo.IsCollection = true;
+                        propInfo.IsArray = prop.Type is IArrayTypeSymbol;
                         
-                        // Check if collection item is nested object
-                        if (SyntaxHelper.IsNestedObjectType(itemType))
+                        // Determine concrete collection type name
+                        propInfo.CollectionConcreteTypeName = SyntaxHelper.GetTypeName(prop.Type);
+                        
+                        if (itemType != null)
                         {
-                            propInfo.IsCollectionItemNested = true;
-                            propInfo.NestedTypeName = itemType.Name;
-                            propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)itemType);
+                            propInfo.CollectionItemType = SyntaxHelper.GetTypeName(itemType);
+                            
+                            // Check if collection item is nested object
+                            if (SyntaxHelper.IsNestedObjectType(itemType))
+                            {
+                                propInfo.IsCollectionItemNested = true;
+                                propInfo.NestedTypeName = itemType.Name;
+                                propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)itemType);
+                            }
                         }
                     }
-                }
-                // Check for Nested Object
-                else if (SyntaxHelper.IsNestedObjectType(prop.Type))
-                {
-                    propInfo.IsNestedObject = true;
-                    propInfo.NestedTypeName = prop.Type.Name;
-                    propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)prop.Type);
-                }
+                    // Check for Nested Object
+                    else if (SyntaxHelper.IsNestedObjectType(prop.Type))
+                    {
+                        propInfo.IsNestedObject = true;
+                        propInfo.NestedTypeName = prop.Type.Name;
+                        propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)prop.Type);
+                    }
 
-                properties.Add(propInfo);
+                    properties.Add(propInfo);
+                }
+                
+                currentType = currentType.BaseType;
             }
         }
 

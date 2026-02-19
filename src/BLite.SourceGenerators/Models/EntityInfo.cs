@@ -30,6 +30,8 @@ namespace BLite.SourceGenerators.Models
         
         public bool HasPublicSetter { get; set; }
         public bool HasInitOnlySetter { get; set; }
+        public bool HasAnySetter { get; set; }
+        public bool IsReadOnlyGetter { get; set; }
         public string? BackingFieldName { get; set; }
         
         public bool IsKey { get; set; }
@@ -42,6 +44,7 @@ namespace BLite.SourceGenerators.Models
         public bool IsCollection { get; set; }
         public bool IsArray { get; set; }
         public string? CollectionItemType { get; set; }
+        public string? CollectionConcreteTypeName { get; set; }
         
         public bool IsNestedObject { get; set; }
         public bool IsCollectionItemNested { get; set; }

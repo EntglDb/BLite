@@ -110,25 +110,39 @@ namespace BLite.SourceGenerators.Helpers
         {
             itemType = null;
             
+            // Exclude string (it's IEnumerable<char> but not a collection for our purposes)
+            if (type.SpecialType == SpecialType.System_String)
+                return false;
+            
+            // Handle arrays
             if (type is IArrayTypeSymbol arrayType)
             {
                 itemType = arrayType.ElementType;
                 return true;
             }
             
+            // Check if the type itself is IEnumerable<T>
             if (type is INamedTypeSymbol namedType && namedType.IsGenericType)
             {
                 var typeDefName = namedType.OriginalDefinition.ToDisplayString();
-                
-                if (typeDefName.StartsWith("System.Collections.Generic.List<") ||
-                    typeDefName.StartsWith("System.Collections.Generic.IList<") ||
-                    typeDefName.StartsWith("System.Collections.Generic.ICollection<") ||
-                    typeDefName.StartsWith("System.Collections.Generic.IEnumerable<"))
+                if (typeDefName == "System.Collections.Generic.IEnumerable<T>" && namedType.TypeArguments.Length == 1)
                 {
                     itemType = namedType.TypeArguments[0];
                     return true;
                 }
             }
+            
+            // Check if the type implements IEnumerable<T> by walking all interfaces
+            var enumerableInterface = type.AllInterfaces
+                .FirstOrDefault(i => i.IsGenericType && 
+                                     i.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.IEnumerable<T>");
+            
+            if (enumerableInterface != null && enumerableInterface.TypeArguments.Length == 1)
+            {
+                itemType = enumerableInterface.TypeArguments[0];
+                return true;
+            }
+            
             return false;
         }
 
@@ -166,6 +180,15 @@ namespace BLite.SourceGenerators.Helpers
             if (type is INamedTypeSymbol nt && nt.IsTupleType) return false;
             
             return type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct;
+        }
+
+        public static bool HasBackingField(IPropertySymbol property)
+        {
+            // Auto-properties have compiler-generated backing fields
+            // Check if there's a field with the pattern <PropertyName>k__BackingField
+            return property.ContainingType.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Any(f => f.AssociatedSymbol?.Equals(property, SymbolEqualityComparer.Default) == true);
         }
     }
 }
