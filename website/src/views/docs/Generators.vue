@@ -142,11 +142,14 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.0.3-1.0.4):</strong>
+        <strong>✨ Recent Improvements (v1.2.0):</strong>
         <ul>
-          <li>✅ Corrected mapper generation for nested objects and collections</li>
-          <li>✅ Fixed ref struct handling for nested object serialization</li>
-          <li>✅ Enhanced support for complex type hierarchies</li>
+          <li>✅ Property inheritance from base classes</li>
+          <li>✅ Private and init-only setters via Expression Trees</li>
+          <li>✅ Advanced collection types (IEnumerable&lt;T&gt;, ICollection&lt;T&gt;, HashSet&lt;T&gt;)</li>
+          <li>✅ Nullable value types and collections</li>
+          <li>✅ Circular reference protection for self-referencing entities</li>
+          <li>✅ N-N relationship patterns with ObjectId collections</li>
         </ul>
       </div>
     </section>
