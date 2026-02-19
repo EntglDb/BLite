@@ -200,7 +200,9 @@ For in-depth technical details, see the complete specification documents:
 ## 📦 Quick Start
 
 ### 1. Installation
-*Coming soon to NuGet...*
+```
+dotnet add package BLite
+```
 
 ### 2. Basic Usage
 
@@ -297,4 +299,5 @@ We welcome contributions! This is a great project to learn about database intern
 ## 📝 License
 
 Licensed under the MIT License. Use it freely in personal and commercial projects.
+
 
