@@ -99,6 +99,32 @@
     </section>
 
     <section>
+      <h2>Base Entity Pattern with Nullable Ids</h2>
+      <p>BLite correctly handles nullable Id properties inherited from generic base classes:</p>
+      <pre><code><span class="comment">// Generic base entity</span>
+<span class="keyword">public abstract class</span> <span class="type">BaseEntity</span>&lt;<span class="type">TId</span>, <span class="type">TEntity</span>&gt;
+{
+    [<span class="type">Key</span>]
+    <span class="keyword">public virtual</span> <span class="type">TId</span>? Id { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+}
+
+<span class="comment">// Specialized base for string Ids</span>
+<span class="keyword">public abstract class</span> <span class="type">UuidEntity</span>&lt;<span class="type">TEntity</span>&gt; : <span class="type">BaseEntity</span>&lt;<span class="keyword">string</span>, <span class="type">TEntity</span>&gt;
+{
+}
+
+<span class="comment">// Concrete entity with nullable string Id</span>
+<span class="keyword">public class</span> <span class="type">Counter</span> : <span class="type">UuidEntity</span>&lt;<span class="type">Counter</span>&gt;
+{
+    <span class="keyword">public string</span> Name { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public int</span> Value { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+}</code></pre>
+      <div class="info-box">
+        <strong>💡 Note:</strong> The generator automatically selects the correct base mapper class (<code>StringMapperBase</code>) even when Id is nullable (<code>string?</code>), ensuring type-safe serialization across inheritance hierarchies.
+      </div>
+    </section>
+
+    <section>
       <h2>Performance Benefits</h2>
       <ul>
         <li>✅ <strong>Zero reflection</strong> - All mapping is compile-time</li>
@@ -144,6 +170,7 @@
       <div class="info-box success">
         <strong>✨ Recent Improvements (v1.2.1):</strong>
         <ul>
+          <li>✅ Nullable string Id properties inherited from base classes (<code>BaseEntity&lt;string, T&gt;</code>)</li>
           <li>✅ Property inheritance from base classes</li>
           <li>✅ Private and init-only setters via Expression Trees</li>
           <li>✅ Advanced collection types (IEnumerable&lt;T&gt;, ICollection&lt;T&gt;, HashSet&lt;T&gt;)</li>
