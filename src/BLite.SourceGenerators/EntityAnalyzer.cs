@@ -36,6 +36,15 @@ namespace BLite.SourceGenerators
             // Analyze properties of the root entity
             AnalyzeProperties(entityType, entityInfo.Properties);
 
+            // Check if entity needs reflection-based deserialization
+            // Include properties with private setters or init-only setters (which can't be set outside initializers)
+            entityInfo.HasPrivateSetters = entityInfo.Properties.Any(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter);
+            
+            // Check if entity has public parameterless constructor
+            var hasPublicParameterlessConstructor = entityType.Constructors
+                .Any(c => c.DeclaredAccessibility == Accessibility.Public && c.Parameters.Length == 0);
+            entityInfo.HasPrivateOrNoConstructor = !hasPublicParameterlessConstructor;
+
             // Analyze nested types recursively
             // We use a dictionary for nested types to ensure uniqueness by name
             var analyzedTypes = new HashSet<string>();

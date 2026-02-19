@@ -409,6 +409,123 @@ public class SourceGeneratorFeaturesTests : IDisposable
 
     #endregion
 
+    #region Private Setters Tests
+
+    [Fact]
+    public void EntityWithPrivateSetters_CanBeDeserialized()
+    {
+        // Arrange
+        var entity = EntityWithPrivateSetters.Create("John Doe", 30);
+
+        // Act
+        var id = _db.PrivateSetterEntities.Insert(entity);
+        _db.SaveChanges();
+        var retrieved = _db.PrivateSetterEntities.FindById(id);
+
+        // Assert
+        Assert.NotNull(retrieved);
+        Assert.Equal(id, retrieved.Id);
+        Assert.Equal("John Doe", retrieved.Name);
+        Assert.Equal(30, retrieved.Age);
+    }
+
+    [Fact]
+    public void EntityWithPrivateSetters_Update_Works()
+    {
+        // Arrange
+        var entity1 = EntityWithPrivateSetters.Create("Alice", 25);
+        var id1 = _db.PrivateSetterEntities.Insert(entity1);
+        
+        var entity2 = EntityWithPrivateSetters.Create("Bob", 35);
+        entity2.GetType().GetProperty("Id")!.SetValue(entity2, id1); // Force same Id
+        
+        _db.PrivateSetterEntities.Update(entity2);
+        _db.SaveChanges();
+
+        // Act
+        var retrieved = _db.PrivateSetterEntities.FindById(id1);
+
+        // Assert
+        Assert.NotNull(retrieved);
+        Assert.Equal(id1, retrieved.Id);
+        Assert.Equal("Bob", retrieved.Name);
+        Assert.Equal(35, retrieved.Age);
+    }
+
+    [Fact]
+    public void EntityWithPrivateSetters_Query_Works()
+    {
+        // Arrange
+        var entity1 = EntityWithPrivateSetters.Create("Charlie", 20);
+        var entity2 = EntityWithPrivateSetters.Create("Diana", 30);
+        var entity3 = EntityWithPrivateSetters.Create("Eve", 40);
+
+        _db.PrivateSetterEntities.Insert(entity1);
+        _db.PrivateSetterEntities.Insert(entity2);
+        _db.PrivateSetterEntities.Insert(entity3);
+        _db.SaveChanges();
+
+        // Act
+        var adults = _db.PrivateSetterEntities.Find(e => e.Age >= 30).ToList();
+
+        // Assert
+        Assert.Equal(2, adults.Count);
+        Assert.Contains(adults, e => e.Name == "Diana");
+        Assert.Contains(adults, e => e.Name == "Eve");
+    }
+
+    #endregion
+
+    #region Init-Only Setters Tests
+
+    [Fact]
+    public void EntityWithInitSetters_CanBeDeserialized()
+    {
+        // Arrange
+        var entity = new EntityWithInitSetters
+        {
+            Id = ObjectId.NewObjectId(),
+            Name = "Jane Doe",
+            Age = 28,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        // Act
+        var id = _db.InitSetterEntities.Insert(entity);
+        _db.SaveChanges();
+        var retrieved = _db.InitSetterEntities.FindById(id);
+
+        // Assert
+        Assert.NotNull(retrieved);
+        Assert.Equal(id, retrieved.Id);
+        Assert.Equal("Jane Doe", retrieved.Name);
+        Assert.Equal(28, retrieved.Age);
+    }
+
+    [Fact]
+    public void EntityWithInitSetters_Query_Works()
+    {
+        // Arrange
+        var entity1 = new EntityWithInitSetters { Id = ObjectId.NewObjectId(), Name = "Alpha", Age = 20, CreatedAt = DateTime.UtcNow };
+        var entity2 = new EntityWithInitSetters { Id = ObjectId.NewObjectId(), Name = "Beta", Age = 30, CreatedAt = DateTime.UtcNow };
+        var entity3 = new EntityWithInitSetters { Id = ObjectId.NewObjectId(), Name = "Gamma", Age = 40, CreatedAt = DateTime.UtcNow };
+
+        _db.InitSetterEntities.Insert(entity1);
+        _db.InitSetterEntities.Insert(entity2);
+        _db.InitSetterEntities.Insert(entity3);
+        _db.SaveChanges();
+
+        // Act
+        var results = _db.InitSetterEntities.Find(e => e.Age > 25).ToList();
+
+        // Assert
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, e => e.Name == "Beta");
+        Assert.Contains(results, e => e.Name == "Gamma");
+    }
+
+    #endregion
+
     public void Dispose()
     {
         _db?.Dispose();

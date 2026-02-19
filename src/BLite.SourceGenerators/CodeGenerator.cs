@@ -38,6 +38,30 @@ namespace BLite.SourceGenerators
                 sb.AppendLine();
             }
 
+            // Generate static setters for private properties (Expression Trees)
+            var privateSetterProps = entity.Properties.Where(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter).ToList();
+            if (privateSetterProps.Any())
+            {
+                sb.AppendLine($"        // Cached Expression Tree setters for private properties");
+                foreach (var prop in privateSetterProps)
+                {
+                    var entityType = $"global::{entity.FullTypeName}";
+                    var propType = QualifyType(prop.TypeName);
+                    sb.AppendLine($"        private static readonly global::System.Action<{entityType}, {propType}> _setter_{prop.Name} = CreateSetter<{entityType}, {propType}>(\"{prop.Name}\");");
+                }
+                sb.AppendLine();
+                
+                sb.AppendLine($"        private static global::System.Action<TObj, TVal> CreateSetter<TObj, TVal>(string propertyName)");
+                sb.AppendLine($"        {{");
+                sb.AppendLine($"            var param = global::System.Linq.Expressions.Expression.Parameter(typeof(TObj), \"obj\");");
+                sb.AppendLine($"            var value = global::System.Linq.Expressions.Expression.Parameter(typeof(TVal), \"val\");");
+                sb.AppendLine($"            var prop = global::System.Linq.Expressions.Expression.Property(param, propertyName);");
+                sb.AppendLine($"            var assign = global::System.Linq.Expressions.Expression.Assign(prop, value);");
+                sb.AppendLine($"            return global::System.Linq.Expressions.Expression.Lambda<global::System.Action<TObj, TVal>>(assign, param, value).Compile();");
+                sb.AppendLine($"        }}");
+                sb.AppendLine();
+            }
+
             // Collection Name (only for root)
             if (isRoot)
             {
@@ -251,6 +275,8 @@ namespace BLite.SourceGenerators
         private static void GenerateDeserializeMethod(StringBuilder sb, EntityInfo entity, bool isRoot, string mapperNamespace)
         {
              var entityType = $"global::{entity.FullTypeName}";
+             var needsReflection = entity.HasPrivateSetters || entity.HasPrivateOrNoConstructor;
+             
              // Note: BsonSpanReader is a ref struct, so nested mappers must use ref
              var methodSig = isRoot 
                 ? $"public override {entityType} Deserialize(global::BLite.Bson.BsonSpanReader reader)"
@@ -314,55 +340,114 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"            }}");
             sb.AppendLine();
             
-            // Construct object using object initializer to satisfy 'required'
-            sb.AppendLine($"            return new {entityType}");
-            sb.AppendLine($"            {{");
-            foreach(var prop in entity.Properties)
+            // Construct object - different approach if needs reflection
+            if (needsReflection)
             {
-                var val = prop.Name.ToLower();
-                if (prop.IsCollection)
+                // Use GetUninitializedObject + Expression Trees for private setters
+                sb.AppendLine($"            // Creating instance without calling constructor (has private members)");
+                sb.AppendLine($"            var entity = (global::{entity.FullTypeName})global::System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(global::{entity.FullTypeName}));");
+                sb.AppendLine();
+                
+                // Set properties using setters (Expression Trees for private, direct for public)
+                foreach(var prop in entity.Properties)
                 {
-                    // Convert to appropriate collection type
-                    if (prop.IsArray)
+                    var varName = prop.Name.ToLower();
+                    var propValue = varName;
+                    
+                    if (prop.IsCollection)
                     {
-                        val += ".ToArray()";
+                        // Convert to appropriate collection type
+                        if (prop.IsArray)
+                        {
+                            propValue += ".ToArray()";
+                        }
+                        else if (prop.CollectionConcreteTypeName != null)
+                        {
+                            var concreteType = prop.CollectionConcreteTypeName;
+                            var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
+                            
+                            if (concreteType.Contains("HashSet"))
+                                propValue = $"new global::System.Collections.Generic.HashSet<{itemType}>({propValue})";
+                            else if (concreteType.Contains("ISet"))
+                                propValue = $"new global::System.Collections.Generic.HashSet<{itemType}>({propValue})";
+                            else if (concreteType.Contains("LinkedList"))
+                                propValue = $"new global::System.Collections.Generic.LinkedList<{itemType}>({propValue})";
+                            else if (concreteType.Contains("Queue"))
+                                propValue = $"new global::System.Collections.Generic.Queue<{itemType}>({propValue})";
+                            else if (concreteType.Contains("Stack"))
+                                propValue = $"new global::System.Collections.Generic.Stack<{itemType}>({propValue})";
+                            else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
+                                propValue += ".AsReadOnly()";
+                        }
                     }
-                    else if (prop.CollectionConcreteTypeName != null)
+                    
+                    // Use appropriate setter
+                    if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
                     {
-                        var concreteType = prop.CollectionConcreteTypeName;
-                        var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
-                        
-                        // Check if it needs conversion from List
-                        if (concreteType.Contains("HashSet"))
-                        {
-                            val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
-                        }
-                        else if (concreteType.Contains("ISet"))
-                        {
-                            val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
-                        }
-                        else if (concreteType.Contains("LinkedList"))
-                        {
-                            val = $"new global::System.Collections.Generic.LinkedList<{itemType}>({val})";
-                        }
-                        else if (concreteType.Contains("Queue"))
-                        {
-                            val = $"new global::System.Collections.Generic.Queue<{itemType}>({val})";
-                        }
-                        else if (concreteType.Contains("Stack"))
-                        {
-                            val = $"new global::System.Collections.Generic.Stack<{itemType}>({val})";
-                        }
-                        else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
-                        {
-                            val += ".AsReadOnly()";
-                        }
-                        // Otherwise keep as List (works for List<T>, IList<T>, ICollection<T>, IEnumerable<T>)
+                        // Use Expression Tree setter (for private or init-only setters)
+                        sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue} ?? default!);");
+                    }
+                    else
+                    {
+                        // Direct property assignment
+                        sb.AppendLine($"            entity.{prop.Name} = {propValue} ?? default!;");
                     }
                 }
-                sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
+                sb.AppendLine();
+                sb.AppendLine($"            return entity;");
             }
-            sb.AppendLine($"            }};");
+            else
+            {
+                // Standard object initializer approach
+                sb.AppendLine($"            return new {entityType}");
+                sb.AppendLine($"            {{");
+                foreach(var prop in entity.Properties)
+                {
+                    var val = prop.Name.ToLower();
+                    if (prop.IsCollection)
+                    {
+                        // Convert to appropriate collection type
+                        if (prop.IsArray)
+                        {
+                            val += ".ToArray()";
+                        }
+                        else if (prop.CollectionConcreteTypeName != null)
+                        {
+                            var concreteType = prop.CollectionConcreteTypeName;
+                            var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
+                            
+                            // Check if it needs conversion from List
+                            if (concreteType.Contains("HashSet"))
+                            {
+                                val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
+                            }
+                            else if (concreteType.Contains("ISet"))
+                            {
+                                val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
+                            }
+                            else if (concreteType.Contains("LinkedList"))
+                            {
+                                val = $"new global::System.Collections.Generic.LinkedList<{itemType}>({val})";
+                            }
+                            else if (concreteType.Contains("Queue"))
+                            {
+                                val = $"new global::System.Collections.Generic.Queue<{itemType}>({val})";
+                            }
+                            else if (concreteType.Contains("Stack"))
+                            {
+                                val = $"new global::System.Collections.Generic.Stack<{itemType}>({val})";
+                            }
+                            else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
+                            {
+                                val += ".AsReadOnly()";
+                            }
+                            // Otherwise keep as List (works for List<T>, IList<T>, ICollection<T>, IEnumerable<T>)
+                        }
+                    }
+                    sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
+                }
+                sb.AppendLine($"            }};");
+            }
             sb.AppendLine($"        }}");
         }
 
@@ -472,7 +557,16 @@ namespace BLite.SourceGenerators
             
             var propName = keyProp?.Name ?? "Id";
             sb.AppendLine($"        public override {qualifiedKeyType} GetId({entityType} entity) => entity.{propName};");
-            sb.AppendLine($"        public override void SetId({entityType} entity, {qualifiedKeyType} id) => entity.{propName} = id;");
+            
+            // If the ID property has a private or init-only setter, use the compiled setter
+            if (entity.HasPrivateSetters && keyProp != null && (!keyProp.HasPublicSetter || keyProp.HasInitOnlySetter))
+            {
+                sb.AppendLine($"        public override void SetId({entityType} entity, {qualifiedKeyType} id) => _setter_{propName}(entity, id);");
+            }
+            else
+            {
+                sb.AppendLine($"        public override void SetId({entityType} entity, {qualifiedKeyType} id) => entity.{propName} = id;");
+            }
 
             if (keyProp?.ConverterTypeName != null)
             {

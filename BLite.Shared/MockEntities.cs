@@ -267,4 +267,38 @@ namespace BLite.Shared
         public HashSet<Address> Addresses { get; set; } = new();
         public ISet<City> FavoriteCities { get; set; } = new HashSet<City>();
     }
+
+    /// <summary>
+    /// Entity with private setters (requires reflection-based deserialization)
+    /// </summary>
+    public class EntityWithPrivateSetters
+    {
+        public ObjectId Id { get; private set; }
+        public string Name { get; private set; } = string.Empty;
+        public int Age { get; private set; }
+        public DateTime CreatedAt { get; private set; }
+
+        // Factory method for creation
+        public static EntityWithPrivateSetters Create(string name, int age)
+        {
+            return new EntityWithPrivateSetters
+            {
+                Id = ObjectId.NewObjectId(),
+                Name = name,
+                Age = age,
+                CreatedAt = DateTime.UtcNow
+            };
+        }
+    }
+
+    /// <summary>
+    /// Entity with init-only setters (can use object initializer)
+    /// </summary>
+    public class EntityWithInitSetters
+    {
+        public ObjectId Id { get; init; }
+        public required string Name { get; init; }
+        public int Age { get; init; }
+        public DateTime CreatedAt { get; init; }
+    }
 }

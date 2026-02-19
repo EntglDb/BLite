@@ -38,6 +38,8 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, DerivedEntity> DerivedEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithComputedProperties> ComputedPropertyEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithAdvancedCollections> AdvancedCollectionEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithPrivateSetters> PrivateSetterEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithInitSetters> InitSetterEntities { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -79,6 +81,8 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<DerivedEntity>().ToCollection("derived_entities");
         modelBuilder.Entity<EntityWithComputedProperties>().ToCollection("computed_property_entities");
         modelBuilder.Entity<EntityWithAdvancedCollections>().ToCollection("advanced_collection_entities");
+        modelBuilder.Entity<EntityWithPrivateSetters>().ToCollection("private_setter_entities");
+        modelBuilder.Entity<EntityWithInitSetters>().ToCollection("init_setter_entities");
     }
 
     public void ForceCheckpoint()

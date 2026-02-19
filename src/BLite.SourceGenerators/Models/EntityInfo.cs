@@ -14,6 +14,8 @@ namespace BLite.SourceGenerators.Models
         
         public PropertyInfo? IdProperty => Properties.FirstOrDefault(p => p.IsKey);
         public bool AutoId { get; set; }
+        public bool HasPrivateSetters { get; set; }
+        public bool HasPrivateOrNoConstructor { get; set; }
         
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();
