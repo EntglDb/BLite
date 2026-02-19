@@ -12,7 +12,7 @@ namespace BLite.Tests;
 /// 2. N-N via referencing with ObjectIds (CategoryRef/ProductRef) - BEST PRACTICE
 /// 
 /// Note: Bidirectional embedding (Category ↔ Product with full objects) is NOT supported
-/// by the source generator and is an anti-pattern for document databases like Cosmos DB.
+/// by the source generator and is an anti-pattern for document databases.
 /// Use referencing (ObjectIds) instead for N-N relationships.
 /// </summary>
 public class CircularReferenceTests : IDisposable
@@ -210,7 +210,7 @@ public class CircularReferenceTests : IDisposable
 
     // ========================================
     // N-N Referencing Tests (CategoryRef/ProductRef)
-    // BEST PRACTICE for Cosmos DB
+    // BEST PRACTICE for document databases
     // ========================================
 
     [Fact]

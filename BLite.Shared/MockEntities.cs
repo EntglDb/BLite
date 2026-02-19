@@ -322,7 +322,7 @@ namespace BLite.Shared
 
     /// <summary>
     /// Category with referenced products (N-N using ObjectId references)
-    /// Tests: N-N relationships using referencing (BEST PRACTICE for Cosmos DB)
+    /// Tests: N-N relationships using referencing (BEST PRACTICE for document databases)
     /// Recommended: Avoids large documents, better for queries and updates
     /// </summary>
     public class CategoryRef
@@ -335,7 +335,7 @@ namespace BLite.Shared
 
     /// <summary>
     /// Product with referenced categories (N-N using ObjectId references)
-    /// Tests: N-N relationships using referencing (BEST PRACTICE for Cosmos DB)
+    /// Tests: N-N relationships using referencing (BEST PRACTICE for document databases)
     /// Recommended: Avoids large documents, better for queries and updates
     /// </summary>
     public class ProductRef
