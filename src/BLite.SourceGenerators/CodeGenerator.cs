@@ -96,16 +96,14 @@ namespace BLite.SourceGenerators
         {
             var entityType = $"global::{entity.FullTypeName}";
             
-            // For nested mappers, generate SerializeFields first (writes only fields, no document wrapper)
+            // Always generate SerializeFields (writes only fields, no document wrapper)
+            // This is needed even for root entities, as they may be used as nested objects
             // Note: BsonSpanWriter is a ref struct, so it must be passed by ref
-            if (!isRoot)
-            {
-                sb.AppendLine($"        public void SerializeFields({entityType} entity, ref global::BLite.Bson.BsonSpanWriter writer)");
-                sb.AppendLine($"        {{");
-                GenerateFieldWritesCore(sb, entity, mapperNamespace);
-                sb.AppendLine($"        }}");
-                sb.AppendLine();
-            }
+            sb.AppendLine($"        public void SerializeFields({entityType} entity, ref global::BLite.Bson.BsonSpanWriter writer)");
+            sb.AppendLine($"        {{");
+            GenerateFieldWritesCore(sb, entity, mapperNamespace);
+            sb.AppendLine($"        }}");
+            sb.AppendLine();
             
             // Generate Serialize method (with document wrapper)
             var methodSig = isRoot 
@@ -301,12 +299,24 @@ namespace BLite.SourceGenerators
              var entityType = $"global::{entity.FullTypeName}";
              var needsReflection = entity.HasPrivateSetters || entity.HasPrivateOrNoConstructor;
              
-             // Note: BsonSpanReader is a ref struct, so nested mappers must use ref
-             var methodSig = isRoot 
-                ? $"public override {entityType} Deserialize(global::BLite.Bson.BsonSpanReader reader)"
-                : $"public {entityType} Deserialize(ref global::BLite.Bson.BsonSpanReader reader)";
-                
-            sb.AppendLine($"        {methodSig}");
+             // Always generate a public Deserialize method that accepts ref (for nested/internal usage)
+             GenerateDeserializeCore(sb, entity, entityType, needsReflection, mapperNamespace);
+             
+             // For root entities, also generate the override without ref that calls the ref version
+             if (isRoot)
+             {
+                 sb.AppendLine();
+                 sb.AppendLine($"        public override {entityType} Deserialize(global::BLite.Bson.BsonSpanReader reader)");
+                 sb.AppendLine($"        {{");
+                 sb.AppendLine($"            return Deserialize(ref reader);");
+                 sb.AppendLine($"        }}");
+             }
+        }
+        
+        private static void GenerateDeserializeCore(StringBuilder sb, EntityInfo entity, string entityType, bool needsReflection, string mapperNamespace)
+        {
+            // Public method that always accepts ref for internal/nested usage
+            sb.AppendLine($"        public {entityType} Deserialize(ref global::BLite.Bson.BsonSpanReader reader)");
             sb.AppendLine($"        {{");
             // Use object initializer if possible or constructor, but for now standard new()
             // To support required properties, we might need a different approach or verify if source generators can detect required.
