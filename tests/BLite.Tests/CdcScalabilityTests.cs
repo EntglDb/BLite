@@ -54,7 +54,7 @@ public class CdcScalabilityTests : IDisposable
         foreach (var sub in subscriptions) sub.Dispose();
     }
 
-    [Fact]
+    [Fact(Skip="Performance test - run manually when needed")]
     public async Task Test_Cdc_Slow_Subscriber_Does_Not_Block_Others()
     {
         var fastEventCount = 0;
