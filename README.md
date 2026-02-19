@@ -140,6 +140,33 @@ db.People.Insert(new Person { Id = 1, Name = "Alice" });
 - **Lowercase Policy**: BSON keys are automatically persisted as `lowercase` for consistency.
 - **Custom Overrides**: Use `[BsonProperty]` or `[JsonPropertyName]` for manual field naming.
 
+#### ✅ Supported Scenarios
+
+The source generator handles a wide range of modern C# patterns:
+
+| Feature | Support | Description |
+| :--- | :---: | :--- |
+| **Property Inheritance** | ✅ | Properties from base classes are automatically included in serialization |
+| **Private Setters** | ✅ | Properties with `private set` are correctly deserialized using Expression Trees |
+| **Init-Only Setters** | ✅ | Properties with `init` are supported via runtime compilation |
+| **Private Constructors** | ✅ | Deserialization works even without parameterless public constructor |
+| **Advanced Collections** | ✅ | `IEnumerable<T>`, `ICollection<T>`, `IList<T>`, `HashSet<T>`, and more |
+| **Nullable Value Types** | ✅ | `ObjectId?`, `int?`, `DateTime?` are correctly serialized/deserialized |
+| **Nullable Collections** | ✅ | `List<T>?`, `string?` with proper null handling |
+| **Unlimited Nesting** | ✅ | Deeply nested object graphs with circular reference protection |
+| **Self-Referencing** | ✅ | Entities can reference themselves (e.g., `Manager` property in `Employee`) |
+| **N-N Relationships** | ✅ | Collections of ObjectIds for efficient document referencing |
+
+#### ❌ Limitations & Design Choices
+
+| Scenario | Status | Reason |
+| :--- | :---: | :--- |
+| **Computed Properties** | ⚠️ Excluded | Getter-only properties without backing fields are intentionally skipped (e.g., `FullName => $"{First} {Last}"`) |
+| **Constructor Logic** | ⚠️ Bypassed | Deserialization uses `FormatterServices.GetUninitializedObject()` to avoid constructor execution |
+| **Constructor Validation** | ⚠️ Not Executed | Validation logic in constructors won't run during deserialization - use Data Annotations instead |
+
+> **💡 Best Practice**: For relationships between entities, prefer **referencing** (storing ObjectIds) over **embedding** (full nested objects) to avoid data duplication and maintain consistency. See tests in `CircularReferenceTests.cs` for implementation patterns.
+
 ### 🏷️ Supported Attributes
 BLite supports standard .NET Data Annotations for mapping and validation:
 

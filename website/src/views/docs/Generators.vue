@@ -150,6 +150,158 @@
         </ul>
       </div>
     </section>
+
+    <section>
+      <h2>✅ Supported Scenarios</h2>
+      <p>The source generator handles a wide range of modern C# patterns, including advanced property configurations and complex relationships:</p>
+      
+      <table class="feature-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Support</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Property Inheritance</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Properties from base classes are automatically included in serialization</td>
+          </tr>
+          <tr>
+            <td><strong>Private Setters</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Properties with <code>private set</code> are correctly deserialized using Expression Trees</td>
+          </tr>
+          <tr>
+            <td><strong>Init-Only Setters</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Properties with <code>init</code> are supported via runtime compilation</td>
+          </tr>
+          <tr>
+            <td><strong>Private Constructors</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Deserialization works even without parameterless public constructor</td>
+          </tr>
+          <tr>
+            <td><strong>Advanced Collections</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td><code>IEnumerable&lt;T&gt;</code>, <code>ICollection&lt;T&gt;</code>, <code>IList&lt;T&gt;</code>, <code>HashSet&lt;T&gt;</code>, and more</td>
+          </tr>
+          <tr>
+            <td><strong>Nullable Value Types</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td><code>ObjectId?</code>, <code>int?</code>, <code>DateTime?</code> are correctly serialized/deserialized</td>
+          </tr>
+          <tr>
+            <td><strong>Nullable Collections</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td><code>List&lt;T&gt;?</code>, <code>string?</code> with proper null handling</td>
+          </tr>
+          <tr>
+            <td><strong>Unlimited Nesting</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Deeply nested object graphs with circular reference protection</td>
+          </tr>
+          <tr>
+            <td><strong>Self-Referencing</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Entities can reference themselves (e.g., <code>Manager</code> property in <code>Employee</code>)</td>
+          </tr>
+          <tr>
+            <td><strong>N-N Relationships</strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Collections of ObjectIds for efficient document referencing</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="code-example">
+        <h4>Example: Advanced Property Patterns</h4>
+        <pre><code><span class="keyword">public class</span> <span class="type">Person</span>
+{
+    <span class="comment">// Property inheritance - inherited properties are included</span>
+    <span class="keyword">public</span> <span class="type">ObjectId</span> Id { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    
+    <span class="comment">// Private setter - Expression Trees used for deserialization</span>
+    <span class="keyword">public string</span> Name { <span class="keyword">get</span>; <span class="keyword">private set</span>; }
+    
+    <span class="comment">// Init-only setter - Runtime compilation for setting</span>
+    <span class="keyword">public string</span> Email { <span class="keyword">get</span>; <span class="keyword">init</span>; }
+    
+    <span class="comment">// Nullable value type - Proper null handling</span>
+    <span class="keyword">public</span> <span class="type">DateTime</span>? BirthDate { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    
+    <span class="comment">// Advanced collection - ICollection&lt;T&gt; recognized</span>
+    <span class="keyword">public</span> <span class="type">ICollection</span>&lt;<span class="keyword">string</span>&gt; Tags { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    
+    <span class="comment">// Self-referencing - Circular reference protection</span>
+    <span class="keyword">public</span> <span class="type">ObjectId</span>? ManagerId { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+}</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>⚠️ Limitations & Design Choices</h2>
+      <p>Some scenarios are handled differently or intentionally excluded:</p>
+      
+      <table class="feature-table">
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Status</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Computed Properties</strong></td>
+            <td><span class="badge warning">⚠️ Excluded</span></td>
+            <td>Getter-only properties without backing fields are intentionally skipped (e.g., <code>FullName => $"{First} {Last}"</code>)</td>
+          </tr>
+          <tr>
+            <td><strong>Constructor Logic</strong></td>
+            <td><span class="badge warning">⚠️ Bypassed</span></td>
+            <td>Deserialization uses <code>FormatterServices.GetUninitializedObject()</code> to avoid constructor execution</td>
+          </tr>
+          <tr>
+            <td><strong>Constructor Validation</strong></td>
+            <td><span class="badge warning">⚠️ Not Executed</span></td>
+            <td>Validation logic in constructors won't run during deserialization - use Data Annotations instead</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="info-box">
+        <strong>💡 Best Practice:</strong> For relationships between entities, prefer <strong>referencing</strong> (storing ObjectIds) over <strong>embedding</strong> (full nested objects) to avoid data duplication and maintain consistency.
+      </div>
+
+      <div class="code-example">
+        <h4>Example: Referencing vs Embedding</h4>
+        <pre><code><span class="comment">// ✅ GOOD: Reference pattern (recommended)</span>
+<span class="keyword">public class</span> <span class="type">Category</span>
+{
+    <span class="keyword">public</span> <span class="type">ObjectId</span> Id { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public string</span> Name { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public</span> <span class="type">List</span>&lt;<span class="type">ObjectId</span>&gt; ProductIds { <span class="keyword">get</span>; <span class="keyword">set</span>; }  <span class="comment">// N-N via IDs</span>
+}
+
+<span class="keyword">public class</span> <span class="type">Product</span>
+{
+    <span class="keyword">public</span> <span class="type">ObjectId</span> Id { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public string</span> Name { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public</span> <span class="type">List</span>&lt;<span class="type">ObjectId</span>&gt; CategoryIds { <span class="keyword">get</span>; <span class="keyword">set</span>; }  <span class="comment">// N-N via IDs</span>
+}
+
+<span class="comment">// ⚠️ AVOID: Embedding full objects (data duplication)</span>
+<span class="keyword">public class</span> <span class="type">BadCategory</span>
+{
+    <span class="keyword">public</span> <span class="type">ObjectId</span> Id { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public</span> <span class="type">List</span>&lt;<span class="type">Product</span>&gt; Products { <span class="keyword">get</span>; <span class="keyword">set</span>; }  <span class="comment">// Duplicates product data!</span>
+}</code></pre>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -160,6 +312,7 @@ h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 16px; }
 section { margin-bottom: 48px; }
 h2 { font-size: 1.8rem; font-weight: 700; margin-bottom: 16px; color: var(--blite-red); border-bottom: 2px solid rgba(231, 76, 60, 0.2); padding-bottom: 8px; }
 h3 { font-size: 1.3rem; font-weight: 600; margin: 24px 0 12px; }
+h4 { font-size: 1.1rem; font-weight: 600; margin: 16px 0 8px; color: var(--text-primary); }
 p { margin-bottom: 16px; line-height: 1.7; color: var(--text-secondary); }
 ul { margin: 16px 0; padding-left: 24px; }
 li { margin-bottom: 12px; color: var(--text-secondary); line-height: 1.6; }
@@ -175,4 +328,13 @@ pre code { background: none; padding: 0; color: var(--text-secondary); }
 .info-box.success { border-left-color: #10b981; background: rgba(16, 185, 129, 0.05); }
 .info-box ul { margin-top: 12px; }
 .info-box li { color: var(--text-secondary); font-size: 0.95rem; }
+.feature-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+.feature-table th { background: rgba(231, 76, 60, 0.1); padding: 12px; text-align: left; font-weight: 600; border-bottom: 2px solid rgba(231, 76, 60, 0.3); }
+.feature-table td { padding: 12px; border-bottom: 1px solid rgba(231, 76, 60, 0.1); }
+.feature-table td code { font-size: 0.85rem; }
+.badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; }
+.badge.success { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+.badge.warning { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.code-example { margin: 24px 0; }
+.code-example h4 { margin-bottom: 8px; }
 </style>
