@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.3.1"></a>
+## [1.3.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.3.1) (2026-02-19)
+
+### Bug Fixes
+
+* generate SerializeFields and Deserialize(ref) for all entities ([69555cd](https://www.github.com/EntglDb/BLite/commit/69555cd16e11f0bf69b73b503ee3bb8e6511f9b5))
+
 <a name="1.3.0"></a>
 ## [1.3.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.3.0) (2026-02-19)
 
