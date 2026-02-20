@@ -1,5 +1,33 @@
 <script setup lang="ts">
-import { RouterView } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
+import { useHead } from '@unhead/vue'
+import { DEFAULT_TITLE, DEFAULT_DESC } from './router'
+
+const route = useRoute()
+const BASE_URL = 'https://blitedb.com'
+
+// useHead is reactive: vite-ssg bakes the correct title/description into the
+// static HTML for each route at build time; on the client it stays reactive.
+useHead(() => {
+  const meta = route.meta as { title?: string; description?: string }
+  const title = meta.title ?? DEFAULT_TITLE
+  const description = meta.description ?? DEFAULT_DESC
+  const url = `${BASE_URL}${route.path}`
+  return {
+    title,
+    meta: [
+      { name: 'description', content: description },
+      { property: 'og:title', content: title },
+      { property: 'og:description', content: description },
+      { property: 'og:url', content: url },
+      { name: 'twitter:title', content: title },
+      { name: 'twitter:description', content: description },
+    ],
+    link: [
+      { rel: 'canonical', href: url },
+    ],
+  }
+})
 </script>
 
 <template>

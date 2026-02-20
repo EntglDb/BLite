@@ -1,0 +1,82 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><!-- Primary meta --><title>CRUD Operations – BLite</title><meta name="description" content="Insert, update, delete and read documents in BLite. Type-safe, no reflection — all serialization is generated at compile time via source generators."><meta name="keywords" content="BLite, embedded database, .NET database, BSON, zero allocation, ACID transactions, CDC, Change Data Capture, document store, NoSQL, .NET 10, source generators, spatial index, R-Tree"><meta name="author" content="BLite Project"><meta name="robots" content="index, follow"><meta name="theme-color" content="#e74c3c"><link rel="canonical" href="https://blitedb.com/docs/crud"><!-- Favicon --><link rel="icon" type="image/svg+xml" href="/icon.svg"><!-- Open Graph --><meta property="og:type" content="website"><meta property="og:site_name" content="BLite"><meta property="og:url" content="https://blitedb.com/docs/crud"><meta property="og:title" content="CRUD Operations – BLite"><meta property="og:description" content="Insert, update, delete and read documents in BLite. Type-safe, no reflection — all serialization is generated at compile time via source generators."><meta property="og:image" content="https://blitedb.com/og-image.png"><!-- Twitter Card --><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="CRUD Operations – BLite"><meta name="twitter:description" content="Insert, update, delete and read documents in BLite. Type-safe, no reflection — all serialization is generated at compile time via source generators."><meta name="twitter:image" content="https://blitedb.com/og-image.png"><!-- JSON-LD Structured Data --><script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "BLite",
+    "url": "https://blitedb.com",
+    "description": "BLite is a high-performance, embedded, ACID-compliant BSON document store for .NET 10. Features zero-allocation I/O, Change Data Capture, R-Tree spatial indexing, and compile-time source generators.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Windows, Linux, macOS",
+    "programmingLanguage": "C#",
+    "license": "https://opensource.org/licenses/MIT",
+    "codeRepository": "https://github.com/EntglDb/BLite",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "keywords": "embedded database, BSON, .NET, zero allocation, ACID, CDC, NoSQL"
+  }</script><script type="module" async="" crossorigin="" src="/assets/app-2UmfhOyc.js"></script><link rel="stylesheet" crossorigin="" href="/assets/app-0Yc34960.css"></head><body><div id="app" data-server-rendered="true"><div class="app-layout" data-v-94ca611f=""><header class="main-header glass-panel" data-v-94ca611f=""><div class="container header-content" data-v-94ca611f=""><a href="/" class="logo-link" data-v-94ca611f=""><img src="/icon.svg" alt="BLite" class="logo-img" data-v-94ca611f=""><div class="logo-text" data-v-94ca611f="">BLite<span class="dot" data-v-94ca611f="">.</span></div></a><nav data-v-94ca611f=""><a href="/" class="" data-v-94ca611f="">Home</a><a href="/docs" class="router-link-active" data-v-94ca611f="">Docs</a><a href="/comparisons" class="" data-v-94ca611f="">Comparisons</a><a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link" data-v-94ca611f="">GitHub ↗</a></nav></div></header><main data-v-94ca611f=""><div class="docs-layout" data-v-94ca611f="" data-v-d8cc3184=""><aside class="docs-sidebar" data-v-d8cc3184=""><div class="sidebar-header" data-v-d8cc3184=""><h2 data-v-d8cc3184="">Documentation</h2></div><nav class="sidebar-nav" data-v-d8cc3184=""><!--[--><a href="/docs/getting-started" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🚀</span><span class="nav-label" data-v-d8cc3184="">Getting Started</span></a><a href="/docs/installation" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">📦</span><span class="nav-label" data-v-d8cc3184="">Installation</span></a><a href="/docs/transactions" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🔄</span><span class="nav-label" data-v-d8cc3184="">Transactions &amp; Async</span></a><a aria-current="page" href="/docs/crud" class="router-link-active router-link-exact-active active nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">✏️</span><span class="nav-label" data-v-d8cc3184="">CRUD Operations</span></a><a href="/docs/querying" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🔍</span><span class="nav-label" data-v-d8cc3184="">Querying</span></a><a href="/docs/generators" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🤖</span><span class="nav-label" data-v-d8cc3184="">Source Generators</span></a><a href="/docs/cdc" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">📡</span><span class="nav-label" data-v-d8cc3184="">Change Data Capture</span></a><a href="/docs/spatial" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🌍</span><span class="nav-label" data-v-d8cc3184="">Spatial Indexing</span></a><a href="/docs/architecture" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🏗️</span><span class="nav-label" data-v-d8cc3184="">Architecture</span></a><a href="/docs/converters" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🆔</span><span class="nav-label" data-v-d8cc3184="">Custom ID Converters</span></a><a href="/docs/benchmarks" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">⚡</span><span class="nav-label" data-v-d8cc3184="">Benchmarks</span></a><!--]--></nav></aside><main class="docs-content" data-v-d8cc3184=""><div class="container" data-v-d8cc3184=""><div class="doc-page" data-v-d8cc3184="" data-v-931f6589=""><h1 data-v-931f6589="">✏️ <span class="title-gradient" data-v-931f6589="">CRUD Operations</span></h1><p class="lead" data-v-931f6589="">Learn how to create, read, update, and delete documents in BLite collections.</p><section data-v-931f6589=""><h2 data-v-931f6589="">Insert</h2><p data-v-931f6589="">Add new documents to a collection:</p><h3 data-v-931f6589="">Single Insert</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> user = <span class="keyword" data-v-931f6589="">new</span> <span class="type" data-v-931f6589="">User</span>
+{
+    Name = <span class="string" data-v-931f6589="">"Alice"</span>,
+    Age = <span class="number" data-v-931f6589="">30</span>,
+    Email = <span class="string" data-v-931f6589="">"alice@example.com"</span>
+};
+
+users.Insert(user);
+<span class="comment" data-v-931f6589="">// ID is automatically generated and assigned</span>
+Console.WriteLine(user.Id);</code></pre><h3 data-v-931f6589="">Bulk Insert</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> batch = <span class="keyword" data-v-931f6589="">new</span> <span class="type" data-v-931f6589="">List</span>&lt;<span class="type" data-v-931f6589="">User</span>&gt;
+{
+    <span class="keyword" data-v-931f6589="">new</span> { Name = <span class="string" data-v-931f6589="">"Bob"</span>, Age = <span class="number" data-v-931f6589="">25</span> },
+    <span class="keyword" data-v-931f6589="">new</span> { Name = <span class="string" data-v-931f6589="">"Charlie"</span>, Age = <span class="number" data-v-931f6589="">35</span> },
+    <span class="keyword" data-v-931f6589="">new</span> { Name = <span class="string" data-v-931f6589="">"Diana"</span>, Age = <span class="number" data-v-931f6589="">28</span> }
+};
+
+users.InsertMany(batch);</code></pre><h3 data-v-931f6589="">Async Insert</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">await</span> users.InsertAsync(user);
+<span class="keyword" data-v-931f6589="">await</span> users.InsertManyAsync(batch);</code></pre></section><section data-v-931f6589=""><h2 data-v-931f6589="">Read</h2><h3 data-v-931f6589="">Find by ID</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> user = users.FindById(userId);
+<span class="keyword" data-v-931f6589="">if</span> (user != <span class="keyword" data-v-931f6589="">null</span>)
+{
+    Console.WriteLine(user.Name);
+}</code></pre><h3 data-v-931f6589="">Find All</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> allUsers = users.FindAll();</code></pre><h3 data-v-931f6589="">Query with Filter</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> adults = users.AsQueryable()
+    .Where(u =&gt; u.Age &gt;= <span class="number" data-v-931f6589="">18</span>)
+    .AsEnumerable();</code></pre></section><section data-v-931f6589=""><h2 data-v-931f6589="">Update</h2><h3 data-v-931f6589="">Update Single Document</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> user = users.FindById(userId);
+user.Age = <span class="number" data-v-931f6589="">31</span>;
+user.Email = <span class="string" data-v-931f6589="">"newemail@example.com"</span>;
+
+users.Update(user);</code></pre><h3 data-v-931f6589="">Upsert (Insert or Update)</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="comment" data-v-931f6589="">// Insert if not exists, update if exists</span>
+users.Upsert(user);</code></pre><h3 data-v-931f6589="">Partial Update</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> user = users.FindById(userId);
+<span class="keyword" data-v-931f6589="">if</span> (user != <span class="keyword" data-v-931f6589="">null</span>)
+{
+    user.Age += <span class="number" data-v-931f6589="">1</span>; <span class="comment" data-v-931f6589="">// Increment age</span>
+    users.Update(user);
+}</code></pre><h3 data-v-931f6589="">Async Update</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">await</span> users.UpdateAsync(user);
+<span class="keyword" data-v-931f6589="">await</span> users.UpsertAsync(user);</code></pre></section><section data-v-931f6589=""><h2 data-v-931f6589="">Delete</h2><h3 data-v-931f6589="">Delete by ID</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> success = users.Delete(userId);
+Console.WriteLine(success); <span class="comment" data-v-931f6589="">// true if deleted</span></code></pre><h3 data-v-931f6589="">Delete by Document</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> user = users.FindById(userId);
+users.Delete(user.Id);</code></pre><h3 data-v-931f6589="">Delete Many</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">var</span> toDelete = users.AsQueryable()
+    .Where(u =&gt; u.Age &lt; <span class="number" data-v-931f6589="">18</span>)
+    .Select(u =&gt; u.Id)
+    .AsEnumerable();
+
+<span class="keyword" data-v-931f6589="">foreach</span> (<span class="keyword" data-v-931f6589="">var</span> id <span class="keyword" data-v-931f6589="">in</span> toDelete)
+{
+    users.Delete(id);
+}</code></pre><h3 data-v-931f6589="">Async Delete</h3><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">await</span> users.DeleteAsync(userId);</code></pre></section><section data-v-931f6589=""><h2 data-v-931f6589="">Validation</h2><p data-v-931f6589="">BLite respects DataAnnotations attributes automatically:</p><pre data-v-931f6589=""><code data-v-931f6589=""><span class="keyword" data-v-931f6589="">public class</span> <span class="type" data-v-931f6589="">User</span>
+{
+    [<span class="type" data-v-931f6589="">Required</span>]
+    [<span class="type" data-v-931f6589="">StringLength</span>(<span class="number" data-v-931f6589="">100</span>, MinimumLength = <span class="number" data-v-931f6589="">2</span>)]
+    <span class="keyword" data-v-931f6589="">public string</span> Name { <span class="keyword" data-v-931f6589="">get</span>; <span class="keyword" data-v-931f6589="">set</span>; }
+    
+    [<span class="type" data-v-931f6589="">Range</span>(<span class="number" data-v-931f6589="">0</span>, <span class="number" data-v-931f6589="">150</span>)]
+    <span class="keyword" data-v-931f6589="">public int</span> Age { <span class="keyword" data-v-931f6589="">get</span>; <span class="keyword" data-v-931f6589="">set</span>; }
+    
+    [<span class="type" data-v-931f6589="">EmailAddress</span>]
+    <span class="keyword" data-v-931f6589="">public string</span> Email { <span class="keyword" data-v-931f6589="">get</span>; <span class="keyword" data-v-931f6589="">set</span>; }
+}
+
+<span class="keyword" data-v-931f6589="">try</span>
+{
+    users.Insert(<span class="keyword" data-v-931f6589="">new</span> <span class="type" data-v-931f6589="">User</span> { Name = <span class="string" data-v-931f6589="">""</span>, Age = <span class="number" data-v-931f6589="">200</span> });
+}
+<span class="keyword" data-v-931f6589="">catch</span> (<span class="type" data-v-931f6589="">ValidationException</span> ex)
+{
+    Console.WriteLine(ex.Message);
+}</code></pre></section><section data-v-931f6589=""><h2 data-v-931f6589="">Best Practices</h2><ul data-v-931f6589=""><li data-v-931f6589="">✅ Use <strong data-v-931f6589="">async methods</strong> for better scalability</li><li data-v-931f6589="">✅ Wrap writes in <strong data-v-931f6589="">transactions</strong> for consistency</li><li data-v-931f6589="">✅ Use <strong data-v-931f6589="">bulk operations</strong> for large datasets</li><li data-v-931f6589="">✅ Leverage <strong data-v-931f6589="">validation attributes</strong> for data integrity</li><li data-v-931f6589="">⚠️ Avoid round-trips - batch related operations</li></ul></section></div></div></main></div></main><footer class="main-footer" data-v-94ca611f=""><div class="container" data-v-94ca611f=""><p data-v-94ca611f="">© 2026 BLite Project. Open Source (MIT).</p><p class="tagline" data-v-94ca611f="">"Sky is Blite, no Clouds today."</p></div></footer></div></div></body></html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><!-- Primary meta --><title>Spatial Indexing – BLite</title><meta name="description" content="BLite includes a built-in R-Tree for geospatial and vector search queries. Query by bounding box, radius, or nearest-neighbour without external plugins."><meta name="keywords" content="BLite, embedded database, .NET database, BSON, zero allocation, ACID transactions, CDC, Change Data Capture, document store, NoSQL, .NET 10, source generators, spatial index, R-Tree"><meta name="author" content="BLite Project"><meta name="robots" content="index, follow"><meta name="theme-color" content="#e74c3c"><link rel="canonical" href="https://blitedb.com/docs/spatial"><!-- Favicon --><link rel="icon" type="image/svg+xml" href="/icon.svg"><!-- Open Graph --><meta property="og:type" content="website"><meta property="og:site_name" content="BLite"><meta property="og:url" content="https://blitedb.com/docs/spatial"><meta property="og:title" content="Spatial Indexing – BLite"><meta property="og:description" content="BLite includes a built-in R-Tree for geospatial and vector search queries. Query by bounding box, radius, or nearest-neighbour without external plugins."><meta property="og:image" content="https://blitedb.com/og-image.png"><!-- Twitter Card --><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Spatial Indexing – BLite"><meta name="twitter:description" content="BLite includes a built-in R-Tree for geospatial and vector search queries. Query by bounding box, radius, or nearest-neighbour without external plugins."><meta name="twitter:image" content="https://blitedb.com/og-image.png"><!-- JSON-LD Structured Data --><script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "BLite",
+    "url": "https://blitedb.com",
+    "description": "BLite is a high-performance, embedded, ACID-compliant BSON document store for .NET 10. Features zero-allocation I/O, Change Data Capture, R-Tree spatial indexing, and compile-time source generators.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Windows, Linux, macOS",
+    "programmingLanguage": "C#",
+    "license": "https://opensource.org/licenses/MIT",
+    "codeRepository": "https://github.com/EntglDb/BLite",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "keywords": "embedded database, BSON, .NET, zero allocation, ACID, CDC, NoSQL"
+  }</script><script type="module" async="" crossorigin="" src="/assets/app-2UmfhOyc.js"></script><link rel="stylesheet" crossorigin="" href="/assets/app-0Yc34960.css"></head><body><div id="app" data-server-rendered="true"><div class="app-layout" data-v-94ca611f=""><header class="main-header glass-panel" data-v-94ca611f=""><div class="container header-content" data-v-94ca611f=""><a href="/" class="logo-link" data-v-94ca611f=""><img src="/icon.svg" alt="BLite" class="logo-img" data-v-94ca611f=""><div class="logo-text" data-v-94ca611f="">BLite<span class="dot" data-v-94ca611f="">.</span></div></a><nav data-v-94ca611f=""><a href="/" class="" data-v-94ca611f="">Home</a><a href="/docs" class="router-link-active" data-v-94ca611f="">Docs</a><a href="/comparisons" class="" data-v-94ca611f="">Comparisons</a><a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link" data-v-94ca611f="">GitHub ↗</a></nav></div></header><main data-v-94ca611f=""><div class="docs-layout" data-v-94ca611f="" data-v-d8cc3184=""><aside class="docs-sidebar" data-v-d8cc3184=""><div class="sidebar-header" data-v-d8cc3184=""><h2 data-v-d8cc3184="">Documentation</h2></div><nav class="sidebar-nav" data-v-d8cc3184=""><!--[--><a href="/docs/getting-started" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🚀</span><span class="nav-label" data-v-d8cc3184="">Getting Started</span></a><a href="/docs/installation" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">📦</span><span class="nav-label" data-v-d8cc3184="">Installation</span></a><a href="/docs/transactions" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🔄</span><span class="nav-label" data-v-d8cc3184="">Transactions &amp; Async</span></a><a href="/docs/crud" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">✏️</span><span class="nav-label" data-v-d8cc3184="">CRUD Operations</span></a><a href="/docs/querying" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🔍</span><span class="nav-label" data-v-d8cc3184="">Querying</span></a><a href="/docs/generators" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🤖</span><span class="nav-label" data-v-d8cc3184="">Source Generators</span></a><a href="/docs/cdc" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">📡</span><span class="nav-label" data-v-d8cc3184="">Change Data Capture</span></a><a aria-current="page" href="/docs/spatial" class="router-link-active router-link-exact-active active nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🌍</span><span class="nav-label" data-v-d8cc3184="">Spatial Indexing</span></a><a href="/docs/architecture" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🏗️</span><span class="nav-label" data-v-d8cc3184="">Architecture</span></a><a href="/docs/converters" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🆔</span><span class="nav-label" data-v-d8cc3184="">Custom ID Converters</span></a><a href="/docs/benchmarks" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">⚡</span><span class="nav-label" data-v-d8cc3184="">Benchmarks</span></a><!--]--></nav></aside><main class="docs-content" data-v-d8cc3184=""><div class="container" data-v-d8cc3184=""><div class="doc-page" data-v-d8cc3184="" data-v-cc7599cf=""><h1 data-v-cc7599cf="">🌍 Spatial Indexing</h1><p class="lead" data-v-cc7599cf="">Built-in R-Tree indexing for geospatial queries and vector search operations.</p><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Coordinate Tuples</h2><p data-v-cc7599cf="">BLite uses <code data-v-cc7599cf="">(double, double)</code> tuples for coordinates to achieve zero allocation:</p><pre data-v-cc7599cf=""><code data-v-cc7599cf=""><span class="keyword" data-v-cc7599cf="">public class</span> <span class="type" data-v-cc7599cf="">Location</span>
+{
+    [<span class="type" data-v-cc7599cf="">Key</span>]
+    <span class="keyword" data-v-cc7599cf="">public</span> <span class="type" data-v-cc7599cf="">ObjectId</span> Id { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+    
+    <span class="keyword" data-v-cc7599cf="">public string</span> Name { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+    
+    <span class="comment" data-v-cc7599cf="">// (latitude, longitude)</span>
+    <span class="keyword" data-v-cc7599cf="">public</span> (<span class="keyword" data-v-cc7599cf="">double</span>, <span class="keyword" data-v-cc7599cf="">double</span>) Coordinates { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+}</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Creating Spatial Index</h2><pre data-v-cc7599cf=""><code data-v-cc7599cf=""><span class="keyword" data-v-cc7599cf="">var</span> locations = db.GetCollection&lt;<span class="type" data-v-cc7599cf="">Location</span>&gt;();
+
+<span class="comment" data-v-cc7599cf="">// Create R-Tree spatial index</span>
+locations.EnsureSpatialIndex(l =&gt; l.Coordinates);</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Inserting Locations</h2><pre data-v-cc7599cf=""><code data-v-cc7599cf="">locations.Insert(<span class="keyword" data-v-cc7599cf="">new</span> <span class="type" data-v-cc7599cf="">Location</span>
+{
+    Name = <span class="string" data-v-cc7599cf="">"Colosseum"</span>,
+    Coordinates = (<span class="number" data-v-cc7599cf="">41.8902</span>, <span class="number" data-v-cc7599cf="">12.4922</span>) <span class="comment" data-v-cc7599cf="">// Rome</span>
+});
+
+locations.Insert(<span class="keyword" data-v-cc7599cf="">new</span> <span class="type" data-v-cc7599cf="">Location</span>
+{
+    Name = <span class="string" data-v-cc7599cf="">"Eiffel Tower"</span>,
+    Coordinates = (<span class="number" data-v-cc7599cf="">48.8584</span>, <span class="number" data-v-cc7599cf="">2.2945</span>) <span class="comment" data-v-cc7599cf="">// Paris</span>
+});</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Proximity Search</h2><p data-v-cc7599cf="">Find locations within a radius:</p><pre data-v-cc7599cf=""><code data-v-cc7599cf=""><span class="keyword" data-v-cc7599cf="">var</span> centerPoint = (<span class="number" data-v-cc7599cf="">41.9028</span>, <span class="number" data-v-cc7599cf="">12.4964</span>); <span class="comment" data-v-cc7599cf="">// Vatican City</span>
+<span class="keyword" data-v-cc7599cf="">var</span> radiusKm = <span class="number" data-v-cc7599cf="">5.0</span>;
+
+<span class="keyword" data-v-cc7599cf="">var</span> nearby = locations.Near(
+    l =&gt; l.Coordinates,
+    centerPoint,
+    radiusKm
+);
+
+<span class="keyword" data-v-cc7599cf="">foreach</span> (<span class="keyword" data-v-cc7599cf="">var</span> location <span class="keyword" data-v-cc7599cf="">in</span> nearby)
+{
+    Console.WriteLine(location.Name);
+}</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Bounding Box Query</h2><p data-v-cc7599cf="">Find all locations within a rectangular area:</p><pre data-v-cc7599cf=""><code data-v-cc7599cf=""><span class="comment" data-v-cc7599cf="">// Define bounding box: (minLat, minLon), (maxLat, maxLon)</span>
+<span class="keyword" data-v-cc7599cf="">var</span> southwest = (<span class="number" data-v-cc7599cf="">41.85</span>, <span class="number" data-v-cc7599cf="">12.45</span>);
+<span class="keyword" data-v-cc7599cf="">var</span> northeast = (<span class="number" data-v-cc7599cf="">41.95</span>, <span class="number" data-v-cc7599cf="">12.55</span>);
+
+<span class="keyword" data-v-cc7599cf="">var</span> inBox = locations.Within(
+    l =&gt; l.Coordinates,
+    southwest,
+    northeast
+);
+</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Sorted by Distance</h2><p data-v-cc7599cf="">Get nearest locations with distance calculation:</p><pre data-v-cc7599cf=""><code data-v-cc7599cf=""><span class="keyword" data-v-cc7599cf="">var</span> myLocation = (<span class="number" data-v-cc7599cf="">41.9028</span>, <span class="number" data-v-cc7599cf="">12.4964</span>);
+
+<span class="keyword" data-v-cc7599cf="">var</span> nearest = locations
+    .NearestNeighbors(l =&gt; l.Coordinates, myLocation, limit: <span class="number" data-v-cc7599cf="">10</span>);
+
+<span class="keyword" data-v-cc7599cf="">foreach</span> (<span class="keyword" data-v-cc7599cf="">var</span> (location, distance) <span class="keyword" data-v-cc7599cf="">in</span> nearest)
+{
+    Console.WriteLine($<span class="string" data-v-cc7599cf="">"{location.Name}: {distance:F2} km"</span>);
+}</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Performance</h2><p data-v-cc7599cf="">R-Tree indexes provide logarithmic search complexity:</p><ul data-v-cc7599cf=""><li data-v-cc7599cf="">✅ <strong data-v-cc7599cf="">O(log n)</strong> spatial queries</li><li data-v-cc7599cf="">✅ <strong data-v-cc7599cf="">Zero allocation</strong> with tuple coordinates</li><li data-v-cc7599cf="">✅ <strong data-v-cc7599cf="">Efficient bounding box</strong> calculations</li><li data-v-cc7599cf="">✅ <strong data-v-cc7599cf="">Optimized for proximity</strong> searches</li></ul></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Advanced Example</h2><pre data-v-cc7599cf=""><code data-v-cc7599cf=""><span class="keyword" data-v-cc7599cf="">public class</span> <span class="type" data-v-cc7599cf="">Restaurant</span>
+{
+    [<span class="type" data-v-cc7599cf="">Key</span>]
+    <span class="keyword" data-v-cc7599cf="">public</span> <span class="type" data-v-cc7599cf="">ObjectId</span> Id { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+    
+    <span class="keyword" data-v-cc7599cf="">public string</span> Name { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+    <span class="keyword" data-v-cc7599cf="">public</span> (<span class="keyword" data-v-cc7599cf="">double</span>, <span class="keyword" data-v-cc7599cf="">double</span>) Location { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+    <span class="keyword" data-v-cc7599cf="">public string</span> Category { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+    <span class="keyword" data-v-cc7599cf="">public double</span> Rating { <span class="keyword" data-v-cc7599cf="">get</span>; <span class="keyword" data-v-cc7599cf="">set</span>; }
+}
+
+<span class="comment" data-v-cc7599cf="">// Find nearby Italian restaurants</span>
+<span class="keyword" data-v-cc7599cf="">var</span> userLocation = (<span class="number" data-v-cc7599cf="">41.9028</span>, <span class="number" data-v-cc7599cf="">12.4964</span>);
+
+<span class="keyword" data-v-cc7599cf="">var</span> italianNearby = restaurants
+    .Near(r =&gt; r.Location, userLocation, <span class="number" data-v-cc7599cf="">2.0</span>) <span class="comment" data-v-cc7599cf="">// Within 2km</span>
+    .Where(r =&gt; r.Category == <span class="string" data-v-cc7599cf="">"Italian"</span> &amp;&amp; r.Rating &gt;= <span class="number" data-v-cc7599cf="">4.0</span>)
+    .OrderByDescending(r =&gt; r.Rating)
+    .Take(<span class="number" data-v-cc7599cf="">5</span>);</code></pre></section><section data-v-cc7599cf=""><h2 data-v-cc7599cf="">Best Practices</h2><ul data-v-cc7599cf=""><li data-v-cc7599cf="">✅ Create spatial indexes <strong data-v-cc7599cf="">before</strong> bulk inserts</li><li data-v-cc7599cf="">✅ Use appropriate radius for queries (avoid too large)</li><li data-v-cc7599cf="">✅ Combine spatial with regular filters for optimal performance</li><li data-v-cc7599cf="">⚠️ Spatial indexes consume more memory than B-Tree indexes</li><li data-v-cc7599cf="">⚠️ Update operations are slower with spatial indexes enabled</li></ul></section></div></div></main></div></main><footer class="main-footer" data-v-94ca611f=""><div class="container" data-v-94ca611f=""><p data-v-94ca611f="">© 2026 BLite Project. Open Source (MIT).</p><p class="tagline" data-v-94ca611f="">"Sky is Blite, no Clouds today."</p></div></footer></div></div></body></html>

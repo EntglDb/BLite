@@ -1,0 +1,84 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><!-- Primary meta --><title>Change Data Capture (CDC) – BLite</title><meta name="description" content="Subscribe to real-time document change streams in BLite. Supports 1000+ concurrent CDC subscribers with a zero-blocking, event-driven architecture."><meta name="keywords" content="BLite, embedded database, .NET database, BSON, zero allocation, ACID transactions, CDC, Change Data Capture, document store, NoSQL, .NET 10, source generators, spatial index, R-Tree"><meta name="author" content="BLite Project"><meta name="robots" content="index, follow"><meta name="theme-color" content="#e74c3c"><link rel="canonical" href="https://blitedb.com/docs/cdc"><!-- Favicon --><link rel="icon" type="image/svg+xml" href="/icon.svg"><!-- Open Graph --><meta property="og:type" content="website"><meta property="og:site_name" content="BLite"><meta property="og:url" content="https://blitedb.com/docs/cdc"><meta property="og:title" content="Change Data Capture (CDC) – BLite"><meta property="og:description" content="Subscribe to real-time document change streams in BLite. Supports 1000+ concurrent CDC subscribers with a zero-blocking, event-driven architecture."><meta property="og:image" content="https://blitedb.com/og-image.png"><!-- Twitter Card --><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Change Data Capture (CDC) – BLite"><meta name="twitter:description" content="Subscribe to real-time document change streams in BLite. Supports 1000+ concurrent CDC subscribers with a zero-blocking, event-driven architecture."><meta name="twitter:image" content="https://blitedb.com/og-image.png"><!-- JSON-LD Structured Data --><script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "BLite",
+    "url": "https://blitedb.com",
+    "description": "BLite is a high-performance, embedded, ACID-compliant BSON document store for .NET 10. Features zero-allocation I/O, Change Data Capture, R-Tree spatial indexing, and compile-time source generators.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Windows, Linux, macOS",
+    "programmingLanguage": "C#",
+    "license": "https://opensource.org/licenses/MIT",
+    "codeRepository": "https://github.com/EntglDb/BLite",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "keywords": "embedded database, BSON, .NET, zero allocation, ACID, CDC, NoSQL"
+  }</script><script type="module" async="" crossorigin="" src="/assets/app-2UmfhOyc.js"></script><link rel="stylesheet" crossorigin="" href="/assets/app-0Yc34960.css"></head><body><div id="app" data-server-rendered="true"><div class="app-layout" data-v-94ca611f=""><header class="main-header glass-panel" data-v-94ca611f=""><div class="container header-content" data-v-94ca611f=""><a href="/" class="logo-link" data-v-94ca611f=""><img src="/icon.svg" alt="BLite" class="logo-img" data-v-94ca611f=""><div class="logo-text" data-v-94ca611f="">BLite<span class="dot" data-v-94ca611f="">.</span></div></a><nav data-v-94ca611f=""><a href="/" class="" data-v-94ca611f="">Home</a><a href="/docs" class="router-link-active" data-v-94ca611f="">Docs</a><a href="/comparisons" class="" data-v-94ca611f="">Comparisons</a><a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link" data-v-94ca611f="">GitHub ↗</a></nav></div></header><main data-v-94ca611f=""><div class="docs-layout" data-v-94ca611f="" data-v-d8cc3184=""><aside class="docs-sidebar" data-v-d8cc3184=""><div class="sidebar-header" data-v-d8cc3184=""><h2 data-v-d8cc3184="">Documentation</h2></div><nav class="sidebar-nav" data-v-d8cc3184=""><!--[--><a href="/docs/getting-started" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🚀</span><span class="nav-label" data-v-d8cc3184="">Getting Started</span></a><a href="/docs/installation" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">📦</span><span class="nav-label" data-v-d8cc3184="">Installation</span></a><a href="/docs/transactions" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🔄</span><span class="nav-label" data-v-d8cc3184="">Transactions &amp; Async</span></a><a href="/docs/crud" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">✏️</span><span class="nav-label" data-v-d8cc3184="">CRUD Operations</span></a><a href="/docs/querying" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🔍</span><span class="nav-label" data-v-d8cc3184="">Querying</span></a><a href="/docs/generators" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🤖</span><span class="nav-label" data-v-d8cc3184="">Source Generators</span></a><a aria-current="page" href="/docs/cdc" class="router-link-active router-link-exact-active active nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">📡</span><span class="nav-label" data-v-d8cc3184="">Change Data Capture</span></a><a href="/docs/spatial" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🌍</span><span class="nav-label" data-v-d8cc3184="">Spatial Indexing</span></a><a href="/docs/architecture" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🏗️</span><span class="nav-label" data-v-d8cc3184="">Architecture</span></a><a href="/docs/converters" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">🆔</span><span class="nav-label" data-v-d8cc3184="">Custom ID Converters</span></a><a href="/docs/benchmarks" class="nav-item" data-v-d8cc3184=""><span class="nav-icon" data-v-d8cc3184="">⚡</span><span class="nav-label" data-v-d8cc3184="">Benchmarks</span></a><!--]--></nav></aside><main class="docs-content" data-v-d8cc3184=""><div class="container" data-v-d8cc3184=""><div class="doc-page" data-v-d8cc3184="" data-v-7d322c86=""><h1 data-v-7d322c86="">📡 <span class="title-gradient" data-v-7d322c86="">Change Data Capture</span></h1><p class="lead" data-v-7d322c86="">Real-time change streams with 1000+ concurrent subscribers and zero-blocking architecture.</p><section data-v-7d322c86=""><h2 data-v-7d322c86="">What is CDC?</h2><p data-v-7d322c86="">Change Data Capture allows you to observe and react to document changes in real-time. Perfect for:</p><ul data-v-7d322c86=""><li data-v-7d322c86="">Real-time UI updates</li><li data-v-7d322c86="">Cache invalidation</li><li data-v-7d322c86="">Event-driven architectures</li><li data-v-7d322c86="">Audit logging</li></ul></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Basic Usage</h2><pre data-v-7d322c86=""><code data-v-7d322c86=""><span class="keyword" data-v-7d322c86="">var</span> users = db.GetCollection&lt;<span class="type" data-v-7d322c86="">User</span>&gt;();
+
+<span class="comment" data-v-7d322c86="">// Subscribe to all changes</span>
+users.Watch().Subscribe(change =&gt;
+{
+    Console.WriteLine($<span class="string" data-v-7d322c86="">"{change.OperationType}: {change.DocumentId}"</span>);
+});</code></pre></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Change Types</h2><pre data-v-7d322c86=""><code data-v-7d322c86=""><span class="keyword" data-v-7d322c86="">var</span> subscription = users.Watch().Subscribe(change =&gt;
+{
+    <span class="keyword" data-v-7d322c86="">switch</span> (change.OperationType)
+    {
+        <span class="keyword" data-v-7d322c86="">case</span> <span class="type" data-v-7d322c86="">ChangeStreamOperationType</span>.Insert:
+            Console.WriteLine(<span class="string" data-v-7d322c86="">"New document: "</span> + change.FullDocument.Name);
+            <span class="keyword" data-v-7d322c86="">break</span>;
+            
+        <span class="keyword" data-v-7d322c86="">case</span> <span class="type" data-v-7d322c86="">ChangeStreamOperationType</span>.Update:
+            Console.WriteLine(<span class="string" data-v-7d322c86="">"Updated: "</span> + change.DocumentId);
+            <span class="keyword" data-v-7d322c86="">break</span>;
+            
+        <span class="keyword" data-v-7d322c86="">case</span> <span class="type" data-v-7d322c86="">ChangeStreamOperationType</span>.Delete:
+            Console.WriteLine(<span class="string" data-v-7d322c86="">"Deleted: "</span> + change.DocumentId);
+            <span class="keyword" data-v-7d322c86="">break</span>;
+    }
+});</code></pre></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Filtering Events</h2><h3 data-v-7d322c86="">Filter by Operation</h3><pre data-v-7d322c86=""><code data-v-7d322c86=""><span class="comment" data-v-7d322c86="">// Only watch inserts</span>
+users.Watch()
+    .Where(c =&gt; c.OperationType == <span class="type" data-v-7d322c86="">ChangeStreamOperationType</span>.Insert)
+    .Subscribe(change =&gt; { <span class="comment" data-v-7d322c86="">/* ... */</span> });</code></pre><h3 data-v-7d322c86="">Filter by Document</h3><pre data-v-7d322c86=""><code data-v-7d322c86=""><span class="comment" data-v-7d322c86="">// Only watch specific users</span>
+users.Watch()
+    .Where(c =&gt; c.FullDocument?.Age &gt; <span class="number" data-v-7d322c86="">18</span>)
+    .Subscribe(change =&gt;
+    {
+        Console.WriteLine(<span class="string" data-v-7d322c86="">"Adult user changed: "</span> + change.FullDocument.Name);
+    });</code></pre></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Async Processing</h2><pre data-v-7d322c86=""><code data-v-7d322c86="">users.Watch().Subscribe(<span class="keyword" data-v-7d322c86="">async</span> change =&gt;
+{
+    <span class="keyword" data-v-7d322c86="">await</span> SendNotificationAsync(change);
+    <span class="keyword" data-v-7d322c86="">await</span> UpdateCacheAsync(change);
+});</code></pre></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Disposing Subscriptions</h2><pre data-v-7d322c86=""><code data-v-7d322c86=""><span class="keyword" data-v-7d322c86="">var</span> subscription = users.Watch().Subscribe(change =&gt;
+{
+    <span class="comment" data-v-7d322c86="">// Handle change</span>
+});
+
+<span class="comment" data-v-7d322c86="">// Later: stop watching</span>
+subscription.Dispose();</code></pre></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Scalability</h2><p data-v-7d322c86="">BLite's CDC uses a <strong data-v-7d322c86="">"Channel-per-subscriber"</strong> architecture:</p><ul data-v-7d322c86=""><li data-v-7d322c86="">✅ <strong data-v-7d322c86="">1000+ subscribers</strong> supported simultaneously</li><li data-v-7d322c86="">✅ <strong data-v-7d322c86="">Zero-blocking</strong> - Slow subscribers don't affect others</li><li data-v-7d322c86="">✅ <strong data-v-7d322c86="">Zero-allocation when idle</strong> - No overhead without watchers</li><li data-v-7d322c86="">✅ <strong data-v-7d322c86="">Transactional consistency</strong> - Events fire after commit</li></ul></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Full Example</h2><pre data-v-7d322c86=""><code data-v-7d322c86=""><span class="keyword" data-v-7d322c86="">var</span> db = <span class="keyword" data-v-7d322c86="">new</span> <span class="type" data-v-7d322c86="">DocumentDb</span>(<span class="string" data-v-7d322c86="">"mydb.blite"</span>);
+<span class="keyword" data-v-7d322c86="">var</span> users = db.GetCollection&lt;<span class="type" data-v-7d322c86="">User</span>&gt;();
+
+<span class="comment" data-v-7d322c86="">// Real-time cache updater</span>
+<span class="keyword" data-v-7d322c86="">var</span> cacheSubscription = users.Watch()
+    .Where(c =&gt; c.OperationType != <span class="type" data-v-7d322c86="">ChangeStreamOperationType</span>.Delete)
+    .Subscribe(change =&gt;
+    {
+        cache.Set(change.DocumentId, change.FullDocument);
+    });
+
+<span class="comment" data-v-7d322c86="">// Audit logger</span>
+<span class="keyword" data-v-7d322c86="">var</span> auditSubscription = users.Watch()
+    .Subscribe(<span class="keyword" data-v-7d322c86="">async</span> change =&gt;
+    {
+        <span class="keyword" data-v-7d322c86="">await</span> auditLog.WriteAsync(<span class="keyword" data-v-7d322c86="">new</span>
+        {
+            Timestamp = DateTime.UtcNow,
+            Operation = change.OperationType,
+            UserId = change.DocumentId
+        });
+    });
+
+<span class="comment" data-v-7d322c86="">// Clean up on shutdown</span>
+cacheSubscription.Dispose();
+auditSubscription.Dispose();</code></pre></section><section data-v-7d322c86=""><h2 data-v-7d322c86="">Best Practices</h2><ul data-v-7d322c86=""><li data-v-7d322c86="">✅ Use filtering to reduce unnecessary work</li><li data-v-7d322c86="">✅ Handle errors in subscribers to avoid crashes</li><li data-v-7d322c86="">✅ Dispose subscriptions when no longer needed</li><li data-v-7d322c86="">✅ Use async operations for I/O-bound work</li><li data-v-7d322c86="">⚠️ Keep subscriber logic fast to avoid backpressure</li><li data-v-7d322c86="">⚠️ Don't perform long-running operations in the callback</li></ul></section></div></div></main></div></main><footer class="main-footer" data-v-94ca611f=""><div class="container" data-v-94ca611f=""><p data-v-94ca611f="">© 2026 BLite Project. Open Source (MIT).</p><p class="tagline" data-v-94ca611f="">"Sky is Blite, no Clouds today."</p></div></footer></div></div></body></html>
