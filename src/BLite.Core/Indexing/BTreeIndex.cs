@@ -3,6 +3,9 @@ using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace BLite.Core.Indexing;
 
@@ -1094,6 +1097,308 @@ public sealed class BTreeIndex
             // TODO: Update persistent root pointer if stored
         }
     }
+
+    #region Async API
+
+    // -------------------------------------------------------------------------
+    // Step 2.1 — FindLeafNodeWithPathAsync
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Traverses the B+Tree from root to the appropriate leaf for <paramref name="key"/>.
+    /// Each level performs a true async page read via <see cref="StorageEngine.ReadPageAsync"/>.
+    /// Comparisons and pointer lookups are done synchronously on the in-memory buffer.
+    /// </summary>
+    private async ValueTask<uint> FindLeafNodeWithPathAsync(
+        IndexKey key, List<uint>? path, ulong transactionId, CancellationToken ct)
+    {
+        var currentPageId = _rootPageId;
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                await _storage.ReadPageAsync(currentPageId, transactionId, pageBuffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+                var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+
+                if (header.IsLeaf)
+                    return currentPageId;
+
+                path?.Add(currentPageId);
+                currentPageId = FindChildNode(pageBuffer.AsSpan(0, _storage.PageSize), header, key);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 2.2 — TryFindAsync
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Async version of <see cref="TryFind"/>.
+    /// Returns a tuple instead of an <c>out</c> parameter (incompatible with async).
+    /// </summary>
+    public async ValueTask<(bool Found, DocumentLocation Location)> TryFindAsync(
+        IndexKey key, ulong? transactionId = null, CancellationToken ct = default)
+    {
+        var txnId = transactionId ?? 0;
+        var leafPageId = await FindLeafNodeWithPathAsync(key, null, txnId, ct).ConfigureAwait(false);
+
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            await _storage.ReadPageAsync(leafPageId, txnId, pageBuffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+            var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+            var dataOffset = 32 + 20;
+
+            for (int i = 0; i < header.EntryCount; i++)
+            {
+                var entryKey = ReadIndexKey(pageBuffer, dataOffset);
+                if (entryKey.Equals(key))
+                {
+                    var locationOffset = dataOffset + 4 + entryKey.Data.Length;
+                    var location = DocumentLocation.ReadFrom(pageBuffer.AsSpan(locationOffset, DocumentLocation.SerializedSize));
+                    return (true, location);
+                }
+                dataOffset += 4 + entryKey.Data.Length + DocumentLocation.SerializedSize;
+            }
+
+            return (false, default);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 2.3 — RangeAsync
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Async range scan — yields all entries with keys in [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// Each page read is a true async I/O call; entry parsing is synchronous on the in-memory buffer.
+    /// The ArrayPool buffer is rented and returned per page so that <c>yield return</c> never
+    /// holds a buffer across an async boundary.
+    /// </summary>
+    public async IAsyncEnumerable<IndexEntry> RangeAsync(
+        IndexKey minKey,
+        IndexKey maxKey,
+        IndexDirection direction = IndexDirection.Forward,
+        ulong? transactionId = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var txnId = transactionId ?? 0;
+
+        if (direction == IndexDirection.Forward)
+        {
+            var leafPageId = await FindLeafNodeWithPathAsync(minKey, null, txnId, ct).ConfigureAwait(false);
+
+            while (leafPageId != 0)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Rent, read, parse — return buffer BEFORE yielding
+                List<IndexEntry> pageEntries;
+                uint nextLeafId;
+                bool exceeded;
+
+                var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                try
+                {
+                    await _storage.ReadPageAsync(leafPageId, txnId, pageBuffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+                    var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+                    nextLeafId = header.NextLeafPageId;
+                    pageEntries = new List<IndexEntry>(header.EntryCount);
+                    exceeded = false;
+
+                    var dataOffset = 32 + 20;
+                    for (int i = 0; i < header.EntryCount; i++)
+                    {
+                        var entryKey = ReadIndexKey(pageBuffer, dataOffset);
+                        if (entryKey >= minKey && entryKey <= maxKey)
+                        {
+                            var locOffset = dataOffset + 4 + entryKey.Data.Length;
+                            var location = DocumentLocation.ReadFrom(pageBuffer.AsSpan(locOffset, DocumentLocation.SerializedSize));
+                            pageEntries.Add(new IndexEntry(entryKey, location));
+                        }
+                        else if (entryKey > maxKey)
+                        {
+                            exceeded = true;
+                            break;
+                        }
+                        dataOffset += 4 + entryKey.Data.Length + DocumentLocation.SerializedSize;
+                    }
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+                }
+
+                // Buffer returned — safe to yield
+                foreach (var entry in pageEntries)
+                    yield return entry;
+
+                if (exceeded) yield break;
+                leafPageId = nextLeafId;
+            }
+        }
+        else // Backward
+        {
+            var leafPageId = await FindLeafNodeWithPathAsync(maxKey, null, txnId, ct).ConfigureAwait(false);
+
+            while (leafPageId != 0)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                List<IndexEntry> pageEntries;
+                uint prevLeafId;
+
+                var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                try
+                {
+                    await _storage.ReadPageAsync(leafPageId, txnId, pageBuffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+                    var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+                    prevLeafId = header.PrevLeafPageId;
+                    pageEntries = ReadLeafEntries(pageBuffer.AsSpan(0, _storage.PageSize), header.EntryCount);
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+                }
+
+                bool belowMin = false;
+                for (int i = pageEntries.Count - 1; i >= 0; i--)
+                {
+                    var entry = pageEntries[i];
+                    if (entry.Key <= maxKey && entry.Key >= minKey)
+                        yield return entry;
+                    else if (entry.Key < minKey)
+                    {
+                        belowMin = true;
+                        break;
+                    }
+                }
+
+                if (belowMin) yield break;
+                leafPageId = prevLeafId;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 2.4 — Query primitive async (delegate to RangeAsync)
+    // -------------------------------------------------------------------------
+
+    /// <summary>Async exact-match lookup. Delegates to <see cref="RangeAsync"/>.</summary>
+    public IAsyncEnumerable<IndexEntry> EqualAsync(
+        IndexKey key, ulong transactionId, CancellationToken ct = default)
+        => RangeAsync(key, key, IndexDirection.Forward, transactionId, ct);
+
+    /// <summary>Async greater-than (or equal) scan.</summary>
+    public async IAsyncEnumerable<IndexEntry> GreaterThanAsync(
+        IndexKey key, bool orEqual, ulong transactionId,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var effectiveMin = orEqual ? key : key; // start key; filter below handles strict
+        await foreach (var entry in RangeAsync(effectiveMin, IndexKey.MaxKey, IndexDirection.Forward, transactionId, ct).ConfigureAwait(false))
+        {
+            if (!orEqual && entry.Key.Equals(key)) continue;
+            yield return entry;
+        }
+    }
+
+    /// <summary>Async less-than (or equal) scan (descending).</summary>
+    public async IAsyncEnumerable<IndexEntry> LessThanAsync(
+        IndexKey key, bool orEqual, ulong transactionId,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var entry in RangeAsync(IndexKey.MinKey, key, IndexDirection.Backward, transactionId, ct).ConfigureAwait(false))
+        {
+            if (!orEqual && entry.Key.Equals(key)) continue;
+            yield return entry;
+        }
+    }
+
+    /// <summary>Async range with configurable inclusivity at both ends.</summary>
+    public async IAsyncEnumerable<IndexEntry> BetweenAsync(
+        IndexKey start, IndexKey end, bool startInclusive, bool endInclusive,
+        ulong transactionId, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var entry in RangeAsync(start, end, IndexDirection.Forward, transactionId, ct).ConfigureAwait(false))
+        {
+            if (!startInclusive && entry.Key.Equals(start)) continue;
+            if (!endInclusive && entry.Key.Equals(end)) continue;
+            yield return entry;
+        }
+    }
+
+    /// <summary>Async prefix scan for string keys.</summary>
+    public async IAsyncEnumerable<IndexEntry> StartsWithAsync(
+        string prefix, ulong transactionId,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var startKey = IndexKey.Create(prefix);
+        await foreach (var entry in RangeAsync(startKey, IndexKey.MaxKey, IndexDirection.Forward, transactionId, ct).ConfigureAwait(false))
+        {
+            string val;
+            try { val = entry.Key.As<string>(); } catch { yield break; }
+            if (!val.StartsWith(prefix, StringComparison.Ordinal)) yield break;
+            yield return entry;
+        }
+    }
+
+    /// <summary>Async multi-key lookup (sorted to exploit leaf chaining).</summary>
+    public async IAsyncEnumerable<IndexEntry> InAsync(
+        IEnumerable<IndexKey> keys, ulong transactionId,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        foreach (var key in keys.OrderBy(k => k))
+        {
+            var (found, location) = await TryFindAsync(key, transactionId, ct).ConfigureAwait(false);
+            if (found)
+                yield return new IndexEntry(key, location);
+        }
+    }
+
+    /// <summary>Async SQL LIKE pattern scan for string keys.</summary>
+    public async IAsyncEnumerable<IndexEntry> LikeAsync(
+        string pattern, ulong transactionId,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var regexPattern = "^" + System.Text.RegularExpressions.Regex.Escape(pattern)
+            .Replace("%", ".*").Replace("_", ".") + "$";
+        var regex = new System.Text.RegularExpressions.Regex(
+            regexPattern, System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        string prefix = "";
+        foreach (char c in pattern)
+        {
+            if (c == '%' || c == '_') break;
+            prefix += c;
+        }
+
+        var startKey = string.IsNullOrEmpty(prefix) ? IndexKey.MinKey : IndexKey.Create(prefix);
+
+        await foreach (var entry in RangeAsync(startKey, IndexKey.MaxKey, IndexDirection.Forward, transactionId, ct).ConfigureAwait(false))
+        {
+            string val;
+            try { val = entry.Key.As<string>(); } catch { yield break; }
+
+            if (!string.IsNullOrEmpty(prefix) && !val.StartsWith(prefix, StringComparison.Ordinal))
+                yield break;
+
+            if (regex.IsMatch(val))
+                yield return entry;
+        }
+    }
+
+    #endregion
 
     private void MergeNodes(uint leftNodeId, uint rightNodeId, IndexKey separatorKey, ulong transactionId)
     {

@@ -28,6 +28,17 @@ public sealed partial class StorageEngine
     {
         _wal.Flush();
     }
+
+    /// <summary>
+    /// Flushes pending memory-mapped (MMF) writes from the PageFile to the OS kernel buffer.
+    /// Required for consistency when <see cref="WritePageImmediate"/> is followed by
+    /// <see cref="ReadPageAsync"/>, which uses <see cref="System.IO.RandomAccess"/> and
+    /// reads from the kernel buffer pool rather than the MMF view.
+    /// </summary>
+    public void FlushPageFile()
+    {
+        _pageFile.Flush();
+    }
     
     /// <summary>
     /// Performs a checkpoint: merges WAL into PageFile.

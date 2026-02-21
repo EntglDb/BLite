@@ -40,49 +40,34 @@ public sealed partial class StorageEngine
 
     public void CommitTransaction(Transaction transaction)
     {
-        _commitLock.Wait();
-        try
-        {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-                throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
+        // NOTE: Do NOT acquire _commitLock here.
+        // CommitTransaction(ulong) already serialises under _commitLock and performs
+        // the full prepare+commit cycle (BEGIN record, DATA records, COMMIT record,
+        // WAL flush, walCache → walIndex move).
+        // Acquiring the lock here too would cause a non-reentrant SemaphoreSlim deadlock.
+        // Similarly, PrepareTransaction(ulong) must NOT be called here because
+        // CommitTransaction(ulong) already writes BEGIN+DATA records internally—
+        // calling it first would duplicate those WAL records.
 
-            // 1. Prepare (Write to WAL)
-            // In a fuller 2PC, this would be separate. Here we do it as part of commit.
-            if (!PrepareTransaction(transaction.TransactionId))
-                throw new IOException("Failed to write transaction to WAL");
+        if (!_activeTransactions.ContainsKey(transaction.TransactionId))
+            throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
 
-            // 2. Commit (Write commit record, flush, move to cache)
-            CommitTransaction(transaction.TransactionId);
-            
-            _activeTransactions.TryRemove(transaction.TransactionId, out _);
-        }
-        finally
-        {
-            _commitLock.Release();
-        }
+        CommitTransaction(transaction.TransactionId);
+
+        _activeTransactions.TryRemove(transaction.TransactionId, out _);
     }
 
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
-        await _commitLock.WaitAsync(ct);
-        try
-        {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-                throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
+        // Same reasoning as CommitTransaction(Transaction) above: no outer lock,
+        // no separate PrepareTransactionAsync call.
 
-            // 1. Prepare (Write to WAL)
-            if (!await PrepareTransactionAsync(transaction.TransactionId, ct))
-                throw new IOException("Failed to write transaction to WAL");
+        if (!_activeTransactions.ContainsKey(transaction.TransactionId))
+            throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
 
-            // 2. Commit (Write commit record, flush, move to cache)
-            await CommitTransactionAsync(transaction.TransactionId, ct);
-            
-            _activeTransactions.TryRemove(transaction.TransactionId, out _);
-        }
-        finally
-        {
-            _commitLock.Release();
-        }
+        await CommitTransactionAsync(transaction.TransactionId, ct);
+
+        _activeTransactions.TryRemove(transaction.TransactionId, out _);
     }
 
     public void RollbackTransaction(Transaction transaction)

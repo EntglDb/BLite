@@ -73,6 +73,45 @@ public sealed partial class StorageEngine
     }
 
     /// <summary>
+    /// Reads a page with transaction isolation (asynchronous).
+    /// Mirrors <see cref="ReadPage"/> but uses <see cref="Memory{T}"/> instead of <see cref="Span{T}"/>
+    /// so it can cross <c>await</c> boundaries.
+    /// <list type="number">
+    ///   <item>WAL cache (uncommitted, per-transaction) — resolved synchronously, no I/O.</item>
+    ///   <item>WAL index (committed, not yet checkpointed) — resolved synchronously, no I/O.</item>
+    ///   <item>PageFile — true async OS read via <see cref="RandomAccess.ReadAsync"/>.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="pageId">Page to read.</param>
+    /// <param name="transactionId">Optional transaction ID for isolation (null = read committed only).</param>
+    /// <param name="destination">Buffer of at least <see cref="PageSize"/> bytes.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public ValueTask ReadPageAsync(uint pageId, ulong? transactionId, Memory<byte> destination, CancellationToken cancellationToken = default)
+    {
+        // 1. WAL cache — uncommitted writes visible only to the owning transaction (synchronous, no I/O)
+        if (transactionId.HasValue &&
+            transactionId.Value != 0 &&
+            _walCache.TryGetValue(transactionId.Value, out var txnPages) &&
+            txnPages.TryGetValue(pageId, out var uncommittedData))
+        {
+            var length = Math.Min(uncommittedData.Length, destination.Length);
+            uncommittedData.AsMemory(0, length).CopyTo(destination);
+            return ValueTask.CompletedTask;
+        }
+
+        // 2. WAL index — committed but not yet checkpointed (synchronous, no I/O)
+        if (_walIndex.TryGetValue(pageId, out var committedData))
+        {
+            var length = Math.Min(committedData.Length, destination.Length);
+            committedData.AsMemory(0, length).CopyTo(destination);
+            return ValueTask.CompletedTask;
+        }
+
+        // 3. PageFile — true async OS read
+        return _pageFile.ReadPageAsync(pageId, destination, cancellationToken);
+    }
+
+    /// <summary>
     /// Gets the number of pages currently allocated in the page file.
     /// Useful for full database scans.
     /// </summary>

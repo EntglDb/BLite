@@ -85,7 +85,7 @@ public sealed class PageFile : IDisposable
                 FileAccess.ReadWrite, 
                 FileShare.None,
                 bufferSize: 4096,
-                FileOptions.RandomAccess);
+                FileOptions.RandomAccess | FileOptions.Asynchronous);
 
             if (!fileExists || _fileStream.Length == 0)
             {
@@ -162,7 +162,7 @@ public sealed class PageFile : IDisposable
 
     // ... (ReadPage / WritePage unchanged) ...
     /// <summary>
-    /// Reads a page by ID into the provided span
+    /// Reads a page by ID into the provided span (synchronous).
     /// </summary>
     public void ReadPage(uint pageId, Span<byte> destination)
     {
@@ -178,6 +178,31 @@ public sealed class PageFile : IDisposable
         var temp = new byte[_config.PageSize];
         accessor.ReadArray(0, temp, 0, _config.PageSize);
         temp.CopyTo(destination);
+    }
+
+    /// <summary>
+    /// Reads a page by ID into the provided buffer (asynchronous).
+    /// Uses <see cref="RandomAccess.ReadAsync"/> for true OS-level async I/O (IOCP on Windows).
+    /// WAL/in-memory paths should be handled by the caller before invoking this method.
+    /// </summary>
+    /// <param name="pageId">The page to read.</param>
+    /// <param name="destination">Buffer of at least <see cref="PageSize"/> bytes.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
+    {
+        if (destination.Length < _config.PageSize)
+            throw new ArgumentException($"Destination must be at least {_config.PageSize} bytes");
+
+        if (_fileStream == null)
+            throw new InvalidOperationException("File not open");
+
+        var offset = (long)pageId * _config.PageSize;
+        var slice = destination[.._config.PageSize];
+
+        var bytesRead = await RandomAccess.ReadAsync(_fileStream.SafeFileHandle, slice, offset, cancellationToken).ConfigureAwait(false);
+
+        if (bytesRead < _config.PageSize)
+            throw new IOException($"Incomplete page read: expected {_config.PageSize} bytes, got {bytesRead} (pageId={pageId})");
     }
 
     /// <summary>
