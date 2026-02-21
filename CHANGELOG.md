@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.4.0"></a>
+## [1.4.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.4.0) (2026-02-21)
+
+### Features
+
+* async read infrastructure + BTreeIndex async API + concurrency fix ([0636221](https://www.github.com/EntglDb/BLite/commit/063622108a4af7d4ccd1499d47b20abf35a5311b))
+* async read path for DocumentCollection, DynamicCollection, BLiteEngine and AsQueryable ([71266a7](https://www.github.com/EntglDb/BLite/commit/71266a7aeab8c595a7a9a8fb1f44606c3001084a))
+* BLiteEngine for generic access to data ([39e6c89](https://www.github.com/EntglDb/BLite/commit/39e6c89971597700e585b7e3d2ea47b0e3a1a692))
+
 <a name="1.3.1"></a>
 ## [1.3.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.3.1) (2026-02-19)
 
