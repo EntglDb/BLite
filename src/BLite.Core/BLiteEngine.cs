@@ -275,6 +275,55 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         return collection.FindAll();
     }
 
+    /// <summary>Async exact-match lookup in the named collection.</summary>
+    public ValueTask<BsonDocument?> FindByIdAsync(string collectionName, BsonId id, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.FindByIdAsync(id, ct);
+    }
+
+    /// <summary>Async full-collection scan in the named collection.</summary>
+    public IAsyncEnumerable<BsonDocument> FindAllAsync(string collectionName, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.FindAllAsync(ct);
+    }
+
+    /// <summary>
+    /// Inserts a document and commits asynchronously.
+    /// The BTree write stays in-memory (WAL cache); only the WAL flush is async.
+    /// </summary>
+    public async ValueTask<BsonId> InsertAsync(string collectionName, BsonDocument document, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var id = collection.Insert(document);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return id;
+    }
+
+    /// <summary>Updates a document and commits asynchronously.</summary>
+    public async ValueTask<bool> UpdateAsync(string collectionName, BsonId id, BsonDocument document, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var result = collection.Update(id, document);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Deletes a document and commits asynchronously.</summary>
+    public async ValueTask<bool> DeleteAsync(string collectionName, BsonId id, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var result = collection.Delete(id);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return result;
+    }
+
     /// <summary>
     /// Updates a document by ID in the named collection and commits immediately.
     /// </summary>

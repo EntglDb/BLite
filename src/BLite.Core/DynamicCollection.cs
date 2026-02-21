@@ -564,6 +564,57 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
+    /// <summary>Async version of <see cref="ReadDocumentAt"/>.</summary>
+    private async ValueTask<BsonDocument?> ReadDocumentAtAsync(DocumentLocation location, ulong txnId, CancellationToken ct)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+
+            var header = SlottedPageHeader.ReadFrom(buffer);
+            if (location.SlotIndex >= header.SlotCount) return null;
+
+            var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+            if (slot.Flags.HasFlag(SlotFlags.Deleted)) return null;
+
+            // Span created after the only await — safe; ToArray() copies before buffer is returned
+            var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
+            return new BsonDocument(docData, _storage.GetKeyReverseMap());
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>Async exact-match lookup.</summary>
+    public async ValueTask<BsonDocument?> FindByIdAsync(BsonId id, CancellationToken ct = default)
+    {
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var key = new IndexKey(id.ToBytes());
+        var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct).ConfigureAwait(false);
+        if (!found) return null;
+        return await ReadDocumentAtAsync(location, transaction.TransactionId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Async full-collection scan.</summary>
+    public async IAsyncEnumerable<BsonDocument> FindAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var txnId = transaction.TransactionId;
+
+        await foreach (var entry in _primaryIndex
+            .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
+            .ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await ReadDocumentAtAsync(entry.Location, txnId, ct).ConfigureAwait(false);
+            if (doc != null) yield return doc;
+        }
+    }
+
     private uint FindPageWithSpace(int requiredBytes, ulong txnId)
     {
         if (_currentDataPage != 0)

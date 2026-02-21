@@ -1082,6 +1082,39 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         }
     }
 
+    /// <summary>
+    /// Async exact-match lookup. Uses <see cref="BTreeIndex.TryFindAsync"/> for the index
+    /// traversal and <see cref="FindByLocationAsync"/> for the page read.
+    /// </summary>
+    public async ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default)
+    {
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var key = _mapper.ToIndexKey(id);
+        var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct).ConfigureAwait(false);
+        if (!found) return default;
+        return await FindByLocationAsync(location, transaction.TransactionId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Async full-collection scan. Uses <see cref="BTreeIndex.RangeAsync"/> for leaf chaining
+    /// and <see cref="FindByLocationAsync"/> for each page read.
+    /// </summary>
+    public async IAsyncEnumerable<T> FindAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var txnId = transaction?.TransactionId ?? 0;
+
+        await foreach (var entry in _primaryIndex
+            .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
+            .ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            var entity = await FindByLocationAsync(entry.Location, txnId, ct).ConfigureAwait(false);
+            if (entity != null)
+                yield return entity;
+        }
+    }
+
     internal T? FindByLocation(DocumentLocation location)
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
@@ -1163,6 +1196,69 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    /// <summary>
+    /// Async version of <see cref="FindByLocation"/>.
+    /// All <see cref="Span{T}"/> operations are performed synchronously on the in-memory buffer.
+    /// No Span variable survives across an <c>await</c> boundary.
+    /// </summary>
+    internal async ValueTask<T?> FindByLocationAsync(DocumentLocation location, ulong txnId, CancellationToken ct = default)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+
+            // --- all Span work is sync after the first read ---
+            var header = SlottedPageHeader.ReadFrom(buffer);
+            if (location.SlotIndex >= header.SlotCount) return default;
+
+            var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+            if ((slot.Flags & SlotFlags.Deleted) != 0) return default;
+
+            if ((slot.Flags & SlotFlags.HasOverflow) != 0)
+            {
+                // Extract scalar values from the buffer before the first await in the loop
+                int totalLength        = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(slot.Offset, 4));
+                uint nextOverflowPage  = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(slot.Offset + 4, 4));
+                int primaryChunkSize   = slot.Length - 8;
+
+                var fullBuffer = ArrayPool<byte>.Shared.Rent(totalLength);
+                try
+                {
+                    // Copy primary chunk synchronously (no await here)
+                    buffer.AsSpan(slot.Offset + 8, primaryChunkSize).CopyTo(fullBuffer.AsSpan(0, primaryChunkSize));
+
+                    int bytesCopied = primaryChunkSize;
+                    uint currentPage = nextOverflowPage;
+
+                    while (currentPage != 0 && bytesCopied < totalLength)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        await _storage.ReadPageAsync(currentPage, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+
+                        // Recreate SlottedPageHeader span after each await — safe because buffer is byte[]
+                        uint nextPage   = SlottedPageHeader.ReadFrom(buffer).NextOverflowPage;
+                        int chunkSize   = Math.Min(_storage.PageSize - SlottedPageHeader.Size, totalLength - bytesCopied);
+                        buffer.AsSpan(SlottedPageHeader.Size, chunkSize).CopyTo(fullBuffer.AsSpan(bytesCopied));
+                        bytesCopied    += chunkSize;
+                        currentPage     = nextPage;
+                    }
+
+                    return _mapper.Deserialize(new BsonSpanReader(fullBuffer.AsSpan(0, totalLength), _storage.GetKeyReverseMap()));
+                }
+                finally { ArrayPool<byte>.Shared.Return(fullBuffer); }
+            }
+
+            if (slot.Offset + slot.Length > buffer.Length)
+                throw new InvalidOperationException($"Corrupted slot: Offset={slot.Offset}, Length={slot.Length}, PageId={location.PageId}");
+
+            // Inline deserialization — Span created after the only await, safe
+            return _mapper.Deserialize(new BsonSpanReader(buffer.AsSpan(slot.Offset, slot.Length), _storage.GetKeyReverseMap()));
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     #endregion
