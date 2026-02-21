@@ -1,0 +1,487 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="89725b01-f090-4190-afd2-dbaf9b684de1" name="FABLUA@FABLUA-NB 2026-02-20 15:50:41" runUser="ZG\FABLUA" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-02-20T15:50:41.3827442+01:00" queuing="2026-02-20T15:50:41.3827447+01:00" start="2026-02-20T15:50:40.3984528+01:00" finish="2026-02-20T15:50:42.2013087+01:00" />
+  <TestSettings name="default" id="cbb70b2c-3ef7-482d-944c-8a47740e6843">
+    <Deployment runDeploymentRoot="FABLUA_FABLUA-NB_2026-02-20_15_50_41" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="c08fb454-d966-4272-8b5a-45831b83f320" testId="e6505051-b915-6c6c-c741-066ea85f1785" testName="BLite.Tests.BLiteEngineTests.Supports_All_Primitive_Types" computerName="FABLUA-NB" duration="00:00:00.0292624" startTime="2026-02-20T15:50:41.2199978+01:00" endTime="2026-02-20T15:50:41.2489337+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c08fb454-d966-4272-8b5a-45831b83f320">
+      <Output>
+        <ErrorInfo>
+          <Message>System.NullReferenceException : Object reference not set to an instance of an object.</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Supports_All_Primitive_Types() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 411&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="76c6e60c-f5d5-4a4d-a991-0e0339dcea8e" testId="378dc690-f57f-93ff-f6b6-e1ae20328724" testName="BLite.Tests.BLiteEngineTests.Update_NonExistent_Returns_False" computerName="FABLUA-NB" duration="00:00:00.0324544" startTime="2026-02-20T15:50:41.3434837+01:00" endTime="2026-02-20T15:50:41.3435753+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="76c6e60c-f5d5-4a4d-a991-0e0339dcea8e" />
+    <UnitTestResult executionId="d38322ab-7b51-4aed-896a-0a8c6173d723" testId="409122da-0615-83d1-553d-f9b48f0f46d3" testName="BLite.Tests.BLiteEngineTests.Engine_Update_Convenience" computerName="FABLUA-NB" duration="00:00:00.0270952" startTime="2026-02-20T15:50:41.5387772+01:00" endTime="2026-02-20T15:50:41.5659516+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d38322ab-7b51-4aed-896a-0a8c6173d723">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Engine_Update_Convenience() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 367&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="7be53cc8-cd82-4c67-b526-578634bd5e9a" testId="675848c6-4795-9911-f9e9-2cc2cc0fa6c5" testName="BLite.Tests.BLiteEngineTests.FindAll_Returns_All_Documents" computerName="FABLUA-NB" duration="00:00:00.0301766" startTime="2026-02-20T15:50:41.9630516+01:00" endTime="2026-02-20T15:50:41.9931854+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7be53cc8-cd82-4c67-b526-578634bd5e9a" />
+    <UnitTestResult executionId="d1f20230-a1f1-41fa-bc19-dac5494e3ccb" testId="3c0f0923-742c-13ae-178b-caffaf8ffb91" testName="BLite.Tests.BLiteEngineTests.CreateIndex_And_QueryIndex" computerName="FABLUA-NB" duration="00:00:00.0433788" startTime="2026-02-20T15:50:41.7006300+01:00" endTime="2026-02-20T15:50:41.7428551+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d1f20230-a1f1-41fa-bc19-dac5494e3ccb">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.CreateIndex_And_QueryIndex() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 564&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="9c1f75d2-f04b-4421-be5a-84484c875ff3" testId="a3f3d659-89df-b95e-2750-d29a8934b87c" testName="BLite.Tests.BLiteEngineTests.BsonValue_Implicit_Conversions" computerName="FABLUA-NB" duration="00:00:00.0299255" startTime="2026-02-20T15:50:41.9933320+01:00" endTime="2026-02-20T15:50:42.0233753+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9c1f75d2-f04b-4421-be5a-84484c875ff3" />
+    <UnitTestResult executionId="e6c94f71-7b54-4390-87fc-6a925189a445" testId="429f177a-aa76-4c74-d6c6-2b066b476d6f" testName="BLite.Tests.BLiteEngineTests.GetCollection_Returns_Null_If_Not_Created" computerName="FABLUA-NB" duration="00:00:00.0267023" startTime="2026-02-20T15:50:41.9031748+01:00" endTime="2026-02-20T15:50:41.9298468+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e6c94f71-7b54-4390-87fc-6a925189a445" />
+    <UnitTestResult executionId="6ca19e62-ca5b-4060-a821-2dbb659f886a" testId="095a1f63-230f-0afb-a8dd-643f299c39ed" testName="BLite.Tests.BLiteEngineTests.Engine_Delete_Convenience" computerName="FABLUA-NB" duration="00:00:00.0460830" startTime="2026-02-20T15:50:41.7435530+01:00" endTime="2026-02-20T15:50:41.7892562+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="6ca19e62-ca5b-4060-a821-2dbb659f886a" />
+    <UnitTestResult executionId="c92c97f4-e07f-43e4-ad54-4aec62c584cd" testId="194c9d0a-0134-9a33-d3b5-52ba8e9dd8ff" testName="BLite.Tests.BLiteEngineTests.Insert_Without_Id_AutoGenerates_ObjectId" computerName="FABLUA-NB" duration="00:00:00.0361007" startTime="2026-02-20T15:50:41.6628956+01:00" endTime="2026-02-20T15:50:41.6991568+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c92c97f4-e07f-43e4-ad54-4aec62c584cd">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Insert_Without_Id_AutoGenerates_ObjectId() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 185&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="6ac2047e-d477-457b-a118-e908d66c8a59" testId="cb5c7c30-4e3b-e8e7-232d-ffa2ec3adcc2" testName="BLite.Tests.BLiteEngineTests.Delete_NonExistent_Returns_False" computerName="FABLUA-NB" duration="00:00:00.0228632" startTime="2026-02-20T15:50:41.1683610+01:00" endTime="2026-02-20T15:50:41.1908631+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="6ac2047e-d477-457b-a118-e908d66c8a59" />
+    <UnitTestResult executionId="2513286f-9a20-437e-b604-3883001ec076" testId="cfe1d669-c243-388b-fb71-4abeaf31fe8b" testName="BLite.Tests.BLiteEngineTests.Insert_And_FindById_Guid" computerName="FABLUA-NB" duration="00:00:00.0234132" startTime="2026-02-20T15:50:41.1433934+01:00" endTime="2026-02-20T15:50:41.1678085+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="2513286f-9a20-437e-b604-3883001ec076">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Values differ&#xD;
+Expected: 946b1810-f6a7-4404-aec4-2f0f32062a20&#xD;
+Actual:   458be382-b5e8-40a2-a641-42b62f91e924</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Insert_And_FindById_Guid() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 158&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="da97a7eb-2182-4487-a19d-6321584256a1" testId="2bf44c32-7c0e-4a10-5430-00cdea194cdb" testName="BLite.Tests.BLiteEngineTests.Update_Replaces_Document" computerName="FABLUA-NB" duration="00:00:00.0358177" startTime="2026-02-20T15:50:41.5996005+01:00" endTime="2026-02-20T15:50:41.6317832+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="da97a7eb-2182-4487-a19d-6321584256a1">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Update_Replaces_Document() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 237&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="7ac2368d-3982-4968-82e9-7d4d3ffc4ab7" testId="9e14c4e9-5219-23ef-23ca-4a8d3c122e7c" testName="BLite.Tests.BLiteEngineTests.BsonId_Equality_And_Comparison" computerName="FABLUA-NB" duration="00:00:00.0338689" startTime="2026-02-20T15:50:41.4498591+01:00" endTime="2026-02-20T15:50:41.4836524+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7ac2368d-3982-4968-82e9-7d4d3ffc4ab7" />
+    <UnitTestResult executionId="ef976a9d-0401-4ad7-a2dc-7962f2a97b05" testId="3e0482be-ffaa-5299-5651-f42a912e98d4" testName="BLite.Tests.BLiteEngineTests.Multiple_Collections_Are_Independent" computerName="FABLUA-NB" duration="00:00:00.0385880" startTime="2026-02-20T15:50:41.3757265+01:00" endTime="2026-02-20T15:50:41.4144483+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ef976a9d-0401-4ad7-a2dc-7962f2a97b05">
+      <Output>
+        <ErrorInfo>
+          <Message>System.NullReferenceException : Object reference not set to an instance of an object.</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Multiple_Collections_Are_Independent() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 665&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="c0ac0593-0af1-4a16-a868-b126a128c616" testId="4f794d21-a2e7-48e9-0a5b-a50e376b4ea5" testName="BLite.Tests.BLiteEngineTests.FindById_NonExistent_Returns_Null" computerName="FABLUA-NB" duration="00:00:00.0254763" startTime="2026-02-20T15:50:42.1101171+01:00" endTime="2026-02-20T15:50:42.1351083+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c0ac0593-0af1-4a16-a868-b126a128c616" />
+    <UnitTestResult executionId="89937208-9162-4d5c-a361-2da456341f84" testId="d71dd9e4-aa3e-41cc-de9e-819e9bcaec5f" testName="BLite.Tests.BLiteEngineTests.Insert_Multiple_And_FindAll" computerName="FABLUA-NB" duration="00:00:00.0393448" startTime="2026-02-20T15:50:41.7896576+01:00" endTime="2026-02-20T15:50:41.8287863+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="89937208-9162-4d5c-a361-2da456341f84" />
+    <UnitTestResult executionId="5f63aba4-248e-4965-ba3d-d77d3ae49c3b" testId="7f266cf7-ecdc-aca6-4738-a7b43e6bf6ba" testName="BLite.Tests.BLiteEngineTests.GetOrCreateCollection_Returns_Same_Instance" computerName="FABLUA-NB" duration="00:00:00.0349126" startTime="2026-02-20T15:50:41.4151045+01:00" endTime="2026-02-20T15:50:41.4496294+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5f63aba4-248e-4965-ba3d-d77d3ae49c3b" />
+    <UnitTestResult executionId="cd67ede3-9b1b-4089-8d76-2f86f6d01f8e" testId="8cc1f8de-034b-cb38-e0bc-34ec59850e23" testName="BLite.Tests.BLiteEngineTests.Rollback_Discards_Changes" computerName="FABLUA-NB" duration="00:00:00.0271214" startTime="2026-02-20T15:50:41.2494627+01:00" endTime="2026-02-20T15:50:41.2762337+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="cd67ede3-9b1b-4089-8d76-2f86f6d01f8e" />
+    <UnitTestResult executionId="ac752be7-ab75-4e8a-8d12-8ef12e1f3226" testId="d02ba606-00db-4565-7f02-6170e9d3436a" testName="BLite.Tests.BLiteEngineTests.EnumerateFields_Returns_All_Fields" computerName="FABLUA-NB" duration="00:00:00.0349939" startTime="2026-02-20T15:50:41.1127661+01:00" endTime="2026-02-20T15:50:41.1423587+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ac752be7-ab75-4e8a-8d12-8ef12e1f3226">
+      <Output>
+        <ErrorInfo>
+          <Message>System.NullReferenceException : Object reference not set to an instance of an object.</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.EnumerateFields_Returns_All_Fields() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 527&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="c7e36329-43bd-43a0-84ff-09d2fb9e5874" testId="719ae647-57de-0e55-1d54-424bd5b4e74b" testName="BLite.Tests.BLiteEngineTests.Engine_Insert_And_FindById_Convenience" computerName="FABLUA-NB" duration="00:00:00.0292571" startTime="2026-02-20T15:50:41.5665948+01:00" endTime="2026-02-20T15:50:41.5956294+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c7e36329-43bd-43a0-84ff-09d2fb9e5874">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Engine_Insert_And_FindById_Convenience() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 339&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="113bc10f-f2ac-4897-9abf-d927c27f4cf1" testId="544b154d-8cb6-5645-31cf-c038dd431874" testName="BLite.Tests.BLiteEngineTests.DropCollection_Removes_Collection" computerName="FABLUA-NB" duration="00:00:00.0328157" startTime="2026-02-20T15:50:41.9306907+01:00" endTime="2026-02-20T15:50:41.9629011+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="113bc10f-f2ac-4897-9abf-d927c27f4cf1" />
+    <UnitTestResult executionId="7d3c31e0-0759-4667-aa9e-d96d816a3fe2" testId="08a951ee-8619-8109-772a-1333f360c6a1" testName="BLite.Tests.BLiteEngineTests.Insert_And_FindById_ObjectId" computerName="FABLUA-NB" duration="00:00:00.0282900" startTime="2026-02-20T15:50:41.1910378+01:00" endTime="2026-02-20T15:50:41.2194354+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7d3c31e0-0759-4667-aa9e-d96d816a3fe2">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Insert_And_FindById_ObjectId() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 89&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="f06c27ee-bc81-4fb7-9d2b-698e95414ede" testId="979d80c6-bbf5-45cb-7abf-7d96ecf81b2f" testName="BLite.Tests.BLiteEngineTests.BsonValue_Factory_And_Accessors" computerName="FABLUA-NB" duration="00:00:00.0387563" startTime="2026-02-20T15:50:41.3440534+01:00" endTime="2026-02-20T15:50:41.3755409+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f06c27ee-bc81-4fb7-9d2b-698e95414ede" />
+    <UnitTestResult executionId="e3fa05c8-39ba-484c-bf8b-9010324ce395" testId="667a8897-7535-d55b-d4d4-94e1b570ca07" testName="BLite.Tests.BLiteEngineTests.Insert_And_FindById_Int32" computerName="FABLUA-NB" duration="00:00:00.0274868" startTime="2026-02-20T15:50:41.2763785+01:00" endTime="2026-02-20T15:50:41.3040144+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e3fa05c8-39ba-484c-bf8b-9010324ce395">
+      <Output>
+        <ErrorInfo>
+          <Message>System.InvalidOperationException : Cannot auto-generate ID for type Int32. Provide an explicit value.</Message>
+          <StackTrace>   at BLite.Bson.BsonId.NewId(BsonIdType type) in C:\github\BLite\src\BLite.Bson\BsonId.cs:line 143&#xD;
+   at BLite.Core.DynamicCollection.InsertCore(BsonDocument document, ITransaction transaction) in C:\github\BLite\src\BLite.Core\DynamicCollection.cs:line 142&#xD;
+   at BLite.Core.DynamicCollection.Insert(BsonDocument document) in C:\github\BLite\src\BLite.Core\DynamicCollection.cs:line 123&#xD;
+   at BLite.Tests.BLiteEngineTests.Insert_And_FindById_Int32() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 108&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="a86e4e00-453e-42d6-af4d-23fed622d715" testId="3e6a50c6-234e-ac5a-aaa7-8a0cae6c93fb" testName="BLite.Tests.BLiteEngineTests.Delete_Removes_Document" computerName="FABLUA-NB" duration="00:00:00.0262777" startTime="2026-02-20T15:50:41.5123546+01:00" endTime="2026-02-20T15:50:41.5386315+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a86e4e00-453e-42d6-af4d-23fed622d715" />
+    <UnitTestResult executionId="8ac592de-d5b9-4521-a3bd-3f1e227625ca" testId="785ec199-34f6-b55a-25c6-d5096e5ec6a6" testName="BLite.Tests.BLiteEngineTests.Data_Persists_After_Engine_Restart" computerName="FABLUA-NB" duration="00:00:00.0859218" startTime="2026-02-20T15:50:42.0237520+01:00" endTime="2026-02-20T15:50:42.1094876+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="8ac592de-d5b9-4521-a3bd-3f1e227625ca">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.True() Failure&#xD;
+Expected: True&#xD;
+Actual:   False</Message>
+          <StackTrace>   at BLite.Tests.BLiteEngineTests.Data_Persists_After_Engine_Restart() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 611&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="5fae87b7-5ff0-4727-beef-dfb42254e4a2" testId="4464d81d-9f21-7f6b-4a25-448e99719c6a" testName="BLite.Tests.BLiteEngineTests.ListCollections_Returns_All_Created" computerName="FABLUA-NB" duration="00:00:00.0284148" startTime="2026-02-20T15:50:41.4838496+01:00" endTime="2026-02-20T15:50:41.5122020+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5fae87b7-5ff0-4727-beef-dfb42254e4a2" />
+    <UnitTestResult executionId="0175756f-9090-428b-84dc-ee2cbf56fe50" testId="ffd572a3-6648-ae92-521d-99be3feab680" testName="BLite.Tests.BLiteEngineTests.Empty_Collection_FindAll_Returns_Empty" computerName="FABLUA-NB" duration="00:00:00.0416773" startTime="2026-02-20T15:50:41.8291941+01:00" endTime="2026-02-20T15:50:41.8706084+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0175756f-9090-428b-84dc-ee2cbf56fe50" />
+    <UnitTestResult executionId="47da96fc-0f5e-4d85-9b5b-9deb1317c40d" testId="f5a07f05-93e3-a392-11be-786d81477114" testName="BLite.Tests.BLiteEngineTests.Engine_FindAll_Convenience" computerName="FABLUA-NB" duration="00:00:00.0306989" startTime="2026-02-20T15:50:41.6323969+01:00" endTime="2026-02-20T15:50:41.6626950+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="47da96fc-0f5e-4d85-9b5b-9deb1317c40d" />
+    <UnitTestResult executionId="0dbbea70-73b9-44db-9b7d-2d3a65d742be" testId="8eae91f3-0b46-90b0-168b-26fea246f137" testName="BLite.Tests.BLiteEngineTests.Insert_And_FindById_String" computerName="FABLUA-NB" duration="00:00:00.0296389" startTime="2026-02-20T15:50:41.0804292+01:00" endTime="2026-02-20T15:50:41.1075190+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0dbbea70-73b9-44db-9b7d-2d3a65d742be">
+      <Output>
+        <ErrorInfo>
+          <Message>System.InvalidOperationException : Cannot auto-generate ID for type String. Provide an explicit value.</Message>
+          <StackTrace>   at BLite.Bson.BsonId.NewId(BsonIdType type) in C:\github\BLite\src\BLite.Bson\BsonId.cs:line 143&#xD;
+   at BLite.Core.DynamicCollection.InsertCore(BsonDocument document, ITransaction transaction) in C:\github\BLite\src\BLite.Core\DynamicCollection.cs:line 142&#xD;
+   at BLite.Core.DynamicCollection.Insert(BsonDocument document) in C:\github\BLite\src\BLite.Core\DynamicCollection.cs:line 123&#xD;
+   at BLite.Tests.BLiteEngineTests.Insert_And_FindById_String() in C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs:line 131&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="9fa7d8a2-61f8-4137-928c-74fd301aee68" testId="3cee184f-1956-193b-78ac-6ab3eadd9142" testName="BLite.Tests.BLiteEngineTests.BsonId_ToBytes_Roundtrip" computerName="FABLUA-NB" duration="00:00:00.0322123" startTime="2026-02-20T15:50:41.8734229+01:00" endTime="2026-02-20T15:50:41.9029828+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9fa7d8a2-61f8-4137-928c-74fd301aee68" />
+    <UnitTestResult executionId="08f44aa5-f13c-4fac-80ab-5a0df4605e52" testId="bae7381a-82da-3d70-ff2c-dd6fdf57fb06" testName="BLite.Tests.BLiteEngineTests.DropIndex_Removes_Index" computerName="FABLUA-NB" duration="00:00:00.0597226" startTime="2026-02-20T15:50:41.0045464+01:00" endTime="2026-02-20T15:50:41.0708247+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="08f44aa5-f13c-4fac-80ab-5a0df4605e52" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.DropIndex_Removes_Index" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="bae7381a-82da-3d70-ff2c-dd6fdf57fb06">
+      <Execution id="08f44aa5-f13c-4fac-80ab-5a0df4605e52" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="DropIndex_Removes_Index" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.BsonValue_Implicit_Conversions" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="a3f3d659-89df-b95e-2750-d29a8934b87c">
+      <Execution id="9c1f75d2-f04b-4421-be5a-84484c875ff3" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="BsonValue_Implicit_Conversions" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Engine_FindAll_Convenience" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="f5a07f05-93e3-a392-11be-786d81477114">
+      <Execution id="47da96fc-0f5e-4d85-9b5b-9deb1317c40d" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Engine_FindAll_Convenience" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.DropCollection_Removes_Collection" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="544b154d-8cb6-5645-31cf-c038dd431874">
+      <Execution id="113bc10f-f2ac-4897-9abf-d927c27f4cf1" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="DropCollection_Removes_Collection" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Delete_Removes_Document" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="3e6a50c6-234e-ac5a-aaa7-8a0cae6c93fb">
+      <Execution id="a86e4e00-453e-42d6-af4d-23fed622d715" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Delete_Removes_Document" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Update_Replaces_Document" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="2bf44c32-7c0e-4a10-5430-00cdea194cdb">
+      <Execution id="da97a7eb-2182-4487-a19d-6321584256a1" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Update_Replaces_Document" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Insert_And_FindById_ObjectId" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="08a951ee-8619-8109-772a-1333f360c6a1">
+      <Execution id="7d3c31e0-0759-4667-aa9e-d96d816a3fe2" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Insert_And_FindById_ObjectId" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Insert_And_FindById_String" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="8eae91f3-0b46-90b0-168b-26fea246f137">
+      <Execution id="0dbbea70-73b9-44db-9b7d-2d3a65d742be" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Insert_And_FindById_String" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.FindById_NonExistent_Returns_Null" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="4f794d21-a2e7-48e9-0a5b-a50e376b4ea5">
+      <Execution id="c0ac0593-0af1-4a16-a868-b126a128c616" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="FindById_NonExistent_Returns_Null" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Engine_Delete_Convenience" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="095a1f63-230f-0afb-a8dd-643f299c39ed">
+      <Execution id="6ca19e62-ca5b-4060-a821-2dbb659f886a" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Engine_Delete_Convenience" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Update_NonExistent_Returns_False" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="378dc690-f57f-93ff-f6b6-e1ae20328724">
+      <Execution id="76c6e60c-f5d5-4a4d-a991-0e0339dcea8e" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Update_NonExistent_Returns_False" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Delete_NonExistent_Returns_False" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="cb5c7c30-4e3b-e8e7-232d-ffa2ec3adcc2">
+      <Execution id="6ac2047e-d477-457b-a118-e908d66c8a59" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Delete_NonExistent_Returns_False" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Multiple_Collections_Are_Independent" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="3e0482be-ffaa-5299-5651-f42a912e98d4">
+      <Execution id="ef976a9d-0401-4ad7-a2dc-7962f2a97b05" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Multiple_Collections_Are_Independent" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.EnumerateFields_Returns_All_Fields" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="d02ba606-00db-4565-7f02-6170e9d3436a">
+      <Execution id="ac752be7-ab75-4e8a-8d12-8ef12e1f3226" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="EnumerateFields_Returns_All_Fields" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.GetCollection_Returns_Null_If_Not_Created" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="429f177a-aa76-4c74-d6c6-2b066b476d6f">
+      <Execution id="e6c94f71-7b54-4390-87fc-6a925189a445" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="GetCollection_Returns_Null_If_Not_Created" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Insert_Multiple_And_FindAll" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="d71dd9e4-aa3e-41cc-de9e-819e9bcaec5f">
+      <Execution id="89937208-9162-4d5c-a361-2da456341f84" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Insert_Multiple_And_FindAll" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Supports_All_Primitive_Types" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="e6505051-b915-6c6c-c741-066ea85f1785">
+      <Execution id="c08fb454-d966-4272-8b5a-45831b83f320" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Supports_All_Primitive_Types" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Engine_Update_Convenience" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="409122da-0615-83d1-553d-f9b48f0f46d3">
+      <Execution id="d38322ab-7b51-4aed-896a-0a8c6173d723" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Engine_Update_Convenience" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Insert_And_FindById_Guid" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="cfe1d669-c243-388b-fb71-4abeaf31fe8b">
+      <Execution id="2513286f-9a20-437e-b604-3883001ec076" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Insert_And_FindById_Guid" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.BsonValue_Factory_And_Accessors" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="979d80c6-bbf5-45cb-7abf-7d96ecf81b2f">
+      <Execution id="f06c27ee-bc81-4fb7-9d2b-698e95414ede" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="BsonValue_Factory_And_Accessors" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Data_Persists_After_Engine_Restart" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="785ec199-34f6-b55a-25c6-d5096e5ec6a6">
+      <Execution id="8ac592de-d5b9-4521-a3bd-3f1e227625ca" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Data_Persists_After_Engine_Restart" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.BsonId_Equality_And_Comparison" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="9e14c4e9-5219-23ef-23ca-4a8d3c122e7c">
+      <Execution id="7ac2368d-3982-4968-82e9-7d4d3ffc4ab7" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="BsonId_Equality_And_Comparison" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.FindAll_Returns_All_Documents" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="675848c6-4795-9911-f9e9-2cc2cc0fa6c5">
+      <Execution id="7be53cc8-cd82-4c67-b526-578634bd5e9a" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="FindAll_Returns_All_Documents" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.ListCollections_Returns_All_Created" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="4464d81d-9f21-7f6b-4a25-448e99719c6a">
+      <Execution id="5fae87b7-5ff0-4727-beef-dfb42254e4a2" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="ListCollections_Returns_All_Created" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Insert_And_FindById_Int32" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="667a8897-7535-d55b-d4d4-94e1b570ca07">
+      <Execution id="e3fa05c8-39ba-484c-bf8b-9010324ce395" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Insert_And_FindById_Int32" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Engine_Insert_And_FindById_Convenience" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="719ae647-57de-0e55-1d54-424bd5b4e74b">
+      <Execution id="c7e36329-43bd-43a0-84ff-09d2fb9e5874" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Engine_Insert_And_FindById_Convenience" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Rollback_Discards_Changes" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="8cc1f8de-034b-cb38-e0bc-34ec59850e23">
+      <Execution id="cd67ede3-9b1b-4089-8d76-2f86f6d01f8e" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Rollback_Discards_Changes" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.BsonId_ToBytes_Roundtrip" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="3cee184f-1956-193b-78ac-6ab3eadd9142">
+      <Execution id="9fa7d8a2-61f8-4137-928c-74fd301aee68" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="BsonId_ToBytes_Roundtrip" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.CreateIndex_And_QueryIndex" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="3c0f0923-742c-13ae-178b-caffaf8ffb91">
+      <Execution id="d1f20230-a1f1-41fa-bc19-dac5494e3ccb" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="CreateIndex_And_QueryIndex" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Empty_Collection_FindAll_Returns_Empty" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="ffd572a3-6648-ae92-521d-99be3feab680">
+      <Execution id="0175756f-9090-428b-84dc-ee2cbf56fe50" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Empty_Collection_FindAll_Returns_Empty" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.Insert_Without_Id_AutoGenerates_ObjectId" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="194c9d0a-0134-9a33-d3b5-52ba8e9dd8ff">
+      <Execution id="c92c97f4-e07f-43e4-ad54-4aec62c584cd" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="Insert_Without_Id_AutoGenerates_ObjectId" />
+    </UnitTest>
+    <UnitTest name="BLite.Tests.BLiteEngineTests.GetOrCreateCollection_Returns_Same_Instance" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="7f266cf7-ecdc-aca6-4738-a7b43e6bf6ba">
+      <Execution id="5f63aba4-248e-4965-ba3d-d77d3ae49c3b" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.BLiteEngineTests" name="GetOrCreateCollection_Returns_Same_Instance" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="e6505051-b915-6c6c-c741-066ea85f1785" executionId="c08fb454-d966-4272-8b5a-45831b83f320" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="378dc690-f57f-93ff-f6b6-e1ae20328724" executionId="76c6e60c-f5d5-4a4d-a991-0e0339dcea8e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="409122da-0615-83d1-553d-f9b48f0f46d3" executionId="d38322ab-7b51-4aed-896a-0a8c6173d723" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="675848c6-4795-9911-f9e9-2cc2cc0fa6c5" executionId="7be53cc8-cd82-4c67-b526-578634bd5e9a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3c0f0923-742c-13ae-178b-caffaf8ffb91" executionId="d1f20230-a1f1-41fa-bc19-dac5494e3ccb" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a3f3d659-89df-b95e-2750-d29a8934b87c" executionId="9c1f75d2-f04b-4421-be5a-84484c875ff3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="429f177a-aa76-4c74-d6c6-2b066b476d6f" executionId="e6c94f71-7b54-4390-87fc-6a925189a445" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="095a1f63-230f-0afb-a8dd-643f299c39ed" executionId="6ca19e62-ca5b-4060-a821-2dbb659f886a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="194c9d0a-0134-9a33-d3b5-52ba8e9dd8ff" executionId="c92c97f4-e07f-43e4-ad54-4aec62c584cd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="cb5c7c30-4e3b-e8e7-232d-ffa2ec3adcc2" executionId="6ac2047e-d477-457b-a118-e908d66c8a59" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="cfe1d669-c243-388b-fb71-4abeaf31fe8b" executionId="2513286f-9a20-437e-b604-3883001ec076" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="2bf44c32-7c0e-4a10-5430-00cdea194cdb" executionId="da97a7eb-2182-4487-a19d-6321584256a1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="9e14c4e9-5219-23ef-23ca-4a8d3c122e7c" executionId="7ac2368d-3982-4968-82e9-7d4d3ffc4ab7" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3e0482be-ffaa-5299-5651-f42a912e98d4" executionId="ef976a9d-0401-4ad7-a2dc-7962f2a97b05" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="4f794d21-a2e7-48e9-0a5b-a50e376b4ea5" executionId="c0ac0593-0af1-4a16-a868-b126a128c616" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d71dd9e4-aa3e-41cc-de9e-819e9bcaec5f" executionId="89937208-9162-4d5c-a361-2da456341f84" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7f266cf7-ecdc-aca6-4738-a7b43e6bf6ba" executionId="5f63aba4-248e-4965-ba3d-d77d3ae49c3b" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8cc1f8de-034b-cb38-e0bc-34ec59850e23" executionId="cd67ede3-9b1b-4089-8d76-2f86f6d01f8e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d02ba606-00db-4565-7f02-6170e9d3436a" executionId="ac752be7-ab75-4e8a-8d12-8ef12e1f3226" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="719ae647-57de-0e55-1d54-424bd5b4e74b" executionId="c7e36329-43bd-43a0-84ff-09d2fb9e5874" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="544b154d-8cb6-5645-31cf-c038dd431874" executionId="113bc10f-f2ac-4897-9abf-d927c27f4cf1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="08a951ee-8619-8109-772a-1333f360c6a1" executionId="7d3c31e0-0759-4667-aa9e-d96d816a3fe2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="979d80c6-bbf5-45cb-7abf-7d96ecf81b2f" executionId="f06c27ee-bc81-4fb7-9d2b-698e95414ede" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="667a8897-7535-d55b-d4d4-94e1b570ca07" executionId="e3fa05c8-39ba-484c-bf8b-9010324ce395" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3e6a50c6-234e-ac5a-aaa7-8a0cae6c93fb" executionId="a86e4e00-453e-42d6-af4d-23fed622d715" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="785ec199-34f6-b55a-25c6-d5096e5ec6a6" executionId="8ac592de-d5b9-4521-a3bd-3f1e227625ca" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="4464d81d-9f21-7f6b-4a25-448e99719c6a" executionId="5fae87b7-5ff0-4727-beef-dfb42254e4a2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ffd572a3-6648-ae92-521d-99be3feab680" executionId="0175756f-9090-428b-84dc-ee2cbf56fe50" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f5a07f05-93e3-a392-11be-786d81477114" executionId="47da96fc-0f5e-4d85-9b5b-9deb1317c40d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8eae91f3-0b46-90b0-168b-26fea246f137" executionId="0dbbea70-73b9-44db-9b7d-2d3a65d742be" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3cee184f-1956-193b-78ac-6ab3eadd9142" executionId="9fa7d8a2-61f8-4137-928c-74fd301aee68" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="bae7381a-82da-3d70-ff2c-dd6fdf57fb06" executionId="08f44aa5-f13c-4fac-80ab-5a0df4605e52" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Risultati non in elenco" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="Tutti i risultati caricati" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="32" executed="32" passed="19" failed="13" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.2)&#xD;
+[xUnit.net 00:00:00.07]   Discovering: BLite.Tests&#xD;
+[xUnit.net 00:00:00.12]   Discovered:  BLite.Tests&#xD;
+[xUnit.net 00:00:00.14]   Starting:    BLite.Tests&#xD;
+[xUnit.net 00:00:00.27]       System.InvalidOperationException : Cannot auto-generate ID for type String. Provide an explicit value.&#xD;
+[xUnit.net 00:00:00.27]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.27]         C:\github\BLite\src\BLite.Bson\BsonId.cs(143,0): at BLite.Bson.BsonId.NewId(BsonIdType type)&#xD;
+[xUnit.net 00:00:00.27]         C:\github\BLite\src\BLite.Core\DynamicCollection.cs(142,0): at BLite.Core.DynamicCollection.InsertCore(BsonDocument document, ITransaction transaction)&#xD;
+[xUnit.net 00:00:00.27]         C:\github\BLite\src\BLite.Core\DynamicCollection.cs(123,0): at BLite.Core.DynamicCollection.Insert(BsonDocument document)&#xD;
+[xUnit.net 00:00:00.27]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(131,0): at BLite.Tests.BLiteEngineTests.Insert_And_FindById_String()&#xD;
+[xUnit.net 00:00:00.27]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.27]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.30]       System.NullReferenceException : Object reference not set to an instance of an object.&#xD;
+[xUnit.net 00:00:00.30]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.30]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(527,0): at BLite.Tests.BLiteEngineTests.EnumerateFields_Returns_All_Fields()&#xD;
+[xUnit.net 00:00:00.30]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.30]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.32]       Assert.Equal() Failure: Values differ&#xD;
+[xUnit.net 00:00:00.32]       Expected: 946b1810-f6a7-4404-aec4-2f0f32062a20&#xD;
+[xUnit.net 00:00:00.32]       Actual:   458be382-b5e8-40a2-a641-42b62f91e924&#xD;
+[xUnit.net 00:00:00.32]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.32]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(158,0): at BLite.Tests.BLiteEngineTests.Insert_And_FindById_Guid()&#xD;
+[xUnit.net 00:00:00.32]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.32]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.37]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:00.37]       Expected: True&#xD;
+[xUnit.net 00:00:00.37]       Actual:   False&#xD;
+[xUnit.net 00:00:00.37]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.37]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(89,0): at BLite.Tests.BLiteEngineTests.Insert_And_FindById_ObjectId()&#xD;
+[xUnit.net 00:00:00.37]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.38]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.40]       System.NullReferenceException : Object reference not set to an instance of an object.&#xD;
+[xUnit.net 00:00:00.40]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.40]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(411,0): at BLite.Tests.BLiteEngineTests.Supports_All_Primitive_Types()&#xD;
+[xUnit.net 00:00:00.40]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.40]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.46]       System.InvalidOperationException : Cannot auto-generate ID for type Int32. Provide an explicit value.&#xD;
+[xUnit.net 00:00:00.46]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.46]         C:\github\BLite\src\BLite.Bson\BsonId.cs(143,0): at BLite.Bson.BsonId.NewId(BsonIdType type)&#xD;
+[xUnit.net 00:00:00.46]         C:\github\BLite\src\BLite.Core\DynamicCollection.cs(142,0): at BLite.Core.DynamicCollection.InsertCore(BsonDocument document, ITransaction transaction)&#xD;
+[xUnit.net 00:00:00.46]         C:\github\BLite\src\BLite.Core\DynamicCollection.cs(123,0): at BLite.Core.DynamicCollection.Insert(BsonDocument document)&#xD;
+[xUnit.net 00:00:00.46]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(108,0): at BLite.Tests.BLiteEngineTests.Insert_And_FindById_Int32()&#xD;
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.46]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.57]       System.NullReferenceException : Object reference not set to an instance of an object.&#xD;
+[xUnit.net 00:00:00.57]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.57]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(665,0): at BLite.Tests.BLiteEngineTests.Multiple_Collections_Are_Independent()&#xD;
+[xUnit.net 00:00:00.57]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.57]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.72]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:00.72]       Expected: True&#xD;
+[xUnit.net 00:00:00.72]       Actual:   False&#xD;
+[xUnit.net 00:00:00.72]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.72]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(367,0): at BLite.Tests.BLiteEngineTests.Engine_Update_Convenience()&#xD;
+[xUnit.net 00:00:00.72]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.72]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.75]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:00.75]       Expected: True&#xD;
+[xUnit.net 00:00:00.75]       Actual:   False&#xD;
+[xUnit.net 00:00:00.75]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.75]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(339,0): at BLite.Tests.BLiteEngineTests.Engine_Insert_And_FindById_Convenience()&#xD;
+[xUnit.net 00:00:00.75]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.75]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.79]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:00.79]       Expected: True&#xD;
+[xUnit.net 00:00:00.79]       Actual:   False&#xD;
+[xUnit.net 00:00:00.79]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.79]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(237,0): at BLite.Tests.BLiteEngineTests.Update_Replaces_Document()&#xD;
+[xUnit.net 00:00:00.79]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.79]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.85]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:00.85]       Expected: True&#xD;
+[xUnit.net 00:00:00.85]       Actual:   False&#xD;
+[xUnit.net 00:00:00.85]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.86]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(185,0): at BLite.Tests.BLiteEngineTests.Insert_Without_Id_AutoGenerates_ObjectId()&#xD;
+[xUnit.net 00:00:00.86]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.86]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.90]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:00.90]       Expected: True&#xD;
+[xUnit.net 00:00:00.90]       Actual:   False&#xD;
+[xUnit.net 00:00:00.90]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.90]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(564,0): at BLite.Tests.BLiteEngineTests.CreateIndex_And_QueryIndex()&#xD;
+[xUnit.net 00:00:00.90]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.90]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:01.26]       Assert.True() Failure&#xD;
+[xUnit.net 00:00:01.26]       Expected: True&#xD;
+[xUnit.net 00:00:01.26]       Actual:   False&#xD;
+[xUnit.net 00:00:01.26]       Stack Trace:&#xD;
+[xUnit.net 00:00:01.27]         C:\github\BLite\tests\BLite.Tests\BLiteEngineTests.cs(611,0): at BLite.Tests.BLiteEngineTests.Data_Persists_After_Engine_Restart()&#xD;
+[xUnit.net 00:00:01.27]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:01.27]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:01.30]   Finished:    BLite.Tests&#xD;
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.1099208+01:00">
+        <Text>[xUnit.net 00:00:00.26]     BLite.Tests.BLiteEngineTests.Insert_And_FindById_String [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.1428074+01:00">
+        <Text>[xUnit.net 00:00:00.30]     BLite.Tests.BLiteEngineTests.EnumerateFields_Returns_All_Fields [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.1682012+01:00">
+        <Text>[xUnit.net 00:00:00.32]     BLite.Tests.BLiteEngineTests.Insert_And_FindById_Guid [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.2198492+01:00">
+        <Text>[xUnit.net 00:00:00.37]     BLite.Tests.BLiteEngineTests.Insert_And_FindById_ObjectId [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.2493580+01:00">
+        <Text>[xUnit.net 00:00:00.40]     BLite.Tests.BLiteEngineTests.Supports_All_Primitive_Types [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.3044994+01:00">
+        <Text>[xUnit.net 00:00:00.46]     BLite.Tests.BLiteEngineTests.Insert_And_FindById_Int32 [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.4150512+01:00">
+        <Text>[xUnit.net 00:00:00.57]     BLite.Tests.BLiteEngineTests.Multiple_Collections_Are_Independent [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.5664123+01:00">
+        <Text>[xUnit.net 00:00:00.72]     BLite.Tests.BLiteEngineTests.Engine_Update_Convenience [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.5961596+01:00">
+        <Text>[xUnit.net 00:00:00.75]     BLite.Tests.BLiteEngineTests.Engine_Insert_And_FindById_Convenience [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.6321848+01:00">
+        <Text>[xUnit.net 00:00:00.79]     BLite.Tests.BLiteEngineTests.Update_Replaces_Document [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.6996590+01:00">
+        <Text>[xUnit.net 00:00:00.85]     BLite.Tests.BLiteEngineTests.Insert_Without_Id_AutoGenerates_ObjectId [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:41.7433007+01:00">
+        <Text>[xUnit.net 00:00:00.90]     BLite.Tests.BLiteEngineTests.CreateIndex_And_QueryIndex [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="FABLUA-NB" outcome="Error" timestamp="2026-02-20T15:50:42.1099326+01:00">
+        <Text>[xUnit.net 00:00:01.26]     BLite.Tests.BLiteEngineTests.Data_Persists_After_Engine_Restart [FAIL]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

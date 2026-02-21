@@ -200,6 +200,72 @@ public sealed partial class StorageEngine
         WritePageImmediate(1, buffer);
     }
 
+    public IReadOnlyList<CollectionMetadata> GetAllCollectionsMetadata()
+    {
+        var result = new List<CollectionMetadata>();
+
+        var buffer = new byte[PageSize];
+        ReadPage(1, null, buffer);
+
+        var header = SlottedPageHeader.ReadFrom(buffer);
+        if (header.PageType != PageType.Collection || header.SlotCount == 0)
+            return result;
+
+        for (ushort i = 0; i < header.SlotCount; i++)
+        {
+            var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+
+            if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
+
+            var dataSpan = buffer.AsSpan(slot.Offset, slot.Length);
+
+            try
+            {
+                using var ms = new MemoryStream(dataSpan.ToArray());
+                using var reader = new BinaryReader(ms);
+
+                var collName = reader.ReadString();
+                var metadata = new CollectionMetadata { Name = collName };
+                metadata.PrimaryRootPageId = reader.ReadUInt32();
+                metadata.SchemaRootPageId = reader.ReadUInt32();
+
+                var indexCount = reader.ReadInt32();
+                for (int j = 0; j < indexCount; j++)
+                {
+                    var idx = new IndexMetadata
+                    {
+                        Name = reader.ReadString(),
+                        IsUnique = reader.ReadBoolean(),
+                        Type = (IndexType)reader.ReadByte(),
+                        RootPageId = reader.ReadUInt32()
+                    };
+
+                    var pathCount = reader.ReadInt32();
+                    idx.PropertyPaths = new string[pathCount];
+                    for (int k = 0; k < pathCount; k++)
+                        idx.PropertyPaths[k] = reader.ReadString();
+
+                    if (idx.Type == IndexType.Vector)
+                    {
+                        idx.Dimensions = reader.ReadInt32();
+                        idx.Metric = (VectorMetric)reader.ReadByte();
+                    }
+
+                    metadata.Indexes.Add(idx);
+                }
+
+                result.Add(metadata);
+            }
+            catch
+            {
+                // Ignora slot malformati
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>
     /// Registers all BSON keys used by a set of mappers into the global dictionary.
     /// </summary>
