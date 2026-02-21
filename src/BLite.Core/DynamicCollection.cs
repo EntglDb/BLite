@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core.Indexing;
+using BLite.Core.Indexing.Internal;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
@@ -30,8 +31,31 @@ public sealed class DynamicCollection : IDisposable
     private readonly int _maxDocumentSizeForSinglePage;
     private uint _currentDataPage;
 
-    // Secondary indexes: name → (BTreeIndex, fieldPath)
-    private readonly Dictionary<string, (BTreeIndex Index, string FieldPath)> _secondaryIndexes = new(StringComparer.OrdinalIgnoreCase);
+    // ── Discriminated union for secondary indexes ─────────────────────────────
+    private enum DynamicIndexKind { BTree, Vector, Spatial }
+
+    private sealed class DynamicSecondaryIndex
+    {
+        public DynamicIndexKind Kind { get; }
+        public string FieldPath { get; }
+        public IndexOptions Options { get; }
+        public BTreeIndex? BTree { get; }
+        public VectorSearchIndex? Vector { get; }
+        public RTreeIndex? Spatial { get; }
+        public uint RootPageId => BTree?.RootPageId ?? Vector?.RootPageId ?? Spatial?.RootPageId ?? 0;
+
+        public DynamicSecondaryIndex(BTreeIndex btree, string fieldPath, IndexOptions options)
+        { Kind = DynamicIndexKind.BTree; BTree = btree; FieldPath = fieldPath; Options = options; }
+
+        public DynamicSecondaryIndex(VectorSearchIndex vector, string fieldPath, IndexOptions options)
+        { Kind = DynamicIndexKind.Vector; Vector = vector; FieldPath = fieldPath; Options = options; }
+
+        public DynamicSecondaryIndex(RTreeIndex spatial, string fieldPath, IndexOptions options)
+        { Kind = DynamicIndexKind.Spatial; Spatial = spatial; FieldPath = fieldPath; Options = options; }
+    }
+
+    // Secondary indexes: name → DynamicSecondaryIndex
+    private readonly Dictionary<string, DynamicSecondaryIndex> _secondaryIndexes = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Creates or opens a dynamic collection.
@@ -59,13 +83,34 @@ public sealed class DynamicCollection : IDisposable
             // Restore secondary indexes from metadata
             foreach (var idxMeta in metadata.Indexes)
             {
-                if (idxMeta.Type == IndexType.BTree && idxMeta.PropertyPaths.Length > 0)
+                if (idxMeta.PropertyPaths.Length == 0) continue;
+                var fieldPath = idxMeta.PropertyPaths[0];
+
+                switch (idxMeta.Type)
                 {
-                    var opts = idxMeta.IsUnique
-                        ? IndexOptions.CreateUnique(idxMeta.PropertyPaths)
-                        : IndexOptions.CreateBTree(idxMeta.PropertyPaths);
-                    var btree = new BTreeIndex(_storage, opts, idxMeta.RootPageId);
-                    _secondaryIndexes[idxMeta.Name] = (btree, idxMeta.PropertyPaths[0]);
+                    case IndexType.BTree:
+                    {
+                        var opts = idxMeta.IsUnique
+                            ? IndexOptions.CreateUnique(idxMeta.PropertyPaths)
+                            : IndexOptions.CreateBTree(idxMeta.PropertyPaths);
+                        var btree = new BTreeIndex(_storage, opts, idxMeta.RootPageId);
+                        _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(btree, fieldPath, opts);
+                        break;
+                    }
+                    case IndexType.Vector:
+                    {
+                        var opts = IndexOptions.CreateVector(idxMeta.Dimensions, idxMeta.Metric, 16, 200, idxMeta.PropertyPaths);
+                        var vector = new VectorSearchIndex(_storage, opts, idxMeta.RootPageId);
+                        _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(vector, fieldPath, opts);
+                        break;
+                    }
+                    case IndexType.Spatial:
+                    {
+                        var opts = IndexOptions.CreateSpatial(idxMeta.PropertyPaths);
+                        var spatial = new RTreeIndex(_storage, opts, idxMeta.RootPageId);
+                        _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(spatial, fieldPath, opts);
+                        break;
+                    }
                 }
             }
         }
@@ -165,15 +210,8 @@ public sealed class DynamicCollection : IDisposable
         _primaryIndex.Insert(key, location, transaction.TransactionId);
 
         // Update secondary indexes
-        foreach (var (indexName, (index, fieldPath)) in _secondaryIndexes)
-        {
-            if (document.TryGetValue(fieldPath, out var fieldValue))
-            {
-                var indexKey = BsonValueToIndexKey(fieldValue);
-                if (indexKey.HasValue)
-                    index.Insert(indexKey.Value, location, transaction.TransactionId);
-            }
-        }
+        foreach (var (_, idx) in _secondaryIndexes)
+            IndexInsert(idx, document, location, transaction);
 
         return id;
     }
@@ -305,6 +343,8 @@ public sealed class DynamicCollection : IDisposable
     {
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry))
             throw new ArgumentException($"Index '{indexName}' not found on collection '{_collectionName}'");
+        if (entry.Kind != DynamicIndexKind.BTree || entry.BTree == null)
+            throw new InvalidOperationException($"Index '{indexName}' is not a BTree index. Use VectorSearch/Near/Within for vector/spatial indexes.");
 
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
         var txnId = transaction.TransactionId;
@@ -312,9 +352,66 @@ public sealed class DynamicCollection : IDisposable
         var minKey = minValue != null ? CreateIndexKeyFromObject(minValue) : IndexKey.MinKey;
         var maxKey = maxValue != null ? CreateIndexKeyFromObject(maxValue) : IndexKey.MaxKey;
 
-        foreach (var indexEntry in entry.Index.Range(minKey, maxKey, IndexDirection.Forward, txnId))
+        foreach (var indexEntry in entry.BTree.Range(minKey, maxKey, IndexDirection.Forward, txnId))
         {
             var doc = ReadDocumentAt(indexEntry.Location, txnId);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// Performs a vector similarity search using the named vector index.
+    /// The field must have been indexed via <see cref="CreateVectorIndex"/>.
+    /// </summary>
+    /// <param name="indexName">Name of the vector index.</param>
+    /// <param name="query">Query vector (must match the index dimensionality).</param>
+    /// <param name="k">Maximum number of nearest neighbours to return.</param>
+    /// <param name="efSearch">HNSW efSearch parameter (higher = more recall, slower). Default 100.</param>
+    public IEnumerable<BsonDocument> VectorSearch(string indexName, float[] query, int k, int efSearch = 100)
+    {
+        if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Vector || entry.Vector == null)
+            throw new ArgumentException($"Vector index '{indexName}' not found on collection '{_collectionName}'");
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        foreach (var result in entry.Vector.Search(query, k, efSearch, transaction))
+        {
+            var doc = ReadDocumentAt(result.Location, transaction.TransactionId);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// Returns documents within a radius (km) of a geographic centre point.
+    /// The field must have been indexed via <see cref="CreateSpatialIndex"/>.
+    /// </summary>
+    public IEnumerable<BsonDocument> Near(string indexName, (double Latitude, double Longitude) center, double radiusKm)
+    {
+        if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Spatial || entry.Spatial == null)
+            throw new ArgumentException($"Spatial index '{indexName}' not found on collection '{_collectionName}'");
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var queryBox = SpatialMath.BoundingBox(center.Latitude, center.Longitude, radiusKm);
+        foreach (var loc in entry.Spatial.Search(queryBox, transaction))
+        {
+            var doc = ReadDocumentAt(loc, transaction.TransactionId);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// Returns documents within a rectangular geographic area.
+    /// The field must have been indexed via <see cref="CreateSpatialIndex"/>.
+    /// </summary>
+    public IEnumerable<BsonDocument> Within(string indexName, (double Latitude, double Longitude) min, (double Latitude, double Longitude) max)
+    {
+        if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Spatial || entry.Spatial == null)
+            throw new ArgumentException($"Spatial index '{indexName}' not found on collection '{_collectionName}'");
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var area = new GeoBox(min.Latitude, min.Longitude, max.Latitude, max.Longitude);
+        foreach (var loc in entry.Spatial.Search(area, transaction))
+        {
+            var doc = ReadDocumentAt(loc, transaction.TransactionId);
             if (doc != null) yield return doc;
         }
     }
@@ -371,22 +468,10 @@ public sealed class DynamicCollection : IDisposable
             _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
 
             // Update secondary indexes
-            foreach (var (indexName, (index, fieldPath)) in _secondaryIndexes)
+            foreach (var (_, idx) in _secondaryIndexes)
             {
-                // Remove old
-                if (oldDoc != null && oldDoc.TryGetValue(fieldPath, out var oldVal))
-                {
-                    var oldIndexKey = BsonValueToIndexKey(oldVal);
-                    if (oldIndexKey.HasValue)
-                        index.Delete(oldIndexKey.Value, oldLocation, transaction.TransactionId);
-                }
-                // Insert new
-                if (newDocument.TryGetValue(fieldPath, out var newVal))
-                {
-                    var newIndexKey = BsonValueToIndexKey(newVal);
-                    if (newIndexKey.HasValue)
-                        index.Insert(newIndexKey.Value, newLocation, transaction.TransactionId);
-                }
+                if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
+                IndexInsert(idx, newDocument, newLocation, transaction);
             }
 
             return true;
@@ -428,15 +513,8 @@ public sealed class DynamicCollection : IDisposable
             // Delete from secondary indexes
             if (doc != null)
             {
-                foreach (var (indexName, (index, fieldPath)) in _secondaryIndexes)
-                {
-                    if (doc.TryGetValue(fieldPath, out var val))
-                    {
-                        var indexKey = BsonValueToIndexKey(val);
-                        if (indexKey.HasValue)
-                            index.Delete(indexKey.Value, location, transaction.TransactionId);
-                    }
-                }
+                foreach (var (_, idx) in _secondaryIndexes)
+                    IndexDelete(idx, doc, location, transaction);
             }
 
             // Mark slot as deleted
@@ -459,9 +537,7 @@ public sealed class DynamicCollection : IDisposable
 
     #region Index Management
 
-    /// <summary>
-    /// Creates a secondary B-Tree index on a field path.
-    /// </summary>
+    /// <summary>Creates a secondary B-Tree index on a field path.</summary>
     public void CreateIndex(string fieldPath, string? name = null, bool unique = false)
     {
         name ??= $"idx_{fieldPath.ToLowerInvariant()}";
@@ -472,32 +548,80 @@ public sealed class DynamicCollection : IDisposable
 
         _storage.RegisterKeys(new[] { fieldPath });
 
-        var opts = unique
-            ? IndexOptions.CreateUnique(fieldPath)
-            : IndexOptions.CreateBTree(fieldPath);
+        var opts = unique ? IndexOptions.CreateUnique(fieldPath) : IndexOptions.CreateBTree(fieldPath);
         var btree = new BTreeIndex(_storage, opts);
-        _secondaryIndexes[name] = (btree, fieldPath);
+        var entry = new DynamicSecondaryIndex(btree, fieldPath, opts);
+        _secondaryIndexes[name] = entry;
 
-        // Rebuild: scan all docs and index the field
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
+        foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
-            var doc = ReadDocumentAt(entry.Location, transaction.TransactionId);
-            if (doc != null && doc.TryGetValue(fieldPath, out var val))
-            {
-                var indexKey = BsonValueToIndexKey(val);
-                if (indexKey.HasValue)
-                    btree.Insert(indexKey.Value, entry.Location, transaction.TransactionId);
-            }
+            var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
+            if (doc != null) IndexInsert(entry, doc, e.Location, transaction);
         }
 
-        // Persist metadata
         PersistIndexMetadata();
     }
 
     /// <summary>
-    /// Drops a secondary index by name.
+    /// Creates a vector (HNSW) index for similarity search on a float-array field.
+    /// The field must be stored as a BSON Array of numeric values.
     /// </summary>
+    public void CreateVectorIndex(string fieldPath, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
+    {
+        name ??= $"idx_vector_{fieldPath.ToLowerInvariant()}";
+        fieldPath = fieldPath.ToLowerInvariant();
+
+        if (_secondaryIndexes.ContainsKey(name))
+            throw new InvalidOperationException($"Index '{name}' already exists");
+
+        _storage.RegisterKeys(new[] { fieldPath });
+
+        var opts = IndexOptions.CreateVector(dimensions, metric, 16, 200, fieldPath);
+        var vector = new VectorSearchIndex(_storage, opts);
+        var entry = new DynamicSecondaryIndex(vector, fieldPath, opts);
+        _secondaryIndexes[name] = entry;
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
+        {
+            var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
+            if (doc != null) IndexInsert(entry, doc, e.Location, transaction);
+        }
+
+        PersistIndexMetadata();
+    }
+
+    /// <summary>
+    /// Creates a geospatial (R-Tree) index for <c>Near</c> and <c>Within</c> queries.
+    /// The field must be stored as a BSON coordinates array <c>[lat, lon]</c>.
+    /// </summary>
+    public void CreateSpatialIndex(string fieldPath, string? name = null)
+    {
+        name ??= $"idx_spatial_{fieldPath.ToLowerInvariant()}";
+        fieldPath = fieldPath.ToLowerInvariant();
+
+        if (_secondaryIndexes.ContainsKey(name))
+            throw new InvalidOperationException($"Index '{name}' already exists");
+
+        _storage.RegisterKeys(new[] { fieldPath });
+
+        var opts = IndexOptions.CreateSpatial(fieldPath);
+        var spatial = new RTreeIndex(_storage, opts, 0);
+        var entry = new DynamicSecondaryIndex(spatial, fieldPath, opts);
+        _secondaryIndexes[name] = entry;
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
+        {
+            var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
+            if (doc != null) IndexInsert(entry, doc, e.Location, transaction);
+        }
+
+        PersistIndexMetadata();
+    }
+
+    /// <summary>Drops a secondary index by name.</summary>
     public bool DropIndex(string name)
     {
         if (!_secondaryIndexes.Remove(name))
@@ -507,30 +631,83 @@ public sealed class DynamicCollection : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Lists all secondary index names.
-    /// </summary>
+    /// <summary>Lists all secondary index names.</summary>
     public IReadOnlyList<string> ListIndexes() => _secondaryIndexes.Keys.ToList();
 
-    private void PersistIndexMetadata()
+    internal void PersistIndexMetadata()
     {
         var metadata = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
         metadata.PrimaryRootPageId = _primaryIndex.RootPageId;
         metadata.Indexes.Clear();
 
-        foreach (var (name, (index, fieldPath)) in _secondaryIndexes)
+        foreach (var (name, idx) in _secondaryIndexes)
         {
-            metadata.Indexes.Add(new IndexMetadata
+            var idxMeta = new IndexMetadata
             {
                 Name = name,
-                Type = IndexType.BTree,
-                RootPageId = index.RootPageId,
-                PropertyPaths = new[] { fieldPath },
+                RootPageId = idx.RootPageId,
+                PropertyPaths = new[] { idx.FieldPath },
                 IsUnique = false
-            });
+            };
+
+            switch (idx.Kind)
+            {
+                case DynamicIndexKind.BTree:
+                    idxMeta.Type = IndexType.BTree;
+                    idxMeta.IsUnique = idx.Options.Unique;
+                    break;
+                case DynamicIndexKind.Vector:
+                    idxMeta.Type = IndexType.Vector;
+                    idxMeta.Dimensions = idx.Options.Dimensions;
+                    idxMeta.Metric = idx.Options.Metric;
+                    break;
+                case DynamicIndexKind.Spatial:
+                    idxMeta.Type = IndexType.Spatial;
+                    break;
+            }
+
+            metadata.Indexes.Add(idxMeta);
         }
 
         _storage.SaveCollectionMetadata(metadata);
+    }
+
+    // ── Index dispatch helpers ────────────────────────────────────────────────
+
+    private void IndexInsert(DynamicSecondaryIndex idx, BsonDocument document, DocumentLocation location, ITransaction transaction)
+    {
+        if (!document.TryGetValue(idx.FieldPath, out var val)) return;
+
+        switch (idx.Kind)
+        {
+            case DynamicIndexKind.BTree:
+                var key = BsonValueToIndexKey(val);
+                if (key.HasValue) idx.BTree!.Insert(key.Value, location, transaction.TransactionId);
+                break;
+            case DynamicIndexKind.Vector:
+                var floats = ExtractFloatVector(val);
+                if (floats != null) idx.Vector!.Insert(floats, location, transaction);
+                break;
+            case DynamicIndexKind.Spatial:
+                var coords = ExtractCoordinates(val);
+                if (coords.HasValue) idx.Spatial!.Insert(GeoBox.FromPoint(new GeoPoint(coords.Value.Lat, coords.Value.Lon)), location, transaction);
+                break;
+        }
+    }
+
+    private void IndexDelete(DynamicSecondaryIndex idx, BsonDocument document, DocumentLocation location, ITransaction transaction)
+    {
+        if (!document.TryGetValue(idx.FieldPath, out var val)) return;
+
+        switch (idx.Kind)
+        {
+            case DynamicIndexKind.BTree:
+                var key = BsonValueToIndexKey(val);
+                if (key.HasValue) idx.BTree!.Delete(key.Value, location, transaction.TransactionId);
+                break;
+            // Vector and Spatial indexes do not support individual entry deletion;
+            // their rebuild is handled at the collection level (compaction/reindex).
+        }
     }
 
     #endregion
@@ -764,8 +941,28 @@ public sealed class DynamicCollection : IDisposable
             BsonType.String => new IndexKey(value.AsString),
             BsonType.ObjectId => new IndexKey(value.AsObjectId),
             BsonType.Double => new IndexKey(BitConverter.GetBytes(value.AsDouble)),
-            _ => null // Can't index this type
+            _ => null // Can't index this type as BTree key
         };
+    }
+
+    /// <summary>Extracts a float[] from a BsonValue stored as a numeric BSON Array.</summary>
+    private static float[]? ExtractFloatVector(BsonValue value)
+    {
+        if (value.Type != BsonType.Array) return null;
+        var list = value.AsArray;
+        if (list == null || list.Count == 0) return null;
+        var result = new float[list.Count];
+        for (int i = 0; i < list.Count; i++)
+            result[i] = (float)list[i].AsDouble;
+        return result;
+    }
+
+    /// <summary>Extracts (Lat, Lon) from a BsonValue stored as a BSON coordinates array.</summary>
+    private static (double Lat, double Lon)? ExtractCoordinates(BsonValue value)
+    {
+        if (value.Type != BsonType.Array) return null;
+        try { return value.AsCoordinates; }
+        catch { return null; }
     }
 
     private static IndexKey CreateIndexKeyFromObject(object value) => value switch

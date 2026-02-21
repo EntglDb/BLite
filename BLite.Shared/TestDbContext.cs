@@ -23,6 +23,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, ComplexUser> ComplexUsers { get; set; } = null!;
     public DocumentCollection<int, AutoInitEntity> AutoInitEntities { get; set; } = null!;
     public DocumentCollection<int, Person> People { get; set; } = null!;
+    public DocumentCollection<string, CustomerOrder> CustomerOrders { get; set; } = null!;
     public DocumentCollection<ObjectId, PersonV2> PeopleV2 { get; set; } = null!;
     public DocumentCollection<int, Product> Products { get; set; } = null!;
     public DocumentCollection<int, IntEntity> IntEntities { get; set; } = null!;
@@ -105,6 +106,9 @@ public partial class TestDbContext : DocumentDbContext
         
         // Temporal Types Test
         modelBuilder.Entity<TemporalEntity>().ToCollection("temporal_entities").HasKey(e => e.Id);
+
+        // Benchmark entities
+        modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);
     }
 
     public void ForceCheckpoint()

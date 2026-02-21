@@ -282,6 +282,21 @@ public ref struct BsonSpanWriter
     }
 
     /// <summary>
+    /// Writes a double element inside a BSON array using a raw positional uint16 index.
+    /// Does NOT use the key dictionary — index is stored as a raw ushort, not a keymap ID.
+    /// Must be used between <see cref="BeginArray"/> and <see cref="EndArray"/>.
+    /// The reader side must use <see cref="BsonSpanReader.SkipArrayKey"/> to consume the index.
+    /// </summary>
+    public void WriteArrayDouble(int index, double value)
+    {
+        _buffer[_position++] = (byte)BsonType.Double;
+        BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), (ushort)index);
+        _position += 2;
+        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), value);
+        _position += 8;
+    }
+
+    /// <summary>
     /// Ends the current BSON array
     /// </summary>
     public void EndArray(int sizePosition)

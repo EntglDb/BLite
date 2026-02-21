@@ -142,13 +142,15 @@ public ref struct BsonSpanReader
         // Skip array size (4 bytes)
         _position += 4;
 
-        // Skip element 0 header: Type(1) + Name("0\0") (3 bytes)
-        _position += 3;
+        // Element 0: skip type byte, skip 2-byte key (ASCII or raw uint16), read Double
+        _position += 1; // type
+        SkipArrayKey();
         var x = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
         _position += 8;
 
-        // Skip element 1 header: Type(1) + Name("1\0") (3 bytes)
-        _position += 3;
+        // Element 1: skip type byte, skip 2-byte key, read Double
+        _position += 1; // type
+        SkipArrayKey();
         var y = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
         _position += 8;
 
@@ -345,6 +347,19 @@ public ref struct BsonSpanReader
         }
 
         return key;
+    }
+
+    /// <summary>
+    /// Skips a 2-byte array element key without any key-dictionary lookup.
+    /// Compatible with both keymap-encoded keys (written by the source generator)
+    /// and raw positional uint16 keys (written by <see cref="BsonSpanWriter.WriteArrayDouble"/>),
+    /// since both use exactly 2 bytes.
+    /// </summary>
+    public void SkipArrayKey()
+    {
+        if (Remaining < 2)
+            throw new InvalidOperationException("Not enough bytes to skip array element key");
+        _position += 2;
     }
 
     public ReadOnlySpan<byte> RemainingBytes() => _buffer[_position..];

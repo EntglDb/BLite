@@ -130,8 +130,56 @@ db.People.Insert(new Person { Id = 1, Name = "Alice" });
 - **Durable**: WAL ensures data safety even in power loss.
 - **Isolated**: Snapshot isolation allowing concurrent readers and writers.
 - **Thread-Safe**: Protected with `SemaphoreSlim` to prevent race conditions in concurrent scenarios.
-- **Async-First**: Full async/await support with proper `CancellationToken` handling.
+- **Async-First**: Full async/await support across reads, writes, and transactions — with proper `CancellationToken` propagation throughout the entire stack (B-Tree traversal → page I/O → `RandomAccess.ReadAsync` on OS level).
 - **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management (like EF Core).
+
+### ⚡ Async Read Operations
+
+All read paths have a true async counterpart — cancellation is propagated all the way down to OS-level `RandomAccess.ReadAsync` (IOCP on Windows).
+
+```csharp
+// FindById — async primary-key lookup via B-Tree
+var order = await db.Orders.FindByIdAsync(id, ct);
+
+// FindAll — async streaming (IAsyncEnumerable)
+await foreach (var order in db.Orders.FindAllAsync(ct))
+    Process(order);
+
+// LINQ — full async materialisation
+var shipped = await db.Orders
+    .AsQueryable()
+    .Where(o => o.Status == "shipped")
+    .ToListAsync(ct);
+
+// Async aggregates
+int count = await db.Orders.AsQueryable().CountAsync(ct);
+bool any  = await db.Orders.AsQueryable().AnyAsync(o => o.Total > 500, ct);
+bool all  = await db.Orders.AsQueryable().AllAsync(o => o.Currency == "EUR", ct);
+
+// First/Single helpers
+var first  = await db.Orders.AsQueryable().FirstOrDefaultAsync(o => o.Status == "pending", ct);
+var single = await db.Orders.AsQueryable().SingleOrDefaultAsync(o => o.Id == id, ct);
+
+// Materialise to array
+var arr = await db.Orders.AsQueryable().ToArrayAsync(ct);
+
+// SaveChanges is also async
+await db.SaveChangesAsync(ct);
+```
+
+**Available async read methods on `DocumentCollection<TId, T>`:**
+
+| Method | Description |
+|:-------|:------------|
+| `FindByIdAsync(id, ct)` | Primary-key lookup via B-Tree; returns `ValueTask<T?>` |
+| `FindAllAsync(ct)` | Full collection streaming; returns `IAsyncEnumerable<T>` |
+| `AsQueryable().ToListAsync(ct)` | LINQ pipeline materialized as `Task<List<T>>` |
+| `AsQueryable().ToArrayAsync(ct)` | LINQ pipeline materialized as `Task<T[]>` |
+| `AsQueryable().FirstOrDefaultAsync(ct)` | First match or `null` |
+| `AsQueryable().SingleOrDefaultAsync(ct)` | Single match or `null`; throws on duplicates |
+| `AsQueryable().CountAsync(ct)` | Element count |
+| `AsQueryable().AnyAsync(predicate, ct)` | Short-circuits on first match |
+| `AsQueryable().AllAsync(predicate, ct)` | Returns `false` on first non-match |
 
 ### 🔌 Intelligent Source Generation
 - **Zero Reflection**: Mappers are generated at compile-time for zero overhead.
@@ -250,7 +298,139 @@ using (var txn = db.BeginTransaction())
 
 ---
 
-## 🗺️ Roadmap & Status
+## � Schema-less API (BLiteEngine / DynamicCollection)
+
+When compile-time types are not available — server-side query processing, scripting, migrations, or interop scenarios — BLite exposes a **fully schema-less BSON API** via `BLiteEngine` and `DynamicCollection`.
+
+Both paths share the **same kernel**: StorageEngine, B-Tree, WAL, Vector / Spatial indexes.
+
+### Entry Point
+
+```csharp
+using var engine = new BLiteEngine("data.db");
+
+// Open (or create) a schema-less collection
+var orders = engine.GetOrCreateCollection("orders", BsonIdType.ObjectId);
+
+// List all collections
+IReadOnlyList<string> names = engine.ListCollections();
+
+// Drop a collection
+engine.DropCollection("orders");
+```
+
+### Insert
+
+```csharp
+// Build a BsonDocument using the engine's field-name dictionary
+var doc = orders.CreateDocument(
+    ["status", "total", "currency"],
+    b => b
+        .Set("status",   "pending")
+        .Set("total",    199.99)
+        .Set("currency", "EUR"));
+
+BsonId id = orders.Insert(doc);
+
+// Async variant
+BsonId id = await engine.InsertAsync("orders", doc, ct);
+```
+
+### Read
+
+```csharp
+// Primary-key lookup
+BsonDocument? doc = orders.FindById(id);
+BsonDocument? doc = await orders.FindByIdAsync(id, ct);
+
+// Full scan
+foreach (var d in orders.FindAll()) { ... }
+await foreach (var d in orders.FindAllAsync(ct)) { ... }
+
+// Zero-copy predicate scan (BsonSpanReader — no heap allocation per document)
+var pending = orders.Scan(reader =>
+{
+    // Read "status" field directly from the BSON bytes
+    if (reader.TryReadString("status", out var status))
+        return status == "shipped";
+    return false;
+});
+
+// B-Tree range query on a secondary index
+var recent = orders.QueryIndex("idx_placed_at", minDate, maxDate);
+
+// Vector similarity search
+var similar = orders.VectorSearch("idx_embedding", queryVector, k: 10);
+
+// Geospatial proximity / bounding box
+var nearby = orders.Near("idx_location", (45.46, 9.18), radiusKm: 5.0);
+var inArea  = orders.Within("idx_location", (45.0, 9.0), (46.0, 10.0));
+
+// Count
+int total = orders.Count();
+```
+
+### Update & Delete
+
+```csharp
+bool updated = orders.Update(id, newDoc);
+bool deleted = orders.Delete(id);
+
+// or via engine shortcuts (async)
+await engine.UpdateAsync("orders", id, newDoc, ct);
+await engine.DeleteAsync("orders", id, ct);
+```
+
+### Index Management
+
+```csharp
+// B-Tree secondary index
+orders.CreateIndex("status");                         // default name = "idx_status"
+orders.CreateIndex("placed_at", unique: false);
+
+// Unique index
+orders.CreateIndex("order_number", unique: true);
+
+// Vector index (HNSW)
+orders.CreateVectorIndex("embedding", dimensions: 1536, metric: VectorMetric.Cosine);
+
+// Spatial index (R-Tree)
+orders.CreateSpatialIndex("location");
+
+// Introspect
+IReadOnlyList<string> indexes = orders.ListIndexes();
+
+// Drop
+orders.DropIndex("idx_status");
+```
+
+### Reading BsonDocument fields
+
+```csharp
+BsonDocument? doc = orders.FindById(id);
+if (doc is not null)
+{
+    string status   = doc.GetString("status");
+    double total    = doc.GetDouble("total");
+    BsonId docId    = doc.Id;
+}
+```
+
+### When to use which API
+
+| | `DocumentDbContext` | `BLiteEngine` |
+|:---|:---|:---|
+| **Type safety** | ✅ Compile-time | ❌ Runtime `BsonDocument` |
+| **Source generators** | ✅ Zero reflection | — |
+| **LINQ** | ✅ Full `IQueryable` | ❌ |
+| **Schema-less / dynamic** | ❌ | ✅ |
+| **Server / scripting mode** | ❌ | ✅ |
+| **Performance** | ✅ Max (generated mappers) | ✅ Near-identical (same kernel) |
+| **Shared storage** | ✅ | ✅ Same file |
+
+---
+
+## �🗺️ Roadmap & Status
 
 We are actively building the core. Here is where we stand:
 
@@ -261,7 +441,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **Geospatial Indexing**: Optimized R-Tree with zero-allocation tuple API.
 - ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
-- ✅ **Async I/O**: Full `async`/`await` support with proper `CancellationToken` handling.
+- ✅ **Async I/O**: True async reads and writes — `FindByIdAsync`, `FindAllAsync` (`IAsyncEnumerable<T>`), `ToListAsync`/`ToArrayAsync`/`CountAsync`/`AnyAsync`/`AllAsync`/`FirstOrDefaultAsync`/`SingleOrDefaultAsync` for LINQ pipelines, `SaveChangesAsync`. `CancellationToken` propagates to `RandomAccess.ReadAsync` (IOCP on Windows).
 - ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
 
 ## 🔮 Future Vision

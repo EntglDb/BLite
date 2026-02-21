@@ -82,9 +82,9 @@ public struct VectorPage
         var vectorSpan = MemoryMarshal.Cast<byte, float>(nodeSpan.Slice(7, dimensions * 4));
         vector.CopyTo(vectorSpan);
 
-        // 4. Links (initialize with 0/empty)
-        // Links follow the vector. Level 0: 2*M links, Level 1..15: M links.
-        // For now, just ensure it's cleared or handled by the indexer.
+        // 4. Links: zero all link slots so GetNeighbors stops at the first empty (PageId == 0) entry.
+        //    ArrayPool buffers are not zeroed, so this is mandatory.
+        nodeSpan.Slice(7 + dimensions * 4).Clear();
     }
 
     public static void ReadNodeData(ReadOnlySpan<byte> page, int nodeIndex, out DocumentLocation loc, out int maxLevel, Span<float> vector)

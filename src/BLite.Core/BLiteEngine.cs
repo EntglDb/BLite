@@ -169,6 +169,10 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     public void Commit()
     {
         ThrowIfDisposed();
+        // Flush current root-page IDs into collection metadata before committing,
+        // so vector/spatial indexes survive a reopen.
+        foreach (var col in _collections.Values)
+            col.PersistIndexMetadata();
         if (CurrentTransaction != null)
         {
             try
@@ -188,6 +192,8 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     public async Task CommitAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
+        foreach (var col in _collections.Values)
+            col.PersistIndexMetadata();
         if (CurrentTransaction != null)
         {
             try

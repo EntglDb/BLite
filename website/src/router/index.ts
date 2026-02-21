@@ -12,6 +12,7 @@ import Spatial from '../views/docs/Spatial.vue'
 import Architecture from '../views/docs/Architecture.vue'
 import Converters from '../views/docs/Converters.vue'
 import Benchmarks from '../views/docs/Benchmarks.vue'
+import DynamicAPI from '../views/docs/DynamicAPI.vue'
 import Comparisons from '../views/docs/Comparisons.vue'
 
 export const DEFAULT_TITLE = 'BLite – High-Performance Embedded Database for .NET'
@@ -117,7 +118,15 @@ export const routes: RouteRecordRaw[] = [
                 component: Benchmarks,
                 meta: {
                     title: 'Benchmarks – BLite',
-                    description: 'BLite benchmark results against LiteDB, SQLite, and RocksDB. Throughput, latency, and allocation numbers for read/write workloads on .NET 10.'
+                    description: 'BLite benchmark results against LiteDB and SQLite+JSON. Throughput, latency, and allocation numbers for read/write workloads on .NET 10.'
+                }
+            },
+            {
+                path: 'dynamic-api',
+                component: DynamicAPI,
+                meta: {
+                    title: 'Schema-less API (BLiteEngine) – BLite',
+                    description: 'Use BLiteEngine and DynamicCollection for schema-less BSON queries without compile-time types. Ideal for server mode, migrations, and scripting.'
                 }
             }
         ]

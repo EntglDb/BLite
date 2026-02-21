@@ -11,11 +11,13 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="LiteDB" Version="5.0.21" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\..\BLite.Shared\BLite.Shared.csproj" />
   </ItemGroup>
 
 </Project>

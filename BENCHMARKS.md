@@ -1,21 +1,48 @@
 # BLite Performance Benchmarks
 
-> **Last Updated:** February 13, 2026  
-> **Platform:** Windows 11, Intel Core i7-13800H (14 cores), .NET 10.0
+> **Last Updated:** February 21, 2026  
+> **Platform:** Windows 11, Intel Core i7-13800H (14 cores), .NET 10.0.2
 
 ---
 
 ## Overview
 
-BLite is designed for **zero-allocation, high-performance** document operations. These benchmarks compare BLite against SQLite using BenchmarkDotNet with identical workloads.
+BLite is designed for **zero-allocation, high-performance** document operations. These benchmarks compare BLite against **LiteDB 5.0.21** and **SQLite+JSON** (`Microsoft.Data.Sqlite` + `System.Text.Json`) using BenchmarkDotNet with identical, realistic document workloads.
 
 ### Key Takeaways
 
-✅ **8.2x faster** single inserts vs SQLite  
-✅ **2.4x faster** serialization (BSON vs JSON)  
-✅ **2.1x faster** deserialization  
-✅ **Zero allocations** for BSON serialization  
-✅ **43% faster** bulk insert (1000 docs)  
+✅ **3.1x faster** batch insert vs LiteDB, **2.9x faster** vs SQLite+JSON  
+✅ **5.6x faster** single insert vs LiteDB, **33x faster** vs SQLite+JSON  
+✅ **2.6x faster** FindById vs LiteDB, **9.9x faster** vs SQLite+JSON  
+✅ **3.5x faster** full collection scan vs LiteDB  
+✅ **3.4x less** memory allocated during scan vs LiteDB  
+
+---
+
+## Document Schema
+
+All benchmarks use a **realistic e-commerce `CustomerOrder` document** (~1–2 KB per document):
+
+```
+CustomerOrder
+├── Id (string, ObjectId)
+├── OrderNumber, PlacedAt, Status, Currency
+├── Subtotal, TaxAmount, Total
+├── Customer (CustomerContact)
+│   ├── FullName, Email, Phone
+│   └── BillingAddress (PostalAddress)
+│       └── Street, City, ZipCode, Country
+├── Shipping (ShippingInfo)
+│   ├── Carrier, TrackingNumber, EstimatedDelivery
+│   └── Destination (PostalAddress)
+├── Lines (List<OrderLine> — 5 items)
+│   └── each: Sku, ProductName, Quantity, UnitPrice, Subtotal, Tags[3]
+├── Notes (List<OrderNote> — 2 items)
+│   └── each: Author, Text, CreatedAt
+└── Tags (List<string>)
+```
+
+Status distribution across 1000 documents: ~25% each (`pending`, `confirmed`, `shipped`, `delivered`).
 
 ---
 
@@ -23,27 +50,49 @@ BLite is designed for **zero-allocation, high-performance** document operations.
 
 ### Single Document Insert
 
-| Database | Mean Time | Allocated Memory |
-|:---------|----------:|-----------------:|
-| **BLite** | **355.8 μs** | 128.89 KB |
-| SQLite | 2,916.3 μs | 6.67 KB |
+| Engine | Mean | Ratio | Allocated |
+|:-------|-----:|------:|----------:|
+| **BLite** | **134.7 μs** | baseline | 114.53 KB |
+| LiteDB | 704.3 μs | 5.57x slower | 57.82 KB |
+| SQLite+JSON | 4,209.1 μs | 33.27x slower | 11.02 KB |
 
-**Speedup:** 8.2x faster
+### Batch Insert (1000 Documents, 1 Transaction)
 
-### Batch Insert (1000 Documents)
+| Engine | Mean | Ratio | Allocated |
+|:-------|-----:|------:|----------:|
+| **BLite** | **8,797 μs** | baseline | 52,930 KB |
+| LiteDB | 27,376 μs | 3.15x slower | 33,000 KB |
+| SQLite+JSON | 25,128 μs | 2.89x slower | 6,295 KB |
 
-| Database | Mean Time | Notes |
-|:---------|----------:|:------|
-| **BLite** | ~355 ms | Single transaction |
-| SQLite | ~620 ms | WAL mode + checkpoint |
+> **Note on SQLite allocations:** SQLite reports minimal managed allocations because it delegates work to its native C library. Unmanaged memory is not captured by BenchmarkDotNet. BLite allocations are fully measured (100% managed code).
 
-**Speedup:** 1.75x faster
+---
 
-> **⚠️ Important:** The "Allocated" metrics for SQLite only measure **managed .NET allocations**. SQLite's native C library allocates significant **unmanaged memory** that is **not captured** by BenchmarkDotNet. In reality, SQLite's total memory footprint is much higher than reported. BLite's allocations are fully measured since it's 100% managed code.
+## Read Performance
+
+*Results from `DefaultJob` (standard BenchmarkDotNet configuration — most reliable).*
+
+### FindById — Primary Key Lookup
+
+| Engine | Mean | Ratio | Allocated |
+|:-------|-----:|------:|----------:|
+| **BLite** | **6.368 μs** | baseline | 6.60 KB |
+| LiteDB | 16.466 μs | 2.59x slower | 44.44 KB |
+| SQLite+JSON | 62.807 μs | 9.87x slower | 9.34 KB |
+
+### Scan — Filter by Field (`Status = "shipped"`, ~250 of 1000 results)
+
+| Engine | Mean | Ratio | Allocated |
+|:-------|-----:|------:|----------:|
+| **BLite** | **3,433 μs** | baseline | 5,090 KB |
+| LiteDB | 11,953 μs | 3.51x slower | 17,295 KB |
+| SQLite+JSON | 9,677 μs | 2.84x slower | 7,803 KB |
 
 ---
 
 ## Serialization Performance
+
+*Standalone BSON vs JSON serialization (no I/O), measured on a complex nested object.*
 
 ### Single Object
 
@@ -75,17 +124,15 @@ BLite is designed for **zero-allocation, high-performance** document operations.
 
 ### Why BLite is Faster
 
-1. **C-BSON Format** - Field name compression (2-byte IDs vs full strings)
-2. **Zero-Copy I/O** - Direct `Span<byte>` operations
-3. **Memory Pooling** - `ArrayPool` for buffer reuse
-4. **Stack Allocation** - `stackalloc` for temporary buffers
-5. **Source Generators** - Compile-time serialization code
+1. **C-BSON Format** — Field name compression (2-byte IDs vs full string keys)
+2. **Zero-Copy I/O** — Direct `Span<byte>` operations
+3. **Memory Pooling** — `ArrayPool` for buffer reuse
+4. **Stack Allocation** — `stackalloc` for temporary buffers
+5. **Source Generators** — Compile-time serialization, no reflection at runtime
 
-### Memory Efficiency
+### LiteDB vs BLite
 
-- **Zero allocations** for BSON serialization (single object)
-- **~70% less memory** for bulk deserialization vs JSON
-- **No GC pressure** during write-heavy workloads
+LiteDB uses reflection-based BSON serialization and a B+ tree storage engine. BLite's source-generated mappers and append-only WAL-based storage eliminate per-document reflection overhead, yielding the measured 2.6–5.6x advantage on read/write operations.
 
 ---
 
@@ -93,88 +140,83 @@ BLite is designed for **zero-allocation, high-performance** document operations.
 
 ```
 BenchmarkDotNet v0.15.8
-OS: Windows 11 (10.0.22631.6345/23H2)
-CPU: 13th Gen Intel Core i7-13800H @ 2.50GHz
-  - 14 physical cores, 20 logical cores
+OS: Windows 11 (10.0.22631.6495/23H2/2023Update/SunValley3)
+CPU: 13th Gen Intel Core i7-13800H @ 2.50GHz — 14 physical cores, 20 logical cores
 Runtime: .NET 10.0.2 (X64 RyuJIT x86-64-v3)
 ```
 
----
+### Engine Versions
 
-## Test Configuration
-
-### Workload Profile
-
-**Person Document Structure:**
-- 10 employment history entries per document
-- Nested address object
-- Lists of tags (5 strings per entry)
-- ObjectId, DateTime, Decimal types
-- Total: ~150 fields per document
-
-### Comparison Setup
-
-| Database | Serialization | ORM | Journal Mode |
-|:---------|:--------------|:----|:-------------|
-| **BLite** | C-BSON (custom) | Generated mappers | WAL |
-| **SQLite** | System.Text.Json | Dapper | WAL + checkpoint |
+| Engine | Version | Notes |
+|:-------|:--------|:------|
+| **BLite** | current | Source-generated mappers, `TestDbContext` |
+| LiteDB | 5.0.21 | `Connection=direct` |
+| SQLite | Microsoft.Data.Sqlite 10.0.2 | Dapper 2.1.66, JSON blobs |
 
 ---
 
 ## Running Benchmarks
 
 ```bash
-# Clone repository
 git clone https://github.com/EntglDb/BLite.git
 cd BLite
 
-# Run all benchmarks
+# Full BenchmarkDotNet run (all engines, all categories)
 dotnet run -c Release --project src/BLite.Benchmark
 
+# Quick manual run (no BDN overhead, ~10s)
+dotnet run -c Release --project src/BLite.Benchmark -- manual
+
 # Results will be in:
-# BenchmarkDotNet.Artifacts/results/*.md
+# src/BLite.Benchmark/BenchmarkDotNet.Artifacts/results/
 ```
 
 ---
 
 ## Interpreting Results
 
-- **μs (microseconds)** - Execution time (lower is better)
-- **Allocated** - Memory allocated per operation
-- **Gen0/Gen1** - Garbage collection counts
-- **Ratio** - Performance relative to baseline (SQLite)
+- **μs (microseconds)** — Execution time (lower is better)
+- **Allocated** — Managed .NET memory allocated per operation
+- **Gen0/Gen1** — Garbage collection pressure
+- **Ratio** — Performance relative to BLite baseline (lower = closer to BLite)
+- **DefaultJob** — Standard BenchmarkDotNet multi-iteration run (most reliable)
+- **InProcess** — Same process, avoids startup cost (used for Insert benchmarks)
 
 ---
 
-## Detailed Results
+## Detailed Raw Output
 
-### Full Serialization Benchmark Output
-
-```
-| Method                             | Mean          | Error       | StdDev      | Gen0      | Allocated  |
-|----------------------------------- |--------------:|------------:|------------:|----------:|-----------:|
-| 'Serialize Single (BSON)'          |      1.415 μs |   0.0080 μs |   0.0071 μs |         - |          - |
-| 'Serialize Single (JSON)'          |      3.427 μs |   0.2013 μs |   0.5937 μs |    0.1488 |     1880 B |
-| 'Deserialize Single (BSON)'        |      3.338 μs |   0.0637 μs |   0.0708 μs |    0.4539 |     5704 B |
-| 'Deserialize Single (JSON)'        |      7.005 μs |   0.1555 μs |   0.4485 μs |    0.5188 |     6600 B |
-|                                    |               |             |             |           |            |
-| 'Serialize List 10k (BSON loop)'   | 14,988.023 μs | 274.5623 μs | 256.8258 μs |         - |          - |
-| 'Serialize List 10k (JSON loop)'   | 21,398.339 μs | 198.2820 μs | 185.4731 μs | 1500.0000 | 19190787 B |
-| 'Deserialize List 10k (BSON loop)' | 18,920.076 μs | 318.3235 μs | 297.7600 μs | 4593.7500 | 57984034 B |
-| 'Deserialize List 10k (JSON loop)' | 42,961.024 μs | 534.7024 μs | 446.5008 μs | 5333.3333 | 66944224 B |
-```
-
-### Full Insert Benchmark Output
+### Insert Benchmarks
 
 ```
-| Method                              | Mean       | Error     | StdDev    | Ratio | Allocated |
-|------------------------------------ |-----------:|----------:|----------:|------:|----------:|
-| 'SQLite Single Insert (AutoCommit)' | 2,916.3 μs | 130.50 μs | 382.73 μs |  1.00 |   6.67 KB |
-| 'DocumentDb Single Insert'          |   355.8 μs |  19.42 μs |  56.65 μs |  0.12 | 128.89 KB |
+| Method                                     | Mean        | Error       | StdDev      | Ratio         | Gen0      | Gen1      | Allocated   |
+|------------------------------------------- |------------:|------------:|------------:|--------------:|----------:|----------:|------------:|
+| 'BLite – Batch Insert (1000)'              |  8,797.0 μs |   352.75 μs |   971.57 μs |      baseline | 4000.0000 | 1000.0000 | 52930.39 KB |
+| 'LiteDB – Batch Insert (1000)'             | 27,376.7 μs | 2,337.11 μs | 6,854.34 μs |  3.15x slower | 2000.0000 |         - | 33000.42 KB |
+| 'SQLite+JSON – Batch Insert (1000, 1 Txn)' | 25,128.5 μs | 2,442.94 μs | 7,203.05 μs |  2.89x slower |         - |         - |   6295.2 KB |
+|                                            |             |             |             |               |           |           |             |
+| 'BLite – Single Insert'                    |    134.7 μs |    10.88 μs |    31.74 μs |      baseline |         - |         - |   114.53 KB |
+| 'LiteDB – Single Insert'                   |    704.3 μs |    46.31 μs |   136.54 μs |  5.57x slower |         - |         - |    57.82 KB |
+| 'SQLite+JSON – Single Insert'              |  4,209.1 μs |   162.09 μs |   472.83 μs | 33.27x slower |         - |         - |    11.02 KB |
+```
+
+### Read Benchmarks (DefaultJob)
+
+```
+| Method                                            | Mean          | Error       | StdDev      | Ratio         | Gen0      | Gen1     | Allocated   |
+|-------------------------------------------------- |--------------:|------------:|------------:|--------------:|----------:|---------:|------------:|
+| 'BLite – FindById'                                |      6.368 μs |   0.1267 μs |   0.2081 μs |      baseline |    0.5379 |   0.0038 |      6.6 KB |
+| 'LiteDB – FindById'                               |     16.466 μs |   0.3149 μs |   0.3093 μs |  2.59x slower |    3.5400 |   0.1221 |    44.44 KB |
+| 'SQLite+JSON – FindById'                          |     62.807 μs |   1.5688 μs |   4.6255 μs |  9.87x slower |    0.7324 |        - |     9.34 KB |
+|                                                   |               |             |             |               |           |          |             |
+| 'BLite – Scan by Status'                          |  3,433.450 μs |  91.2274 μs | 268.9861 μs |      baseline |  414.0625 | 214.8438 |  5090.54 KB |
+| 'LiteDB – Scan by Status'                         | 11,953.181 μs | 234.5464 μs | 434.7467 μs |  3.51x slower | 1406.2500 | 468.7500 |  17295.5 KB |
+| 'SQLite+JSON – Scan by Status (full deserialize)' |  9,677.939 μs | 213.9870 μs | 630.9455 μs |  2.84x slower |  632.8125 | 562.5000 |  7803.53 KB |
 ```
 
 ---
 
 ## License
 
-BLite is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+BLite is licensed under the MIT License. See [LICENSE](LICENSE.txt) for details.
+

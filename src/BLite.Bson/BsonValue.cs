@@ -128,6 +128,9 @@ public readonly struct BsonValue : IEquatable<BsonValue>
         {
             if (_type == BsonType.Array && _refValue is double[] arr && arr.Length == 2)
                 return (arr[0], arr[1]);
+            // Documents round-tripped through ReadArray store elements as List<BsonValue>
+            if (_type == BsonType.Array && _refValue is List<BsonValue> list && list.Count == 2)
+                return (list[0].AsDouble, list[1].AsDouble);
             throw new InvalidOperationException($"BsonValue is {_type}, not Coordinates");
         }
     }
@@ -227,7 +230,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
         {
             var elemType = reader.ReadBsonType();
             if (elemType == BsonType.EndOfDocument) break;
-            reader.ReadElementHeader(); // index as name
+            reader.SkipArrayKey(); // positional index — value always discarded; works for both keymap and raw uint16 encoding
             list.Add(ReadFrom(ref reader, elemType));
         }
         return FromArray(list);

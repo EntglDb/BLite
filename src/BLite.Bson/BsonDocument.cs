@@ -400,6 +400,28 @@ public sealed class BsonDocumentBuilder
         return this;
     }
 
+    /// <summary>
+    /// Writes a float array as a BSON array of double elements (same format as the source generator).
+    /// The numeric index keys ("0", "1", ...) must have been pre-registered in the key map;
+    /// they are typically registered by <c>CreateVectorIndex</c>.
+    /// </summary>
+    /// <summary>
+    /// Writes a float array as a BSON array of double elements using raw positional uint16 keys.
+    /// Does NOT register or read numeric index keys ("0", "1"…) in the key dictionary.
+    /// Read back via <see cref="BsonValue.AsArray"/> which calls <see cref="BsonSpanReader.SkipArrayKey"/>.
+    /// </summary>
+    public BsonDocumentBuilder AddFloatArray(string name, float[] values)
+    {
+        EnsureCapacity(values.Length * 12 + 64);
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
+        var arrayPos = writer.BeginArray(name);
+        for (int i = 0; i < values.Length; i++)
+            writer.WriteArrayDouble(i, values[i]);
+        writer.EndArray(arrayPos);
+        _position += writer.Position;
+        return this;
+    }
+
     public BsonDocument Build()
     {
         // Final layout: [4-byte size] [accumulated fields] [0x00 end marker]

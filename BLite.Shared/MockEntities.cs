@@ -396,6 +396,74 @@ namespace BLite.Shared
         public int Value { get; set; }
     }
 
+    // ========================================
+    // Benchmark Entities – Realistic Document
+    // ========================================
+
+    public class PostalAddress
+    {
+        public string Street  { get; set; } = string.Empty;
+        public string City    { get; set; } = string.Empty;
+        public string ZipCode { get; set; } = string.Empty;
+        public string Country { get; set; } = string.Empty;
+    }
+
+    public class CustomerContact
+    {
+        public string FullName       { get; set; } = string.Empty;
+        public string Email          { get; set; } = string.Empty;
+        public string Phone          { get; set; } = string.Empty;
+        public PostalAddress BillingAddress { get; set; } = new();
+    }
+
+    public class OrderLine
+    {
+        public string  Sku         { get; set; } = string.Empty;
+        public string  ProductName { get; set; } = string.Empty;
+        public int     Quantity    { get; set; }
+        public decimal UnitPrice   { get; set; }
+        public decimal Subtotal    { get; set; }
+        public List<string> Tags   { get; set; } = new();
+    }
+
+    public class ShippingInfo
+    {
+        public string       Carrier           { get; set; } = string.Empty;
+        public string       TrackingNumber    { get; set; } = string.Empty;
+        public PostalAddress Destination      { get; set; } = new();
+        public DateTime?    EstimatedDelivery { get; set; }
+    }
+
+    public class OrderNote
+    {
+        public string   Author    { get; set; } = string.Empty;
+        public string   Text      { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// Realistic e-commerce order document for benchmarking.
+    /// Structure: 2 nested objects (Customer, Shipping), each with a nested PostalAddress;
+    /// 3 collections (Lines with sub-Tags, Notes, Tags) — good stress test for
+    /// nested serialization in BLite vs LiteDB vs SQLite+JSON.
+    /// </summary>
+    public class CustomerOrder
+    {
+        public string          Id          { get; set; } = string.Empty;
+        public string          OrderNumber { get; set; } = string.Empty;
+        public DateTime        PlacedAt    { get; set; }
+        public string          Status      { get; set; } = string.Empty;
+        public string          Currency    { get; set; } = "EUR";
+        public decimal         Subtotal    { get; set; }
+        public decimal         TaxAmount   { get; set; }
+        public decimal         Total       { get; set; }
+        public CustomerContact Customer    { get; set; } = new();
+        public ShippingInfo    Shipping    { get; set; } = new();
+        public List<OrderLine> Lines       { get; set; } = new();
+        public List<OrderNote> Notes       { get; set; } = new();
+        public List<string>    Tags        { get; set; } = new();
+    }
+
     /// <summary>
     /// Entity for testing temporal types: DateTimeOffset, TimeSpan, DateOnly, TimeOnly
     /// </summary>

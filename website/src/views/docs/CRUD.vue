@@ -44,13 +44,40 @@ users.InsertMany(batch);</code></pre>
     Console.WriteLine(user.Name);
 }</code></pre>
 
+      <h3>Find by ID — Async</h3>
+      <pre><code><span class="type">User</span>? user = <span class="keyword">await</span> users.FindByIdAsync(userId, ct);</code></pre>
+
       <h3>Find All</h3>
       <pre><code><span class="keyword">var</span> allUsers = users.FindAll();</code></pre>
+
+      <h3>Find All — Async Streaming</h3>
+      <pre><code><span class="keyword">await foreach</span> (<span class="keyword">var</span> user <span class="keyword">in</span> users.FindAllAsync(ct))
+{
+    Process(user);
+}</code></pre>
 
       <h3>Query with Filter</h3>
       <pre><code><span class="keyword">var</span> adults = users.AsQueryable()
     .Where(u => u.Age >= <span class="number">18</span>)
     .AsEnumerable();</code></pre>
+
+      <h3>Query — Async LINQ</h3>
+      <pre><code><span class="comment">// Materialise to list</span>
+<span class="type">List</span>&lt;<span class="type">User</span>&gt; adults = <span class="keyword">await</span> users.AsQueryable()
+    .Where(u => u.Age >= <span class="number">18</span>)
+    .ToListAsync(ct);
+
+<span class="comment">// First match</span>
+<span class="type">User</span>? alice = <span class="keyword">await</span> users.AsQueryable()
+    .FirstOrDefaultAsync(u => u.Name == <span class="string">"Alice"</span>, ct);
+
+<span class="comment">// Aggregates</span>
+<span class="keyword">int</span>  count  = <span class="keyword">await</span> users.AsQueryable().CountAsync(ct);
+<span class="keyword">bool</span> any    = <span class="keyword">await</span> users.AsQueryable().AnyAsync(u => u.Age > <span class="number">60</span>, ct);
+<span class="keyword">bool</span> all    = <span class="keyword">await</span> users.AsQueryable().AllAsync(u => u.Active, ct);
+
+<span class="comment">// Materialise to array</span>
+<span class="type">User</span>[] arr = <span class="keyword">await</span> users.AsQueryable().ToArrayAsync(ct);</code></pre>
     </section>
 
     <section>
@@ -135,11 +162,12 @@ users.Delete(user.Id);</code></pre>
     <section>
       <h2>Best Practices</h2>
       <ul>
-        <li>✅ Use <strong>async methods</strong> for better scalability</li>
+        <li>✅ Use <strong>async methods</strong> for better scalability — <code>FindByIdAsync</code>, <code>FindAllAsync</code>, <code>ToListAsync</code></li>
         <li>✅ Wrap writes in <strong>transactions</strong> for consistency</li>
         <li>✅ Use <strong>bulk operations</strong> for large datasets</li>
         <li>✅ Leverage <strong>validation attributes</strong> for data integrity</li>
-        <li>⚠️ Avoid round-trips - batch related operations</li>
+        <li>⚠️ Avoid round-trips — batch related operations</li>
+        <li>🔌 Need schema-less queries? See <router-link to="/docs/dynamic-api">Schema-less API (BLiteEngine)</router-link></li>
       </ul>
     </section>
   </div>

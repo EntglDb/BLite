@@ -29,6 +29,11 @@ const features = [
     icon: '🔒',
     title: 'Embedded First',
     description: 'No external dependencies. No cloud required. Zero latency.'
+  },
+  {
+    icon: '🔌',
+    title: 'Schema-less API',
+    description: 'BLiteEngine + DynamicCollection for schema-less BSON queries. No compile-time types needed — same kernel, same performance.'
   }
 ]
 </script>

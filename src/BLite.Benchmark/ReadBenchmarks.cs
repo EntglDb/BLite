@@ -1,12 +1,9 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
-using BenchmarkDotNet.Jobs;
+using BLite.Shared;
+using BLite.Tests;
 using Dapper;
-using BLite.Bson;
-using BLite.Core;
-using BLite.Core.Collections;
-using BLite.Core.Storage;
-using BLite.Core.Transactions;
+using LiteDB;
 using Microsoft.Data.Sqlite;
 using System.IO;
 using System.Text.Json;
@@ -21,136 +18,113 @@ namespace BLite.Benchmark;
 [JsonExporterAttribute.Full]
 public class ReadBenchmarks
 {
-    private const int DocCount = 1000;
-    
-    // Paths
+    private const int DocCount   = 1000;
+    private const string ScanStatus = "shipped"; // ~250 hits out of 1000
+
     private string _docDbPath = null!;
-    private string _docDbWalPath = null!;
     private string _sqlitePath = null!;
     private string _sqliteConnString = null!;
+    private string _litePath = null!;
 
-    // DocumentDb
-    private StorageEngine _storage = null!;
-    private DocumentCollection<Person> _collection = null!;
-    // _mapper removed (unused)
+    private TestDbContext _ctx    = null!;
+    private LiteDatabase  _liteDb = null!;
 
-    // Data
-    private ObjectId[] _ids = null!;
-    private ObjectId _targetId; // Middle item
+    private string _targetId = null!;
 
     [GlobalSetup]
     public void Setup()
     {
         var temp = AppContext.BaseDirectory;
-        var id = Guid.NewGuid().ToString("N");
-        _docDbPath = Path.Combine(temp, $"bench_read_docdb_{id}.db");
-        _docDbWalPath = Path.Combine(temp, $"bench_read_docdb_{id}.wal");
-        _sqlitePath = Path.Combine(temp, $"bench_read_sqlite_{id}.db");
+        var id   = Guid.NewGuid().ToString("N");
+        _docDbPath        = Path.Combine(temp, $"bench_read_docdb_{id}.db");
+        _sqlitePath       = Path.Combine(temp, $"bench_read_sqlite_{id}.db");
         _sqliteConnString = $"Data Source={_sqlitePath}";
+        _litePath         = Path.Combine(temp, $"bench_read_lite_{id}.db");
 
-        // Cleanup
-        if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
-        if (File.Exists(_docDbWalPath)) File.Delete(_docDbWalPath);
-        if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
+        foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath })
+            if (File.Exists(p)) File.Delete(p);
 
-        // 1. Setup DocumentDb & Insert Data
-        _storage = new StorageEngine(_docDbPath, PageFileConfig.Default);
-        _collection = new DocumentCollection<Person>(_storage, new PersonMapper());
+        var orders = Enumerable.Range(0, DocCount)
+                               .Select(BenchmarkDataFactory.CreateOrder)
+                               .ToArray();
 
-        _ids = new ObjectId[DocCount];
-        for (int i = 0; i < DocCount; i++)
-        {
-             var p = CreatePerson(i);
-             _ids[i] = _collection.Insert(p);
-        }
-        
-        // 2. Setup SQLite & Insert Data
-        using (var conn = new SqliteConnection(_sqliteConnString))
-        {
-            conn.Open();
-            conn.Execute("CREATE TABLE Documents (Id TEXT PRIMARY KEY, Payload TEXT)");
-            using var txn = conn.BeginTransaction();
-            for (int i = 0; i < DocCount; i++)
-            {
-                var p = CreatePerson(i);
-                p.Id = _ids[i]; // Sync IDs
-                var json = JsonSerializer.Serialize(p);
-                conn.Execute("INSERT INTO Documents (Id, Payload) VALUES (@Id, @Payload)", 
-                    new { Id = p.Id.ToString(), Payload = json }, transaction: txn);
-            }
-            txn.Commit();
-        }
+        // 1. BLite
+        _ctx = new TestDbContext(_docDbPath);
+        _ctx.CustomerOrders.InsertBulk(orders);
 
-        // Target
-        _targetId = _ids[DocCount / 2];
+        // 2. SQLite + JSON
+        using var conn = new SqliteConnection(_sqliteConnString);
+        conn.Open();
+        conn.Execute("CREATE TABLE Orders (Id TEXT PRIMARY KEY, Data TEXT NOT NULL)");
+        using var txn = conn.BeginTransaction();
+        foreach (var o in orders)
+            conn.Execute("INSERT INTO Orders (Id, Data) VALUES (@Id, @Data)",
+                new { o.Id, Data = System.Text.Json.JsonSerializer.Serialize(o) }, transaction: txn);
+        txn.Commit();
+
+        // 3. LiteDB
+        _liteDb = new LiteDatabase($"Filename={_litePath};Connection=direct");
+        var col = _liteDb.GetCollection<CustomerOrder>("orders");
+        col.InsertBulk(orders);
+
+        // Middle document as lookup target
+        _targetId = orders[DocCount / 2].Id;
     }
-    
+
     [GlobalCleanup]
     public void Cleanup()
     {
-        _storage?.Dispose();
+        _ctx?.Dispose();
+        _liteDb?.Dispose();
         SqliteConnection.ClearAllPools();
-        
-        if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
-        if (File.Exists(_docDbWalPath)) File.Delete(_docDbWalPath);
-        if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
+        foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath })
+            if (File.Exists(p)) File.Delete(p);
     }
 
-    private Person CreatePerson(int i)
-    {
-        var p = new Person
-        {
-            Id = ObjectId.NewObjectId(),
-            FirstName = $"First_{i}",
-            LastName = $"Last_{i}",
-            Age = 20 + (i % 50),
-            Bio = null,
-            CreatedAt = DateTime.UtcNow,
-            Balance = 1000.50m * (i + 1),
-            HomeAddress = new Address 
-            {
-                Street = $"{i} Main St",
-                City = "Tech City",
-                ZipCode = "12345"
-            }
-        };
+    // ──── FindById (primary key lookup) ──────────────────────────────
 
-        // Add 10 work history items
-        for(int j=0; j<10; j++)
-        {
-            p.EmploymentHistory.Add(new WorkHistory
-            {
-                CompanyName = $"TechCorp_{i}_{j}",
-                Title = "Developer",
-                DurationYears = j,
-                Tags = new List<string> { "C#", "BSON", "Performance", "Database", "Complex" }
-            });
-        }
+    [Benchmark(Baseline = true, Description = "BLite – FindById")]
+    [BenchmarkCategory("FindById")]
+    public CustomerOrder? BLite_FindById() => _ctx.CustomerOrders.FindById(_targetId);
 
-        return p;
-    }
+    [Benchmark(Description = "LiteDB – FindById")]
+    [BenchmarkCategory("FindById")]
+    public CustomerOrder? LiteDb_FindById() => _liteDb.GetCollection<CustomerOrder>("orders").FindById(_targetId);
 
-    [Benchmark(Baseline = true, Description = "SQLite FindById (Deserialize)")]
-    [BenchmarkCategory("Read_Single")]
-    public Person Sqlite_FindById()
+    [Benchmark(Description = "SQLite+JSON – FindById")]
+    [BenchmarkCategory("FindById")]
+    public CustomerOrder Sqlite_FindById()
     {
         using var conn = new SqliteConnection(_sqliteConnString);
         conn.Open();
-        
         var json = conn.QueryFirstOrDefault<string>(
-            "SELECT Payload FROM Documents WHERE Id = @Id", 
-            new { Id = _targetId.ToString() });
-            
-        if (string.IsNullOrEmpty(json)) 
-            throw new InvalidOperationException($"Document not found: {_targetId}");
-            
-        return JsonSerializer.Deserialize<Person>(json) ?? throw new InvalidOperationException("Deserialization returned null");
+            "SELECT Data FROM Orders WHERE Id = @Id", new { Id = _targetId });
+        return json is null ? throw new InvalidOperationException()
+                           : System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(json)!;
     }
 
-    [Benchmark(Description = "DocumentDb FindById")]
-    [BenchmarkCategory("Read_Single")]
-    public Person? DocumentDb_FindById()
+    // ──── Scan (linear scan with status filter, ~250 results out of 1000) ───
+
+    [Benchmark(Baseline = true, Description = "BLite – Scan by Status")]
+    [BenchmarkCategory("Scan")]
+    public List<CustomerOrder> BLite_Scan()
+        => _ctx.CustomerOrders.Find(x => x.Status == ScanStatus).ToList();
+
+    [Benchmark(Description = "LiteDB – Scan by Status")]
+    [BenchmarkCategory("Scan")]
+    public List<CustomerOrder> LiteDb_Scan()
+        => _liteDb.GetCollection<CustomerOrder>("orders")
+                  .Find(x => x.Status == ScanStatus).ToList();
+
+    [Benchmark(Description = "SQLite+JSON – Scan by Status (full deserialize)")]
+    [BenchmarkCategory("Scan")]
+    public List<CustomerOrder> Sqlite_Scan()
     {
-        return _collection.FindById(_targetId);
+        using var conn = new SqliteConnection(_sqliteConnString);
+        conn.Open();
+        return conn.Query<string>("SELECT Data FROM Orders")
+                   .Select(json => System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(json)!)
+                   .Where(o => o.Status == ScanStatus)
+                   .ToList();
     }
 }
