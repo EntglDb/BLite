@@ -168,11 +168,13 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.3.0):</strong>
+        <strong>✨ Recent Improvements (v1.3.0 – v1.4.0):</strong>
         <ul>
-          <li>✅ Full temporal type support: <code>DateTimeOffset</code>, <code>TimeSpan</code>, <code>DateOnly</code>, <code>TimeOnly</code></li>
-          <li>✅ Improved nullable property handling in generated deserializers</li>
-          <li>✅ Nullable string Id properties inherited from base classes (<code>BaseEntity&lt;string, T&gt;</code>)</li>
+          <li>✅ <strong>v1.4.0</strong> — Full async read path: <code>FindByIdAsync</code>, <code>FindAllAsync</code>, LINQ async extensions (<code>ToListAsync</code>, <code>CountAsync</code>, <code>AnyAsync</code>, …)</li>
+          <li>✅ <strong>v1.4.0</strong> — <code>BLiteEngine</code> + <code>DynamicCollection</code> for schema-less BSON queries without compile-time types</li>
+          <li>✅ <strong>v1.3.0</strong> — Full temporal type support: <code>DateTimeOffset</code>, <code>TimeSpan</code>, <code>DateOnly</code>, <code>TimeOnly</code></li>
+          <li>✅ <strong>v1.3.0</strong> — Improved nullable property handling in generated deserializers</li>
+          <li>✅ <strong>v1.3.0</strong> — Nullable string Id properties inherited from base classes (<code>BaseEntity&lt;string, T&gt;</code>)</li>
           <li>✅ Property inheritance from base classes</li>
           <li>✅ Private and init-only setters via Expression Trees</li>
           <li>✅ Advanced collection types (IEnumerable&lt;T&gt;, ICollection&lt;T&gt;, HashSet&lt;T&gt;)</li>

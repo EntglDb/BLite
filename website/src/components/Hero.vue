@@ -13,7 +13,7 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
     
     <div class="container hero-content">
       <div class="badge animate-fade-in" style="animation-delay: 0.1s">
-        <span class="badge-dot"></span> v1.3.0 Released - Temporal Types Support
+        <span class="badge-dot"></span> v1.4.0 Released - Async Reads &amp; Schema-less API
       </div>
       
       <h1 class="hero-title animate-fade-in" style="animation-delay: 0.2s">

@@ -13,7 +13,7 @@
 
       <p>Or add directly to your <code>.csproj</code>:</p>
       <pre><code>&lt;<span class="keyword">ItemGroup</span>&gt;
-  &lt;<span class="keyword">PackageReference</span> <span class="type">Include</span>=<span class="string">"BLite"</span> <span class="type">Version</span>=<span class="string">"1.3.0"</span> /&gt;
+  &lt;<span class="keyword">PackageReference</span> <span class="type">Include</span>=<span class="string">"BLite"</span> <span class="type">Version</span>=<span class="string">"1.4.0"</span> /&gt;
 &lt;/<span class="keyword">ItemGroup</span>&gt;</code></pre>
     </section>
 
