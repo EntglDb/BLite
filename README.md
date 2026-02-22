@@ -3,6 +3,7 @@
 
 [![NuGet](https://img.shields.io/nuget/v/BLite?label=nuget&color=red)](https://www.nuget.org/packages/BLite)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/BLite?label=downloads)](https://www.nuget.org/packages/BLite)
+[![Buy Me a Coffee](https://img.shields.io/badge/sponsor-Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/lucafabbriu)
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-.NET%2010-purple)
