@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.6.0"></a>
+## [1.6.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.6.0) (2026-02-22)
+
+### Features
+
+* expose RegisterKeys/GetKeyMap publicly on BLiteEngine ([cb9c6c9](https://www.github.com/EntglDb/BLite/commit/cb9c6c9703abc1608beb387d45f9fb60a2cc7cda))
+
 <a name="1.5.0"></a>
 ## [1.5.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.5.0) (2026-02-22)
 
