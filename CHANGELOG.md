@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.6.1"></a>
+## [1.6.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.6.1) (2026-02-22)
+
+### Bug Fixes
+
+* add enum support to Source Generator serialization ([7096950](https://www.github.com/EntglDb/BLite/commit/709695028aeb9633be14038b93626dfcfcc8756d))
+
 <a name="1.6.0"></a>
 ## [1.6.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.6.0) (2026-02-22)
 
