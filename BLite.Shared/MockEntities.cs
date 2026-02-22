@@ -490,4 +490,94 @@ namespace BLite.Shared
         public TimeOnly OpeningTime { get; set; }
         public TimeOnly? ClosingTime { get; set; }
     }
+
+    // ========================================
+    // Enum Serialization Test Entities
+    // ========================================
+
+    /// <summary>Default underlying type (int)</summary>
+    public enum UserRole
+    {
+        Guest = 0,
+        User = 1,
+        Moderator = 2,
+        Admin = 3
+    }
+
+    /// <summary>int-based enum with explicit values</summary>
+    public enum OrderStatus : int
+    {
+        Pending = 0,
+        Processing = 10,
+        Shipped = 20,
+        Delivered = 30,
+        Cancelled = -1
+    }
+
+    /// <summary>byte-based enum</summary>
+    public enum Priority : byte
+    {
+        Low = 0,
+        Normal = 1,
+        High = 2,
+        Critical = 3
+    }
+
+    /// <summary>long-based enum</summary>
+    public enum AuditAction : long
+    {
+        None = 0L,
+        Created = 1L,
+        Updated = 2L,
+        Deleted = 3L,
+        Archived = 100L
+    }
+
+    /// <summary>[Flags] enum to verify bitwise values survive round-trip</summary>
+    [Flags]
+    public enum Permissions
+    {
+        None = 0,
+        Read = 1,
+        Write = 2,
+        Execute = 4,
+        Admin = 8,
+        All = Read | Write | Execute | Admin
+    }
+
+    /// <summary>
+    /// Entity with various enum property types:
+    /// required, nullable, collections, different underlying types, flags.
+    /// </summary>
+    public class EnumEntity
+    {
+        public ObjectId Id { get; set; }
+
+        // Required enum (default underlying = int)
+        public UserRole Role { get; set; }
+
+        // Nullable enum
+        public OrderStatus? Status { get; set; }
+
+        // byte-based enum
+        public Priority Priority { get; set; }
+
+        // Nullable byte-based enum
+        public Priority? FallbackPriority { get; set; }
+
+        // long-based enum
+        public AuditAction LastAction { get; set; }
+
+        // [Flags] enum stored as int
+        public Permissions Permissions { get; set; }
+
+        // Collection of enums (List<T>)
+        public List<UserRole> AssignableRoles { get; set; } = new();
+
+        // Array of enums
+        public OrderStatus[] StatusHistory { get; set; } = Array.Empty<OrderStatus>();
+
+        // A simple string field to prove other fields still work
+        public string Label { get; set; } = string.Empty;
+    }
 }

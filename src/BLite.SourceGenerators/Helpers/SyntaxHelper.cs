@@ -183,6 +183,31 @@ namespace BLite.SourceGenerators.Helpers
             return type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct;
         }
 
+        /// <summary>
+        /// Detects whether a type is an enum (including Nullable&lt;TEnum&gt;),
+        /// returning the underlying primitive type name and the fully-qualified enum type name.
+        /// </summary>
+        public static bool IsEnumType(ITypeSymbol type, out string underlyingTypeName, out string enumFullTypeName)
+        {
+            underlyingTypeName = "int";
+            enumFullTypeName = "";
+            
+            // Unwrap Nullable<T>
+            var actualType = type;
+            if (actualType is INamedTypeSymbol nullable && 
+                nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            {
+                actualType = nullable.TypeArguments[0];
+            }
+            
+            if (actualType.TypeKind != TypeKind.Enum || actualType is not INamedTypeSymbol enumSymbol)
+                return false;
+            
+            enumFullTypeName = GetFullName(enumSymbol);
+            underlyingTypeName = enumSymbol.EnumUnderlyingType?.ToDisplayString() ?? "int";
+            return true;
+        }
+
         public static bool HasBackingField(IPropertySymbol property)
         {
             // Auto-properties have compiler-generated backing fields

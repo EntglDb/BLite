@@ -175,7 +175,21 @@ namespace BLite.SourceGenerators
                                 propInfo.NestedTypeName = itemType.Name;
                                 propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)itemType);
                             }
+                            // Check if collection item is an enum
+                            else if (itemType.TypeKind == TypeKind.Enum && itemType is INamedTypeSymbol enumItemSymbol)
+                            {
+                                propInfo.IsCollectionItemEnum = true;
+                                propInfo.CollectionItemEnumFullTypeName = SyntaxHelper.GetFullName(enumItemSymbol);
+                                propInfo.CollectionItemEnumUnderlyingTypeName = enumItemSymbol.EnumUnderlyingType?.ToDisplayString() ?? "int";
+                            }
                         }
+                    }
+                    // Check for enum type (direct property)
+                    else if (SyntaxHelper.IsEnumType(prop.Type, out var enumUnderlying, out var enumFullName))
+                    {
+                        propInfo.IsEnum = true;
+                        propInfo.EnumUnderlyingTypeName = enumUnderlying;
+                        propInfo.EnumFullTypeName = enumFullName;
                     }
                     // Check for Nested Object
                     else if (SyntaxHelper.IsNestedObjectType(prop.Type))

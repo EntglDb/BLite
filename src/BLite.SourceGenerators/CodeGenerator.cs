@@ -219,6 +219,11 @@ namespace BLite.SourceGenerators
                      sb.AppendLine($"            {indent}    {prop.Name.ToLower()}ItemMapper.SerializeFields(item, ref writer);");
                      sb.AppendLine($"            {indent}    writer.EndDocument(itemStartPos);");
                  }
+                 else if (prop.IsCollectionItemEnum)
+                 {
+                     var underlyingWrite = GetWriteMethodForUnderlyingType(prop.CollectionItemEnumUnderlyingTypeName!);
+                     sb.AppendLine($"            {indent}    writer.{underlyingWrite}({prop.Name.ToLower()}Index.ToString(), ({prop.CollectionItemEnumUnderlyingTypeName})item);");
+                 }
                  else
                  {
                      // Simplified: pass a dummy PropertyInfo with the item type for primitive collection items
@@ -258,6 +263,27 @@ namespace BLite.SourceGenerators
                 sb.AppendLine($"            {{");
                 sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
                 sb.AppendLine($"            }}");
+            }
+            else if (prop.IsEnum)
+            {
+                var enumType = $"global::{prop.EnumFullTypeName}";
+                var underlyingWrite = GetWriteMethodForUnderlyingType(prop.EnumUnderlyingTypeName!);
+                
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                    sb.AppendLine($"            {{");
+                    sb.AppendLine($"                writer.{underlyingWrite}(\"{fieldName}\", ({prop.EnumUnderlyingTypeName})entity.{prop.Name}.Value);");
+                    sb.AppendLine($"            }}");
+                    sb.AppendLine($"            else");
+                    sb.AppendLine($"            {{");
+                    sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                    sb.AppendLine($"            }}");
+                }
+                else
+                {
+                    sb.AppendLine($"            writer.{underlyingWrite}(\"{fieldName}\", ({prop.EnumUnderlyingTypeName})entity.{prop.Name});");
+                }
             }
             else
             {
@@ -516,6 +542,13 @@ namespace BLite.SourceGenerators
                      sb.AppendLine($"                            var item = {prop.Name.ToLower()}ItemMapper.Deserialize(ref reader);");
                      sb.AppendLine($"                            {localVar}.Add(item);");
                  }
+                 else if (prop.IsCollectionItemEnum)
+                 {
+                     var enumItemType = $"global::{prop.CollectionItemEnumFullTypeName}";
+                     var underlyingRead = GetReadMethodForUnderlyingType(prop.CollectionItemEnumUnderlyingTypeName!);
+                     sb.AppendLine($"                            var item = ({enumItemType})reader.{underlyingRead}();");
+                     sb.AppendLine($"                            {localVar}.Add(item);");
+                 }
                  else
                  {
                      var readMethod = GetPrimitiveReadMethod(new PropertyInfo { TypeName = prop.CollectionItemType! });
@@ -550,6 +583,27 @@ namespace BLite.SourceGenerators
                  sb.AppendLine($"                            var {prop.Name.ToLower()}Mapper = new global::{mapperNamespace}.{nestedMapperType}();");
                  sb.AppendLine($"                            {localVar} = {prop.Name.ToLower()}Mapper.Deserialize(ref reader);");
                  sb.AppendLine($"                        }}");
+             }
+             else if (prop.IsEnum)
+             {
+                 var enumType = $"global::{prop.EnumFullTypeName}";
+                 var underlyingRead = GetReadMethodForUnderlyingType(prop.EnumUnderlyingTypeName!);
+                 
+                 if (prop.IsNullable)
+                 {
+                     sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                     sb.AppendLine($"                        {{");
+                     sb.AppendLine($"                            {localVar} = null;");
+                     sb.AppendLine($"                        }}");
+                     sb.AppendLine($"                        else");
+                     sb.AppendLine($"                        {{");
+                     sb.AppendLine($"                            {localVar} = ({enumType})reader.{underlyingRead}();");
+                     sb.AppendLine($"                        }}");
+                 }
+                 else
+                 {
+                     sb.AppendLine($"                        {localVar} = ({enumType})reader.{underlyingRead}();");
+                 }
              }
              else
              {
@@ -864,6 +918,33 @@ namespace BLite.SourceGenerators
                 default:
                     return false;
             }
+        }
+
+        /// <summary>
+        /// Maps an enum's underlying type name (e.g. "int", "byte", "long") to the
+        /// corresponding BsonSpanWriter write method name.
+        /// </summary>
+        private static string GetWriteMethodForUnderlyingType(string underlyingType)
+        {
+            return underlyingType switch
+            {
+                "byte" or "sbyte" or "short" or "ushort" or "int" or "uint" => "WriteInt32",
+                "long" or "ulong" => "WriteInt64",
+                _ => "WriteInt32"
+            };
+        }
+
+        /// <summary>
+        /// Maps an enum's underlying type name to the corresponding BsonSpanReader read method name.
+        /// </summary>
+        private static string GetReadMethodForUnderlyingType(string underlyingType)
+        {
+            return underlyingType switch
+            {
+                "byte" or "sbyte" or "short" or "ushort" or "int" or "uint" => "ReadInt32",
+                "long" or "ulong" => "ReadInt64",
+                _ => "ReadInt32"
+            };
         }
     }
 }

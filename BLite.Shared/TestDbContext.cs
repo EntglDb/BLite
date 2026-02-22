@@ -52,6 +52,9 @@ public partial class TestDbContext : DocumentDbContext
     
     // Temporal Types Test (DateTimeOffset, TimeSpan, DateOnly, TimeOnly)
     public DocumentCollection<ObjectId, TemporalEntity> TemporalEntities { get; set; } = null!;
+    
+    // Enum Serialization Tests
+    public DocumentCollection<ObjectId, EnumEntity> EnumEntities { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -106,6 +109,9 @@ public partial class TestDbContext : DocumentDbContext
         
         // Temporal Types Test
         modelBuilder.Entity<TemporalEntity>().ToCollection("temporal_entities").HasKey(e => e.Id);
+
+        // Enum Serialization Test
+        modelBuilder.Entity<EnumEntity>().ToCollection("enum_entities").HasKey(e => e.Id);
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);

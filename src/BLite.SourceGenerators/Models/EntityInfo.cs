@@ -48,8 +48,15 @@ namespace BLite.SourceGenerators.Models
         public string? CollectionItemType { get; set; }
         public string? CollectionConcreteTypeName { get; set; }
         
+        public bool IsEnum { get; set; }
+        public string? EnumUnderlyingTypeName { get; set; }
+        public string? EnumFullTypeName { get; set; }
+        
         public bool IsNestedObject { get; set; }
         public bool IsCollectionItemNested { get; set; }
+        public bool IsCollectionItemEnum { get; set; }
+        public string? CollectionItemEnumUnderlyingTypeName { get; set; }
+        public string? CollectionItemEnumFullTypeName { get; set; }
         public string? NestedTypeName { get; set; }
         public string? NestedTypeFullName { get; set; }
         public string? ConverterTypeName { get; set; }
