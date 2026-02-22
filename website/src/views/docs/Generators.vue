@@ -168,8 +168,12 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.3.0 – v1.4.0):</strong>
+        <strong>✨ Recent Improvements (v1.3.0 – v1.5.0):</strong>
         <ul>
+          <li>✅ <strong>v1.5.0</strong> — Projection push-down: <code>.Select(x =&gt; new Dto(x.F1, x.F2))</code> compiles to a single-pass BSON reader — <code>T</code> is never allocated</li>
+          <li>✅ <strong>v1.5.0</strong> — WHERE + SELECT combined push-down evaluated in one BSON pass</li>
+          <li>✅ <strong>v1.5.0</strong> — <code>IBLiteQueryable&lt;T&gt;</code> preserves async LINQ chain across all operators; <code>AsAsyncEnumerable()</code> extension</li>
+          <li>✅ <strong>v1.5.0</strong> — <code>FindAsync(predicate, ct)</code> on <code>DocumentCollection</code></li>
           <li>✅ <strong>v1.4.0</strong> — Full async read path: <code>FindByIdAsync</code>, <code>FindAllAsync</code>, LINQ async extensions (<code>ToListAsync</code>, <code>CountAsync</code>, <code>AnyAsync</code>, …)</li>
           <li>✅ <strong>v1.4.0</strong> — <code>BLiteEngine</code> + <code>DynamicCollection</code> for schema-less BSON queries without compile-time types</li>
           <li>✅ <strong>v1.3.0</strong> — Full temporal type support: <code>DateTimeOffset</code>, <code>TimeSpan</code>, <code>DateOnly</code>, <code>TimeOnly</code></li>

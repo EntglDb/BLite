@@ -87,6 +87,37 @@
 <span class="keyword">var</span> summary = users.AsQueryable()
     .Select(u => <span class="keyword">new</span> { u.Name, u.Age })
     .AsEnumerable();</code></pre>
+
+      <h3>Push-down Projection <span style="font-size:0.75em;color:#06b6d4;font-weight:600;">NEW in v1.5.0</span></h3>
+      <p>When a query contains only scalar-field projections, BLite compiles the SELECT lambda into a single-pass raw-BSON reader. The source type <code>T</code> is <strong>never instantiated</strong> — only the requested bytes are read off the page.</p>
+      <pre><code><span class="comment">// Only Name and Age bytes are read — User is never allocated</span>
+<span class="keyword">var</span> dtos = users.AsQueryable()
+    .Select(u => <span class="keyword">new</span> UserDto(u.Name, u.Age))
+    .ToList();
+
+<span class="comment">// WHERE + SELECT: both evaluated in a single BSON pass</span>
+<span class="keyword">var</span> adults = users.AsQueryable()
+    .Where(u => u.Age >= <span class="number">18</span>)
+    .Select(u => <span class="keyword">new</span> { u.Name, u.Age })
+    .ToList();</code></pre>
+      <div class="info-box">
+        <strong>⚡ When push-down fires:</strong> SELECT with scalar fields only, with or without a WHERE clause. Queries that include <code>OrderBy</code> / <code>Take</code> / <code>Skip</code> <em>after</em> the projection still benefit — the ordering/paging is applied on the already-projected <code>IEnumerable&lt;TResult&gt;</code>. Complex/nested fields (e.g. <code>x.Address</code>) automatically fall back to the standard path.
+      </div>
+    </section>
+
+    <section>
+      <h2>Async LINQ <span style="font-size:0.75em;color:#06b6d4;font-weight:600;">v1.4.0+</span></h2>
+      <p><code>AsQueryable()</code> returns <code>IBLiteQueryable&lt;T&gt;</code>, which preserves the async chain across all LINQ operators.</p>
+      <pre><code><span class="comment">// Async terminal operators</span>
+<span class="keyword">var</span> list  = <span class="keyword">await</span> users.AsQueryable().Where(u => u.Age > <span class="number">25</span>).ToListAsync();
+<span class="keyword">var</span> count = <span class="keyword">await</span> users.AsQueryable().CountAsync();
+<span class="keyword">var</span> any   = <span class="keyword">await</span> users.AsQueryable().AnyAsync(u => u.Active);
+
+<span class="comment">// Async streaming via IAsyncEnumerable&lt;T&gt;</span>
+<span class="keyword">await foreach</span> (<span class="keyword">var</span> user <span class="keyword">in</span> users.AsQueryable().Where(u => u.Age > <span class="number">25</span>).AsAsyncEnumerable())
+{
+    Console.WriteLine(user.Name);
+}</code></pre>
     </section>
 
     <section>
