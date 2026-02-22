@@ -53,7 +53,12 @@ engine.DropCollection(<span class="string">"orders"</span>);</code></pre>
 <span class="type">BsonId</span> id = orders.Insert(doc);</code></pre>
 
       <h3>Async</h3>
-      <pre><code><span class="type">BsonId</span> id = <span class="keyword">await</span> engine.InsertAsync(<span class="string">"orders"</span>, doc, ct);</code></pre>
+      <pre><code><span class="comment">// Async single insert</span>
+<span class="type">BsonId</span> id = <span class="keyword">await</span> orders.InsertAsync(doc, ct);
+
+<span class="comment">// Bulk insert (single transaction)</span>
+<span class="type">List</span>&lt;<span class="type">BsonId</span>&gt; ids = orders.InsertBulk([doc1, doc2, doc3]);
+<span class="type">List</span>&lt;<span class="type">BsonId</span>&gt; ids = <span class="keyword">await</span> orders.InsertBulkAsync([doc1, doc2, doc3], ct);</code></pre>
     </section>
 
     <section>
@@ -67,6 +72,13 @@ engine.DropCollection(<span class="string">"orders"</span>);</code></pre>
       <pre><code><span class="keyword">foreach</span> (<span class="keyword">var</span> d <span class="keyword">in</span> orders.FindAll()) { ... }
 
 <span class="keyword">await foreach</span> (<span class="keyword">var</span> d <span class="keyword">in</span> orders.FindAllAsync(ct)) { ... }</code></pre>
+
+      <h3>Predicate filter</h3>
+      <pre><code><span class="comment">// Sync predicate filter</span>
+<span class="keyword">var</span> pending = orders.Find(d => d.GetString(<span class="string">"status"</span>) == <span class="string">"pending"</span>);
+
+<span class="comment">// Async predicate filter</span>
+<span class="keyword">await foreach</span> (<span class="keyword">var</span> d <span class="keyword">in</span> orders.FindAsync(d => d.GetDouble(<span class="string">"total"</span>) > <span class="number">100</span>, ct)) { ... }</code></pre>
 
       <h3>Zero-copy predicate scan</h3>
       <p>Use <code>BsonSpanReader</code> to filter directly on the raw bytes — no heap allocation per document:</p>
@@ -110,9 +122,17 @@ engine.DropCollection(<span class="string">"orders"</span>);</code></pre>
 <span class="keyword">bool</span> updated = orders.Update(id, newDoc);
 <span class="keyword">bool</span> deleted = orders.Delete(id);
 
-<span class="comment">// Async (via engine)</span>
-<span class="keyword">await</span> engine.UpdateAsync(<span class="string">"orders"</span>, id, newDoc, ct);
-<span class="keyword">await</span> engine.DeleteAsync(<span class="string">"orders"</span>, id, ct);</code></pre>
+<span class="comment">// Async (collection-level)</span>
+<span class="keyword">bool</span> updated = <span class="keyword">await</span> orders.UpdateAsync(id, newDoc, ct);
+<span class="keyword">bool</span> deleted = <span class="keyword">await</span> orders.DeleteAsync(id, ct);
+
+<span class="comment">// Bulk (single transaction)</span>
+<span class="keyword">int</span> updatedCount = orders.UpdateBulk([(id1, doc1), (id2, doc2)]);
+<span class="keyword">int</span> deletedCount = orders.DeleteBulk([id1, id2, id3]);
+
+<span class="comment">// Bulk async</span>
+<span class="keyword">int</span> updatedCount = <span class="keyword">await</span> orders.UpdateBulkAsync([(id1, doc1), (id2, doc2)], ct);
+<span class="keyword">int</span> deletedCount = <span class="keyword">await</span> orders.DeleteBulkAsync([id1, id2, id3], ct);</code></pre>
     </section>
 
     <section>
@@ -145,11 +165,24 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
           <tr><td><code>GetCollection(name)</code></td><td>Get existing collection or <code>null</code></td></tr>
           <tr><td><code>ListCollections()</code></td><td>List all collection names</td></tr>
           <tr><td><code>DropCollection(name)</code></td><td>Delete a collection and all its data</td></tr>
-          <tr><td><code>InsertAsync(collection, doc, ct)</code></td><td>Async insert returning <code>ValueTask&lt;BsonId&gt;</code></td></tr>
+          <tr><td><code>Insert(collection, doc)</code></td><td>Sync insert, returns <code>BsonId</code></td></tr>
+          <tr><td><code>InsertAsync(collection, doc, ct)</code></td><td>Async insert, returns <code>Task&lt;BsonId&gt;</code></td></tr>
+          <tr><td><code>InsertBulk(collection, docs)</code></td><td>Bulk insert (one transaction), returns <code>List&lt;BsonId&gt;</code></td></tr>
+          <tr><td><code>InsertBulkAsync(collection, docs, ct)</code></td><td>Async bulk insert, returns <code>Task&lt;List&lt;BsonId&gt;&gt;</code></td></tr>
+          <tr><td><code>FindById(collection, id)</code></td><td>Sync primary-key lookup</td></tr>
           <tr><td><code>FindByIdAsync(collection, id, ct)</code></td><td>Async primary-key lookup</td></tr>
+          <tr><td><code>FindAll(collection)</code></td><td>Sync full-collection scan</td></tr>
           <tr><td><code>FindAllAsync(collection, ct)</code></td><td>Async streaming <code>IAsyncEnumerable&lt;BsonDocument&gt;</code></td></tr>
+          <tr><td><code>Find(collection, predicate)</code></td><td>Sync predicate filter</td></tr>
+          <tr><td><code>FindAsync(collection, predicate, ct)</code></td><td>Async predicate filter as <code>IAsyncEnumerable</code></td></tr>
+          <tr><td><code>Update(collection, id, doc)</code></td><td>Sync update</td></tr>
           <tr><td><code>UpdateAsync(collection, id, doc, ct)</code></td><td>Async update</td></tr>
+          <tr><td><code>UpdateBulk(collection, updates)</code></td><td>Bulk update (one transaction), returns <code>int</code></td></tr>
+          <tr><td><code>UpdateBulkAsync(collection, updates, ct)</code></td><td>Async bulk update, returns <code>Task&lt;int&gt;</code></td></tr>
+          <tr><td><code>Delete(collection, id)</code></td><td>Sync delete</td></tr>
           <tr><td><code>DeleteAsync(collection, id, ct)</code></td><td>Async delete</td></tr>
+          <tr><td><code>DeleteBulk(collection, ids)</code></td><td>Bulk delete (one transaction), returns <code>int</code></td></tr>
+          <tr><td><code>DeleteBulkAsync(collection, ids, ct)</code></td><td>Async bulk delete, returns <code>Task&lt;int&gt;</code></td></tr>
         </tbody>
       </table>
 
@@ -161,10 +194,15 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
         <tbody>
           <tr><td><code>CreateDocument(fields, builder)</code></td><td><code>BsonDocument</code></td></tr>
           <tr><td><code>Insert(doc)</code></td><td><code>BsonId</code></td></tr>
+          <tr><td><code>InsertAsync(doc, ct)</code></td><td><code>Task&lt;BsonId&gt;</code></td></tr>
+          <tr><td><code>InsertBulk(docs)</code></td><td><code>List&lt;BsonId&gt;</code></td></tr>
+          <tr><td><code>InsertBulkAsync(docs, ct)</code></td><td><code>Task&lt;List&lt;BsonId&gt;&gt;</code></td></tr>
           <tr><td><code>FindById(id)</code></td><td><code>BsonDocument?</code></td></tr>
           <tr><td><code>FindByIdAsync(id, ct)</code></td><td><code>ValueTask&lt;BsonDocument?&gt;</code></td></tr>
           <tr><td><code>FindAll()</code></td><td><code>IEnumerable&lt;BsonDocument&gt;</code></td></tr>
           <tr><td><code>FindAllAsync(ct)</code></td><td><code>IAsyncEnumerable&lt;BsonDocument&gt;</code></td></tr>
+          <tr><td><code>Find(predicate)</code></td><td><code>IEnumerable&lt;BsonDocument&gt;</code></td></tr>
+          <tr><td><code>FindAsync(predicate, ct)</code></td><td><code>IAsyncEnumerable&lt;BsonDocument&gt;</code></td></tr>
           <tr><td><code>Scan(predicate)</code></td><td><code>IEnumerable&lt;BsonDocument&gt;</code> (zero-copy)</td></tr>
           <tr><td><code>QueryIndex(name, min, max)</code></td><td><code>IEnumerable&lt;BsonDocument&gt;</code></td></tr>
           <tr><td><code>VectorSearch(name, vector, k)</code></td><td><code>IEnumerable&lt;BsonDocument&gt;</code></td></tr>
@@ -172,7 +210,13 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
           <tr><td><code>Within(name, min, max)</code></td><td><code>IEnumerable&lt;BsonDocument&gt;</code></td></tr>
           <tr><td><code>Count()</code></td><td><code>int</code></td></tr>
           <tr><td><code>Update(id, doc)</code></td><td><code>bool</code></td></tr>
+          <tr><td><code>UpdateAsync(id, doc, ct)</code></td><td><code>Task&lt;bool&gt;</code></td></tr>
+          <tr><td><code>UpdateBulk(updates)</code></td><td><code>int</code></td></tr>
+          <tr><td><code>UpdateBulkAsync(updates, ct)</code></td><td><code>Task&lt;int&gt;</code></td></tr>
           <tr><td><code>Delete(id)</code></td><td><code>bool</code></td></tr>
+          <tr><td><code>DeleteAsync(id, ct)</code></td><td><code>Task&lt;bool&gt;</code></td></tr>
+          <tr><td><code>DeleteBulk(ids)</code></td><td><code>int</code></td></tr>
+          <tr><td><code>DeleteBulkAsync(ids, ct)</code></td><td><code>Task&lt;int&gt;</code></td></tr>
           <tr><td><code>CreateIndex / CreateVectorIndex / CreateSpatialIndex</code></td><td><code>void</code></td></tr>
           <tr><td><code>DropIndex(name)</code></td><td><code>bool</code></td></tr>
           <tr><td><code>ListIndexes()</code></td><td><code>IReadOnlyList&lt;string&gt;</code></td></tr>

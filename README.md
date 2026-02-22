@@ -338,7 +338,11 @@ var doc = orders.CreateDocument(
 BsonId id = orders.Insert(doc);
 
 // Async variant
-BsonId id = await engine.InsertAsync("orders", doc, ct);
+BsonId id = await orders.InsertAsync(doc, ct);
+
+// Bulk insert (single transaction)
+List<BsonId> ids = orders.InsertBulk([doc1, doc2, doc3]);
+List<BsonId> ids = await orders.InsertBulkAsync([doc1, doc2, doc3], ct);
 ```
 
 ### Read
@@ -351,6 +355,10 @@ BsonDocument? doc = await orders.FindByIdAsync(id, ct);
 // Full scan
 foreach (var d in orders.FindAll()) { ... }
 await foreach (var d in orders.FindAllAsync(ct)) { ... }
+
+// Predicate filter
+var pending = orders.Find(d => d.GetString("status") == "pending");
+await foreach (var d in orders.FindAsync(d => d.GetString("status") == "pending", ct)) { ... }
 
 // Zero-copy predicate scan (BsonSpanReader — no heap allocation per document)
 var pending = orders.Scan(reader =>
@@ -381,9 +389,23 @@ int total = orders.Count();
 bool updated = orders.Update(id, newDoc);
 bool deleted = orders.Delete(id);
 
+// Async (collection-level)
+bool updated = await orders.UpdateAsync(id, newDoc, ct);
+bool deleted = await orders.DeleteAsync(id, ct);
+
+// Bulk (single transaction)
+int updatedCount = orders.UpdateBulk([(id1, doc1), (id2, doc2)]);
+int deletedCount = orders.DeleteBulk([id1, id2, id3]);
+
+// Bulk async
+int updatedCount = await orders.UpdateBulkAsync([(id1, doc1), (id2, doc2)], ct);
+int deletedCount = await orders.DeleteBulkAsync([id1, id2, id3], ct);
+
 // or via engine shortcuts (async)
 await engine.UpdateAsync("orders", id, newDoc, ct);
 await engine.DeleteAsync("orders", id, ct);
+int u = await engine.UpdateBulkAsync("orders", [(id1, d1), (id2, d2)], ct);
+int d = await engine.DeleteBulkAsync("orders", [id1, id2], ct);
 ```
 
 ### Index Management

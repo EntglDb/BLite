@@ -252,6 +252,91 @@ public sealed class DynamicCollection : IDisposable
         return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap());
     }
 
+    /// <summary>
+    /// Inserts a BsonDocument into the collection asynchronously.
+    /// If the document has no _id field, one is auto-generated.
+    /// Returns the BsonId of the inserted document.
+    /// </summary>
+    public async Task<BsonId> InsertAsync(BsonDocument document, CancellationToken ct = default)
+    {
+        if (document == null) throw new ArgumentNullException(nameof(document));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return InsertCore(document, transaction);
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Inserts multiple BsonDocuments into the collection in a single transaction.
+    /// Returns the list of generated/existing BsonIds in insertion order.
+    /// </summary>
+    public List<BsonId> InsertBulk(IEnumerable<BsonDocument> documents)
+    {
+        if (documents == null) throw new ArgumentNullException(nameof(documents));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        _collectionLock.Wait();
+        try
+        {
+            var ids = new List<BsonId>();
+            foreach (var doc in documents)
+                ids.Add(InsertCore(doc, transaction));
+            return ids;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Inserts multiple BsonDocuments asynchronously in a single transaction.
+    /// Returns the list of generated/existing BsonIds in insertion order.
+    /// </summary>
+    public async Task<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+    {
+        if (documents == null) throw new ArgumentNullException(nameof(documents));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var ids = new List<BsonId>();
+            foreach (var doc in documents)
+            {
+                ct.ThrowIfCancellationRequested();
+                ids.Add(InsertCore(doc, transaction));
+            }
+            return ids;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
     #endregion
 
     #region Find
@@ -416,6 +501,29 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns documents matching the specified predicate.
+    /// </summary>
+    public IEnumerable<BsonDocument> Find(Func<BsonDocument, bool> predicate)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+        foreach (var doc in FindAll())
+            if (predicate(doc)) yield return doc;
+    }
+
+    /// <summary>
+    /// Asynchronously yields documents matching the specified predicate.
+    /// </summary>
+    public async IAsyncEnumerable<BsonDocument> FindAsync(Func<BsonDocument, bool> predicate, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+        await foreach (var doc in FindAllAsync(ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (predicate(doc)) yield return doc;
+        }
+    }
+
     #endregion
 
     #region Update
@@ -487,6 +595,182 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
+    /// <summary>
+    /// Updates a document by its BsonId asynchronously. Replaces the entire document.
+    /// </summary>
+    public async Task<bool> UpdateAsync(BsonId id, BsonDocument newDocument, CancellationToken ct = default)
+    {
+        if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var key = new IndexKey(id.ToBytes());
+            if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+                return false;
+
+            var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
+            DeleteSlot(oldLocation, transaction);
+
+            if (!newDocument.TryGetId(out _))
+                newDocument = PrependId(newDocument, id);
+
+            var docData = newDocument.RawData;
+            DocumentLocation newLocation;
+            if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
+            {
+                var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
+                if (pageId == 0) pageId = AllocateNewDataPage(transaction);
+                var slotIndex = InsertIntoPage(pageId, docData, transaction);
+                newLocation = new DocumentLocation(pageId, slotIndex);
+            }
+            else
+            {
+                throw new InvalidOperationException("Document too large for single page. Overflow not yet supported in DynamicCollection.");
+            }
+
+            _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
+            _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+
+            foreach (var (_, idx) in _secondaryIndexes)
+            {
+                if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
+                IndexInsert(idx, newDocument, newLocation, transaction);
+            }
+
+            return true;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Updates multiple documents by their BsonIds in a single transaction.
+    /// Returns the number of documents successfully updated.
+    /// </summary>
+    public int UpdateBulk(IEnumerable<(BsonId Id, BsonDocument Document)> updates)
+    {
+        if (updates == null) throw new ArgumentNullException(nameof(updates));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        _collectionLock.Wait();
+        try
+        {
+            var count = 0;
+            foreach (var (id, doc) in updates)
+            {
+                var key = new IndexKey(id.ToBytes());
+                if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+                    continue;
+
+                var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
+                DeleteSlot(oldLocation, transaction);
+
+                var newDoc = doc;
+                if (!newDoc.TryGetId(out _))
+                    newDoc = PrependId(newDoc, id);
+
+                var docData = newDoc.RawData;
+                if (docData.Length + SlotEntry.Size > _maxDocumentSizeForSinglePage)
+                    throw new InvalidOperationException("Document too large for single page.");
+
+                var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
+                if (pageId == 0) pageId = AllocateNewDataPage(transaction);
+                var slotIndex = InsertIntoPage(pageId, docData, transaction);
+                var newLocation = new DocumentLocation(pageId, slotIndex);
+
+                _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
+                _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+
+                foreach (var (_, idx) in _secondaryIndexes)
+                {
+                    if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
+                    IndexInsert(idx, newDoc, newLocation, transaction);
+                }
+
+                count++;
+            }
+            return count;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Updates multiple documents asynchronously in a single transaction.
+    /// Returns the number of documents successfully updated.
+    /// </summary>
+    public async Task<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
+    {
+        if (updates == null) throw new ArgumentNullException(nameof(updates));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var count = 0;
+            foreach (var (id, doc) in updates)
+            {
+                ct.ThrowIfCancellationRequested();
+                var key = new IndexKey(id.ToBytes());
+                if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+                    continue;
+
+                var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
+                DeleteSlot(oldLocation, transaction);
+
+                var newDoc = doc;
+                if (!newDoc.TryGetId(out _))
+                    newDoc = PrependId(newDoc, id);
+
+                var docData = newDoc.RawData;
+                if (docData.Length + SlotEntry.Size > _maxDocumentSizeForSinglePage)
+                    throw new InvalidOperationException("Document too large for single page.");
+
+                var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
+                if (pageId == 0) pageId = AllocateNewDataPage(transaction);
+                var slotIndex = InsertIntoPage(pageId, docData, transaction);
+                var newLocation = new DocumentLocation(pageId, slotIndex);
+
+                _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
+                _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+
+                foreach (var (_, idx) in _secondaryIndexes)
+                {
+                    if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
+                    IndexInsert(idx, newDoc, newLocation, transaction);
+                }
+
+                count++;
+            }
+            return count;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
     #endregion
 
     #region Delete
@@ -521,6 +805,131 @@ public sealed class DynamicCollection : IDisposable
             DeleteSlot(location, transaction);
 
             return true;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes a document by its BsonId asynchronously.
+    /// </summary>
+    public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
+    {
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var key = new IndexKey(id.ToBytes());
+            if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
+                return false;
+
+            var doc = ReadDocumentAt(location, transaction.TransactionId);
+            _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+            if (doc != null)
+            {
+                foreach (var (_, idx) in _secondaryIndexes)
+                    IndexDelete(idx, doc, location, transaction);
+            }
+
+            DeleteSlot(location, transaction);
+            return true;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes multiple documents by their BsonIds in a single transaction.
+    /// Returns the number of documents successfully deleted.
+    /// </summary>
+    public int DeleteBulk(IEnumerable<BsonId> ids)
+    {
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        _collectionLock.Wait();
+        try
+        {
+            var count = 0;
+            foreach (var id in ids)
+            {
+                var key = new IndexKey(id.ToBytes());
+                if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
+                    continue;
+
+                var doc = ReadDocumentAt(location, transaction.TransactionId);
+                _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+                if (doc != null)
+                {
+                    foreach (var (_, idx) in _secondaryIndexes)
+                        IndexDelete(idx, doc, location, transaction);
+                }
+
+                DeleteSlot(location, transaction);
+                count++;
+            }
+            return count;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes multiple documents asynchronously in a single transaction.
+    /// Returns the number of documents successfully deleted.
+    /// </summary>
+    public async Task<int> DeleteBulkAsync(IEnumerable<BsonId> ids, CancellationToken ct = default)
+    {
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var count = 0;
+            foreach (var id in ids)
+            {
+                ct.ThrowIfCancellationRequested();
+                var key = new IndexKey(id.ToBytes());
+                if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
+                    continue;
+
+                var doc = ReadDocumentAt(location, transaction.TransactionId);
+                _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+                if (doc != null)
+                {
+                    foreach (var (_, idx) in _secondaryIndexes)
+                        IndexDelete(idx, doc, location, transaction);
+                }
+
+                DeleteSlot(location, transaction);
+                count++;
+            }
+            return count;
         }
         catch
         {

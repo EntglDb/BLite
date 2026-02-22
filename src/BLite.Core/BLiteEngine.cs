@@ -352,6 +352,100 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         return result;
     }
 
+    /// <summary>
+    /// Inserts multiple documents and commits immediately.
+    /// Returns the list of generated/existing BsonIds in insertion order.
+    /// </summary>
+    public List<BsonId> InsertBulk(string collectionName, IEnumerable<BsonDocument> documents)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var ids = collection.InsertBulk(documents);
+        Commit();
+        return ids;
+    }
+
+    /// <summary>
+    /// Inserts multiple documents asynchronously and commits.
+    /// Returns the list of generated/existing BsonIds in insertion order.
+    /// </summary>
+    public async Task<List<BsonId>> InsertBulkAsync(string collectionName, IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var ids = await collection.InsertBulkAsync(documents, ct).ConfigureAwait(false);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return ids;
+    }
+
+    /// <summary>Returns documents in the named collection matching the specified predicate.</summary>
+    public IEnumerable<BsonDocument> Find(string collectionName, Func<BsonDocument, bool> predicate)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.Find(predicate);
+    }
+
+    /// <summary>Asynchronously yields documents in the named collection matching the specified predicate.</summary>
+    public IAsyncEnumerable<BsonDocument> FindAsync(string collectionName, Func<BsonDocument, bool> predicate, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.FindAsync(predicate, ct);
+    }
+
+    /// <summary>
+    /// Updates multiple documents and commits immediately.
+    /// Returns the number of documents successfully updated.
+    /// </summary>
+    public int UpdateBulk(string collectionName, IEnumerable<(BsonId Id, BsonDocument Document)> updates)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var count = collection.UpdateBulk(updates);
+        Commit();
+        return count;
+    }
+
+    /// <summary>
+    /// Updates multiple documents asynchronously and commits.
+    /// Returns the number of documents successfully updated.
+    /// </summary>
+    public async Task<int> UpdateBulkAsync(string collectionName, IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var count = await collection.UpdateBulkAsync(updates, ct).ConfigureAwait(false);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return count;
+    }
+
+    /// <summary>
+    /// Deletes multiple documents and commits immediately.
+    /// Returns the number of documents successfully deleted.
+    /// </summary>
+    public int DeleteBulk(string collectionName, IEnumerable<BsonId> ids)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var count = collection.DeleteBulk(ids);
+        Commit();
+        return count;
+    }
+
+    /// <summary>
+    /// Deletes multiple documents asynchronously and commits.
+    /// Returns the number of documents successfully deleted.
+    /// </summary>
+    public async Task<int> DeleteBulkAsync(string collectionName, IEnumerable<BsonId> ids, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        var count = await collection.DeleteBulkAsync(ids, ct).ConfigureAwait(false);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return count;
+    }
+
     #endregion
 
     #region Disposal
