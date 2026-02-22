@@ -1,6 +1,8 @@
 # ⚡ BLite
 ### High-Performance BSON Database Engine for .NET 10
 
+[![NuGet](https://img.shields.io/nuget/v/BLite?label=nuget&color=red)](https://www.nuget.org/packages/BLite)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/BLite?label=downloads)](https://www.nuget.org/packages/BLite)
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-.NET%2010-purple)
@@ -243,6 +245,8 @@ BLite supports standard .NET Data Annotations for mapping and validation:
 
 ## 📚 Documentation
 
+📖 **[Official Documentation → blitedb.com/docs/getting-started](https://blitedb.com/docs/getting-started)**
+
 For in-depth technical details, see the complete specification documents:
 
 - **[RFC.md](RFC.md)** - Full architectural specification covering storage engine, indexing, transactions, WAL protocol, and query processing
@@ -470,6 +474,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
 - ✅ **Async I/O**: True async reads and writes — `FindByIdAsync`, `FindAllAsync` (`IAsyncEnumerable<T>`), `ToListAsync`/`ToArrayAsync`/`CountAsync`/`AnyAsync`/`AllAsync`/`FirstOrDefaultAsync`/`SingleOrDefaultAsync` for LINQ pipelines, `SaveChangesAsync`. `CancellationToken` propagates to `RandomAccess.ReadAsync` (IOCP on Windows).
 - ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
+- ✅ **Projection Push-down**: SELECT (and WHERE+SELECT) lambdas compile to a single-pass raw-BSON reader — `T` is never instantiated. `IBLiteQueryable<T>` preserves the async chain across all LINQ operators.
 
 ## 🔮 Future Vision
 
@@ -482,7 +487,6 @@ We are actively building the core. Here is where we stand:
 - **Internal Dispatcher**: Keeps specialized indices updated automatically via CDC.
 
 ### 3. Performance & Optimization
-- **Projection Engine**: Read only specific fields from disk (via BSON offsets) without full document deserialization.
 - **Portability**: Evaluate `.netstandard2.1` support for broader compatibility (Unity, MAUI, etc.).
 
 ---
