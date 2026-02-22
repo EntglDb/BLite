@@ -15,87 +15,105 @@
       "priceCurrency": "USD"
     },
     "keywords": "embedded database, BSON, .NET, zero allocation, ACID, CDC, NoSQL"
-  }</script><script type="module" async="" crossorigin="" src="/assets/app-b_-VbZ7y.js"></script><link rel="stylesheet" crossorigin="" href="/assets/app-Dn3sjlTS.css"></head><body><div id="app" data-server-rendered="true"><div class="app-layout" data-v-94ca611f=""><header class="main-header glass-panel" data-v-94ca611f=""><div class="container header-content" data-v-94ca611f=""><a href="/" class="logo-link" data-v-94ca611f=""><img src="/icon.svg" alt="BLite" class="logo-img" data-v-94ca611f=""><div class="logo-text" data-v-94ca611f="">BLite<span class="dot" data-v-94ca611f="">.</span></div></a><nav data-v-94ca611f=""><a href="/" class="" data-v-94ca611f="">Home</a><a href="/docs" class="router-link-active" data-v-94ca611f="">Docs</a><a href="/comparisons" class="" data-v-94ca611f="">Comparisons</a><a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link" data-v-94ca611f="">GitHub ↗</a></nav></div></header><main data-v-94ca611f=""><div class="docs-layout" data-v-94ca611f="" data-v-a567941b=""><aside class="docs-sidebar" data-v-a567941b=""><div class="sidebar-header" data-v-a567941b=""><h2 data-v-a567941b="">Documentation</h2></div><nav class="sidebar-nav" data-v-a567941b=""><!--[--><a href="/docs/getting-started" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🚀</span><span class="nav-label" data-v-a567941b="">Getting Started</span></a><a href="/docs/installation" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">📦</span><span class="nav-label" data-v-a567941b="">Installation</span></a><a href="/docs/transactions" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🔄</span><span class="nav-label" data-v-a567941b="">Transactions &amp; Async</span></a><a href="/docs/crud" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">✏️</span><span class="nav-label" data-v-a567941b="">CRUD Operations</span></a><a aria-current="page" href="/docs/querying" class="router-link-active router-link-exact-active active nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🔍</span><span class="nav-label" data-v-a567941b="">Querying</span></a><a href="/docs/generators" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🤖</span><span class="nav-label" data-v-a567941b="">Source Generators</span></a><a href="/docs/cdc" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">📡</span><span class="nav-label" data-v-a567941b="">Change Data Capture</span></a><a href="/docs/spatial" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🌍</span><span class="nav-label" data-v-a567941b="">Spatial Indexing</span></a><a href="/docs/architecture" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🏗️</span><span class="nav-label" data-v-a567941b="">Architecture</span></a><a href="/docs/converters" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🆔</span><span class="nav-label" data-v-a567941b="">Custom ID Converters</span></a><a href="/docs/benchmarks" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">⚡</span><span class="nav-label" data-v-a567941b="">Benchmarks</span></a><a href="/docs/dynamic-api" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🔌</span><span class="nav-label" data-v-a567941b="">Schema-less API</span></a><!--]--></nav></aside><main class="docs-content" data-v-a567941b=""><div class="container" data-v-a567941b=""><div class="doc-page" data-v-a567941b="" data-v-4e5bbdf8=""><h1 data-v-4e5bbdf8="">🔍 Querying</h1><p class="lead" data-v-4e5bbdf8="">Master BLite's powerful LINQ-based query engine with automatic index optimization.</p><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Basic Queries</h2><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="keyword" data-v-4e5bbdf8="">var</span> results = users.AsQueryable()
-    .Where(u =&gt; u.Age &gt; <span class="number" data-v-4e5bbdf8="">25</span>)
+  }</script><script type="module" async="" crossorigin="" src="/assets/app-DDrgXac2.js"></script><link rel="stylesheet" crossorigin="" href="/assets/app-DwHxgPD0.css"></head><body><div id="app" data-server-rendered="true"><div class="app-layout" data-v-94ca611f=""><header class="main-header glass-panel" data-v-94ca611f=""><div class="container header-content" data-v-94ca611f=""><a href="/" class="logo-link" data-v-94ca611f=""><img src="/icon.svg" alt="BLite" class="logo-img" data-v-94ca611f=""><div class="logo-text" data-v-94ca611f="">BLite<span class="dot" data-v-94ca611f="">.</span></div></a><nav data-v-94ca611f=""><a href="/" class="" data-v-94ca611f="">Home</a><a href="/docs" class="router-link-active" data-v-94ca611f="">Docs</a><a href="/comparisons" class="" data-v-94ca611f="">Comparisons</a><a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link" data-v-94ca611f="">GitHub ↗</a></nav></div></header><main data-v-94ca611f=""><div class="docs-layout" data-v-94ca611f="" data-v-a567941b=""><aside class="docs-sidebar" data-v-a567941b=""><div class="sidebar-header" data-v-a567941b=""><h2 data-v-a567941b="">Documentation</h2></div><nav class="sidebar-nav" data-v-a567941b=""><!--[--><a href="/docs/getting-started" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🚀</span><span class="nav-label" data-v-a567941b="">Getting Started</span></a><a href="/docs/installation" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">📦</span><span class="nav-label" data-v-a567941b="">Installation</span></a><a href="/docs/transactions" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🔄</span><span class="nav-label" data-v-a567941b="">Transactions &amp; Async</span></a><a href="/docs/crud" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">✏️</span><span class="nav-label" data-v-a567941b="">CRUD Operations</span></a><a aria-current="page" href="/docs/querying" class="router-link-active router-link-exact-active active nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🔍</span><span class="nav-label" data-v-a567941b="">Querying</span></a><a href="/docs/generators" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🤖</span><span class="nav-label" data-v-a567941b="">Source Generators</span></a><a href="/docs/cdc" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">📡</span><span class="nav-label" data-v-a567941b="">Change Data Capture</span></a><a href="/docs/spatial" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🌍</span><span class="nav-label" data-v-a567941b="">Spatial Indexing</span></a><a href="/docs/architecture" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🏗️</span><span class="nav-label" data-v-a567941b="">Architecture</span></a><a href="/docs/converters" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🆔</span><span class="nav-label" data-v-a567941b="">Custom ID Converters</span></a><a href="/docs/benchmarks" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">⚡</span><span class="nav-label" data-v-a567941b="">Benchmarks</span></a><a href="/docs/dynamic-api" class="nav-item" data-v-a567941b=""><span class="nav-icon" data-v-a567941b="">🔌</span><span class="nav-label" data-v-a567941b="">Schema-less API</span></a><!--]--></nav></aside><main class="docs-content" data-v-a567941b=""><div class="container" data-v-a567941b=""><div class="doc-page" data-v-a567941b="" data-v-efedd259=""><h1 data-v-efedd259="">🔍 Querying</h1><p class="lead" data-v-efedd259="">Master BLite's powerful LINQ-based query engine with automatic index optimization.</p><section data-v-efedd259=""><h2 data-v-efedd259="">Basic Queries</h2><pre data-v-efedd259=""><code data-v-efedd259=""><span class="keyword" data-v-efedd259="">var</span> results = users.AsQueryable()
+    .Where(u =&gt; u.Age &gt; <span class="number" data-v-efedd259="">25</span>)
     .AsEnumerable();
 
-<span class="keyword" data-v-4e5bbdf8="">foreach</span> (<span class="keyword" data-v-4e5bbdf8="">var</span> user <span class="keyword" data-v-4e5bbdf8="">in</span> results)
+<span class="keyword" data-v-efedd259="">foreach</span> (<span class="keyword" data-v-efedd259="">var</span> user <span class="keyword" data-v-efedd259="">in</span> results)
 {
     Console.WriteLine(user.Name);
-}</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Filtering</h2><h3 data-v-4e5bbdf8="">Comparison Operators</h3><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="comment" data-v-4e5bbdf8="">// Equality</span>
-.Where(u =&gt; u.Name == <span class="string" data-v-4e5bbdf8="">"Alice"</span>)
+}</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">Filtering</h2><h3 data-v-efedd259="">Comparison Operators</h3><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// Equality</span>
+.Where(u =&gt; u.Name == <span class="string" data-v-efedd259="">"Alice"</span>)
 
-<span class="comment" data-v-4e5bbdf8="">// Greater than / Less than</span>
-.Where(u =&gt; u.Age &gt; <span class="number" data-v-4e5bbdf8="">30</span>)
-.Where(u =&gt; u.Age &lt;= <span class="number" data-v-4e5bbdf8="">50</span>)
+<span class="comment" data-v-efedd259="">// Greater than / Less than</span>
+.Where(u =&gt; u.Age &gt; <span class="number" data-v-efedd259="">30</span>)
+.Where(u =&gt; u.Age &lt;= <span class="number" data-v-efedd259="">50</span>)
 
-<span class="comment" data-v-4e5bbdf8="">// Range</span>
-.Where(u =&gt; u.Age &gt;= <span class="number" data-v-4e5bbdf8="">18</span> &amp;&amp; u.Age &lt;= <span class="number" data-v-4e5bbdf8="">65</span>)</code></pre><h3 data-v-4e5bbdf8="">String Operations</h3><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="comment" data-v-4e5bbdf8="">// StartsWith (optimized with B-Tree index)</span>
-.Where(u =&gt; u.Name.StartsWith(<span class="string" data-v-4e5bbdf8="">"A"</span>))
+<span class="comment" data-v-efedd259="">// Range</span>
+.Where(u =&gt; u.Age &gt;= <span class="number" data-v-efedd259="">18</span> &amp;&amp; u.Age &lt;= <span class="number" data-v-efedd259="">65</span>)</code></pre><h3 data-v-efedd259="">String Operations</h3><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// StartsWith (optimized with B-Tree index)</span>
+.Where(u =&gt; u.Name.StartsWith(<span class="string" data-v-efedd259="">"A"</span>))
 
-<span class="comment" data-v-4e5bbdf8="">// Contains (full scan)</span>
-.Where(u =&gt; u.Email.Contains(<span class="string" data-v-4e5bbdf8="">"@example.com"</span>))
+<span class="comment" data-v-efedd259="">// Contains (full scan)</span>
+.Where(u =&gt; u.Email.Contains(<span class="string" data-v-efedd259="">"@example.com"</span>))
 
-<span class="comment" data-v-4e5bbdf8="">// Case-insensitive</span>
-.Where(u =&gt; u.Name.ToLower() == <span class="string" data-v-4e5bbdf8="">"alice"</span>)</code></pre><h3 data-v-4e5bbdf8="">Logical Operators</h3><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="comment" data-v-4e5bbdf8="">// AND</span>
-.Where(u =&gt; u.Age &gt; <span class="number" data-v-4e5bbdf8="">25</span> &amp;&amp; u.Name.StartsWith(<span class="string" data-v-4e5bbdf8="">"A"</span>))
+<span class="comment" data-v-efedd259="">// Case-insensitive</span>
+.Where(u =&gt; u.Name.ToLower() == <span class="string" data-v-efedd259="">"alice"</span>)</code></pre><h3 data-v-efedd259="">Logical Operators</h3><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// AND</span>
+.Where(u =&gt; u.Age &gt; <span class="number" data-v-efedd259="">25</span> &amp;&amp; u.Name.StartsWith(<span class="string" data-v-efedd259="">"A"</span>))
 
-<span class="comment" data-v-4e5bbdf8="">// OR</span>
-.Where(u =&gt; u.Age &lt; <span class="number" data-v-4e5bbdf8="">18</span> || u.Age &gt; <span class="number" data-v-4e5bbdf8="">65</span>)
+<span class="comment" data-v-efedd259="">// OR</span>
+.Where(u =&gt; u.Age &lt; <span class="number" data-v-efedd259="">18</span> || u.Age &gt; <span class="number" data-v-efedd259="">65</span>)
 
-<span class="comment" data-v-4e5bbdf8="">// NOT</span>
-.Where(u =&gt; !(u.Age &gt;= <span class="number" data-v-4e5bbdf8="">18</span> &amp;&amp; u.Age &lt;= <span class="number" data-v-4e5bbdf8="">65</span>))</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Sorting</h2><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="comment" data-v-4e5bbdf8="">// Ascending</span>
+<span class="comment" data-v-efedd259="">// NOT</span>
+.Where(u =&gt; !(u.Age &gt;= <span class="number" data-v-efedd259="">18</span> &amp;&amp; u.Age &lt;= <span class="number" data-v-efedd259="">65</span>))</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">Sorting</h2><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// Ascending</span>
 .OrderBy(u =&gt; u.Age)
 
-<span class="comment" data-v-4e5bbdf8="">// Descending</span>
+<span class="comment" data-v-efedd259="">// Descending</span>
 .OrderByDescending(u =&gt; u.Name)
 
-<span class="comment" data-v-4e5bbdf8="">// Multiple sort keys</span>
+<span class="comment" data-v-efedd259="">// Multiple sort keys</span>
 .OrderBy(u =&gt; u.Age)
-.ThenBy(u =&gt; u.Name)</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Pagination</h2><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="keyword" data-v-4e5bbdf8="">int</span> page = <span class="number" data-v-4e5bbdf8="">2</span>;
-<span class="keyword" data-v-4e5bbdf8="">int</span> pageSize = <span class="number" data-v-4e5bbdf8="">10</span>;
+.ThenBy(u =&gt; u.Name)</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">Pagination</h2><pre data-v-efedd259=""><code data-v-efedd259=""><span class="keyword" data-v-efedd259="">int</span> page = <span class="number" data-v-efedd259="">2</span>;
+<span class="keyword" data-v-efedd259="">int</span> pageSize = <span class="number" data-v-efedd259="">10</span>;
 
-<span class="keyword" data-v-4e5bbdf8="">var</span> results = users.AsQueryable()
+<span class="keyword" data-v-efedd259="">var</span> results = users.AsQueryable()
     .OrderBy(u =&gt; u.Id)
-    .Skip((page - <span class="number" data-v-4e5bbdf8="">1</span>) * pageSize)
+    .Skip((page - <span class="number" data-v-efedd259="">1</span>) * pageSize)
     .Take(pageSize)
-    .AsEnumerable();</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Projection</h2><h3 data-v-4e5bbdf8="">Select Specific Fields</h3><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="keyword" data-v-4e5bbdf8="">var</span> names = users.AsQueryable()
+    .AsEnumerable();</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">Projection</h2><h3 data-v-efedd259="">Select Specific Fields</h3><pre data-v-efedd259=""><code data-v-efedd259=""><span class="keyword" data-v-efedd259="">var</span> names = users.AsQueryable()
     .Select(u =&gt; u.Name)
     .AsEnumerable();
 
-<span class="comment" data-v-4e5bbdf8="">// Anonymous types</span>
-<span class="keyword" data-v-4e5bbdf8="">var</span> summary = users.AsQueryable()
-    .Select(u =&gt; <span class="keyword" data-v-4e5bbdf8="">new</span> { u.Name, u.Age })
-    .AsEnumerable();</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Aggregations</h2><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="comment" data-v-4e5bbdf8="">// Count</span>
-<span class="keyword" data-v-4e5bbdf8="">var</span> total = users.AsQueryable().Count();
-<span class="keyword" data-v-4e5bbdf8="">var</span> adults = users.AsQueryable().Count(u =&gt; u.Age &gt;= <span class="number" data-v-4e5bbdf8="">18</span>);
+<span class="comment" data-v-efedd259="">// Anonymous types</span>
+<span class="keyword" data-v-efedd259="">var</span> summary = users.AsQueryable()
+    .Select(u =&gt; <span class="keyword" data-v-efedd259="">new</span> { u.Name, u.Age })
+    .AsEnumerable();</code></pre><h3 data-v-efedd259="">Push-down Projection <span style="font-size:.75em;color:#06b6d4;font-weight:600" data-v-efedd259="">NEW in v1.5.0</span></h3><p data-v-efedd259="">When a query contains only scalar-field projections, BLite compiles the SELECT lambda into a single-pass raw-BSON reader. The source type <code data-v-efedd259="">T</code> is <strong data-v-efedd259="">never instantiated</strong> — only the requested bytes are read off the page.</p><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// Only Name and Age bytes are read — User is never allocated</span>
+<span class="keyword" data-v-efedd259="">var</span> dtos = users.AsQueryable()
+    .Select(u =&gt; <span class="keyword" data-v-efedd259="">new</span> UserDto(u.Name, u.Age))
+    .ToList();
 
-<span class="comment" data-v-4e5bbdf8="">// Sum, Min, Max, Average</span>
-<span class="keyword" data-v-4e5bbdf8="">var</span> totalAge = users.AsQueryable().Sum(u =&gt; u.Age);
-<span class="keyword" data-v-4e5bbdf8="">var</span> youngest = users.AsQueryable().Min(u =&gt; u.Age);
-<span class="keyword" data-v-4e5bbdf8="">var</span> oldest = users.AsQueryable().Max(u =&gt; u.Age);
-<span class="keyword" data-v-4e5bbdf8="">var</span> avgAge = users.AsQueryable().Average(u =&gt; u.Age);</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">GroupBy</h2><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="keyword" data-v-4e5bbdf8="">var</span> byAge = users.AsQueryable()
+<span class="comment" data-v-efedd259="">// WHERE + SELECT: both evaluated in a single BSON pass</span>
+<span class="keyword" data-v-efedd259="">var</span> adults = users.AsQueryable()
+    .Where(u =&gt; u.Age &gt;= <span class="number" data-v-efedd259="">18</span>)
+    .Select(u =&gt; <span class="keyword" data-v-efedd259="">new</span> { u.Name, u.Age })
+    .ToList();</code></pre><div class="info-box" data-v-efedd259=""><strong data-v-efedd259="">⚡ When push-down fires:</strong> SELECT with scalar fields only, with or without a WHERE clause. Queries that include <code data-v-efedd259="">OrderBy</code> / <code data-v-efedd259="">Take</code> / <code data-v-efedd259="">Skip</code> <em data-v-efedd259="">after</em> the projection still benefit — the ordering/paging is applied on the already-projected <code data-v-efedd259="">IEnumerable&lt;TResult&gt;</code>. Complex/nested fields (e.g. <code data-v-efedd259="">x.Address</code>) automatically fall back to the standard path.</div></section><section data-v-efedd259=""><h2 data-v-efedd259="">Async LINQ <span style="font-size:.75em;color:#06b6d4;font-weight:600" data-v-efedd259="">v1.4.0+</span></h2><p data-v-efedd259=""><code data-v-efedd259="">AsQueryable()</code> returns <code data-v-efedd259="">IBLiteQueryable&lt;T&gt;</code>, which preserves the async chain across all LINQ operators.</p><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// Async terminal operators</span>
+<span class="keyword" data-v-efedd259="">var</span> list  = <span class="keyword" data-v-efedd259="">await</span> users.AsQueryable().Where(u =&gt; u.Age &gt; <span class="number" data-v-efedd259="">25</span>).ToListAsync();
+<span class="keyword" data-v-efedd259="">var</span> count = <span class="keyword" data-v-efedd259="">await</span> users.AsQueryable().CountAsync();
+<span class="keyword" data-v-efedd259="">var</span> any   = <span class="keyword" data-v-efedd259="">await</span> users.AsQueryable().AnyAsync(u =&gt; u.Active);
+
+<span class="comment" data-v-efedd259="">// Async streaming via IAsyncEnumerable&lt;T&gt;</span>
+<span class="keyword" data-v-efedd259="">await foreach</span> (<span class="keyword" data-v-efedd259="">var</span> user <span class="keyword" data-v-efedd259="">in</span> users.AsQueryable().Where(u =&gt; u.Age &gt; <span class="number" data-v-efedd259="">25</span>).AsAsyncEnumerable())
+{
+    Console.WriteLine(user.Name);
+}</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">Aggregations</h2><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// Count</span>
+<span class="keyword" data-v-efedd259="">var</span> total = users.AsQueryable().Count();
+<span class="keyword" data-v-efedd259="">var</span> adults = users.AsQueryable().Count(u =&gt; u.Age &gt;= <span class="number" data-v-efedd259="">18</span>);
+
+<span class="comment" data-v-efedd259="">// Sum, Min, Max, Average</span>
+<span class="keyword" data-v-efedd259="">var</span> totalAge = users.AsQueryable().Sum(u =&gt; u.Age);
+<span class="keyword" data-v-efedd259="">var</span> youngest = users.AsQueryable().Min(u =&gt; u.Age);
+<span class="keyword" data-v-efedd259="">var</span> oldest = users.AsQueryable().Max(u =&gt; u.Age);
+<span class="keyword" data-v-efedd259="">var</span> avgAge = users.AsQueryable().Average(u =&gt; u.Age);</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">GroupBy</h2><pre data-v-efedd259=""><code data-v-efedd259=""><span class="keyword" data-v-efedd259="">var</span> byAge = users.AsQueryable()
     .GroupBy(u =&gt; u.Age)
-    .Select(g =&gt; <span class="keyword" data-v-4e5bbdf8="">new</span>
+    .Select(g =&gt; <span class="keyword" data-v-efedd259="">new</span>
     {
         Age = g.Key,
         Count = g.Count(),
         Names = g.Select(u =&gt; u.Name).ToList()
     })
-    .AsEnumerable();</code></pre></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Index Optimization</h2><p data-v-4e5bbdf8="">BLite automatically uses B-Tree indexes when available:</p><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="comment" data-v-4e5bbdf8="">// Create an index on Age</span>
+    .AsEnumerable();</code></pre></section><section data-v-efedd259=""><h2 data-v-efedd259="">Index Optimization</h2><p data-v-efedd259="">BLite automatically uses B-Tree indexes when available:</p><pre data-v-efedd259=""><code data-v-efedd259=""><span class="comment" data-v-efedd259="">// Create an index on Age</span>
 users.EnsureIndex(u =&gt; u.Age);
 
-<span class="comment" data-v-4e5bbdf8="">// This query now uses the index</span>
-<span class="keyword" data-v-4e5bbdf8="">var</span> results = users.AsQueryable()
-    .Where(u =&gt; u.Age &gt; <span class="number" data-v-4e5bbdf8="">30</span>) <span class="comment" data-v-4e5bbdf8="">// ← Index hit!</span>
-    .AsEnumerable();</code></pre><div class="info-box" data-v-4e5bbdf8=""><strong data-v-4e5bbdf8="">💡 Tip:</strong> Use <code data-v-4e5bbdf8="">.Explain()</code> to see query execution plans and verify index usage.</div></section><section data-v-4e5bbdf8=""><h2 data-v-4e5bbdf8="">Advanced Examples</h2><h3 data-v-4e5bbdf8="">Complex Filter</h3><pre data-v-4e5bbdf8=""><code data-v-4e5bbdf8=""><span class="keyword" data-v-4e5bbdf8="">var</span> results = users.AsQueryable()
+<span class="comment" data-v-efedd259="">// This query now uses the index</span>
+<span class="keyword" data-v-efedd259="">var</span> results = users.AsQueryable()
+    .Where(u =&gt; u.Age &gt; <span class="number" data-v-efedd259="">30</span>) <span class="comment" data-v-efedd259="">// ← Index hit!</span>
+    .AsEnumerable();</code></pre><div class="info-box" data-v-efedd259=""><strong data-v-efedd259="">💡 Tip:</strong> Use <code data-v-efedd259="">.Explain()</code> to see query execution plans and verify index usage.</div></section><section data-v-efedd259=""><h2 data-v-efedd259="">Advanced Examples</h2><h3 data-v-efedd259="">Complex Filter</h3><pre data-v-efedd259=""><code data-v-efedd259=""><span class="keyword" data-v-efedd259="">var</span> results = users.AsQueryable()
     .Where(u =&gt; 
-        u.Age &gt;= <span class="number" data-v-4e5bbdf8="">25</span> &amp;&amp; 
-        u.Age &lt;= <span class="number" data-v-4e5bbdf8="">50</span> &amp;&amp; 
-        u.Name.StartsWith(<span class="string" data-v-4e5bbdf8="">"A"</span>) &amp;&amp;
-        u.Email.Contains(<span class="string" data-v-4e5bbdf8="">"@company.com"</span>)
+        u.Age &gt;= <span class="number" data-v-efedd259="">25</span> &amp;&amp; 
+        u.Age &lt;= <span class="number" data-v-efedd259="">50</span> &amp;&amp; 
+        u.Name.StartsWith(<span class="string" data-v-efedd259="">"A"</span>) &amp;&amp;
+        u.Email.Contains(<span class="string" data-v-efedd259="">"@company.com"</span>)
     )
     .OrderBy(u =&gt; u.Age)
     .ThenBy(u =&gt; u.Name)
-    .Take(<span class="number" data-v-4e5bbdf8="">100</span>)
+    .Take(<span class="number" data-v-efedd259="">100</span>)
     .AsEnumerable();</code></pre></section></div></div></main></div></main><footer class="main-footer" data-v-94ca611f=""><div class="container" data-v-94ca611f=""><p data-v-94ca611f="">© 2026 BLite Project. Open Source (MIT).</p><p class="tagline" data-v-94ca611f="">"Sky is Blite, no Clouds today."</p></div></footer></div></div></body></html>
