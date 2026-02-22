@@ -4,7 +4,7 @@ using System.Linq.Expressions;
 
 namespace BLite.Core.Query;
 
-internal class BTreeQueryable<T> : IBLiteQueryable<T>
+internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
 {
     public BTreeQueryable(IQueryProvider provider, Expression expression)
     {

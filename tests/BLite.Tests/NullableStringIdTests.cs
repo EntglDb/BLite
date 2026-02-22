@@ -9,7 +9,7 @@ using BLite.Core.Storage;
 using BLite.Core.Collections;
 using BLite.Shared;
 
-namespace BLite.Tests.NullableStringId
+namespace BLite.Tests
 {
     /// <summary>
     /// Tests for entities with nullable string Id (like UuidEntity scenario from CleanCore)

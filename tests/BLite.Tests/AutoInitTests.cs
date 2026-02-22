@@ -8,7 +8,7 @@ using BLite.Core.Storage;
 using BLite.Core.Collections;
 using BLite.Shared;
 
-namespace BLite.Tests.AutoInit
+namespace BLite.Tests
 {
     public class AutoInitTests : System.IDisposable
     {
