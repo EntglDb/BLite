@@ -1690,6 +1690,24 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     public IEnumerable<T> Find(Func<T, bool> predicate)
         => FindAll(predicate);
 
+    /// <summary>
+    /// Async predicate scan over the full collection.
+    /// Iterates <see cref="FindAllAsync"/> and yields each entity that satisfies
+    /// <paramref name="predicate"/>. CancellationToken is propagated to the
+    /// underlying page reads.
+    /// </summary>
+    public async IAsyncEnumerable<T> FindAsync(
+        Func<T, bool> predicate,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var entity in FindAllAsync(ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (predicate(entity))
+                yield return entity;
+        }
+    }
+
     #endregion
 
     /// <summary>

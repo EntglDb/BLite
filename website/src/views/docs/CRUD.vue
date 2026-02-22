@@ -56,6 +56,12 @@ users.InsertMany(batch);</code></pre>
     Process(user);
 }</code></pre>
 
+      <h3>Find — Async Predicate Scan</h3>
+      <pre><code><span class="keyword">await foreach</span> (<span class="keyword">var</span> user <span class="keyword">in</span> users.FindAsync(u => u.Age >= <span class="number">18</span>, ct))
+{
+    Console.WriteLine(user.Name);
+}</code></pre>
+
       <h3>Query with Filter</h3>
       <pre><code><span class="keyword">var</span> adults = users.AsQueryable()
     .Where(u => u.Age >= <span class="number">18</span>)

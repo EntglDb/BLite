@@ -145,6 +145,10 @@ var order = await db.Orders.FindByIdAsync(id, ct);
 await foreach (var order in db.Orders.FindAllAsync(ct))
     Process(order);
 
+// FindAsync — async predicate scan (IAsyncEnumerable)
+await foreach (var order in db.Orders.FindAsync(o => o.Status == "shipped", ct))
+    Process(order);
+
 // LINQ — full async materialisation
 var shipped = await db.Orders
     .AsQueryable()
@@ -173,6 +177,7 @@ await db.SaveChangesAsync(ct);
 |:-------|:------------|
 | `FindByIdAsync(id, ct)` | Primary-key lookup via B-Tree; returns `ValueTask<T?>` |
 | `FindAllAsync(ct)` | Full collection streaming; returns `IAsyncEnumerable<T>` |
+| `FindAsync(predicate, ct)` | Async predicate scan; returns `IAsyncEnumerable<T>` |
 | `AsQueryable().ToListAsync(ct)` | LINQ pipeline materialized as `Task<List<T>>` |
 | `AsQueryable().ToArrayAsync(ct)` | LINQ pipeline materialized as `Task<T[]>` |
 | `AsQueryable().FirstOrDefaultAsync(ct)` | First match or `null` |
