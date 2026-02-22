@@ -80,7 +80,7 @@
         <li><strong>Collections:</strong> <code>List&lt;T&gt;</code>, <code>T[]</code>, <code>Dictionary&lt;string, T&gt;</code></li>
         <li><strong>BLite Types:</strong> <code>ObjectId</code>, <code>BsonDocument</code></li>
         <li><strong>Nested Objects:</strong> Automatic recursive mapping</li>
-        <li><strong>Enums:</strong> Serialized as integers or strings</li>
+        <li><strong>Enums:</strong> Serialized as their underlying integer type (<code>int</code>, <code>byte</code>, <code>long</code>, etc.); nullable enums and collections of enums (<code>List&lt;TEnum&gt;</code>, <code>TEnum[]</code>) are fully supported</li>
       </ul>
     </section>
 
@@ -170,6 +170,8 @@
       <div class="info-box success">
         <strong>✨ Recent Improvements (v1.3.0 – v1.5.0):</strong>
         <ul>
+          <li>✅ <strong>v1.6.1</strong> — Full enum support in Source Generator: enum properties (<code>int</code>/<code>byte</code>/<code>long</code> underlying types), nullable enums, and collections of enums (<code>List&lt;TEnum&gt;</code>, <code>TEnum[]</code>)</li>
+          <li>✅ <strong>v1.6.0</strong> — <code>RegisterKeys</code> / <code>GetKeyMap</code> exposed publicly on <code>BLiteEngine</code> for external field-name synchronization</li>
           <li>✅ <strong>v1.5.0</strong> — Projection push-down: <code>.Select(x =&gt; new Dto(x.F1, x.F2))</code> compiles to a single-pass BSON reader — <code>T</code> is never allocated</li>
           <li>✅ <strong>v1.5.0</strong> — WHERE + SELECT combined push-down evaluated in one BSON pass</li>
           <li>✅ <strong>v1.5.0</strong> — <code>IBLiteQueryable&lt;T&gt;</code> preserves async LINQ chain across all operators; <code>AsAsyncEnumerable()</code> extension</li>

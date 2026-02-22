@@ -161,6 +161,8 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
           <tr><th>Method</th><th>Description</th></tr>
         </thead>
         <tbody>
+          <tr><td><code>RegisterKeys(fieldNames)</code></td><td>Pre-register field-name strings into the engine's shared dictionary (for cross-context sync)</td></tr>
+          <tr><td><code>GetKeyMap()</code></td><td>Return the current field-name dictionary (<code>IReadOnlyDictionary&lt;string, int&gt;</code>) for external consumers</td></tr>
           <tr><td><code>GetOrCreateCollection(name, idType)</code></td><td>Open or create a <code>DynamicCollection</code></td></tr>
           <tr><td><code>GetCollection(name)</code></td><td>Get existing collection or <code>null</code></td></tr>
           <tr><td><code>ListCollections()</code></td><td>List all collection names</td></tr>
