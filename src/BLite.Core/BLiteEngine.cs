@@ -253,6 +253,37 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
+    /// Registers all supplied field names in the global C-BSON key dictionary,
+    /// assigning a persistent <see cref="ushort"/> ID to each new name.
+    /// Already-known names are left unchanged. Thread-safe.
+    /// </summary>
+    public void RegisterKeys(IEnumerable<string> keys)
+    {
+        ThrowIfDisposed();
+        _storage.RegisterKeys(keys);
+    }
+
+    /// <summary>
+    /// Returns the global field-name → ushort ID forward map.
+    /// This is the source-of-truth for C-BSON serialization.
+    /// </summary>
+    public IReadOnlyDictionary<string, ushort> GetKeyMap()
+    {
+        ThrowIfDisposed();
+        return _storage.GetKeyMap();
+    }
+
+    /// <summary>
+    /// Returns the global ushort ID → field-name reverse map.
+    /// Used for deserialization (reading C-BSON bytes back into <see cref="BsonDocument"/>).
+    /// </summary>
+    public IReadOnlyDictionary<ushort, string> GetKeyReverseMap()
+    {
+        ThrowIfDisposed();
+        return _storage.GetKeyReverseMap();
+    }
+
+    /// <summary>
     /// Inserts a document into the named collection and commits immediately.
     /// </summary>
     public BsonId Insert(string collectionName, BsonDocument document)
