@@ -10,6 +10,19 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 {
     private readonly DocumentCollection<TId, T> _collection;
 
+    // ── Reflection cache (computed once per TId+T combination) ────────────────
+    // BsonProjectionCompiler.TryCompile<T, TResult> generic method definition.
+    private static readonly MethodInfo s_tryCompileMethod =
+        typeof(BsonProjectionCompiler)
+            .GetMethod(nameof(BsonProjectionCompiler.TryCompile),
+                       BindingFlags.Static | BindingFlags.Public)!;
+
+    // DocumentCollection<TId,T>.Scan<TResult>(Func<BsonSpanReader, TResult?>) — generic overload.
+    private static readonly MethodInfo s_scanProjectorMethod =
+        typeof(DocumentCollection<TId, T>)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(m => m.Name == "Scan" && m.IsGenericMethodDefinition);
+
     public BTreeQueryProvider(DocumentCollection<TId, T> collection)
     {
         _collection = collection;
@@ -54,6 +67,22 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         var visitor = new BTreeExpressionVisitor();
         visitor.Visit(expression);
         var model = visitor.GetModel();
+
+        // ── Push-down SELECT  ─────────────────────────────────────────────────
+        // When the query is a PURE projection (no WHERE, no OrderBy/Take/Skip),
+        // scan raw BSON bytes and build TProj directly — T is never instantiated.
+        // WHERE + SELECT fall through to the standard path which applies index / scan
+        // optimisation on T first, then projects via EnumerableRewriter.
+        if (model.SelectClause is not null
+            && model.WhereClause is null
+            && model.OrderByClause is null
+            && !model.Take.HasValue
+            && !model.Skip.HasValue)
+        {
+            var pushed = TryPushDownSelect<TResult>(model.SelectClause);
+            if (pushed is not null) return pushed;
+        }
+        // ─────────────────────────────────────────────────────────────────────
         
         // 2. Data Fetching Strategy (Optimized or Full Scan)
         IEnumerable<T> sourceData = null!;
@@ -129,6 +158,47 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         return compiled();
     }
     
+    // ─── Push-down SELECT helper ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Attempts to execute the query entirely via a single-pass BSON projection scan,
+    /// bypassing full <typeparamref name="T"/> deserialisation.
+    /// </summary>
+    /// <returns>The projected <c>IEnumerable&lt;TProj&gt;</c>, or <c>null</c> if push-down is
+    /// not applicable (caller should fall through to the standard path).</returns>
+    private TResult? TryPushDownSelect<TResult>(LambdaExpression selectLambda)
+    {
+        // We need TResult = IEnumerable<TProj> for some projection type TProj.
+        var resultType = typeof(TResult);
+        if (!resultType.IsGenericType) return default;
+        if (resultType.GetGenericTypeDefinition() != typeof(IEnumerable<>)) return default;
+
+        var projType = resultType.GetGenericArguments()[0];
+        if (projType == typeof(T)) return default; // not a real projection
+
+        // Compile the push-down projector via reflection (TProj is only known at runtime).
+        object? projector;
+        try
+        {
+            var compileMethod = s_tryCompileMethod.MakeGenericMethod(typeof(T), projType);
+            projector = compileMethod.Invoke(null, [selectLambda, (object?)null]);
+        }
+        catch { return default; }
+
+        if (projector is null) return default; // compilation soft-failed
+
+        // Invoke _collection.Scan<TProj>(projector) via reflection.
+        try
+        {
+            var scanMethod = s_scanProjectorMethod.MakeGenericMethod(projType);
+            var result = scanMethod.Invoke(_collection, [projector]);
+            return (TResult?)result;
+        }
+        catch { return default; }
+    }
+
+    // ─── Expression-tree helpers ──────────────────────────────────────────────
+
     private class RootFinder : ExpressionVisitor
     {
         public IQueryable? Root { get; private set; }

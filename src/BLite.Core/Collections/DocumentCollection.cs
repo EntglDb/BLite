@@ -293,6 +293,72 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Scans the entire collection applying a <paramref name="projector"/> directly to raw BSON
+    /// bytes.  Only the fields accessed by the projector are read; the full entity <typeparamref
+    /// name="T"/> is never instantiated.
+    /// </summary>
+    /// <typeparam name="TResult">The projected result type.</typeparam>
+    /// <param name="projector">
+    ///   A delegate that receives a <see cref="BsonSpanReader"/> positioned at the start of each
+    ///   document and returns the projected value, or <c>null</c> to skip the document.
+    ///   Build this delegate via <see cref="BLite.Core.Query.BsonProjectionCompiler"/>.
+    /// </param>
+    /// <remarks>
+    /// This overload is used by the query engine for LINQ SELECT push-down: instead of
+    /// deserialising <typeparamref name="T"/> and then projecting via
+    /// <see cref="System.Linq.Enumerable.Select{T,R}"/>, the projection runs at the storage level.
+    /// </remarks>
+    public IEnumerable<TResult> Scan<TResult>(Func<BsonSpanReader, TResult?> projector)
+    {
+        if (projector == null) throw new ArgumentNullException(nameof(projector));
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var txnId = transaction.TransactionId;
+        var pageCount = _storage.PageCount;
+        var buffer = new byte[_storage.PageSize];
+        var pageResults = new List<TResult>();
+
+        for (uint pageId = 0; pageId < pageCount; pageId++)
+        {
+            pageResults.Clear();
+            ScanPageProjected(pageId, txnId, buffer, projector, pageResults);
+
+            foreach (var result in pageResults)
+                yield return result;
+        }
+    }
+
+    private void ScanPageProjected<TResult>(
+        uint pageId,
+        ulong txnId,
+        byte[] buffer,
+        Func<BsonSpanReader, TResult?> projector,
+        List<TResult> results)
+    {
+        _storage.ReadPage(pageId, txnId, buffer);
+        var header = SlottedPageHeader.ReadFrom(buffer);
+
+        if (header.PageType != PageType.Data)
+            return;
+
+        var slots = MemoryMarshal.Cast<byte, SlotEntry>(
+            buffer.AsSpan(SlottedPageHeader.Size, header.SlotCount * SlotEntry.Size));
+
+        var keyMap = _storage.GetKeyReverseMap();
+
+        for (int i = 0; i < header.SlotCount; i++)
+        {
+            var slot = slots[i];
+            if (slot.Flags.HasFlag(SlotFlags.Deleted)) continue;
+
+            var data = buffer.AsSpan(slot.Offset, slot.Length);
+            var reader = new BsonSpanReader(data, keyMap);
+            var result = projector(reader);
+            if (result is not null) results.Add(result);
+        }
+    }
+
+    /// <summary>
     /// Scans the collection in parallel using multiple threads.
     /// Useful for large collections on multi-core machines.
     /// </summary>
