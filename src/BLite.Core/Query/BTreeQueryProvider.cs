@@ -68,18 +68,17 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         visitor.Visit(expression);
         var model = visitor.GetModel();
 
-        // ── Push-down SELECT  ─────────────────────────────────────────────────
-        // When the query is a PURE projection (no WHERE, no OrderBy/Take/Skip),
-        // scan raw BSON bytes and build TProj directly — T is never instantiated.
-        // WHERE + SELECT fall through to the standard path which applies index / scan
-        // optimisation on T first, then projects via EnumerableRewriter.
+        // ── Push-down SELECT (+ optional WHERE)  ──────────────────────────────
+        // When the query has a projection and no post-scan ordering/paging,
+        // scan raw BSON bytes building TProj directly — T is never instantiated.
+        // OrderBy / Take / Skip fall through to the standard path which pipes the
+        // already-projected IEnumerable<TProj> through EnumerableRewriter.
         if (model.SelectClause is not null
-            && model.WhereClause is null
             && model.OrderByClause is null
             && !model.Take.HasValue
             && !model.Skip.HasValue)
         {
-            var pushed = TryPushDownSelect<TResult>(model.SelectClause);
+            var pushed = TryPushDownSelect<TResult>(model.SelectClause, model.WhereClause);
             if (pushed is not null) return pushed;
         }
         // ─────────────────────────────────────────────────────────────────────
@@ -166,7 +165,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
     /// </summary>
     /// <returns>The projected <c>IEnumerable&lt;TProj&gt;</c>, or <c>null</c> if push-down is
     /// not applicable (caller should fall through to the standard path).</returns>
-    private TResult? TryPushDownSelect<TResult>(LambdaExpression selectLambda)
+    private TResult? TryPushDownSelect<TResult>(LambdaExpression selectLambda,
+                                                   LambdaExpression? whereLambda = null)
     {
         // We need TResult = IEnumerable<TProj> for some projection type TProj.
         var resultType = typeof(TResult);
@@ -177,11 +177,13 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         if (projType == typeof(T)) return default; // not a real projection
 
         // Compile the push-down projector via reflection (TProj is only known at runtime).
+        // BsonProjectionCompiler.TryCompile<T, TProj>(selectLambda, whereLambda?) handles
+        // both the pure-SELECT and the WHERE+SELECT cases in a single BSON pass.
         object? projector;
         try
         {
             var compileMethod = s_tryCompileMethod.MakeGenericMethod(typeof(T), projType);
-            projector = compileMethod.Invoke(null, [selectLambda, (object?)null]);
+            projector = compileMethod.Invoke(null, [selectLambda, whereLambda]);
         }
         catch { return default; }
 

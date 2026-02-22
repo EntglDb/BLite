@@ -197,6 +197,21 @@ namespace BLite.Tests
         }
 
         [Fact]
+        public void Where_And_Select_Push_Down_Works()
+        {
+            // WHERE + SELECT: both predicates must be evaluated in a single BSON-level pass.
+            // Only scalar fields — push-down should fire and return filtered projections.
+            var result = _db.TestDocuments.AsQueryable()
+                .Where(x => x.Category == "A")
+                .Select(x => new { x.Name, x.Amount })
+                .ToList();
+
+            Assert.Equal(2, result.Count);
+            Assert.Contains(result, r => r.Name == "Item1" && r.Amount == 10);
+            Assert.Contains(result, r => r.Name == "Item2" && r.Amount == 20);
+        }
+
+        [Fact]
         public void Select_Project_Nested_Array_Of_Objects()
         {
             var doc = new ComplexDocument
