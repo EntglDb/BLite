@@ -11,6 +11,70 @@ namespace BLite.Core.Query;
 /// </summary>
 public static class BLiteQueryableExtensions
 {
+    // ─── IBLiteQueryable-preserving LINQ operators ────────────────────────────
+    // Standard Queryable.Where/Select/etc. call IQueryProvider.CreateQuery<T> which
+    // is declared as returning IQueryable<T>. The runtime object is always
+    // BTreeQueryable<T> : IBLiteQueryable<T>, so the cast is safe and restores the
+    // richer interface across the full query chain.
+
+    /// <summary>Filters a sequence and preserves the <see cref="IBLiteQueryable{T}"/> contract.</summary>
+    public static IBLiteQueryable<T> Where<T>(
+        this IBLiteQueryable<T> source,
+        Expression<Func<T, bool>> predicate)
+        => (IBLiteQueryable<T>)Queryable.Where(source, predicate);
+
+    /// <summary>Projects each element and preserves the <see cref="IBLiteQueryable{TResult}"/> contract.</summary>
+    public static IBLiteQueryable<TResult> Select<T, TResult>(
+        this IBLiteQueryable<T> source,
+        Expression<Func<T, TResult>> selector)
+        => (IBLiteQueryable<TResult>)Queryable.Select(source, selector);
+
+    /// <summary>Sorts ascending and preserves the <see cref="IBLiteQueryable{T}"/> contract.</summary>
+    public static IBLiteQueryable<T> OrderBy<T, TKey>(
+        this IBLiteQueryable<T> source,
+        Expression<Func<T, TKey>> keySelector)
+        => (IBLiteQueryable<T>)Queryable.OrderBy(source, keySelector);
+
+    /// <summary>Sorts descending and preserves the <see cref="IBLiteQueryable{T}"/> contract.</summary>
+    public static IBLiteQueryable<T> OrderByDescending<T, TKey>(
+        this IBLiteQueryable<T> source,
+        Expression<Func<T, TKey>> keySelector)
+        => (IBLiteQueryable<T>)Queryable.OrderByDescending(source, keySelector);
+
+    /// <summary>Returns a specified number of elements and preserves the <see cref="IBLiteQueryable{T}"/> contract.</summary>
+    public static IBLiteQueryable<T> Take<T>(
+        this IBLiteQueryable<T> source,
+        int count)
+        => (IBLiteQueryable<T>)Queryable.Take(source, count);
+
+    /// <summary>Skips a specified number of elements and preserves the <see cref="IBLiteQueryable{T}"/> contract.</summary>
+    public static IBLiteQueryable<T> Skip<T>(
+        this IBLiteQueryable<T> source,
+        int count)
+        => (IBLiteQueryable<T>)Queryable.Skip(source, count);
+
+    // ─── Async bridge ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Exposes any <see cref="IQueryable{T}"/> returned by BLite as an
+    /// <see cref="IAsyncEnumerable{T}"/>, enabling <c>await foreach</c> after
+    /// standard LINQ operators (e.g. <c>query.Select(...).AsAsyncEnumerable()</c>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if the queryable is not a BLite queryable (does not implement
+    /// <see cref="IAsyncEnumerable{T}"/>).
+    /// </exception>
+    public static IAsyncEnumerable<T> AsAsyncEnumerable<T>(this IQueryable<T> source)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+            return asyncEnum;
+
+        throw new InvalidOperationException(
+            $"The queryable of type '{source.GetType().Name}' does not implement " +
+            $"IAsyncEnumerable<{typeof(T).Name}>. Use DocumentCollection.AsQueryable() " +
+            "to obtain a BLite queryable that supports async enumeration.");
+    }
+
     // ─── Materialisation ──────────────────────────────────────────────────────
 
     /// <summary>Executes the query asynchronously and returns all results as a list.</summary>

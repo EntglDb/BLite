@@ -30,10 +30,15 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         }
     }
 
-    public IQueryable<TElement> CreateQuery<TElement>(Expression expression)
-    {
-        return new BTreeQueryable<TElement>(this, expression);
-    }
+    // Explicit implementation satisfies IQueryProvider contract.
+    // The runtime object is always BTreeQueryable<TElement> : IBLiteQueryable<TElement>,
+    // so callers can safely use AsAsyncEnumerable() or the typed LINQ extensions.
+    IQueryable<TElement> IQueryProvider.CreateQuery<TElement>(Expression expression)
+        => new BTreeQueryable<TElement>(this, expression);
+
+    /// <summary>Typed overload — returns the richer <see cref="IBLiteQueryable{TElement}"/> interface.</summary>
+    public IBLiteQueryable<TElement> CreateQuery<TElement>(Expression expression)
+        => new BTreeQueryable<TElement>(this, expression);
 
     public object? Execute(Expression expression)
     {

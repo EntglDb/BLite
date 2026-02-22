@@ -368,7 +368,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// Gets a queryable interface for this collection.
     /// Supports LINQ queries that are translated to optimized BTree scans or index lookups.
     /// </summary>
-    public IQueryable<T> AsQueryable()
+    public IBLiteQueryable<T> AsQueryable()
     {
         return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this));
     }
