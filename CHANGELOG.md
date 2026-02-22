@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.5.0"></a>
+## [1.5.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.5.0) (2026-02-22)
+
+### Features
+
+* add FindAsync(predicate, ct) to DocumentCollection ([ee9566a](https://www.github.com/EntglDb/BLite/commit/ee9566a4f286ad47e53d4c41b2b8b88d1d959cb6))
+* extend push-down to WHERE+SELECT combined queries ([ea4feaf](https://www.github.com/EntglDb/BLite/commit/ea4feaf9a6950f340ef19d240f221e4c1f91f59c))
+* IBLiteQueryable<T> + async LINQ chain preservation (Step 1) ([c1926bb](https://www.github.com/EntglDb/BLite/commit/c1926bbe5f9e6a2162c98fa5e662343bfa871469))
+* push-down SELECT projection at storage level (Steps 2-5) ([df7cceb](https://www.github.com/EntglDb/BLite/commit/df7ccebee1904369c552d26679f92c59dea7a2ba))
+* symmetric CRUD API for DynamicCollection and BLiteEngine ([42cb68c](https://www.github.com/EntglDb/BLite/commit/42cb68cbeae7dec02b7ee2ffbf949eb05d6059da))
+
+### Bug Fixes
+
+* restore IAsyncEnumerable<T> on BTreeQueryable<T> ([444a96a](https://www.github.com/EntglDb/BLite/commit/444a96a6db043e9bc8a60b6e6b5278fbda4e3dba))
+
 <a name="1.4.0"></a>
 ## [1.4.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.4.0) (2026-02-21)
 
