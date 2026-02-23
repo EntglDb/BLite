@@ -18,7 +18,7 @@ public partial class BsonSchema
         var fieldsSize = writer.BeginArray("f");
         for (int i = 0; i < Fields.Count; i++)
         {
-            writer.WriteElementHeader(BsonType.Document, i.ToString());
+            writer.WriteArrayElementHeader(BsonType.Document, i);
             Fields[i].ToBson(ref writer);
         }
         writer.EndArray(fieldsSize);
@@ -48,7 +48,7 @@ public partial class BsonSchema
                     {
                         var itemType = reader.ReadBsonType();
                         if (itemType == BsonType.EndOfDocument) break;
-                        reader.ReadElementHeader(); // index
+                        reader.SkipArrayKey(); // raw positional index
                         schema.Fields.Add(BsonField.FromBson(ref reader));
                     }
                     break;

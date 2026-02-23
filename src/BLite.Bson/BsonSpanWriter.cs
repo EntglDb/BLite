@@ -282,6 +282,28 @@ public ref struct BsonSpanWriter
     }
 
     /// <summary>
+    /// Writes a BSON array element header using a raw positional uint16 index.
+    /// Does NOT use the key dictionary — the index is stored directly as a ushort.
+    /// The reader side must use <see cref="BsonSpanReader.SkipArrayKey"/> to consume it.
+    /// </summary>
+    public void WriteArrayElementHeader(BsonType type, int index)
+    {
+        _buffer[_position++] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), (ushort)index);
+        _position += 2;
+    }
+
+    /// <summary>
+    /// Begins a sub-document inside a BSON array using a raw positional index.
+    /// Returns the size-placeholder position to patch later with <see cref="EndDocument"/>.
+    /// </summary>
+    public int BeginArrayDocument(int index)
+    {
+        WriteArrayElementHeader(BsonType.Document, index);
+        return WriteDocumentSizePlaceholder();
+    }
+
+    /// <summary>
     /// Writes a double element inside a BSON array using a raw positional uint16 index.
     /// Does NOT use the key dictionary — index is stored as a raw ushort, not a keymap ID.
     /// Must be used between <see cref="BeginArray"/> and <see cref="EndArray"/>.
@@ -289,11 +311,106 @@ public ref struct BsonSpanWriter
     /// </summary>
     public void WriteArrayDouble(int index, double value)
     {
-        _buffer[_position++] = (byte)BsonType.Double;
-        BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), (ushort)index);
-        _position += 2;
+        WriteArrayElementHeader(BsonType.Double, index);
         BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), value);
         _position += 8;
+    }
+
+    public void WriteArrayString(int index, string value)
+    {
+        WriteArrayElementHeader(BsonType.String, index);
+        var valueBytes = Encoding.UTF8.GetByteCount(value);
+        var stringLength = valueBytes + 1;
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), stringLength);
+        _position += 4;
+        Encoding.UTF8.GetBytes(value, _buffer[_position..]);
+        _position += valueBytes;
+        _buffer[_position++] = 0;
+    }
+
+    public void WriteArrayInt32(int index, int value)
+    {
+        WriteArrayElementHeader(BsonType.Int32, index);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), value);
+        _position += 4;
+    }
+
+    public void WriteArrayInt64(int index, long value)
+    {
+        WriteArrayElementHeader(BsonType.Int64, index);
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value);
+        _position += 8;
+    }
+
+    public void WriteArrayBoolean(int index, bool value)
+    {
+        WriteArrayElementHeader(BsonType.Boolean, index);
+        _buffer[_position++] = (byte)(value ? 1 : 0);
+    }
+
+    public void WriteArrayDecimal128(int index, decimal value)
+    {
+        WriteArrayElementHeader(BsonType.Decimal128, index);
+        var bits = decimal.GetBits(value);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), bits[0]);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position + 4, 4), bits[1]);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position + 8, 4), bits[2]);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position + 12, 4), bits[3]);
+        _position += 16;
+    }
+
+    public void WriteArrayDateTime(int index, DateTime value)
+    {
+        WriteArrayElementHeader(BsonType.DateTime, index);
+        var milliseconds = new DateTimeOffset(value.ToUniversalTime()).ToUnixTimeMilliseconds();
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), milliseconds);
+        _position += 8;
+    }
+
+    public void WriteArrayDateTimeOffset(int index, DateTimeOffset value)
+    {
+        WriteArrayElementHeader(BsonType.DateTime, index);
+        var milliseconds = value.ToUnixTimeMilliseconds();
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), milliseconds);
+        _position += 8;
+    }
+
+    public void WriteArrayTimeSpan(int index, TimeSpan value)
+    {
+        WriteArrayElementHeader(BsonType.Int64, index);
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value.Ticks);
+        _position += 8;
+    }
+
+    public void WriteArrayDateOnly(int index, DateOnly value)
+    {
+        WriteArrayElementHeader(BsonType.Int32, index);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), value.DayNumber);
+        _position += 4;
+    }
+
+    public void WriteArrayTimeOnly(int index, TimeOnly value)
+    {
+        WriteArrayElementHeader(BsonType.Int64, index);
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value.Ticks);
+        _position += 8;
+    }
+
+    public void WriteArrayGuid(int index, Guid value)
+    {
+        WriteArrayString(index, value.ToString());
+    }
+
+    public void WriteArrayObjectId(int index, ObjectId value)
+    {
+        WriteArrayElementHeader(BsonType.ObjectId, index);
+        value.WriteTo(_buffer.Slice(_position, 12));
+        _position += 12;
+    }
+
+    public void WriteArrayNull(int index)
+    {
+        WriteArrayElementHeader(BsonType.Null, index);
     }
 
     /// <summary>

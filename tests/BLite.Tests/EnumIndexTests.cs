@@ -213,4 +213,80 @@ public class EnumIndexTests : IDisposable
         var ex = Record.Exception(() => _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_idempotent"));
         Assert.Null(ex);
     }
+
+    // ------------------------------------------------------------------
+    // Query – full document retrieval via index
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// QueryIndex with equal min/max returns the single matching document
+    /// and its deserialized Role property is correct.
+    /// </summary>
+    [Fact]
+    public void QueryIndex_Exact_Enum_Returns_Document_With_Correct_Role()
+    {
+        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_query_exact");
+
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "guest"));
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "admin"));
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "moderator"));
+        _db.SaveChanges();
+
+        var results = _db.EnumEntities
+            .QueryIndex("idx_role_query_exact", UserRole.Admin, UserRole.Admin)
+            .ToList();
+
+        Assert.Single(results);
+        Assert.Equal(UserRole.Admin, results[0].Role);
+        Assert.Equal("admin", results[0].Label);
+    }
+
+    /// <summary>
+    /// QueryIndex with a range returns all documents whose Role falls in
+    /// [User=1 .. Admin=3], verifying both count and the actual Role values.
+    /// </summary>
+    [Fact]
+    public void QueryIndex_Range_Enum_Returns_Documents_With_Correct_Roles()
+    {
+        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_query_range");
+
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "guest"));     // 0 – outside range
+        _db.EnumEntities.Insert(MakeEntity(UserRole.User,      "user"));      // 1
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "moderator")); // 2
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "admin"));     // 3
+        _db.SaveChanges();
+
+        var results = _db.EnumEntities
+            .QueryIndex("idx_role_query_range", UserRole.User, UserRole.Admin)
+            .ToList();
+
+        Assert.Equal(3, results.Count);
+        Assert.All(results, e => Assert.True(e.Role >= UserRole.User && e.Role <= UserRole.Admin));
+        Assert.DoesNotContain(results, e => e.Role == UserRole.Guest);
+    }
+
+    /// <summary>
+    /// AsQueryable().Where() with an equality predicate on an indexed enum
+    /// property returns only the matching documents with the correct Role.
+    /// </summary>
+    [Fact]
+    public void AsQueryable_Where_On_Indexed_Enum_Returns_Correct_Documents()
+    {
+        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_linq");
+
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "g1"));
+        _db.EnumEntities.Insert(MakeEntity(UserRole.User,      "u1"));
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "mod1"));
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "a1"));
+        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "a2")); // second Admin
+        _db.SaveChanges();
+
+        var results = _db.EnumEntities
+            .AsQueryable()
+            .Where(e => e.Role == UserRole.Admin)
+            .ToList();
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, e => Assert.Equal(UserRole.Admin, e.Role));
+    }
 }

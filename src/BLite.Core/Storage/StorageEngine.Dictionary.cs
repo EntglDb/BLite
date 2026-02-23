@@ -69,11 +69,6 @@ public sealed partial class StorageEngine
 
         // Pre-register internal keys used for Schema persistence
         RegisterKeys(new[] { "_id", "t", "_v", "f", "n", "b", "s", "a" });
-        
-        // Pre-register common array indices to avoid mapping during high-frequency writes
-        var indices = new List<string>(101);
-        for (int i = 0; i <= 100; i++) indices.Add(i.ToString());
-        RegisterKeys(indices);
     }
 
     public ConcurrentDictionary<string, ushort> GetKeyMap() => _dictionaryCache;

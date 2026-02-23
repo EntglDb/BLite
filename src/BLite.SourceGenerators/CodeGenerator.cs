@@ -217,14 +217,14 @@ namespace BLite.SourceGenerators
                      var nestedMapperTypes = GetMapperName(prop.NestedTypeFullName!);
                      sb.AppendLine($"            {indent}    var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");
                      
-                     sb.AppendLine($"            {indent}    var itemStartPos = writer.BeginDocument({prop.Name.ToLower()}Index.ToString());");
+                     sb.AppendLine($"            {indent}    var itemStartPos = writer.BeginArrayDocument({prop.Name.ToLower()}Index);");
                      sb.AppendLine($"            {indent}    {prop.Name.ToLower()}ItemMapper.SerializeFields(item, ref writer);");
                      sb.AppendLine($"            {indent}    writer.EndDocument(itemStartPos);");
                  }
                  else if (prop.IsCollectionItemEnum)
                  {
-                     var underlyingWrite = GetWriteMethodForUnderlyingType(prop.CollectionItemEnumUnderlyingTypeName!);
-                     sb.AppendLine($"            {indent}    writer.{underlyingWrite}({prop.Name.ToLower()}Index.ToString(), ({prop.CollectionItemEnumUnderlyingTypeName})item);");
+                     var arrayWrite = GetArrayWriteMethodForUnderlyingType(prop.CollectionItemEnumUnderlyingTypeName!);
+                     sb.AppendLine($"            {indent}    writer.{arrayWrite}({prop.Name.ToLower()}Index, ({prop.CollectionItemEnumUnderlyingTypeName})item);");
                  }
                  else
                  {
@@ -233,7 +233,8 @@ namespace BLite.SourceGenerators
                      var writeMethod = GetPrimitiveWriteMethod(dummyProp);
                      if (writeMethod != null)
                      {
-                        sb.AppendLine($"            {indent}    writer.{writeMethod}({prop.Name.ToLower()}Index.ToString(), item);");
+                        var arrayWriteMethod = ToArrayWriteMethod(writeMethod);
+                        sb.AppendLine($"            {indent}    writer.{arrayWriteMethod}({prop.Name.ToLower()}Index, item);");
                      }
                  }
                  sb.AppendLine($"            {indent}    {prop.Name.ToLower()}Index++;");
@@ -529,6 +530,11 @@ namespace BLite.SourceGenerators
              if (prop.IsCollection)
              {
                  var arrVar = prop.Name.ToLower();
+                 // Handle null for nullable collections
+                 if (prop.IsNullable)
+                 {
+                     sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null) break;");
+                 }
                  sb.AppendLine($"                        // Read Array {prop.Name}");
                  sb.AppendLine($"                        var {arrVar}ArrSize = reader.ReadDocumentSize();");
                  sb.AppendLine($"                        var {arrVar}ArrEndPos = reader.Position + {arrVar}ArrSize - 4;");
@@ -536,7 +542,7 @@ namespace BLite.SourceGenerators
                  sb.AppendLine($"                        {{");
                  sb.AppendLine($"                            var itemType = reader.ReadBsonType();");
                  sb.AppendLine($"                            if (itemType == global::BLite.Bson.BsonType.EndOfDocument) break;");
-                 sb.AppendLine($"                            reader.ReadElementHeader(); // Skip index key");
+                 sb.AppendLine($"                            reader.SkipArrayKey();");
                  
                  if (prop.IsCollectionItemNested)
                  {
@@ -934,6 +940,31 @@ namespace BLite.SourceGenerators
                 "byte" or "sbyte" or "short" or "ushort" or "int" or "uint" => "WriteInt32",
                 "long" or "ulong" => "WriteInt64",
                 _ => "WriteInt32"
+            };
+        }
+
+        /// <summary>
+        /// Maps a BsonSpanWriter write method (e.g. "WriteString") to the corresponding
+        /// array variant (e.g. "WriteArrayString") that uses a raw positional index
+        /// instead of the key dictionary.
+        /// </summary>
+        private static string ToArrayWriteMethod(string writeMethod)
+        {
+            // "WriteString" -> "WriteArrayString", "WriteInt32" -> "WriteArrayInt32", etc.
+            return "WriteArray" + writeMethod.Substring(5);
+        }
+
+        /// <summary>
+        /// Maps an enum's underlying type to the array-variant write method
+        /// that uses a raw positional index.
+        /// </summary>
+        private static string GetArrayWriteMethodForUnderlyingType(string underlyingType)
+        {
+            return underlyingType switch
+            {
+                "byte" or "sbyte" or "short" or "ushort" or "int" or "uint" => "WriteArrayInt32",
+                "long" or "ulong" => "WriteArrayInt64",
+                _ => "WriteArrayInt32"
             };
         }
 

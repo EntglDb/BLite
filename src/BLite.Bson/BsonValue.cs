@@ -209,7 +209,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
                 var arrPos = writer.BeginArray(fieldName);
                 for (int i = 0; i < arr.Count; i++)
                 {
-                    arr[i].WriteTo(ref writer, i.ToString());
+                    arr[i].WriteToArray(ref writer, i);
                 }
                 writer.EndArray(arrPos);
                 break;
@@ -221,6 +221,60 @@ public readonly struct BsonValue : IEquatable<BsonValue>
                 break;
             default:
                 throw new NotSupportedException($"Cannot write BsonValue of type {_type}");
+        }
+    }
+
+    /// <summary>
+    /// Writes this value as an element inside a BSON array using a raw positional index.
+    /// Does NOT use the key dictionary.
+    /// </summary>
+    public void WriteToArray(ref BsonSpanWriter writer, int index)
+    {
+        switch (_type)
+        {
+            case BsonType.Int32:
+                writer.WriteArrayInt32(index, (int)_numericValue);
+                break;
+            case BsonType.Int64:
+                writer.WriteArrayInt64(index, BitConverter.DoubleToInt64Bits(_numericValue));
+                break;
+            case BsonType.Double:
+                writer.WriteArrayDouble(index, _numericValue);
+                break;
+            case BsonType.Decimal128:
+                writer.WriteArrayDecimal128(index, (decimal)_refValue!);
+                break;
+            case BsonType.String:
+                writer.WriteArrayString(index, (string)_refValue!);
+                break;
+            case BsonType.Boolean:
+                writer.WriteArrayBoolean(index, _numericValue != 0);
+                break;
+            case BsonType.ObjectId:
+                writer.WriteArrayObjectId(index, (ObjectId)_refValue!);
+                break;
+            case BsonType.DateTime:
+                writer.WriteArrayDateTime(index, DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue)).UtcDateTime);
+                break;
+            case BsonType.Null:
+                writer.WriteArrayNull(index);
+                break;
+            case BsonType.Array when _refValue is List<BsonValue> arr:
+                writer.WriteArrayElementHeader(BsonType.Array, index);
+                var innerPos = writer.WriteDocumentSizePlaceholder();
+                for (int i = 0; i < arr.Count; i++)
+                {
+                    arr[i].WriteToArray(ref writer, i);
+                }
+                writer.EndArray(innerPos);
+                break;
+            case BsonType.Document when _refValue is BsonDocument doc:
+                var docPos = writer.BeginArrayDocument(index);
+                doc.WriteFieldsTo(ref writer);
+                writer.EndDocument(docPos);
+                break;
+            default:
+                throw new NotSupportedException($"Cannot write BsonValue of type {_type} to array");
         }
     }
 
