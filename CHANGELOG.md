@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.6.2"></a>
+## [1.6.2](https://www.github.com/EntglDb/BLite/releases/tag/v1.6.2) (2026-02-23)
+
+### Bug Fixes
+
+* allows document metadata page overflow ([c663462](https://www.github.com/EntglDb/BLite/commit/c663462cdaf25868282678103a349ad07fb5487d))
+
 <a name="1.6.1"></a>
 ## [1.6.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.6.1) (2026-02-22)
 
