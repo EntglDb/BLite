@@ -1,0 +1,1 @@
+﻿- Deve essere possibile dichiarare un indice che si basa su un Enum

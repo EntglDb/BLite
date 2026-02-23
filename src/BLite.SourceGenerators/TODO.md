@@ -1,0 +1,2 @@
+﻿- NestedObjects che hanno campo Id dichiarato ma non sono ne DocumentCollection ne sono definiti in modelBuilder devono funzionare usando la chiave "_id" dal dizionario delle chiavi
+- 

@@ -90,6 +90,14 @@ public readonly struct BsonValue : IEquatable<BsonValue>
         ? d
         : throw new InvalidOperationException($"BsonValue is {_type}, not Decimal128");
 
+    public Guid AsGuid => _type == BsonType.String && _refValue is string s && Guid.TryParse(s, out var g)
+        ? g
+        : throw new InvalidOperationException($"BsonValue is {_type}, not a valid Guid string");
+
+    public int AsTimestamp => _type == BsonType.Timestamp
+        ? (int)_numericValue
+        : throw new InvalidOperationException($"BsonValue is {_type}, not Timestamp");
+
     public string AsString => _type == BsonType.String && _refValue is string s
         ? s
         : throw new InvalidOperationException($"BsonValue is {_type}, not String");
@@ -134,6 +142,23 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             throw new InvalidOperationException($"BsonValue is {_type}, not Coordinates");
         }
     }
+
+    public bool IsString => Type == BsonType.String;
+    public bool IsInt32 => Type == BsonType.Int32;
+    public bool IsInt64 => Type == BsonType.Int64;
+    public bool IsDouble => Type == BsonType.Double;
+    public bool IsBoolean => Type == BsonType.Boolean;
+    public bool IsDateTime => Type == BsonType.DateTime;
+    public bool IsDecimal => Type == BsonType.Decimal128;
+    public bool IsBinary => Type == BsonType.Binary;
+    public bool IsObjectId => Type == BsonType.ObjectId;
+    public bool IsDocument => Type == BsonType.Document;
+    public bool IsArray => Type == BsonType.Array;
+    public bool IsTimestamp => Type == BsonType.Timestamp;
+    public bool IsGuid => Type == BsonType.String && _refValue is string s && Guid.TryParse(s, out _);
+    public bool IsCoordinates => Type == BsonType.Array && _refValue is double[] arr && arr.Length == 2
+        || Type == BsonType.Array && _refValue is List<BsonValue> list && list.Count == 2;
+
 
     #endregion
 
