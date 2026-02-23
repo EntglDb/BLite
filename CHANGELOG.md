@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.7.0"></a>
+## [1.7.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.7.0) (2026-02-23)
+
+### Features
+
+* **bson:** BsonJsonConverter - JSON<->BSON conversion in BLite.Bson ([c2e295c](https://www.github.com/EntglDb/BLite/commit/c2e295c60149feaad2cfb95a009a34b45f2ec4a2))
+
+### Bug Fixes
+
+* nested objects with [Key] Id + enum index support ([e6a334a](https://www.github.com/EntglDb/BLite/commit/e6a334a6d4bc155adb69e3d340f93ba39c2cc95a))
+
 <a name="1.6.2"></a>
 ## [1.6.2](https://www.github.com/EntglDb/BLite/releases/tag/v1.6.2) (2026-02-23)
 
