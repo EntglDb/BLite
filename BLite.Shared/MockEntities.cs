@@ -580,4 +580,35 @@ namespace BLite.Shared
         // A simple string field to prove other fields still work
         public string Label { get; set; } = string.Empty;
     }
+
+    // ========================================
+    // NestedObject with [Key] Id field
+    // ========================================
+
+    /// <summary>
+    /// Nested type that has a [Key]-decorated Id.
+    /// It is NOT registered as a DocumentCollection – it is only ever used as an embedded object.
+    /// The fix ensures its mapper is generated as a plain class (no base mapper),
+    /// and the Id field is serialized using BsonFieldName "id" (not "_id").
+    /// </summary>
+    public class ContactInfo
+    {
+        [System.ComponentModel.DataAnnotations.Key]
+        public int Id { get; set; }
+
+        public string Email { get; set; } = string.Empty;
+        public string Phone { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Root entity that embeds a <see cref="ContactInfo"/> (with [Key] Id)
+    /// both as a single nested object and in a collection.
+    /// </summary>
+    public class PersonWithContact
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public ContactInfo? MainContact { get; set; }
+        public List<ContactInfo> Contacts { get; set; } = new();
+    }
 }

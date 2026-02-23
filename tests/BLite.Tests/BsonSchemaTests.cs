@@ -23,10 +23,15 @@ public class BsonSchemaTests
         var schema = BsonSchemaGenerator.FromType<SimpleEntity>();
 
         Assert.Equal("SimpleEntity", schema.Title);
-        Assert.Equal(4, schema.Fields.Count);
+        // Schema now emits both "id" and "_id" for a property named "Id":
+        // root mappers write "_id", nested-type mappers write "id". Both keys must be registered.
+        Assert.Equal(5, schema.Fields.Count);
 
-        var idField = schema.Fields.First(f => f.Name == "_id");
+        // Both aliases must be present with the correct type
+        var idField  = schema.Fields.First(f => f.Name == "id");
+        var _idField = schema.Fields.First(f => f.Name == "_id");
         Assert.Equal(BsonType.ObjectId, idField.Type);
+        Assert.Equal(BsonType.ObjectId, _idField.Type);
 
         var nameField = schema.Fields.First(f => f.Name == "name");
         Assert.Equal(BsonType.String, nameField.Type);

@@ -17,6 +17,13 @@ namespace BLite.SourceGenerators.Models
         public bool HasPrivateSetters { get; set; }
         public bool HasPrivateOrNoConstructor { get; set; }
         
+        /// <summary>
+        /// True when this EntityInfo represents a nested type (not a root DocumentCollection entity).
+        /// In this case, even if a property has IsKey=true, the mapper is generated as a plain class
+        /// and the key field is serialized using its BsonFieldName (e.g. "id") instead of "_id".
+        /// </summary>
+        public bool IsNestedTypeMapper { get; set; }
+        
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();
         public HashSet<string> IgnoredProperties { get; } = new HashSet<string>();

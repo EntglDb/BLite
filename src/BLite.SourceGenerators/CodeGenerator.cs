@@ -14,7 +14,9 @@ namespace BLite.SourceGenerators
             var sb = new StringBuilder();
             var mapperName = GetMapperName(entity.FullTypeName);
             var keyProp = entity.Properties.FirstOrDefault(p => p.IsKey);
-            var isRoot = entity.IdProperty != null;
+            // Nested type mappers are never treated as root entities, even if they have a key property.
+            // Their Id field is serialized using BsonFieldName (e.g. "id") rather than "_id".
+            var isRoot = entity.IdProperty != null && !entity.IsNestedTypeMapper;
             
             // Class Declaration
             if (isRoot)
@@ -126,7 +128,7 @@ namespace BLite.SourceGenerators
             foreach (var prop in entity.Properties)
             {
                 // Handle key property - serialize as "_id" regardless of property name
-                if (prop.IsKey)
+                if (prop.IsKey && !entity.IsNestedTypeMapper)
                 {
                     if (prop.ConverterTypeName != null)
                     {
@@ -384,7 +386,8 @@ namespace BLite.SourceGenerators
             
             foreach (var prop in entity.Properties)
             {
-                var caseName = prop.IsKey ? "_id" : prop.BsonFieldName;
+                // Root entities use "_id" for the key field; nested type mappers use the BsonFieldName (e.g. "id").
+                var caseName = (prop.IsKey && !entity.IsNestedTypeMapper) ? "_id" : prop.BsonFieldName;
                 sb.AppendLine($"                    case \"{caseName}\":");
                 
                 // Read Logic -> assign to local var

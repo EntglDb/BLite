@@ -387,6 +387,10 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
             bool boolVal => new IndexKey(boolVal ? 1 : 0),
             byte[] byteArray => new IndexKey(byteArray),
             
+            // Enum values are boxed as the enum type (not the underlying int).
+            // Convert to long to handle all enum underlying types (byte, short, int, long) consistently.
+            _ when value.GetType().IsEnum => new IndexKey(Convert.ToInt64(value)),
+            
             // For compound keys or complex types, use ToString and serialize
             // TODO: Better compound key serialization
             _ => new IndexKey(value.ToString() ?? string.Empty)

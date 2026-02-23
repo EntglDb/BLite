@@ -46,24 +46,35 @@ public static class BsonSchemaGenerator
 
     private static void AddField(BsonSchema schema, string name, Type type)
     {
-        name = name.ToLowerInvariant();
-
-        // Convention: id -> _id for root document
-        if (name.Equals("id", StringComparison.OrdinalIgnoreCase))
-        {
-            name = "_id";
-        }
-
+        var lowerName = name.ToLowerInvariant();
         var (bsonType, nestedSchema, itemType) = GetBsonType(type);
 
-        schema.Fields.Add(new BsonField
+        var field = new BsonField
         {
-            Name = name,
+            Name = lowerName,
             Type = bsonType,
             IsNullable = IsNullable(type),
             NestedSchema = nestedSchema,
             ArrayItemType = itemType
-        });
+        };
+
+        schema.Fields.Add(field);
+
+        // Whenever a property is named "Id", register BOTH "id" and "_id".
+        // Root-entity mappers write it as "_id"; nested-type mappers write it as "id".
+        // Having both in the schema ensures the BSON key dictionary always contains
+        // both names, avoiding "key not found" errors regardless of context.
+        if (lowerName == "id")
+        {
+            schema.Fields.Add(new BsonField
+            {
+                Name = "_id",
+                Type = bsonType,
+                IsNullable = IsNullable(type),
+                NestedSchema = nestedSchema,
+                ArrayItemType = itemType
+            });
+        }
     }
 
     private static (BsonType type, BsonSchema? nested, BsonType? itemType) GetBsonType(Type type)
@@ -96,8 +107,6 @@ public static class BsonSchemaGenerator
         // If it's not a string, not a primitive, and not an array/list, treat as Document
         if (type != typeof(string) && !type.IsPrimitive && !type.IsEnum)
         {
-            // Avoid infinite recursion?
-            // Simple approach: generating nested schema
             return (BsonType.Document, FromType(type), null);
         }
 

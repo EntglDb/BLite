@@ -114,7 +114,7 @@ public class DbContextInfo
                             Name = nested.Name, 
                             Namespace = nested.Namespace,
                             FullTypeName = nested.FullTypeName, // Ensure FullTypeName is copied
-                            // Helper to copy properties
+                            IsNestedTypeMapper = true,
                         };
                         nestedEntity.Properties.AddRange(nested.Properties);
                         

@@ -56,6 +56,9 @@ public partial class TestDbContext : DocumentDbContext
     // Enum Serialization Tests
     public DocumentCollection<ObjectId, EnumEntity> EnumEntities { get; set; } = null!;
 
+    // NestedObject with [Key] Id – regression tests
+    public DocumentCollection<ObjectId, PersonWithContact> PeopleWithContacts { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
         InitializeCollections();
@@ -112,6 +115,9 @@ public partial class TestDbContext : DocumentDbContext
 
         // Enum Serialization Test
         modelBuilder.Entity<EnumEntity>().ToCollection("enum_entities").HasKey(e => e.Id);
+
+        // NestedObject with [Key] Id – regression
+        modelBuilder.Entity<PersonWithContact>().ToCollection("people_with_contacts");
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);
