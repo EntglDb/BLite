@@ -107,11 +107,21 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
-    /// Lists all collection names currently loaded in the engine.
+    /// Lists all collection names, including those persisted on disk but not yet
+    /// loaded in memory. Discovers storage-level collections via the page catalog,
+    /// then returns the union of in-memory and on-disk names.
     /// </summary>
     public IReadOnlyList<string> ListCollections()
     {
         ThrowIfDisposed();
+
+        // Warm up: open any collection that is in the storage catalog but not yet
+        // registered in the in-memory dictionary.  DynamicCollection reads its
+        // own metadata from storage, so the idType argument is irrelevant for
+        // existing collections (only matters when creating brand-new ones).
+        foreach (var meta in _storage.GetAllCollectionsMetadata())
+            _collections.GetOrAdd(meta.Name, n => new DynamicCollection(_storage, this, n));
+
         return _collections.Keys.ToList();
     }
 
