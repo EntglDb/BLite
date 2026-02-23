@@ -155,10 +155,16 @@ users.EnsureIndex(u => u.Age);
 <span class="comment">// This query now uses the index</span>
 <span class="keyword">var</span> results = users.AsQueryable()
     .Where(u => u.Age > <span class="number">30</span>) <span class="comment">// ← Index hit!</span>
+    .AsEnumerable();
+
+<span class="comment">// Enum properties can also be indexed (v1.7.0)</span>
+orders.EnsureIndex(o => o.Status);
+<span class="keyword">var</span> shipped = orders.AsQueryable()
+    .Where(o => o.Status == OrderStatus.Shipped)
     .AsEnumerable();</code></pre>
 
       <div class="info-box">
-        <strong>💡 Tip:</strong> Use <code>.Explain()</code> to see query execution plans and verify index usage.
+        <strong>💡 Tip:</strong> Use <code>.Explain()</code> to see query execution plans and verify index usage. Enum index keys are stored as their underlying integer value (<code>int</code>, <code>byte</code>, <code>long</code>) — ordering and range queries work correctly.
       </div>
     </section>
 

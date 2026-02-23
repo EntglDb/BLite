@@ -154,6 +154,40 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
     </section>
 
     <section>
+      <h2>JSON Interop <span style="font-size:0.6em;vertical-align:middle;background:rgba(231,76,60,0.15);color:var(--blite-red);padding:2px 8px;border-radius:12px;font-weight:600">v1.7.0</span></h2>
+      <p>
+        <code>BsonJsonConverter</code> bridges JSON and BLite's native BSON — ideal for ingesting HTTP payloads,
+        exporting documents, or building migration scripts. It uses <code>System.Text.Json</code> (no extra dependencies)
+        and shares the engine's field-name dictionary so field compression is consistent across all operations.
+      </p>
+
+      <h3>Ingest a JSON payload</h3>
+      <pre><code><span class="keyword">using</span> BLite.Bson;
+
+<span class="comment">// Get the engine's shared key maps (field-name compression)</span>
+<span class="keyword">var</span> (keyMap, reverseKeyMap) = engine.GetKeyMap();
+
+<span class="keyword">string</span> json = <span class="string">@"{""_id"":""507f1f77bcf86cd799439011"",""status"":""pending"",""total"":199.99}"</span>;
+
+<span class="type">BsonDocument</span> doc = <span class="type">BsonJsonConverter</span>.FromJson(json, keyMap, reverseKeyMap);
+<span class="type">BsonId</span> id = orders.Insert(doc);</code></pre>
+
+      <h3>Export a document as JSON</h3>
+      <pre><code><span class="type">BsonDocument</span>? doc = orders.FindById(id);
+
+<span class="keyword">if</span> (doc <span class="keyword">is not null</span>)
+{
+    <span class="keyword">string</span> json    = <span class="type">BsonJsonConverter</span>.ToJson(doc);                   <span class="comment">// indented</span>
+    <span class="keyword">string</span> compact = <span class="type">BsonJsonConverter</span>.ToJson(doc, indented: <span class="keyword">false</span>); <span class="comment">// compact</span>
+}</code></pre>
+
+      <div class="info-box">
+        <div class="info-header">📖 Full type-mapping tables</div>
+        See the <a href="/docs/converters" style="color:var(--blite-red)">Converters</a> page for the complete JSON↔BSON type mapping reference.
+      </div>
+    </section>
+
+    <section>
       <h2>API Reference</h2>
       <h3>BLiteEngine</h3>
       <table>

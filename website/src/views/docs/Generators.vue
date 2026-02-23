@@ -168,8 +168,10 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.3.0 – v1.5.0):</strong>
+        <strong>✨ Recent Improvements (v1.3.0 – v1.7.0):</strong>
         <ul>
+          <li>✅ <strong>v1.7.0</strong> — Nested objects that declare a <code>[Key]</code>-decorated <code>Id</code> property but are NOT registered as a collection are now correctly treated as embedded types: their <code>Id</code> is serialised as <code>"id"</code> (not <code>"_id"</code>) and no root-entity base mapper is generated for them</li>
+          <li>✅ <strong>v1.7.0</strong> — Enum properties can now be declared as secondary indexes (<code>modelBuilder.Entity&lt;T&gt;().HasIndex(x =&gt; x.Status)</code>) — enum values are stored as their underlying integer type in the B-Tree</li>
           <li>✅ <strong>v1.6.1</strong> — Full enum support in Source Generator: enum properties (<code>int</code>/<code>byte</code>/<code>long</code> underlying types), nullable enums, and collections of enums (<code>List&lt;TEnum&gt;</code>, <code>TEnum[]</code>)</li>
           <li>✅ <strong>v1.6.0</strong> — <code>RegisterKeys</code> / <code>GetKeyMap</code> exposed publicly on <code>BLiteEngine</code> for external field-name synchronization</li>
           <li>✅ <strong>v1.5.0</strong> — Projection push-down: <code>.Select(x =&gt; new Dto(x.F1, x.F2))</code> compiles to a single-pass BSON reader — <code>T</code> is never allocated</li>
@@ -253,6 +255,11 @@
             <td><strong>N-N Relationships</strong></td>
             <td><span class="badge success">✅</span></td>
             <td>Collections of ObjectIds for efficient document referencing</td>
+          </tr>
+          <tr>
+            <td><strong>Nested Object with <code>[Key] Id</code></strong></td>
+            <td><span class="badge success">✅</span></td>
+            <td>Embedded objects that declare a <code>[Key]</code> Id are treated as plain nested types — <code>Id</code> is serialised as <code>"id"</code>, not <code>"_id"</code>. No root-mapper base class is generated <span style="font-size:0.8em;color:#06b6d4">(v1.7.0)</span></td>
           </tr>
         </tbody>
       </table>

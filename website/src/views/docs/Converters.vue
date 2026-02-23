@@ -1,8 +1,8 @@
 <template>
   <div class="doc-page">
     <header class="doc-header">
-      <h1>🆔 <span class="title-gradient">Custom ID Converters</span></h1>
-      <p class="lead">Use ValueObjects and custom types as primary keys with native conversion support.</p>
+      <h1>🔄 <span class="title-gradient">Converters</span></h1>
+      <p class="lead">BLite ships two complementary conversion systems: <strong>Custom ID Converters</strong> for mapping ValueObjects to BSON storage types, and <strong>BsonJsonConverter</strong> for translating between JSON and native BSON — with zero extra dependencies.</p>
     </header>
 
     <section class="doc-section">
@@ -65,6 +65,104 @@ db.Orders.Insert(new Order { Id = myOrderId, Customer = "Alice" });
 
 // FindById uses the ValueObject type
 var order = db.Orders.FindById(myOrderId);</code></pre>
+    </section>
+
+    <section class="doc-section">
+      <h2>BsonJsonConverter <span style="font-size:0.6em;vertical-align:middle;background:rgba(231,76,60,0.15);color:var(--blite-red);padding:2px 8px;border-radius:12px;font-weight:600">v1.7.0</span></h2>
+      <p>
+        <code>BsonJsonConverter</code> is a static utility in <code>BLite.Bson</code> that converts between UTF-8 JSON and BLite's native BSON representation.
+        It uses <strong><code>System.Text.Json</code></strong> — built into the .NET runtime — so there are zero extra NuGet dependencies.
+      </p>
+      <p>
+        It is especially useful in <strong>schema-less / server mode</strong> (<code>BLiteEngine</code> + <code>DynamicCollection</code>) when you need to ingest JSON payloads or export documents as JSON.
+      </p>
+
+      <h3>JSON → BsonDocument</h3>
+      <pre><code>using BLite.Bson;
+
+using var engine = new BLiteEngine("data.db");
+var col = engine.GetOrCreateCollection("events");
+
+// Get the engine's shared field-name dictionaries
+var (keyMap, reverseKeyMap) = engine.GetKeyMap();
+
+string json = """
+    {
+        "_id": "507f1f77bcf86cd799439011",
+        "type": "order_placed",
+        "total": 199.99,
+        "placedAt": "2026-02-23T10:00:00Z"
+    }
+    """;
+
+BsonDocument doc = BsonJsonConverter.FromJson(json, keyMap, reverseKeyMap);
+col.Insert(doc);</code></pre>
+
+      <h3>BsonDocument → JSON</h3>
+      <pre><code>BsonDocument? doc = col.FindById(id);
+
+if (doc is not null)
+{
+    // Indented output (default)
+    string json = BsonJsonConverter.ToJson(doc);
+
+    // Compact (no indentation)
+    string compact = BsonJsonConverter.ToJson(doc, indented: false);
+
+    Console.WriteLine(json);
+    // {
+    //   "_id": "507f1f77bcf86cd799439011",
+    //   "type": "order_placed",
+    //   "total": 199.99,
+    //   "placedAt": "2026-02-23T10:00:00Z"
+    // }
+}</code></pre>
+
+      <h3>Type Mapping</h3>
+      <table>
+        <thead>
+          <tr><th>JSON</th><th>BSON</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>null</code></td><td><code>BsonValue.Null</code></td><td></td></tr>
+          <tr><td><code>true</code> / <code>false</code></td><td><code>BsonValue.Boolean</code></td><td></td></tr>
+          <tr><td>number (fits int32)</td><td><code>BsonValue.Int32</code></td><td></td></tr>
+          <tr><td>number (fits int64)</td><td><code>BsonValue.Int64</code></td><td></td></tr>
+          <tr><td>number (fractional)</td><td><code>BsonValue.Double</code></td><td></td></tr>
+          <tr><td>string (ISO-8601)</td><td><code>BsonValue.DateTime</code></td><td>Auto-detected, stored as UTC</td></tr>
+          <tr><td>string (UUID)</td><td><code>BsonValue.Guid</code></td><td>Standard <code>D</code> format</td></tr>
+          <tr><td>string</td><td><code>BsonValue.String</code></td><td></td></tr>
+          <tr><td>object <code>{…}</code></td><td>nested <code>BsonDocument</code></td><td>Shares engine key map</td></tr>
+          <tr><td>array <code>[…]</code></td><td><code>BsonValue.Array</code></td><td></td></tr>
+          <tr><td><code>"_id"</code> field</td><td><code>BsonId</code></td><td>24-hex → ObjectId, int, long, Guid, or string fallback</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Reverse Mapping (BSON → JSON)</h3>
+      <table>
+        <thead>
+          <tr><th>BSON</th><th>JSON</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Null</code></td><td><code>null</code></td></tr>
+          <tr><td><code>Boolean</code></td><td><code>true</code> / <code>false</code></td></tr>
+          <tr><td><code>Int32</code> / <code>Int64</code> / <code>Double</code> / <code>Decimal</code></td><td>number</td></tr>
+          <tr><td><code>String</code></td><td>string</td></tr>
+          <tr><td><code>DateTime</code></td><td>ISO-8601 string (<code>"2026-02-23T10:00:00Z"</code>)</td></tr>
+          <tr><td><code>Guid</code></td><td>UUID string (<code>"xxxxxxxx-xxxx-..."</code>)</td></tr>
+          <tr><td><code>ObjectId</code></td><td>24-char lowercase hex string</td></tr>
+          <tr><td><code>Timestamp</code></td><td>number (Unix seconds)</td></tr>
+          <tr><td><code>Binary</code></td><td>base64 string</td></tr>
+          <tr><td><code>Coordinates</code></td><td><code>[lon, lat]</code> (GeoJSON order)</td></tr>
+          <tr><td><code>Array</code></td><td>JSON array</td></tr>
+          <tr><td><code>Document</code></td><td>JSON object</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info-box">
+        <span class="icon">💡</span>
+        <p>Both overloads of <code>FromJson</code> accept a <code>string</code> or a <code>ReadOnlyMemory&lt;byte&gt;</code> UTF-8 buffer. The byte-buffer overload avoids an extra string allocation when reading directly from a network stream.</p>
+      </div>
     </section>
   </div>
 </template>
@@ -164,5 +262,34 @@ li {
   color: var(--text-secondary);
   margin-bottom: 12px;
   line-height: 1.6;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0 24px;
+}
+
+th, td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(231, 76, 60, 0.2);
+}
+
+th {
+  color: var(--blite-red);
+  font-weight: 600;
+}
+
+td {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 28px 0 12px;
+  color: var(--text-primary);
 }
 </style>

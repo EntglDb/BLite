@@ -42,3 +42,10 @@
 - All public APIs must have unit tests
 - Performance-critical code must have benchmarks
 - Verify zero-allocation with BenchmarkDotNet memory diagnostics
+
+## Agent Rules Maintenance
+
+- **ALWAYS** update `.agent/rules.md` at the end of every development session to reflect new features, fixes, architectural decisions, and any new conventions introduced
+- **ALWAYS** update `.agent/context.md` at the end of every development session: version history, new/changed APIs, new entities, new test files, new website pages
+- Document new packages, new projects, new entities, new test files, and relevant API changes
+- Keep both files accurate so any agent can onboard the project from scratch by reading them alone
