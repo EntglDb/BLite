@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.7.1"></a>
+## [1.7.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.7.1) (2026-02-23)
+
+### Bug Fixes
+
+* corrects array document write to avoid key dictionary lookup ([7ac36a7](https://www.github.com/EntglDb/BLite/commit/7ac36a76c99b85b786f7eec744415cbc6dfdb509))
+
 <a name="1.7.0"></a>
 ## [1.7.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.7.0) (2026-02-23)
 
