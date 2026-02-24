@@ -14,6 +14,7 @@ import Converters from '../views/docs/Converters.vue'
 import Benchmarks from '../views/docs/Benchmarks.vue'
 import DynamicAPI from '../views/docs/DynamicAPI.vue'
 import Comparisons from '../views/docs/Comparisons.vue'
+import BLQL from '../views/docs/BLQL.vue'
 
 export const DEFAULT_TITLE = 'BLite – High-Performance Embedded Database for .NET'
 export const DEFAULT_DESC = 'BLite is an AI-ready, zero-allocation BSON document store for .NET 10. ACID transactions, Change Data Capture, R-Tree spatial indexing — embedded, cloud-free.'
@@ -127,6 +128,14 @@ export const routes: RouteRecordRaw[] = [
                 meta: {
                     title: 'Schema-less API (BLiteEngine) – BLite',
                     description: 'Use BLiteEngine and DynamicCollection for schema-less BSON queries without compile-time types. Ideal for server mode, migrations, and scripting.'
+                }
+            },
+            {
+                path: 'blql',
+                component: BLQL,
+                meta: {
+                    title: 'BLQL — BLite Query Language',
+                    description: 'BLQL is the MQL-inspired query language for DynamicCollection. Filter, sort, project, and page BsonDocument results using JSON strings or the fluent C# API. Built-in injection and ReDoS protection.'
                 }
             }
         ]

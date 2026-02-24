@@ -15,7 +15,8 @@ const docSections = [
   { path: '/docs/architecture', label: 'Architecture', icon: '🏗️' },
   { path: '/docs/converters', label: 'Custom ID Converters', icon: '🆔' },
   { path: '/docs/benchmarks', label: 'Benchmarks', icon: '⚡' },
-  { path: '/docs/dynamic-api', label: 'Schema-less API', icon: '🔌' }
+  { path: '/docs/dynamic-api', label: 'Schema-less API', icon: '🔌' },
+  { path: '/docs/blql', label: 'BLQL', icon: '🔎' }
 ]
 
 const isActive = (path: string) => route.path === path

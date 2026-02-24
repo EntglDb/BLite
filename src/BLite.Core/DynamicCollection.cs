@@ -138,6 +138,14 @@ public sealed class DynamicCollection : IDisposable
     public BsonIdType IdType => _idType;
 
     /// <summary>
+    /// Applies a BLQL projection to a document using the database-level key maps.
+    /// Key maps live at database scope (StorageEngine), not per-collection;
+    /// this method keeps that detail encapsulated.
+    /// </summary>
+    internal BsonDocument ProjectDocument(BsonDocument source, Query.Blql.BlqlProjection projection)
+        => projection.Apply(source, _storage.GetKeyMap(), _storage.GetKeyReverseMap());
+
+    /// <summary>
     /// Creates a BsonDocument using the storage engine's key dictionary.
     /// Field names are automatically registered in the C-BSON key map.
     /// </summary>

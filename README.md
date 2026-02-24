@@ -54,6 +54,30 @@ var users = collection.AsQueryable()
 - **Composite Indexes**: Support for multi-column keys.
 - **Vector Search (HNSW)**: Fast similarity search for AI embeddings using Hierarchical Navigable Small World algorithm.
 
+### 🔎 BLQL — BLite Query Language
+MQL-inspired query language for schema-less (`DynamicCollection`) scenarios. Filter, sort, project, and page `BsonDocument` results using either a fluent C# API or JSON strings — no compile-time types required.
+
+```csharp
+// JSON string entry-point (MQL-style)
+var docs = col.Query("""{ "status": "active", "age": { "$gt": 18 } }""")
+    .Sort("""{ "name": 1 }""")
+    .Skip(0).Take(20)
+    .ToList();
+
+// Fluent C# API
+var docs = col.Query()
+    .Filter(BlqlFilter.And(
+        BlqlFilter.Eq("status", "active"),
+        BlqlFilter.Gt("age", 18)))
+    .OrderBy("name")
+    .Project(BlqlProjection.Include("name", "email"))
+    .ToList();
+```
+
+- **All MQL operators**: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$type`, `$regex`.
+- **Logical combinators**: `$and`, `$or`, `$nor`, `$not`, implicit AND for multiple top-level fields.
+- **Security-hardened**: Unknown `$` operators (e.g. `$where`, `$expr`) throw `FormatException`. ReDoS protected via `NonBacktracking` regex engine.
+
 ### 🤖 AI-Ready Vector Search
 BLite natively supports vector embeddings and fast similarity search.
 
@@ -455,10 +479,118 @@ if (doc is not null)
 | **Type safety** | ✅ Compile-time | ❌ Runtime `BsonDocument` |
 | **Source generators** | ✅ Zero reflection | — |
 | **LINQ** | ✅ Full `IQueryable` | ❌ |
+| **BLQL** | ❌ | ✅ JSON string queries |
 | **Schema-less / dynamic** | ❌ | ✅ |
 | **Server / scripting mode** | ❌ | ✅ |
 | **Performance** | ✅ Max (generated mappers) | ✅ Near-identical (same kernel) |
 | **Shared storage** | ✅ | ✅ Same file |
+
+---
+
+## 🔎 BLQL — BLite Query Language
+
+BLQL is a **BLite Query Language** for `DynamicCollection` — the schema-less counterpart of LINQ for `DocumentDbContext`. Inspired by MQL (MongoDB Query Language), it lets you filter, sort, project, and page `BsonDocument` results using **JSON strings** or a **fluent C# API**, with no compile-time type information required.
+
+### Entry Points
+
+```csharp
+using BLite.Core.Query.Blql;
+
+// 1. JSON string filter (MQL-style)
+var docs = col.Query("""{ "status": "active", "age": { "$gt": 18 } }""")
+    .Sort("""{ "name": 1 }""")
+    .Skip(0).Take(20)
+    .ToList();
+
+// 2. Programmatic filter
+var docs = col.Query()
+    .Filter(BlqlFilter.Eq("status", "active").AndAlso(BlqlFilter.Gt("age", 18)))
+    .OrderByDescending("createdAt")
+    .Project(BlqlProjection.Include("name", "email", "createdAt"))
+    .ToList();
+```
+
+### Supported Filter Operators
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
+| `{ "f": value }` | `BlqlFilter.Eq("f", v)` | Equality |
+| `{ "f": { "$ne": v } }` | `BlqlFilter.Ne("f", v)` | Not equal |
+| `{ "f": { "$gt": v } }` | `BlqlFilter.Gt("f", v)` | Greater than |
+| `{ "f": { "$gte": v } }` | `BlqlFilter.Gte("f", v)` | Greater than or equal |
+| `{ "f": { "$lt": v } }` | `BlqlFilter.Lt("f", v)` | Less than |
+| `{ "f": { "$lte": v } }` | `BlqlFilter.Lte("f", v)` | Less than or equal |
+| `{ "f": { "$in": [...] } }` | `BlqlFilter.In("f", ...)` | Value in set |
+| `{ "f": { "$nin": [...] } }` | `BlqlFilter.Nin("f", ...)` | Value not in set |
+| `{ "f": { "$exists": true } }` | `BlqlFilter.Exists("f")` | Field exists |
+| `{ "f": { "$type": 16 } }` | `BlqlFilter.Type("f", BsonType.Int32)` | BSON type check |
+| `{ "f": { "$regex": "^Al" } }` | `BlqlFilter.Regex("f", "^Al")` | Regex match |
+| `{ "$and": [...] }` | `BlqlFilter.And(...)` | Logical AND |
+| `{ "$or": [...] }` | `BlqlFilter.Or(...)` | Logical OR |
+| `{ "$nor": [...] }` | `BlqlFilter.Nor(...)` | Logical NOR |
+| `{ "$not": {...} }` | `BlqlFilter.Not(...)` | Logical NOT |
+
+Multiple top-level fields in one JSON object produce an implicit AND:
+```json
+{ "status": "active", "age": { "$gt": 18 } }
+```
+
+### Sorting
+
+```csharp
+// JSON sort (1 = ascending, -1 = descending)
+var results = col.Query(filter)
+    .Sort("""{ "lastName": 1, "age": -1 }""")  // multi-key sort
+    .ToList();
+
+// Fluent sort
+var results = col.Query(filter)
+    .OrderBy("lastName")
+    .ToList();
+```
+
+### Projection
+
+```csharp
+// Include only specified fields
+var results = col.Query(filter)
+    .Project(BlqlProjection.Include("name", "email"))
+    .ToList();
+
+// Exclude specified fields
+var results = col.Query(filter)
+    .Project(BlqlProjection.Exclude("password", "__internal"))
+    .ToList();
+```
+
+### Paging & Terminal Methods
+
+```csharp
+var page = col.Query(filter)
+    .OrderBy("createdAt")
+    .Skip(20).Take(10)     // or .Limit(10)
+    .ToList();
+
+// Single document
+BsonDocument? doc = col.Query(filter).FirstOrDefault();
+
+// Aggregates
+int total = col.Query(filter).Count();
+bool any  = col.Query(filter).Any();
+bool none = col.Query(filter).None();
+
+// Async streaming
+await foreach (var doc in col.Query(filter).AsAsyncEnumerable(ct))
+    Process(doc);
+```
+
+### Security
+
+The JSON parser is **hardened against BLQL-injection**:
+- Unknown `$` operators at root level (`$where`, `$expr`, `$function`, …) → `FormatException`.
+- `$regex` patterns are compiled with `RegexOptions.NonBacktracking` (ReDoS-safe).
+- `$exists` requires a strict boolean — wrong types throw `FormatException`.
+- Deeply nested JSON (> 64 levels) is rejected by `System.Text.Json` before evaluation.
 
 ---
 
@@ -476,6 +608,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **Async I/O**: True async reads and writes — `FindByIdAsync`, `FindAllAsync` (`IAsyncEnumerable<T>`), `ToListAsync`/`ToArrayAsync`/`CountAsync`/`AnyAsync`/`AllAsync`/`FirstOrDefaultAsync`/`SingleOrDefaultAsync` for LINQ pipelines, `SaveChangesAsync`. `CancellationToken` propagates to `RandomAccess.ReadAsync` (IOCP on Windows).
 - ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
 - ✅ **Projection Push-down**: SELECT (and WHERE+SELECT) lambdas compile to a single-pass raw-BSON reader — `T` is never instantiated. `IBLiteQueryable<T>` preserves the async chain across all LINQ operators.
+- ✅ **BLQL**: MQL-inspired query language for `DynamicCollection` — filter, sort, project and page `BsonDocument` results from JSON strings or via a fluent C# API. Security-hardened against injection and ReDoS.
 
 ## 🔮 Future Vision
 

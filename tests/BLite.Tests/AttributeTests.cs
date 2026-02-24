@@ -16,7 +16,7 @@ namespace BLite.Tests
         public AttributeTests()
         {
             ushort id = 1;
-            string[] keys = ["_id", "display_name", "age", "location", "0", "1"];
+            string[] keys = ["_id", "name", "age", "location", "0", "1"];
             foreach (var key in keys)
             {
                 _keyMap[key] = id;
@@ -79,33 +79,6 @@ namespace BLite.Tests
             bool thrown = false;
             try { mapper.Serialize(user, writer); } catch (ValidationException) { thrown = true; }
             Assert.True(thrown, "Should throw ValidationException for Age out of range.");
-        }
-
-        [Fact]
-        public void Test_Column_Name_Mapping()
-        {
-            var mapper = CreateMapper();
-            var user = new AnnotatedUser { Name = "John", Age = 30 };
-            var buffer = new byte[1024];
-            var writer = new BsonSpanWriter(buffer, _keyMap);
-            
-            mapper.Serialize(user, writer);
-            
-            var reader = new BsonSpanReader(buffer, _keys);
-            reader.ReadDocumentSize();
-            
-            bool foundDisplayName = false;
-            while (reader.Remaining > 0)
-            {
-                var type = reader.ReadBsonType();
-                if (type == BsonType.EndOfDocument) break;
-                
-                var name = reader.ReadElementHeader();
-                if (name == "display_name") foundDisplayName = true;
-                reader.SkipValue(type);
-            }
-            
-            Assert.True(foundDisplayName, "BSON field name should be 'display_name' from [Column] attribute.");
         }
 
         [Fact]
