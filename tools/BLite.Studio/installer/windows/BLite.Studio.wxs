@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  BLite Studio — WiX 5 MSI definition
+  BLite Studio — WiX MSI definition
   Build with:
     wix build BLite.Studio.wxs \
         -d AppVersion=1.0.0     \
@@ -39,10 +39,13 @@
 
     <!-- Installation root: C:\Program Files\BLite Studio -->
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="BLite Studio">
-          <Files Include="$(SourceDir)\**" />
-      </Directory>
+      <Directory Id="INSTALLFOLDER" Name="BLite Studio" />
     </StandardDirectory>
+
+    <!-- Define a ComponentGroup explicitly for the harvested files -->
+    <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(SourceDir)\**" />
+    </ComponentGroup>
 
     <!-- Start-menu folder + shortcut -->
     <StandardDirectory Id="ProgramMenuFolder">
@@ -85,7 +88,7 @@
 
     <!-- Feature tree -->
     <Feature Id="ProductFeature" Title="BLite Studio" Level="1">
-	  <ComponentGroupRef Id="SourceDir" /> 
+      <ComponentGroupRef Id="PublishedFiles" /> 
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
