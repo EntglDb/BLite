@@ -8,6 +8,7 @@ obj/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+publish/
 
 # BenchmarkDotNet
 BenchmarkDotNet.Artifacts/

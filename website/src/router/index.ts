@@ -1,6 +1,7 @@
 import { type RouteRecordRaw } from 'vue-router'
 import Home from '../views/Home.vue'
 import Docs from '../views/Docs.vue'
+import Studio from '../views/Studio.vue'
 import GettingStarted from '../views/docs/GettingStarted.vue'
 import Installation from '../views/docs/Installation.vue'
 import Transactions from '../views/docs/Transactions.vue'
@@ -147,6 +148,15 @@ export const routes: RouteRecordRaw[] = [
         meta: {
             title: 'BLite vs LiteDB, SQLite & RocksDB – Comparisons',
             description: 'Side-by-side comparison of BLite against popular embedded databases: LiteDB, SQLite, and RocksDB. Allocation count, throughput, features, and API ergonomics.'
+        }
+    },
+    {
+        path: '/studio',
+        name: 'studio',
+        component: Studio,
+        meta: {
+            title: 'BLite Studio — GUI for BLite Databases',
+            description: 'Download BLite Studio, the official cross-platform GUI for browsing, querying, and managing BLite databases. Available for Windows and Linux.'
         }
     }
 ]

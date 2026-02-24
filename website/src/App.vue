@@ -41,6 +41,7 @@ useHead(() => {
         <nav>
           <router-link to="/">Home</router-link>
           <router-link to="/docs">Docs</router-link>
+          <router-link to="/studio">Studio</router-link>
           <router-link to="/comparisons">Comparisons</router-link>
           <a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link">GitHub ↗</a>
         </nav>
@@ -56,9 +57,20 @@ useHead(() => {
     </main>
 
     <footer class="main-footer">
-      <div class="container">
-        <p>© 2026 BLite Project. Open Source (MIT).</p>
-        <p class="tagline">"Sky is Blite, no Clouds today."</p>
+      <div class="container footer-inner">
+        <div class="footer-col">
+          <p>© 2026 BLite Project. Open Source (MIT).</p>
+          <p class="tagline">"Sky is Blite, no Clouds today."</p>
+        </div>
+        <div class="footer-col footer-downloads">
+          <p class="footer-dl-title">⬇ Download BLite Studio v1.9.0</p>
+          <div class="footer-dl-links">
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-win-x64.msi">🪟 Windows MSI</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-win-x64-portable.zip">🪟 Windows Portable</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/blite-studio_1.9.0_amd64.deb">🐧 Linux .deb</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-linux-x64.tar.gz">🐧 Linux tar.gz</a>
+          </div>
+        </div>
       </div>
     </footer>
   </div>
@@ -150,14 +162,46 @@ main {
   margin-top: 80px;
   color: var(--text-muted);
   font-size: 0.9rem;
-  text-align: center;
 }
 
+.footer-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.footer-col { display: flex; flex-direction: column; gap: 6px; }
+
 .main-footer .tagline {
-  margin-top: 8px;
+  margin-top: 4px;
   color: var(--blite-red);
   font-style: italic;
   font-size: 0.85rem;
+}
+
+.footer-dl-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.footer-dl-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.footer-dl-links a {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.footer-dl-links a:hover {
+  color: var(--blite-red);
 }
 
 .fade-enter-active,

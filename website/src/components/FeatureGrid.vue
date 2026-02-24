@@ -34,6 +34,11 @@ const features = [
     icon: '🔌',
     title: 'Schema-less API',
     description: 'BLiteEngine + DynamicCollection for schema-less BSON queries. No compile-time types needed — same kernel, same performance.'
+  },
+  {
+    icon: '🖥️',
+    title: 'BLite Studio',
+    description: 'Official cross-platform GUI to browse, query and manage your databases. Available for Windows and Linux.'
   }
 ]
 </script>
