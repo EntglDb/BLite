@@ -18,6 +18,14 @@ const downloads = [
       { label: 'Debian package (.deb)', url: `${BASE}/blite-studio_${VERSION}_amd64.deb`, tag: 'Recommended' },
       { label: 'Archive (.tar.gz)', url: `${BASE}/BLite.Studio-${VERSION}-linux-x64.tar.gz`, tag: '' },
     ]
+  },
+  {
+    platform: 'macOS',
+    icon: '🍎',
+    items: [
+      { label: 'Apple Silicon (.dmg)', url: `${BASE}/BLite.Studio-${VERSION}-osx-arm64.dmg`, tag: 'Recommended' },
+      { label: 'Intel x64 (.dmg)', url: `${BASE}/BLite.Studio-${VERSION}-osx-x64.dmg`, tag: '' },
+    ]
   }
 ]
 
@@ -27,7 +35,7 @@ const features = [
   { icon: '✏️', title: 'Insert & Edit', description: 'Insert new documents and edit existing ones with a built-in BSON editor.' },
   { icon: '📋', title: 'Connection History', description: 'Quickly reopen recent databases with saved access settings.' },
   { icon: '🔒', title: 'Read-Only Mode', description: 'Open databases in safe read-only mode to prevent accidental writes.' },
-  { icon: '🌐', title: 'Cross-Platform', description: 'Native Windows and Linux builds. macOS support coming soon.' },
+  { icon: '🌐', title: 'Cross-Platform', description: 'Native builds for Windows, Linux and macOS (Intel & Apple Silicon).' },
 ]
 </script>
 

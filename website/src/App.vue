@@ -69,6 +69,8 @@ useHead(() => {
             <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-win-x64-portable.zip">🪟 Windows Portable</a>
             <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/blite-studio_1.9.0_amd64.deb">🐧 Linux .deb</a>
             <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-linux-x64.tar.gz">🐧 Linux tar.gz</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-osx-arm64.dmg">🍎 macOS Apple Silicon</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.9.0/BLite.Studio-1.9.0-osx-x64.dmg">🍎 macOS Intel</a>
           </div>
         </div>
       </div>
