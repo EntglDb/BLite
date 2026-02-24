@@ -40,13 +40,9 @@
     <!-- Installation root: C:\Program Files\BLite Studio -->
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="BLite Studio">
-        <Component Id="BLiteStudioExe" Guid="*">
-          <File Id="BLiteStudioExeFile"
-                Source="$(SourceDir)\BLite.Studio.exe"
-                KeyPath="yes" />
+        <Component Id="PublishedFiles" Guid="*">
+          <Files Include="$(SourceDir)\**" />
         </Component>
-        <!-- Harvest all remaining published files (DLLs, assets, etc.) -->
-        <Files Include="$(SourceDir)\**" Exclude="$(SourceDir)\BLite.Studio.exe" />
       </Directory>
     </StandardDirectory>
 
@@ -91,7 +87,7 @@
 
     <!-- Feature tree -->
     <Feature Id="ProductFeature" Title="BLite Studio" Level="1">
-      <ComponentRef Id="BLiteStudioExe" />
+      <ComponentRef Id="PublishedFiles" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
