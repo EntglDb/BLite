@@ -7,11 +7,18 @@
       <h2>Storage Engine</h2>
       <p>BLite uses a <strong>page-based storage engine</strong> with memory-mapped files:</p>
       <ul>
-        <li><strong>PageFile</strong> - Memory-mapped file manager</li>
+        <li><strong>PageFile</strong> - Memory-mapped file manager with block-aligned growth</li>
         <li><strong>Write-Ahead Log (WAL)</strong> - Durability and crash recovery</li>
         <li><strong>SlottedPage</strong> - Variable-length record storage</li>
         <li><strong>B-Tree Index</strong> - Logarithmic key lookups</li>
       </ul>
+
+      <h3>File Growth Strategy</h3>
+      <p>The file grows in <strong>fixed-size blocks</strong> (aligned allocation), avoiding the exponential doubling of traditional databases. Waste is bounded to at most one block regardless of database size:</p>
+      <pre><code><span class="comment">// PageFileConfig presets</span>
+<span class="type">PageFileConfig</span>.Small   <span class="comment">// 8 KB pages,  grow by  512 KB</span>
+<span class="type">PageFileConfig</span>.Default <span class="comment">// 16 KB pages, grow by    1 MB</span>
+<span class="type">PageFileConfig</span>.Large   <span class="comment">// 32 KB pages, grow by    2 MB</span></code></pre>
     </section>
 
     <section>
@@ -173,6 +180,17 @@
     <span class="comment">// Clear WAL</span>
     WAL.Truncate();
 }</code></pre>
+    </section>
+
+    <section>
+      <h2>Hot Backup</h2>
+      <p>BLite supports <strong>online, consistent backups</strong> without stopping the engine. Concurrent reads and writes remain safe during the copy:</p>
+      <pre><code><span class="comment">// 1. Checkpoint WAL into PageFile (under commit lock)</span>
+<span class="comment">// 2. Copy PageFile to destination (while holding the lock)</span>
+<span class="comment">// 3. Release lock — normal writes resume</span>
+
+<span class="comment">// The WAL is NOT copied — the destination is already consistent</span></code></pre>
+      <p>See <strong>Transactions → Hot Backup</strong> for the user-facing API.</p>
     </section>
 
     <section>

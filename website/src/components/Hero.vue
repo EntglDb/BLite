@@ -13,7 +13,7 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
     
     <div class="container hero-content">
       <div class="badge animate-fade-in" style="animation-delay: 0.1s">
-        <span class="badge-dot"></span> v1.6.1 Released - Enum Support &amp; BLiteEngine Key Map API
+        <span class="badge-dot"></span> v1.8.0 Released - Hot Backup &amp; Storage Growth
       </div>
       
       <h1 class="hero-title animate-fade-in" style="animation-delay: 0.2s">

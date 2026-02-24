@@ -29,7 +29,7 @@
   "src/components/FeatureGrid.vue?vue&type=style&index=0&scoped=c7eae723&lang.css": [],
   "src/components/Hero.vue": [],
   "src/components/Hero.vue?vue&type=script&setup=true&lang.ts": [],
-  "src/components/Hero.vue?vue&type=style&index=0&scoped=8021855f&lang.css": [],
+  "src/components/Hero.vue?vue&type=style&index=0&scoped=baf39348&lang.css": [],
   "src/main.ts": [],
   "src/router/index.ts": [],
   "src/style.css": [],
@@ -40,7 +40,7 @@
   "src/views/Home.vue?vue&type=script&setup=true&lang.ts": [],
   "src/views/Home.vue?vue&type=style&index=0&scoped=e3052d86&lang.css": [],
   "src/views/docs/Architecture.vue": [],
-  "src/views/docs/Architecture.vue?vue&type=style&index=0&scoped=3d7cac45&lang.css": [],
+  "src/views/docs/Architecture.vue?vue&type=style&index=0&scoped=5def349c&lang.css": [],
   "src/views/docs/Benchmarks.vue": [],
   "src/views/docs/Benchmarks.vue?vue&type=style&index=0&scoped=e15e320f&lang.css": [],
   "src/views/docs/CDC.vue": [],
@@ -64,5 +64,5 @@
   "src/views/docs/Spatial.vue": [],
   "src/views/docs/Spatial.vue?vue&type=style&index=0&scoped=cc7599cf&lang.css": [],
   "src/views/docs/Transactions.vue": [],
-  "src/views/docs/Transactions.vue?vue&type=style&index=0&scoped=2594d762&lang.css": []
+  "src/views/docs/Transactions.vue?vue&type=style&index=0&scoped=0f65e990&lang.css": []
 }

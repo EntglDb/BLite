@@ -355,6 +355,32 @@ txn.Commit();</code></pre>
     </section>
 
     <section>
+      <h2>Hot Backup (v1.8.0)</h2>
+      <p>Create a <strong>consistent, online backup</strong> of the database without stopping or pausing the engine. Concurrent reads and writes remain safe during the copy.</p>
+      <pre><code><span class="comment">// Typed API (DocumentDbContext)</span>
+<span class="keyword">using</span> <span class="keyword">var</span> db = <span class="keyword">new</span> <span class="type">MyDbContext</span>(<span class="string">"mydb.blite"</span>);
+<span class="keyword">await</span> db.BackupAsync(<span class="string">"backups/mydb-2026-02-24.blite"</span>);
+
+<span class="comment">// Schema-less API (BLiteEngine)</span>
+<span class="keyword">using</span> <span class="keyword">var</span> engine = <span class="keyword">new</span> <span class="type">BLiteEngine</span>(<span class="string">"mydb.blite"</span>);
+<span class="keyword">await</span> engine.BackupAsync(<span class="string">"backups/mydb-2026-02-24.blite"</span>);</code></pre>
+      <p>The backup file is a <strong>standalone, fully consistent database</strong> that can be opened directly with a new engine instance.</p>
+      <div class="info-box">
+        <strong>How it works:</strong>
+        <ul>
+          <li>Acquires the commit lock (no new commits during copy)</li>
+          <li>Checkpoints WAL into the PageFile</li>
+          <li>Copies the PageFile to the destination path</li>
+          <li>Releases the lock — writes resume immediately</li>
+          <li>WAL is <strong>not</strong> copied — the destination is already consistent</li>
+        </ul>
+      </div>
+      <pre><code><span class="comment">// With CancellationToken support</span>
+<span class="keyword">var</span> cts = <span class="keyword">new</span> <span class="type">CancellationTokenSource</span>(<span class="type">TimeSpan</span>.FromSeconds(<span class="number">30</span>));
+<span class="keyword">await</span> db.BackupAsync(<span class="string">"backup.blite"</span>, cts.Token);</code></pre>
+    </section>
+
+    <section>
       <h2>Error Handling with Explicit Transactions</h2>
       <pre><code><span class="keyword">try</span>
 {
