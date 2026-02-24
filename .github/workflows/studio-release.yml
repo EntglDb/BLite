@@ -59,10 +59,10 @@ jobs:
           -p:PublishSingleFile=false
           -o publish/win-x64
 
-      - name: Install WiX 4 (pinned stable)
+      - name: Install WiX 5 (pinned stable)
         run: |
-          dotnet tool install --global wix --version 4.0.5
-          wix extension add WixToolset.UI.wixext/4.0.5 --global
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add WixToolset.UI.wixext/5.0.2 --global
 
       - name: Build MSI
         run: |

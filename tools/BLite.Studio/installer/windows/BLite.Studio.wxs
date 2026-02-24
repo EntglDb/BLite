@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  BLite Studio — WiX 4 MSI definition
+  BLite Studio — WiX 5 MSI definition
   Build with:
     wix build BLite.Studio.wxs \
         -d AppVersion=1.0.0     \
