@@ -59,26 +59,27 @@ jobs:
           -p:PublishSingleFile=false
           -o publish/win-x64
 
-      - name: Install WiX 4
+      - name: Install WiX 4 (pinned stable)
         run: |
-          dotnet tool install --global wix
-          wix extension add WixToolset.UI.wixext --global
+          dotnet tool install --global wix --version 4.0.5
+          wix extension add WixToolset.UI.wixext/4.0.5 --global
 
       - name: Build MSI
-        run: >
-          wix build
-          tools/BLite.Studio/installer/windows/BLite.Studio.wxs
-          -d AppVersion=${{ env.VERSION }}
-          -d SourceDir=publish/win-x64
-          -arch x64
-          -ext WixToolset.UI.wixext
-          -o dist/BLite.Studio-${{ env.VERSION }}-win-x64.msi
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          wix build `
+            tools/BLite.Studio/installer/windows/BLite.Studio.wxs `
+            -d AppVersion=${{ env.VERSION }} `
+            -d SourceDir=publish/win-x64 `
+            -arch x64 `
+            -ext WixToolset.UI.wixext `
+            -o dist/BLite.Studio-${{ env.VERSION }}-win-x64.msi
 
       - name: Zip portable build
-        run: >
-          Compress-Archive
-          -Path publish/win-x64/*
-          -DestinationPath dist/BLite.Studio-${{ env.VERSION }}-win-x64-portable.zip
+        run: |
+          Compress-Archive `
+            -Path publish/win-x64/* `
+            -DestinationPath dist/BLite.Studio-${{ env.VERSION }}-win-x64-portable.zip
 
       - name: Upload Windows artefacts
         uses: actions/upload-artifact@v4
