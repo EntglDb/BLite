@@ -1,7 +1,6 @@
 using BLite.Bson;
 using BLite.Core;
 using BLite.Shared;
-using Xunit;
 
 namespace BLite.Tests;
 

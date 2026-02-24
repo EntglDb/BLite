@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\BLite.Shared\BLite.Shared.csproj" />
+    <ProjectReference Include="..\BLite.Shared\BLite.Shared.csproj" />
     <ProjectReference Include="..\..\src\BLite.Bson\BLite.Bson.csproj" />
     <ProjectReference Include="..\..\src\BLite.Core\BLite.Core.csproj" />
   </ItemGroup>

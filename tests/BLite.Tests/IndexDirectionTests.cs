@@ -1,10 +1,5 @@
-using BLite.Bson;
-using BLite.Core;
-using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Shared;
-using System;
-using Xunit;
 
 namespace BLite.Tests;
 

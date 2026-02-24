@@ -16,8 +16,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BLite.Core\BLite.Core.csproj" />
-    <ProjectReference Include="..\..\BLite.Shared\BLite.Shared.csproj" />
+    <ProjectReference Include="..\..\src\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\BLite.Shared\BLite.Shared.csproj" />
   </ItemGroup>
 
 </Project>

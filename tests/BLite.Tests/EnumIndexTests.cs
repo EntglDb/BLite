@@ -1,5 +1,3 @@
-using BLite.Bson;
-using BLite.Core.Indexing;
 using BLite.Shared;
 
 namespace BLite.Tests;

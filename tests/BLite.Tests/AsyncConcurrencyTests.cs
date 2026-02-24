@@ -1,7 +1,5 @@
-using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
-using Xunit;
 
 namespace BLite.Tests;
 

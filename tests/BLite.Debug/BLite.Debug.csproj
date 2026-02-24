@@ -1,17 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <LangVersion>14.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BLite.Core\BLite.Core.csproj" />
-    <ProjectReference Include="..\BLite.Bson\BLite.Bson.csproj" />
+    <ProjectReference Include="..\BLite.Shared\BLite.Shared.csproj" />
+    <ProjectReference Include="..\..\src\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\..\src\BLite.Bson\BLite.Bson.csproj" />
   </ItemGroup>
-
 </Project>

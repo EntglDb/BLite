@@ -182,7 +182,6 @@ namespace BLite.Shared
         public ObjectId Id { get; set; }
 
         [Required]
-        [Column("display_name")]
         [StringLength(50, MinimumLength = 3)]
         public string Name { get; set; } = "";
 

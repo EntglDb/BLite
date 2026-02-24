@@ -1,7 +1,3 @@
-using Xunit;
-using BLite.Core.Indexing;
-using System.IO;
-using System.Linq;
 using BLite.Core;
 using BLite.Shared;
 

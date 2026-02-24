@@ -1,0 +1,743 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:BLite.Studio.ViewModels"
+        xmlns:ex="using:BLite.Studio.ViewModels.Explorer"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="640"
+        x:Class="BLite.Studio.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="BLite Studio"
+        Width="900" Height="680"
+        MinWidth="640" MinHeight="480"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:MainWindowViewModel/>
+  </Design.DataContext>
+
+  <Grid RowDefinitions="Auto,*">
+
+    <!-- ── Toolbar ──────────────────────────────────────────────────── -->
+    <Border Grid.Row="0"
+            Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+            BorderThickness="0,0,0,1"
+            Padding="16,10">
+      <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <TextBlock Text="BLite" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+        <TextBlock Text="Studio" FontSize="18" FontWeight="Light" VerticalAlignment="Center"/>
+        <TextBlock Text="—" Margin="8,0" Opacity="0.4" VerticalAlignment="Center"
+                   IsVisible="{Binding IsDatabaseOpen}"/>
+        <TextBlock Text="{Binding OpenDatabaseName}"
+                   FontSize="14" VerticalAlignment="Center" Opacity="0.7"
+                   IsVisible="{Binding IsDatabaseOpen}"/>
+      </StackPanel>
+    </Border>
+
+    <!-- ── Body ─────────────────────────────────────────────────────── -->
+    <Grid Grid.Row="1">
+
+      <!-- ══ Open database panel ══════════════════════════════════ -->
+      <ScrollViewer IsVisible="{Binding !IsDatabaseOpen}" Padding="32,28,32,32">
+        <StackPanel MaxWidth="560" Spacing="0">
+
+          <TextBlock Text="Open database" FontSize="22" FontWeight="SemiBold"
+                     Margin="0,0,0,4"/>
+          <TextBlock Text="Select a BLite database file and configure the access options."
+                     Opacity="0.6" Margin="0,0,0,24" TextWrapping="Wrap"/>
+
+          <!-- File path row -->
+          <TextBlock Text="Database file" FontWeight="SemiBold" Margin="0,0,0,6"/>
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0"
+                     Text="{Binding DatabasePath}"
+                     Watermark="Percorso del file (qualsiasi estensione)…"
+                     VerticalContentAlignment="Center"/>
+            <Button Grid.Column="1"
+                    Content="Browse…"
+                    Margin="8,0,0,0"
+                    Click="Browse_Click"/>
+          </Grid>
+          <TextBlock Text="Any file extension is accepted (.db, .blite, etc.)"
+                     FontSize="11" Opacity="0.5" Margin="0,4,0,0"/>
+
+          <Separator Margin="0,20,0,18"/>
+
+          <!-- Preset -->
+          <TextBlock Text="Page configuration" FontWeight="SemiBold" Margin="0,0,0,10"/>
+          <Grid ColumnDefinitions="*,*,*">
+            <Border Grid.Column="0" Classes="PresetCard" Margin="0,0,6,0">
+              <StackPanel>
+                <RadioButton Content="Small" GroupName="Preset"
+                             IsChecked="{Binding IsPresetSmall}" FontWeight="SemiBold"/>
+                <TextBlock Text="8 KB page · 512 KB growth" FontSize="11" Opacity="0.6" Margin="28,0,0,0"/>
+                <TextBlock Text="Small documents" FontSize="11" Opacity="0.5" Margin="28,2,0,0"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Classes="PresetCard" Margin="3,0">
+              <StackPanel>
+                <RadioButton Content="Default" GroupName="Preset"
+                             IsChecked="{Binding IsPresetDefault}" FontWeight="SemiBold"/>
+                <TextBlock Text="16 KB page · 1 MB growth" FontSize="11" Opacity="0.6" Margin="28,0,0,0"/>
+                <TextBlock Text="Balanced (recommended)" FontSize="11" Opacity="0.5" Margin="28,2,0,0"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Classes="PresetCard" Margin="6,0,0,0">
+              <StackPanel>
+                <RadioButton Content="Large" GroupName="Preset"
+                             IsChecked="{Binding IsPresetLarge}" FontWeight="SemiBold"/>
+                <TextBlock Text="32 KB page · 2 MB growth" FontSize="11" Opacity="0.6" Margin="28,0,0,0"/>
+                <TextBlock Text="Large documents" FontSize="11" Opacity="0.5" Margin="28,2,0,0"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Border Background="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"
+                  CornerRadius="6" Padding="14,8" Margin="0,10,0,0">
+            <Grid ColumnDefinitions="Auto,*,Auto,*">
+              <TextBlock Grid.Column="0" Text="Page size:" Opacity="0.6" Margin="0,0,12,0"/>
+              <TextBlock Grid.Column="1" Text="{Binding PageSizeDisplay}" FontWeight="SemiBold" Margin="0,0,24,0"/>
+              <TextBlock Grid.Column="2" Text="Growth block:" Opacity="0.6" Margin="0,0,12,0"/>
+              <TextBlock Grid.Column="3" Text="{Binding GrowthBlockDisplay}" FontWeight="SemiBold"/>
+            </Grid>
+          </Border>
+
+          <Separator Margin="0,20,0,18"/>
+
+          <!-- Access mode -->
+          <TextBlock Text="Access mode" FontWeight="SemiBold" Margin="0,0,0,8"/>
+          <StackPanel Orientation="Horizontal" Spacing="24">
+            <RadioButton Content="Read / Write" GroupName="Access" IsChecked="{Binding IsReadWrite}"/>
+            <RadioButton Content="Read only"   GroupName="Access" IsChecked="{Binding IsReadOnly}"/>
+          </StackPanel>
+
+          <!-- Error -->
+          <Border IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                  Background="#1FE53935" BorderBrush="#80E53935" BorderThickness="1"
+                  CornerRadius="6" Padding="12,8" Margin="0,18,0,0">
+            <TextBlock Text="{Binding StatusMessage}" Foreground="#E53935" TextWrapping="Wrap" FontSize="12"/>
+          </Border>
+
+          <!-- Open button -->
+          <Button Content="Open database"
+                  Classes="accent"
+                  Command="{Binding OpenDatabaseCommand}"
+                  HorizontalAlignment="Right"
+                  Margin="0,20,0,0"
+                  Padding="20,8"/>
+
+          <!-- ── Recent connections ──────────────────────────── -->
+          <StackPanel IsVisible="{Binding HasRecentConnections}" Margin="0,32,0,0">
+            <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,10">
+              <TextBlock Grid.Column="0"
+                         Text="Recent" FontSize="16" FontWeight="SemiBold"
+                         VerticalAlignment="Center"/>
+            </Grid>
+
+            <ItemsControl ItemsSource="{Binding RecentConnections}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:RecentConnectionViewModel">
+                  <Border Classes="RecentCard" Margin="0,0,0,6">
+                    <Grid ColumnDefinitions="*,Auto">
+
+                      <!-- Clickable left area -->
+                      <Button Grid.Column="0"
+                              Classes="RecentCardBtn"
+                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).OpenRecentCommand}"
+                              CommandParameter="{Binding}"
+                              HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="{Binding DisplayName}"
+                                       FontWeight="SemiBold" FontSize="13"/>
+                            <TextBlock Text="{Binding FilePath}"
+                                       FontSize="11" Opacity="0.5"
+                                       TextTrimming="CharacterEllipsis"/>
+                          </StackPanel>
+                          <StackPanel Grid.Column="1"
+                                      Orientation="Horizontal"
+                                      Spacing="10"
+                                      VerticalAlignment="Center"
+                                      Margin="16,0,0,0">
+                            <Border Classes="Tag">
+                              <TextBlock Text="{Binding PresetLabel}" FontSize="10"/>
+                            </Border>
+                            <Border Classes="Tag">
+                              <TextBlock Text="{Binding AccessLabel}" FontSize="10"/>
+                            </Border>
+                            <TextBlock Text="{Binding RelativeTime}"
+                                       FontSize="11" Opacity="0.5"
+                                       VerticalAlignment="Center"/>
+                          </StackPanel>
+                        </Grid>
+                      </Button>
+
+                      <!-- Remove button -->
+                      <Button Grid.Column="1"
+                              Content="✕"
+                              Classes="RecentRemoveBtn"
+                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemoveRecentCommand}"
+                              CommandParameter="{Binding}"
+                              ToolTip.Tip="Remove from recents"/>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ══ Connected panel ══════════════════════════════════════ -->
+      <Grid IsVisible="{Binding IsDatabaseOpen}" RowDefinitions="Auto,*">
+
+        <!-- Top bar -->
+        <Border Grid.Row="0"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="16,10">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+              <StackPanel Spacing="1">
+                <TextBlock Text="{Binding OpenDatabaseName}" FontWeight="SemiBold" FontSize="14"/>
+                <TextBlock Text="{Binding DatabasePath}" FontSize="11" Opacity="0.5"
+                           TextTrimming="CharacterEllipsis" MaxWidth="400"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Page:" Opacity="0.5" FontSize="11" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding PageSizeDisplay}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Growth:" Opacity="0.5" FontSize="11" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding GrowthBlockDisplay}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Access:" Opacity="0.5" FontSize="11" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding AccessModeDisplay}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+              </StackPanel>
+            </StackPanel>
+            <Button Grid.Column="1"
+                    Content="Disconnect"
+                    Command="{Binding CloseDatabaseCommand}"
+                    VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+
+        <!-- Master / Detail -->
+        <Grid Grid.Row="1" ColumnDefinitions="220,Auto,*">
+
+          <!-- ── Sidebar (master) ──────────────────────────── -->
+          <Border Grid.Column="0"
+                  Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
+                  Padding="0,8,0,0">
+            <ScrollViewer>
+              <StackPanel Spacing="2">
+
+                <!-- Field Keys item -->
+                <Button Classes="NavItem"
+                        Classes.NavItemActive="{Binding Explorer.SidebarItems[0].IsSelected}"
+                        Command="{Binding Explorer.SelectItemCommand}"
+                        CommandParameter="{Binding Explorer.SidebarItems[0]}"
+                        HorizontalAlignment="Stretch">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="#" FontWeight="Bold" Opacity="0.6"/>
+                    <TextBlock Text="Field Keys"/>
+                  </StackPanel>
+                </Button>
+
+                <!-- Collections section -->
+                <StackPanel Margin="12,16,12,4" Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="COLLECTIONS"
+                             FontSize="10" FontWeight="SemiBold"
+                             Opacity="0.4" VerticalAlignment="Center"
+                             LetterSpacing="1"/>
+                  <Border Classes="Tag" IsVisible="{Binding Explorer.HasCollections}">
+                    <TextBlock Text="{Binding Explorer.CollectionCount}" FontSize="10"/>
+                  </Border>
+                  <Button Content="↻"
+                          Command="{Binding Explorer.RefreshCommand}"
+                          Classes="NavRefreshBtn"
+                          ToolTip.Tip="Refresh"
+                          Margin="4,0,0,0"/>
+                </StackPanel>
+
+                <!-- Collection items -->
+                <ItemsControl ItemsSource="{Binding Explorer.CollectionItems}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="ex:SidebarItemViewModel">
+                      <Button Classes="NavItem"
+                              Classes.NavItemActive="{Binding IsSelected}"
+                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).Explorer.SelectItemCommand}"
+                              CommandParameter="{Binding}"
+                              HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <TextBlock Text="≡" Opacity="0.5"/>
+                          <TextBlock Text="{Binding Label}"
+                                     TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Empty state -->
+                <TextBlock IsVisible="{Binding !Explorer.HasCollections}"
+                           Text="No collections found"
+                           FontSize="11" Opacity="0.4"
+                           Margin="12,4"/>
+
+              </StackPanel>
+            </ScrollViewer>
+          </Border>
+
+          <!-- Vertical divider -->
+          <Border Grid.Column="1" Width="1"
+                  Background="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                  Opacity="0.5"/>
+
+          <!-- ── Detail panel ──────────────────────────────── -->
+          <ContentControl Grid.Column="2"
+                          Content="{Binding Explorer.DetailContent}">
+            <ContentControl.DataTemplates>
+
+              <!-- Field Keys detail -->
+              <DataTemplate DataType="ex:FieldKeysDetailViewModel">
+                <Grid RowDefinitions="Auto,*" Margin="24,20">
+                  <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,14">
+                    <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center">
+                      <TextBlock Grid.Column="0"
+                                 Text="Field Keys" FontSize="18" FontWeight="SemiBold"/>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                  VerticalAlignment="Bottom">
+                        <TextBlock Text="{Binding FilteredCount}" Opacity="0.5" FontSize="12"/>
+                        <TextBlock Text=" / " Opacity="0.4" FontSize="12"/>
+                        <TextBlock Text="{Binding TotalCount}" Opacity="0.5" FontSize="12"/>
+                        <TextBlock Text=" keys" Opacity="0.4" FontSize="12"/>
+                      </StackPanel>
+                    </Grid>
+                    <TextBox Text="{Binding SearchText}"
+                             Watermark="Search field names…"/>
+                  </StackPanel>
+                  <ScrollViewer Grid.Row="1">
+                    <ItemsControl ItemsSource="{Binding FilteredKeys}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="ex:FieldKeyEntry">
+                          <Grid ColumnDefinitions="*,Auto"
+                                Margin="0,0,0,1">
+                            <Border Grid.ColumnSpan="2"
+                                    Classes="KeyRow"/>
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding Name}"
+                                       FontSize="13" Margin="10,6"
+                                       FontFamily="Monospace"/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Id}"
+                                       FontSize="11" Margin="16,6,10,6"
+                                       Opacity="0.45"
+                                       VerticalAlignment="Center"/>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </Grid>
+              </DataTemplate>
+
+              <!-- Collection detail -->
+              <DataTemplate DataType="ex:CollectionDetailViewModel">
+                <Grid RowDefinitions="Auto,*">
+
+                  <!-- ── Header ── -->
+                  <StackPanel Grid.Row="0" Spacing="8" Margin="20,14,20,8">
+                    <TextBlock Text="{Binding Name}"
+                               FontSize="18" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                      <Border Classes="StatCard">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="Documents" FontSize="11" Opacity="0.5"/>
+                          <TextBlock Text="{Binding DocumentCount}"
+                                     FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                      </Border>
+                      <Border Classes="StatCard">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="ID type" FontSize="11" Opacity="0.5"/>
+                          <TextBlock Text="{Binding IdType}"
+                                     FontSize="13" FontWeight="SemiBold"
+                                     FontFamily="Monospace"/>
+                        </StackPanel>
+                      </Border>
+                      <Border Classes="StatCard">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="Indexes" FontSize="11" Opacity="0.5"/>
+                          <TextBlock Text="{Binding IndexList.Count}"
+                                     FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+                  </StackPanel>
+
+                  <!-- ── Tabs ── -->
+                  <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedTabIndex}">
+
+                    <!-- ── Tab: Documents ── -->
+                    <TabItem Header="Documents">
+                      <Grid ColumnDefinitions="*,Auto">
+
+                        <!-- Table pane -->
+                        <DockPanel Grid.Column="0">
+
+                          <!-- Toolbar -->
+                          <Border DockPanel.Dock="Top"
+                                  Padding="8,6"
+                                  BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                  BorderThickness="0,0,0,1">
+                            <Button Content="+ New Document"
+                                    Command="{Binding NewDocumentCommand}"
+                                    HorizontalAlignment="Right"/>
+                          </Border>
+
+                          <!-- Pagination -->
+                          <Border DockPanel.Dock="Bottom"
+                                  BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                  BorderThickness="0,1,0,0"
+                                  Padding="12,6">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                              <Button Grid.Column="0" Content="← Prev"
+                                      IsEnabled="{Binding CanGoPrev}"
+                                      Command="{Binding PrevPageCommand}"/>
+                              <TextBlock Grid.Column="1"
+                                         Text="{Binding CurrentPageDisplay}"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"
+                                         FontSize="12" Opacity="0.7"/>
+                              <Button Grid.Column="2" Content="Next →"
+                                      IsEnabled="{Binding CanGoNext}"
+                                      Command="{Binding NextPageCommand}"/>
+                            </Grid>
+                          </Border>
+
+                          <!-- Table -->
+                          <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                  BorderThickness="0,1,0,0">
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Auto">
+                              <StackPanel>
+                                <Grid ColumnDefinitions="110,200,80,*"
+                                      Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
+                                  <TextBlock Grid.Column="0" Text="Actions"
+                                             FontWeight="SemiBold" FontSize="12"
+                                             Margin="10,7"/>
+                                  <TextBlock Grid.Column="1" Text="_id"
+                                             FontWeight="SemiBold" FontSize="12"
+                                             FontFamily="Monospace" Margin="8,7"/>
+                                  <TextBlock Grid.Column="2" Text="Size"
+                                             FontWeight="SemiBold" FontSize="12"
+                                             Margin="8,7"/>
+                                  <TextBlock Grid.Column="3" Text="Fields"
+                                             FontWeight="SemiBold" FontSize="12"
+                                             Margin="8,7"/>
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding Documents}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="ex:DocumentRowViewModel"
+                                                  x:CompileBindings="False">
+                                      <Grid ColumnDefinitions="110,200,80,*"
+                                            Classes="DocRow">
+                                        <StackPanel Grid.Column="0"
+                                                    Orientation="Horizontal"
+                                                    Spacing="4" Margin="6,4">
+                                          <Button Content="Open"
+                                                  FontSize="11"
+                                                  Padding="6,2"
+                                                  Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}"
+                                                  CommandParameter="{Binding}"/>
+                                          <Button Content="✕"
+                                                  FontSize="11"
+                                                  Padding="6,2"
+                                                  Classes="DangerBtn"
+                                                  Command="{Binding DataContext.DeleteDocumentCommand, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}"
+                                                  CommandParameter="{Binding}"/>
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding Id}"
+                                                   FontFamily="Monospace"
+                                                   FontSize="12"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"
+                                                   Margin="8,0"/>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding SizeDisplay}"
+                                                   FontFamily="Monospace"
+                                                   FontSize="11"
+                                                   Opacity="0.65"
+                                                   VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right"
+                                                   Margin="4,0,8,0"/>
+                                        <TextBlock Grid.Column="3"
+                                                   Text="{Binding Content}"
+                                                   FontSize="12"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"
+                                                   Margin="8,0"/>
+                                      </Grid>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </StackPanel>
+                            </ScrollViewer>
+                          </Border>
+                        </DockPanel>
+
+                        <!-- ── Editor pane (right) ── -->
+                        <Border Grid.Column="1"
+                                Width="380"
+                                IsVisible="{Binding IsEditorOpen}"
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="1,0,0,0">
+                          <DockPanel>
+
+                            <!-- Editor header -->
+                            <Grid DockPanel.Dock="Top"
+                                  ColumnDefinitions="*,Auto"
+                                  Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                                  Height="36">
+                              <TextBlock Grid.Column="0"
+                                         Text="{Binding EditorTitle}"
+                                         FontFamily="Monospace" FontSize="12"
+                                         TextTrimming="CharacterEllipsis"
+                                         VerticalAlignment="Center"
+                                         Margin="12,0"/>
+                              <Button Grid.Column="1"
+                                      Content="✕"
+                                      Padding="8,0"
+                                      Height="36"
+                                      Command="{Binding CloseEditorCommand}"/>
+                            </Grid>
+
+                            <!-- Editor footer -->
+                            <Border DockPanel.Dock="Bottom"
+                                    BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                    BorderThickness="0,1,0,0"
+                                    Padding="10,6">
+                              <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding EditorMessage}"
+                                           VerticalAlignment="Center"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"
+                                           Classes.MsgErr="{Binding EditorIsError}"
+                                           Classes.MsgOk="{Binding EditorIsOk}"/>
+                                <Button Grid.Column="1"
+                                        Content="💾 Save"
+                                        Command="{Binding SaveDocumentCommand}"/>
+                              </Grid>
+                            </Border>
+
+                            <!-- JSON textarea -->
+                            <TextBox AcceptsReturn="True"
+                                     TextWrapping="NoWrap"
+                                     Text="{Binding EditorJson}"
+                                     FontFamily="Monospace"
+                                     FontSize="12"
+                                     BorderThickness="0"
+                                     CornerRadius="0"/>
+                          </DockPanel>
+                        </Border>
+
+                      </Grid>
+                    </TabItem>
+
+                    <!-- ── Tab: Indexes ── -->
+                    <TabItem Header="Indexes">
+                      <DockPanel Margin="20,16">
+
+                        <!-- Create form (bottom) -->
+                        <Border DockPanel.Dock="Bottom"
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,1,0,0"
+                                Padding="0,14,0,0">
+                          <StackPanel Spacing="8">
+                            <TextBlock Text="Create Index"
+                                       FontWeight="SemiBold" FontSize="13"/>
+                            <Grid ColumnDefinitions="*,180,Auto,Auto">
+                              <TextBox Grid.Column="0"
+                                       Text="{Binding NewIndexField}"
+                                       Watermark="Field path (e.g. age)"
+                                       Margin="0,0,8,0"
+                                       VerticalContentAlignment="Center"/>
+                              <TextBox Grid.Column="1"
+                                       Text="{Binding NewIndexName}"
+                                       Watermark="Index name (optional)"
+                                       Margin="0,0,8,0"
+                                       VerticalContentAlignment="Center"/>
+                              <CheckBox Grid.Column="2"
+                                        Content="Unique"
+                                        IsChecked="{Binding IsNewIndexUnique}"
+                                        Margin="0,0,8,0"
+                                        VerticalAlignment="Center"/>
+                              <Button Grid.Column="3"
+                                      Content="Create"
+                                      Command="{Binding CreateIndexCommand}"/>
+                            </Grid>
+                            <TextBlock Text="{Binding IndexMessage}"
+                                       FontSize="12"
+                                       Classes.MsgErr="{Binding IndexIsError}"
+                                       Classes.MsgOk="{Binding IndexIsOk}"
+                                       IsVisible="{Binding IndexMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                          </StackPanel>
+                        </Border>
+
+                        <!-- Index list -->
+                        <StackPanel Spacing="4">
+                          <TextBlock Text="Secondary Indexes"
+                                     FontWeight="SemiBold" FontSize="13"
+                                     Margin="0,0,0,8"/>
+                          <TextBlock Text="No indexes defined."
+                                     Opacity="0.5" FontSize="12"
+                                     IsVisible="{Binding HasNoIndexes}"/>
+                          <ItemsControl ItemsSource="{Binding IndexList}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="x:String"
+                                            x:CompileBindings="False">
+                                <Grid ColumnDefinitions="*,Auto"
+                                      Margin="0,0,0,4">
+                                  <Border Classes="KeyRow"
+                                          Grid.ColumnSpan="2"/>
+                                  <TextBlock Grid.Column="0"
+                                             Text="{Binding}"
+                                             FontFamily="Monospace"
+                                             FontSize="13"
+                                             VerticalAlignment="Center"
+                                             Margin="10,6"/>
+                                  <Button Grid.Column="1"
+                                          Content="Drop"
+                                          FontSize="11"
+                                          Padding="8,2"
+                                          Margin="6,4"
+                                          Classes="DangerBtn"
+                                          Command="{Binding DataContext.DropIndexCommand, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}"
+                                          CommandParameter="{Binding}"/>
+                                </Grid>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+
+                      </DockPanel>
+                    </TabItem>
+
+                  </TabControl>
+                </Grid>
+              </DataTemplate>
+
+            </ContentControl.DataTemplates>
+          </ContentControl>
+        </Grid>
+      </Grid>
+
+    </Grid>
+  </Grid>
+
+  <Window.Styles>
+    <Style Selector="Border.PresetCard">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="Padding" Value="10,10"/>
+    </Style>
+
+    <Style Selector="Border.RecentCard">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"/>
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+
+    <Style Selector="Button.RecentCardBtn">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="14,10"/>
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+
+    <Style Selector="Button.RecentRemoveBtn">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+      <Setter Property="Padding" Value="10,0"/>
+      <Setter Property="CornerRadius" Value="0,6,6,0"/>
+      <Setter Property="VerticalAlignment" Value="Stretch"/>
+      <Setter Property="FontSize" Value="11"/>
+    </Style>
+
+    <Style Selector="Border.Tag">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumBrush}"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="Padding" Value="6,2"/>
+    </Style>
+
+    <!-- ── Sidebar nav items ──────────────────────────────────────── -->
+    <Style Selector="Button.NavItem">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Padding" Value="12,7"/>
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="Margin" Value="4,1"/>
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
+    <Style Selector="Button.NavItem:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}"/>
+    </Style>
+    <Style Selector="Button.NavItem.NavItemActive">
+      <Setter Property="Background" Value="{DynamicResource SystemControlHighlightAccentBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="Button.NavItem.NavItemActive:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlHighlightAccentBrush}"/>
+    </Style>
+
+    <Style Selector="Button.NavRefreshBtn">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="2,0"/>
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
+
+    <!-- ── Detail panel ───────────────────────────────────────────── -->
+    <Style Selector="Border.KeyRow">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"/>
+      <Setter Property="CornerRadius" Value="4"/>
+    </Style>
+    <Style Selector="Border.StatCard">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"/>
+      <Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="Padding" Value="16,12"/>
+      <Setter Property="MinWidth" Value="100"/>
+    </Style>
+    <Style Selector="Grid.DocRow">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Grid.DocRow:nth-child(even)">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"/>
+    </Style>
+    <Style Selector="Grid.DocRow:pointerover">
+      <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}"/>
+    </Style>
+    <Style Selector="TextBlock.MsgErr">
+      <Setter Property="Foreground" Value="#E05555"/>
+    </Style>
+    <Style Selector="TextBlock.MsgOk">
+      <Setter Property="Foreground" Value="#55AA55"/>
+    </Style>
+    <Style Selector="Button.DangerBtn">
+      <Setter Property="Background" Value="#C0392B"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+  </Window.Styles>
+
+</Window>

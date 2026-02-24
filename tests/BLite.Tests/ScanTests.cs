@@ -1,13 +1,4 @@
-using BLite.Core;
-using BLite.Core.Storage;
-using BLite.Core.Collections;
-using BLite.Core.Indexing;
 using BLite.Bson;
-using Xunit;
-using System;
-using System.IO;
-using System.Linq;
-using System.Collections.Generic;
 using BLite.Shared;
 
 namespace BLite.Tests

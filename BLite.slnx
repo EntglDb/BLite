@@ -14,10 +14,14 @@
     <Project Path="src/BLite/BLite.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="BLite.Shared/BLite.Shared.csproj" Id="c1cb8033-8381-4f75-8a26-23ea9f8f8f4e" />
-    <Project Path="src/BLite.Benchmark/BLite.Benchmark.csproj" />
-    <Project Path="src/BLite.CheckpointTest/DocumentDb.CheckpointTest.csproj" />
-    <Project Path="src/BLite.Debug/BLite.Debug.csproj" />
+    <Project Path="tests/BLite.Benchmark/BLite.Benchmark.csproj" />
+    <Project Path="tests/BLite.CheckpointTest/DocumentDb.CheckpointTest.csproj" />
+    <Project Path="tests/BLite.ConsoleSample/BLite.ConsoleSample.csproj" />
+    <Project Path="tests/BLite.Debug/BLite.Debug.csproj" />
+    <Project Path="tests/BLite.Shared/BLite.Shared.csproj" Id="c1cb8033-8381-4f75-8a26-23ea9f8f8f4e" />
     <Project Path="tests/BLite.Tests/BLite.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/BLite.Studio/BLite.Studio.csproj" />
   </Folder>
 </Solution>

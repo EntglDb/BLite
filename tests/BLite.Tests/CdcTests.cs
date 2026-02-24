@@ -1,13 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
-using BLite.Bson;
 using BLite.Core.CDC;
 using BLite.Core.Transactions;
 using BLite.Shared;
-using Xunit;
 
 namespace BLite.Tests;
 

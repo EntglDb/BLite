@@ -1,4 +1,3 @@
-using BLite.Bson;
 using BLite.Shared;
 
 namespace BLite.Tests;

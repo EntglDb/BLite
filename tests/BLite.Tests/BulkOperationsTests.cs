@@ -1,11 +1,5 @@
 using BLite.Bson;
-using BLite.Core.Collections;
-using BLite.Core.Storage;
-using BLite.Core.Transactions;
 using BLite.Shared;
-using BLite.Tests.TestDbContext_TestDbContext_Mappers;
-using Xunit;
-using static BLite.Tests.SchemaTests;
 
 namespace BLite.Tests;
 

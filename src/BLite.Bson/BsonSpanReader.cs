@@ -343,7 +343,8 @@ public ref struct BsonSpanReader
 
         if (!_keys.TryGetValue(id, out var key))
         {
-            throw new InvalidOperationException($"BSON Key ID {id} not found in reverse key dictionary.");
+            //throw new InvalidOperationException($"BSON Key ID {id} not found in reverse key dictionary.");
+            key = $"{id}";
         }
 
         return key;

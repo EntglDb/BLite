@@ -1,4 +1,3 @@
-using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Indexing;
 

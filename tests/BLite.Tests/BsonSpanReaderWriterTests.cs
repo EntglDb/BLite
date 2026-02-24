@@ -1,5 +1,4 @@
 using BLite.Bson;
-using Xunit;
 using System.Collections.Concurrent;
 
 namespace BLite.Tests;

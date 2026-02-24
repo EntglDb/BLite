@@ -1,9 +1,6 @@
-using Xunit;
 using BLite.Core.Query;
 using BLite.Core.Indexing;
 using System.Linq.Expressions;
-using System.Collections.Generic;
-using System;
 
 namespace BLite.Tests
 {

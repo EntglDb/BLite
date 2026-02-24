@@ -1,5 +1,4 @@
-﻿using BLite.Bson;
-using BLite.Shared;
+﻿using BLite.Shared;
 using System.Security.Cryptography;
 
 namespace BLite.Tests;
