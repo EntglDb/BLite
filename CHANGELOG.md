@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.9.0"></a>
+## [1.9.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.9.0) (2026-02-24)
+
+### Features
+
+* BLite Studio ([11c6eb2](https://www.github.com/EntglDb/BLite/commit/11c6eb200e61154cdf23715584c89a968d507949))
+* BLQL BLite Query Language ([a86d458](https://www.github.com/EntglDb/BLite/commit/a86d4584cf87136ed00876d16512a85a2367a213))
+
 <a name="1.8.0"></a>
 ## [1.8.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.8.0) (2026-02-24)
 
