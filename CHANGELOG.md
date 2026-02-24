@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.10.0"></a>
+## [1.10.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.10.0) (2026-02-24)
+
+### Features
+
+* advanced BLQL filters ([c9b8fb7](https://www.github.com/EntglDb/BLite/commit/c9b8fb72cc3015ffcabe0cff4c618077fb633024))
+* **studio:** add macOS build job — osx-x64 + osx-arm64 .app bundle + .dmg ([224a770](https://www.github.com/EntglDb/BLite/commit/224a770730b26f5bc5d78b70ca81d00ff8e022e1))
+* **website:** add macOS download links — Studio page + footer ([c5ddf99](https://www.github.com/EntglDb/BLite/commit/c5ddf99f6c7cf98d7fd79618b3546c136e8afdb2))
+
+### Bug Fixes
+
+* corrects windows BLite Studio pipeline ([07a0266](https://www.github.com/EntglDb/BLite/commit/07a026671adac4bf810b2590fe3b6095d87518a2))
+* **studio:** absolute SourceDir path + WixUI_FeatureTree with optional shortcuts and launch checkbox ([f3e56e8](https://www.github.com/EntglDb/BLite/commit/f3e56e828077438e3eb5cf543b4714427e6f3339))
+* **studio:** correct WiX 4 Files syntax inside Component ([5442c60](https://www.github.com/EntglDb/BLite/commit/5442c60794f23c54172d06cc7b9c770b81d8d4d2))
+* **studio:** fix WiX 4 Files harvesting inside Directory instead of ComponentGroup ([614a83b](https://www.github.com/EntglDb/BLite/commit/614a83baa171a781c549fdfc9dba63fe0d538cd0))
+* **studio:** WiX SetProperty launch + LicenseRtf absolute path ([ef598e4](https://www.github.com/EntglDb/BLite/commit/ef598e465bc968d3cbe29a2aba44aaf2206f1296))
+
 <a name="1.9.0"></a>
 ## [1.9.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.9.0) (2026-02-24)
 
