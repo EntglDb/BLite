@@ -179,10 +179,84 @@ jobs:
           name: linux
           path: dist/
 
+  # ── macOS — publish + .app bundle + .dmg ─────────────────────────────────────
+  macos:
+    runs-on: macos-latest
+    needs: version
+    env:
+      VERSION: ${{ needs.version.outputs.value }}
+    strategy:
+      matrix:
+        rid: [osx-x64, osx-arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.x"
+
+      - name: Publish (${{ matrix.rid }}, self-contained)
+        run: >
+          dotnet publish tools/BLite.Studio/BLite.Studio.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained
+          -p:Version=${{ env.VERSION }}
+          -p:PublishSingleFile=false
+          -o publish/${{ matrix.rid }}
+
+      - name: Build .app bundle
+        run: |
+          APP="BLite Studio.app"
+          CONTENTS="$APP/Contents"
+          mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
+
+          # Copy all published files into MacOS/
+          cp -r publish/${{ matrix.rid }}/. "$CONTENTS/MacOS/"
+          chmod +x "$CONTENTS/MacOS/BLite.Studio"
+
+          # Write Info.plist
+          cat > "$CONTENTS/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key>             <string>BLite Studio</string>
+            <key>CFBundleDisplayName</key>      <string>BLite Studio</string>
+            <key>CFBundleIdentifier</key>       <string>dev.blite.studio</string>
+            <key>CFBundleVersion</key>          <string>${{ env.VERSION }}</string>
+            <key>CFBundleShortVersionString</key><string>${{ env.VERSION }}</string>
+            <key>CFBundleExecutable</key>       <string>BLite.Studio</string>
+            <key>CFBundlePackageType</key>      <string>APPL</string>
+            <key>NSHighResolutionCapable</key>  <true/>
+            <key>NSPrincipalClass</key>         <string>NSApplication</string>
+          </dict></plist>
+          EOF
+
+          # Ad-hoc sign (prevents "app is damaged" Gatekeeper error)
+          codesign --deep --force --sign - "$APP"
+
+      - name: Create DMG
+        run: |
+          mkdir -p dist dmg_staging
+          cp -r "BLite Studio.app" dmg_staging/
+          hdiutil create \
+            -volname "BLite Studio ${{ env.VERSION }}" \
+            -srcfolder dmg_staging \
+            -ov -format UDZO \
+            "dist/BLite.Studio-${{ env.VERSION }}-${{ matrix.rid }}.dmg"
+
+      - name: Upload macOS artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.rid }}
+          path: dist/
+
   # ── GitHub Release ────────────────────────────────────────────────────────────
   release:
     runs-on: ubuntu-latest
-    needs: [version, windows, linux]
+    needs: [version, windows, linux, macos]
     env:
       VERSION: ${{ needs.version.outputs.value }}
     steps:
@@ -205,3 +279,5 @@ jobs:
             dist/BLite.Studio-${{ env.VERSION }}-win-x64-portable.zip
             dist/BLite.Studio-${{ env.VERSION }}-linux-x64.tar.gz
             dist/blite-studio_${{ env.VERSION }}_amd64.deb
+            dist/BLite.Studio-${{ env.VERSION }}-osx-x64.dmg
+            dist/BLite.Studio-${{ env.VERSION }}-osx-arm64.dmg
