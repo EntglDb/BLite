@@ -40,9 +40,7 @@
     <!-- Installation root: C:\Program Files\BLite Studio -->
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="BLite Studio">
-        <Component Id="PublishedFiles" Guid="*">
           <Files Include="$(SourceDir)\**" />
-        </Component>
       </Directory>
     </StandardDirectory>
 
@@ -87,7 +85,7 @@
 
     <!-- Feature tree -->
     <Feature Id="ProductFeature" Title="BLite Studio" Level="1">
-      <ComponentRef Id="PublishedFiles" />
+	  <ComponentGroupRef Id="SourceDir" /> 
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
