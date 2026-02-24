@@ -22,8 +22,8 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
       </h1>
       
       <p class="hero-subtitle animate-fade-in" style="animation-delay: 0.3s">
-        The Binary-Light Document Store for AI-Ready Apps.<br/>
-        High performance, zero allocation. Local-first, cloud-free.
+        The embedded NoSQL database for .NET.<br/>
+        Zero allocation, local-first, cloud-free.
       </p>
       
       <div class="hero-actions animate-fade-in" style="animation-delay: 0.4s">

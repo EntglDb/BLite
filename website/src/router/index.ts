@@ -17,8 +17,8 @@ import DynamicAPI from '../views/docs/DynamicAPI.vue'
 import Comparisons from '../views/docs/Comparisons.vue'
 import BLQL from '../views/docs/BLQL.vue'
 
-export const DEFAULT_TITLE = 'BLite – High-Performance Embedded Database for .NET'
-export const DEFAULT_DESC = 'BLite is an AI-ready, zero-allocation BSON document store for .NET 10. ACID transactions, Change Data Capture, R-Tree spatial indexing — embedded, cloud-free.'
+export const DEFAULT_TITLE = 'BLite – Embedded NoSQL Database for .NET'
+export const DEFAULT_DESC = 'BLite is the high-performance embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, CDC streams, and spatial indexing — no server, no cloud. Install via NuGet.'
 
 export const routes: RouteRecordRaw[] = [
     {
@@ -26,8 +26,8 @@ export const routes: RouteRecordRaw[] = [
         name: 'home',
         component: Home,
         meta: {
-            title: DEFAULT_TITLE,
-            description: DEFAULT_DESC
+            title: 'BLite – Embedded NoSQL Database for .NET | BSON Document Store',
+            description: 'BLite is the fastest embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, CDC streams, R-Tree spatial indexing and source generators. No cloud, install via NuGet.'
         }
     },
     {
@@ -39,16 +39,16 @@ export const routes: RouteRecordRaw[] = [
                 path: 'getting-started',
                 component: GettingStarted,
                 meta: {
-                    title: 'Getting Started – BLite',
-                    description: 'Get up and running with BLite in minutes. Install via NuGet, define your models, and perform your first CRUD operations with full ACID support.'
+                    title: 'Getting Started with BLite – Embedded NoSQL for .NET',
+                    description: 'Get up and running with BLite — the embedded NoSQL database for .NET — in minutes. Install via NuGet, define your models, and perform your first ACID-safe CRUD operations.'
                 }
             },
             {
                 path: 'installation',
                 component: Installation,
                 meta: {
-                    title: 'Installation – BLite',
-                    description: 'Install BLite in your .NET 10 project via NuGet. A single package brings the core engine, zero-allocation BSON serializer, and source generators.'
+                    title: 'Install BLite – Embedded NoSQL Database for .NET via NuGet',
+                    description: 'Install BLite in your .NET project via NuGet. A single package brings the embedded NoSQL engine, zero-allocation BSON serializer, and compile-time source generators.'
                 }
             },
             {
@@ -119,8 +119,8 @@ export const routes: RouteRecordRaw[] = [
                 path: 'benchmarks',
                 component: Benchmarks,
                 meta: {
-                    title: 'Benchmarks – BLite',
-                    description: 'BLite benchmark results against LiteDB and SQLite+JSON. Throughput, latency, and allocation numbers for read/write workloads on .NET 10.'
+                    title: 'BLite vs LiteDB vs SQLite – Embedded NoSQL .NET Benchmarks',
+                    description: 'Benchmark results comparing BLite against LiteDB and SQLite+JSON. See why BLite is the fastest embedded NoSQL database for .NET 10 — throughput, latency, and zero allocations.'
                 }
             },
             {
@@ -146,8 +146,8 @@ export const routes: RouteRecordRaw[] = [
         name: 'comparisons',
         component: Comparisons,
         meta: {
-            title: 'BLite vs LiteDB, SQLite & RocksDB – Comparisons',
-            description: 'Side-by-side comparison of BLite against popular embedded databases: LiteDB, SQLite, and RocksDB. Allocation count, throughput, features, and API ergonomics.'
+            title: 'BLite vs LiteDB vs SQLite – Best Embedded NoSQL Database for .NET',
+            description: 'Side-by-side comparison: BLite vs LiteDB, SQLite, and RocksDB as embedded NoSQL databases for .NET. Allocation count, throughput, ACID support, API ergonomics and feature set.'
         }
     },
     {
@@ -155,8 +155,8 @@ export const routes: RouteRecordRaw[] = [
         name: 'studio',
         component: Studio,
         meta: {
-            title: 'BLite Studio — GUI for BLite Databases',
-            description: 'Download BLite Studio, the official cross-platform GUI for browsing, querying, and managing BLite databases. Available for Windows and Linux.'
+            title: 'BLite Studio – GUI for Embedded NoSQL Databases (.NET)',
+            description: 'Download BLite Studio, the official cross-platform GUI for browsing, querying, and managing BLite embedded NoSQL databases. Available for Windows, Linux, and macOS.'
         }
     }
 ]

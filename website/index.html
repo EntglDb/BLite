@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
   <!-- Primary meta -->
-  <title>BLite – High-Performance Embedded Database for .NET</title>
-  <meta name="description" content="BLite is an AI-ready, zero-allocation BSON document store for .NET 10. ACID transactions, Change Data Capture, R-Tree spatial indexing — embedded, cloud-free." />
-  <meta name="keywords" content="BLite, embedded database, .NET database, BSON, zero allocation, ACID transactions, CDC, Change Data Capture, document store, NoSQL, .NET 10, source generators, spatial index, R-Tree" />
+  <title>BLite – Embedded NoSQL Database for .NET | BSON Document Store</title>
+  <meta name="description" content="BLite is the fast embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, Change Data Capture, R-Tree spatial indexing and source generators. No server, no cloud — install via NuGet." />
+  <meta name="keywords" content="embedded NoSQL database for .NET, embedded NoSQL .NET, NoSQL database C#, embedded document database .NET, BSON document store, embedded database .NET, zero allocation .NET database, ACID transactions .NET, LiteDB alternative, local-first database .NET, .NET 10 database, NoSQL NuGet package, embedded database NuGet, document store C#, BLite" />
   <meta name="author" content="BLite Project" />
   <meta name="robots" content="index, follow" />
   <meta name="theme-color" content="#e74c3c" />
@@ -21,14 +21,14 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="BLite" />
   <meta property="og:url" content="https://blitedb.com/" />
-  <meta property="og:title" content="BLite – High-Performance Embedded Database for .NET" />
-  <meta property="og:description" content="BLite is an AI-ready, zero-allocation BSON document store for .NET 10. ACID transactions, Change Data Capture, R-Tree spatial indexing — embedded, cloud-free." />
+  <meta property="og:title" content="BLite – Embedded NoSQL Database for .NET" />
+  <meta property="og:description" content="The fast embedded NoSQL database for .NET. Zero-allocation BSON document store, ACID transactions, Change Data Capture, spatial indexing — no server, no cloud." />
   <meta property="og:image" content="https://blitedb.com/og-image.png" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="BLite – High-Performance Embedded Database for .NET" />
-  <meta name="twitter:description" content="AI-ready, zero-allocation BSON document store for .NET 10. ACID, CDC streams, spatial indexing. No cloud required." />
+  <meta name="twitter:title" content="BLite – Embedded NoSQL Database for .NET" />
+  <meta name="twitter:description" content="Embedded NoSQL database for .NET. Zero-allocation BSON, ACID transactions, CDC streams, spatial indexing. Install via NuGet — no cloud needed." />
   <meta name="twitter:image" content="https://blitedb.com/og-image.png" />
 
   <!-- JSON-LD Structured Data -->
@@ -37,19 +37,77 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "BLite",
+    "alternateName": "BLite Embedded NoSQL Database",
     "url": "https://blitedb.com",
-    "description": "BLite is a high-performance, embedded, ACID-compliant BSON document store for .NET 10. Features zero-allocation I/O, Change Data Capture, R-Tree spatial indexing, and compile-time source generators.",
+    "description": "BLite is the high-performance embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, Change Data Capture streams, R-Tree spatial indexing, and compile-time source generators. No cloud, no server — install via NuGet.",
     "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "Embedded NoSQL Database",
     "operatingSystem": "Windows, Linux, macOS",
     "programmingLanguage": "C#",
+    "softwareVersion": "1.9.0",
     "license": "https://opensource.org/licenses/MIT",
     "codeRepository": "https://github.com/EntglDb/BLite",
+    "downloadUrl": "https://www.nuget.org/packages/BLite",
+    "featureList": [
+      "Embedded NoSQL document store for .NET",
+      "Zero-allocation BSON serialization",
+      "ACID transactions with Write-Ahead Logging",
+      "Change Data Capture (CDC) with 1000+ subscribers",
+      "R-Tree spatial and vector indexing",
+      "Compile-time source generators — no reflection",
+      "LINQ IQueryable provider",
+      "Schema-less DynamicCollection API",
+      "BLQL query language",
+      "Local-first, no cloud required"
+    ],
+    "keywords": "embedded NoSQL database for .NET, embedded database .NET, BSON document store, NoSQL C#, ACID .NET, zero allocation, LiteDB alternative",
     "offers": {
       "@type": "Offer",
       "price": "0",
       "priceCurrency": "USD"
-    },
-    "keywords": "embedded database, BSON, .NET, zero allocation, ACID, CDC, NoSQL"
+    }
+  }
+  </script>
+
+  <!-- FAQ Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is BLite?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "BLite is a high-performance embedded NoSQL database for .NET. It stores BSON documents locally inside your application with zero allocations, ACID transactions, and no external server or cloud dependency."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How do I install BLite in a .NET project?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Run 'dotnet add package BLite' in your .NET project. BLite targets .NET 10 and is available on NuGet."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is BLite a good alternative to LiteDB for .NET?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. BLite offers significantly higher throughput and zero heap allocations compared to LiteDB, plus modern features like Change Data Capture, R-Tree spatial indexing, and compile-time source generators."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does BLite require a cloud service or external server?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. BLite is a fully embedded database that runs entirely inside your .NET process. There is no external server, no cloud service, and no network dependency."
+        }
+      }
+    ]
   }
   </script>
 </head>

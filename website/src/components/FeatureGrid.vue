@@ -28,7 +28,7 @@ const features = [
   {
     icon: '🔒',
     title: 'Embedded First',
-    description: 'No external dependencies. No cloud required. Zero latency.'
+    description: 'No server. No cloud. Add BLite via NuGet and get a full embedded NoSQL database living inside your .NET process — zero latency, zero dependencies.'
   },
   {
     icon: '🔌',
@@ -38,7 +38,7 @@ const features = [
   {
     icon: '🖥️',
     title: 'BLite Studio',
-    description: 'Official cross-platform GUI to browse, query and manage your databases. Available for Windows and Linux.'
+    description: 'Official cross-platform GUI to browse, query and manage your embedded NoSQL databases. Available for Windows, Linux and macOS.'
   }
 ]
 </script>
@@ -47,7 +47,7 @@ const features = [
   <section class="features">
     <div class="container">
       <h2 class="section-title">Built for<span class="brand-gradient"> Performance</span></h2>
-      <p class="section-subtitle">Modern embedded database for .NET 10 applications</p>
+      <p class="section-subtitle">The most capable embedded NoSQL database for .NET 10 — zero allocations, ACID transactions, real-time CDC</p>
       
       <div class="feature-grid">
         <div v-for="(feature, index) in features" :key="index" class="feature-card animate-fade-in" :style="`animation-delay: ${0.1 * index}s`">
