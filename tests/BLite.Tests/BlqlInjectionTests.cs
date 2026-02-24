@@ -108,9 +108,9 @@ public class BlqlInjectionTests : IDisposable
     [Theory]
     [InlineData("""{ "age": { "$where": "1" } }""")]
     [InlineData("""{ "age": { "$between": [0, 100] } }""")]   // not a raw BLQL operator
-    [InlineData("""{ "age": { "$mod": [2, 0] } }""")]
     [InlineData("""{ "name": { "$text": "Alice" } }""")]
     [InlineData("""{ "name": { "$search": "Alice" } }""")]
+    [InlineData("""{ "age": { "$abs": 1 } }""")]
     public void FieldLevel_UnknownOperator_ThrowsFormatException(string json)
     {
         Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
@@ -478,6 +478,219 @@ public class BlqlInjectionTests : IDisposable
         Assert.Empty(docs);
         Assert.True(sw.ElapsedMilliseconds < 5_000,
             $"Large $in query took {sw.ElapsedMilliseconds} ms");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  13. New operators — type-confusion attacks
+    //      Each new operator must reject wrong JSON types for its value.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // $startsWith / $endsWith / $contains must receive strings
+    [Theory]
+    [InlineData("""{ "name": { "$startsWith": 42 } }""")]
+    [InlineData("""{ "name": { "$startsWith": true } }""")]
+    [InlineData("""{ "name": { "$startsWith": null } }""")]
+    [InlineData("""{ "name": { "$startsWith": [1,2] } }""")]
+    [InlineData("""{ "name": { "$endsWith": 42 } }""")]
+    [InlineData("""{ "name": { "$endsWith": {"a":1} } }""")]
+    [InlineData("""{ "name": { "$contains": false } }""")]
+    [InlineData("""{ "name": { "$contains": [1] } }""")]
+    public void StringOperator_NonString_Value_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $elemMatch must receive an object
+    [Theory]
+    [InlineData("""{ "tags": { "$elemMatch": "admin" } }""")]
+    [InlineData("""{ "tags": { "$elemMatch": 42 } }""")]
+    [InlineData("""{ "tags": { "$elemMatch": [1,2,3] } }""")]
+    [InlineData("""{ "tags": { "$elemMatch": null } }""")]
+    [InlineData("""{ "tags": { "$elemMatch": true } }""")]
+    public void ElemMatch_NonObject_Value_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $all must receive an array
+    [Theory]
+    [InlineData("""{ "tags": { "$all": "admin" } }""")]
+    [InlineData("""{ "tags": { "$all": 42 } }""")]
+    [InlineData("""{ "tags": { "$all": {"a":1} } }""")]
+    [InlineData("""{ "tags": { "$all": true } }""")]
+    public void All_NonArray_Value_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $mod must receive a [divisor, remainder] array
+    [Theory]
+    [InlineData("""{ "age": { "$mod": "bad" } }""")]
+    [InlineData("""{ "age": { "$mod": 42 } }""")]
+    [InlineData("""{ "age": { "$mod": true } }""")]
+    [InlineData("""{ "age": { "$mod": [3] } }""")]           // only 1 element
+    [InlineData("""{ "age": { "$mod": [3, 0, 1] } }""")]     // too many elements
+    public void Mod_InvalidFormat_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $not (field-level) must receive an object
+    [Theory]
+    [InlineData("""{ "age": { "$not": "hello" } }""")]
+    [InlineData("""{ "age": { "$not": 42 } }""")]
+    [InlineData("""{ "age": { "$not": [1,2] } }""")]
+    [InlineData("""{ "age": { "$not": null } }""")]
+    [InlineData("""{ "age": { "$not": true } }""")]
+    public void FieldNot_NonObject_Value_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $geoWithin must receive an object with $box
+    [Theory]
+    [InlineData("""{ "loc": { "$geoWithin": "bad" } }""")]
+    [InlineData("""{ "loc": { "$geoWithin": 42 } }""")]
+    [InlineData("""{ "loc": { "$geoWithin": [1,2] } }""")]
+    [InlineData("""{ "loc": { "$geoWithin": {} } }""")]                                    // missing $box
+    [InlineData("""{ "loc": { "$geoWithin": { "$box": "bad" } } }""")]                     // $box not array
+    [InlineData("""{ "loc": { "$geoWithin": { "$box": [[1,2]] } } }""")]                   // only 1 point
+    [InlineData("""{ "loc": { "$geoWithin": { "$box": [[1,2], [3]] } } }""")]              // second point missing coord
+    public void GeoWithin_InvalidFormat_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $geoNear must receive an object with $center and $maxDistance
+    [Theory]
+    [InlineData("""{ "loc": { "$geoNear": "bad" } }""")]
+    [InlineData("""{ "loc": { "$geoNear": 42 } }""")]
+    [InlineData("""{ "loc": { "$geoNear": {} } }""")]                                                    // missing both
+    [InlineData("""{ "loc": { "$geoNear": { "$center": [1,2] } } }""")]                                 // missing $maxDistance
+    [InlineData("""{ "loc": { "$geoNear": { "$maxDistance": 10 } } }""")]                                // missing $center
+    [InlineData("""{ "loc": { "$geoNear": { "$center": "bad", "$maxDistance": 10 } } }""")]              // $center not array
+    [InlineData("""{ "loc": { "$geoNear": { "$center": [1], "$maxDistance": 10 } } }""")]                // $center 1 element
+    [InlineData("""{ "loc": { "$geoNear": { "$center": [1,2], "$maxDistance": 10, "$foo": 1 } } }""")]   // unknown property
+    public void GeoNear_InvalidFormat_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // $nearVector must receive an object with $vector
+    [Theory]
+    [InlineData("""{ "emb": { "$nearVector": "bad" } }""")]
+    [InlineData("""{ "emb": { "$nearVector": 42 } }""")]
+    [InlineData("""{ "emb": { "$nearVector": {} } }""")]                                               // missing $vector
+    [InlineData("""{ "emb": { "$nearVector": { "$vector": "bad" } } }""")]                             // $vector not array
+    [InlineData("""{ "emb": { "$nearVector": { "$vector": [1], "$foo": 1 } } }""")]                    // unknown property
+    public void NearVector_InvalidFormat_ThrowsFormatException(string json)
+    {
+        Assert.Throws<FormatException>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  14. $mod divisor-by-zero (DivideByZeroException prevention)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Mod_DivisorZero_ThrowsFormatException()
+    {
+        // A malicious payload with divisor=0 must be rejected at parse time,
+        // NOT cause a DivideByZeroException at evaluation time.
+        Assert.Throws<FormatException>(
+            () => BlqlFilterParser.Parse("""{ "age": { "$mod": [0, 0] } }"""));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  15. Deep $not nesting at field level (DoS via recursion)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void FieldNot_DeepNesting_LimitedByJsonDepth()
+    {
+        // Each { "$not": ... } adds one JSON depth level.
+        // 30 nested $not objects = 31 total depth < System.Text.Json default max 64.
+        // Must parse without StackOverflowException or uncontrolled recursion.
+        var json = """{ "age": """;
+        for (int i = 0; i < 30; i++) json += """{ "$not": """;
+        json += """{ "$gt": 0 }""";
+        for (int i = 0; i < 30; i++) json += " }";
+        json += " }";
+
+        // Should parse without throwing
+        var filter = BlqlFilterParser.Parse(json);
+        var doc = MakeDoc("age", "30");
+        // Should evaluate without StackOverflow
+        filter.Matches(doc);
+    }
+
+    [Fact]
+    public void FieldNot_Excessive_Nesting_ThrowsJsonException()
+    {
+        // 70+ nested $not objects → exceeds System.Text.Json default max depth 64.
+        var json = """{ "age": """;
+        for (int i = 0; i < 70; i++) json += """{ "$not": """;
+        json += """{ "$gt": 0 }""";
+        for (int i = 0; i < 70; i++) json += " }";
+        json += " }";
+
+        Assert.ThrowsAny<Exception>(() => BlqlFilterParser.Parse(json));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  16. $all large-array DoS (analogous to large $in test)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Large_All_Array_CompletesWithoutError()
+    {
+        var values = string.Join(",", Enumerable.Range(0, 50_000).Select(i => $"\"item{i}\""));
+        var json = $"{{ \"tags\": {{ \"$all\": [{values}] }} }}";
+
+        var sw = Stopwatch.StartNew();
+        var filter = BlqlFilterParser.Parse(json);
+        var docs = _col.Query(filter).ToList();
+        sw.Stop();
+
+        Assert.Empty(docs);
+        Assert.True(sw.ElapsedMilliseconds < 5_000,
+            $"Large $all query took {sw.ElapsedMilliseconds} ms");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  17. $nearVector large vector DoS
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void NearVector_LargeVector_CompletesWithoutError()
+    {
+        // 100,000-dimensional vector — must parse and evaluate without issues
+        var values = string.Join(",", Enumerable.Range(0, 100_000).Select(i => "0.1"));
+        var json = $"{{ \"emb\": {{ \"$nearVector\": {{ \"$vector\": [{values}], \"$k\": 10 }} }} }}";
+
+        var sw = Stopwatch.StartNew();
+        var filter = BlqlFilterParser.Parse(json);
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds < 5_000,
+            $"Large $nearVector parsing took {sw.ElapsedMilliseconds} ms");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  18. String operators do NOT interpret regex/wildcards
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [Theory]
+    [InlineData("""{ "name": { "$startsWith": ".*" } }""")]
+    [InlineData("""{ "name": { "$endsWith": ".*" } }""")]
+    [InlineData("""{ "name": { "$contains": "(a+)+" } }""")]
+    public void StringOperators_RegexPatterns_TreatedAsLiterals(string json)
+    {
+        // Regex metacharacters must be treated as literal text, not patterns.
+        // None of these should match "Alice".
+        var filter = BlqlFilterParser.Parse(json);
+        var doc = MakeDoc("name", "Alice");
+        Assert.False(filter.Matches(doc));
     }
 
     // ══════════════════════════════════════════════════════════════════════════

@@ -108,6 +108,97 @@
       <pre><code><span class="keyword">var</span> f = <span class="type">BlqlFilter</span>.Gt(<span class="string">"age"</span>, <span class="number">18</span>)
                .AndAlso(<span class="type">BlqlFilter</span>.Eq(<span class="string">"status"</span>, <span class="string">"active"</span>))
                .AndAlso(<span class="type">BlqlFilter</span>.Exists(<span class="string">"email"</span>));</code></pre>
+
+      <h3>String Operators</h3>
+      <p>Ordinal string comparisons — regex metacharacters are treated as literals, not patterns.</p>
+      <pre><code><span class="comment">// JSON                                        C# equivalent</span>
+{ <span class="string">"name"</span>: { <span class="string">"$startsWith"</span>: <span class="string">"Al"</span> } }      <span class="type">BlqlFilter</span>.StartsWith(<span class="string">"name"</span>, <span class="string">"Al"</span>)
+{ <span class="string">"email"</span>: { <span class="string">"$endsWith"</span>:   <span class="string">".com"</span> } }   <span class="type">BlqlFilter</span>.EndsWith(<span class="string">"email"</span>, <span class="string">".com"</span>)
+{ <span class="string">"bio"</span>:   { <span class="string">"$contains"</span>:  <span class="string">"BLite"</span> } }  <span class="type">BlqlFilter</span>.Contains(<span class="string">"bio"</span>, <span class="string">"BLite"</span>)</code></pre>
+      <div class="tip-box">
+        <strong>🔒 No regex injection</strong> — <code>$startsWith</code>, <code>$endsWith</code>, and <code>$contains</code>
+        use <code>StringComparison.Ordinal</code> under the hood. A pattern like <code>"(a+)+"</code> is matched
+        literally, not as a regex.
+      </div>
+
+      <h3>Array Operators</h3>
+      <pre><code><span class="comment">// $elemMatch — any element in the array satisfies the condition</span>
+
+<span class="comment">// Scalar array: scores contains at least one value between 80 and 90</span>
+{ <span class="string">"scores"</span>: { <span class="string">"$elemMatch"</span>: { <span class="string">"$gte"</span>: <span class="number">80</span>, <span class="string">"$lt"</span>: <span class="number">90</span> } } }
+<span class="type">BlqlFilter</span>.ElemMatch(<span class="string">"scores"</span>,
+    <span class="type">BlqlFilter</span>.And(<span class="type">BlqlFilter</span>.Gte(<span class="string">"scores"</span>, <span class="number">80</span>), <span class="type">BlqlFilter</span>.Lt(<span class="string">"scores"</span>, <span class="number">90</span>)))
+
+<span class="comment">// Document array: at least one embedded doc has score >= 90</span>
+{ <span class="string">"results"</span>: { <span class="string">"$elemMatch"</span>: { <span class="string">"score"</span>: { <span class="string">"$gte"</span>: <span class="number">90</span> } } } }
+
+<span class="comment">// $size — array has exactly N elements</span>
+{ <span class="string">"tags"</span>: { <span class="string">"$size"</span>: <span class="number">3</span> } }      <span class="type">BlqlFilter</span>.Size(<span class="string">"tags"</span>, <span class="number">3</span>)
+
+<span class="comment">// $all — array contains ALL specified values</span>
+{ <span class="string">"tags"</span>: { <span class="string">"$all"</span>: [<span class="string">"alpha"</span>, <span class="string">"beta"</span>] } }   <span class="type">BlqlFilter</span>.All(<span class="string">"tags"</span>, <span class="string">"alpha"</span>, <span class="string">"beta"</span>)</code></pre>
+
+      <h3>Arithmetic</h3>
+      <pre><code><span class="comment">// $mod — field % divisor == remainder</span>
+{ <span class="string">"qty"</span>: { <span class="string">"$mod"</span>: [<span class="number">3</span>, <span class="number">0</span>] } }    <span class="type">BlqlFilter</span>.Mod(<span class="string">"qty"</span>, divisor: <span class="number">3</span>, remainder: <span class="number">0</span>)</code></pre>
+      <div class="tip-box">
+        <strong>🛡️ Zero-divisor protection</strong> — passing divisor <code>0</code> throws
+        <code>FormatException</code> at parse time, never <code>DivideByZeroException</code> at evaluation.
+      </div>
+
+      <h3>Field-level <code>$not</code></h3>
+      <p>Negate any field-level operator block directly on a field, without wrapping the whole filter:</p>
+      <pre><code><span class="comment">// Top-level $not — negates a full sub-filter</span>
+{ <span class="string">"$not"</span>: { <span class="string">"status"</span>: <span class="string">"banned"</span> } }
+<span class="type">BlqlFilter</span>.Not(<span class="type">BlqlFilter</span>.Eq(<span class="string">"status"</span>, <span class="string">"banned"</span>))
+
+<span class="comment">// Field-level $not — negate a specific operator block on one field</span>
+{ <span class="string">"age"</span>: { <span class="string">"$not"</span>: { <span class="string">"$gt"</span>: <span class="number">65</span> } } }  <span class="type">BlqlFilter</span>.Not(<span class="type">BlqlFilter</span>.Gt(<span class="string">"age"</span>, <span class="number">65</span>))
+{ <span class="string">"name"</span>: { <span class="string">"$not"</span>: { <span class="string">"$startsWith"</span>: <span class="string">"Bot"</span> } } }</code></pre>
+
+      <h3>Geospatial Operators</h3>
+      <p>Require a field storing coordinate values (stored via <code>[Column(TypeName="geopoint")]</code> or <code>BsonValue.FromCoordinates</code>).</p>
+      <pre><code><span class="comment">// $geoWithin — point inside a bounding box [[minLon,minLat],[maxLon,maxLat]]</span>
+{
+  <span class="string">"location"</span>: {
+    <span class="string">"$geoWithin"</span>: { <span class="string">"$box"</span>: [[<span class="number">9.0</span>, <span class="number">45.0</span>], [<span class="number">10.0</span>, <span class="number">46.0</span>]] }
+  }
+}
+<span class="type">BlqlFilter</span>.GeoWithin(<span class="string">"location"</span>, minLon: <span class="number">9.0</span>, minLat: <span class="number">45.0</span>, maxLon: <span class="number">10.0</span>, maxLat: <span class="number">46.0</span>)
+
+<span class="comment">// $geoNear — point within radius (km) using Haversine formula</span>
+{
+  <span class="string">"location"</span>: {
+    <span class="string">"$geoNear"</span>: { <span class="string">"$center"</span>: [<span class="number">9.19</span>, <span class="number">45.46</span>], <span class="string">"$maxDistance"</span>: <span class="number">5.0</span> }
+  }
+}
+<span class="type">BlqlFilter</span>.GeoNear(<span class="string">"location"</span>, lon: <span class="number">9.19</span>, lat: <span class="number">45.46</span>, maxDistanceKm: <span class="number">5.0</span>)</code></pre>
+      <div class="tip-box">
+        Coordinates are stored as <code>[longitude, latitude]</code> pairs — same convention as GeoJSON.
+        Distance calculation uses the <strong>Haversine formula</strong> for great-circle distance.
+      </div>
+
+      <h3>Vector Search</h3>
+      <p>
+        <code>$nearVector</code> triggers an <strong>HNSW ANN index search</strong> on a pre-built vector index.
+        The <code>Matches()</code> method always returns <code>true</code> — actual ranking is performed by
+        the query optimizer via the index. Use it together with <code>.Take(k)</code>.
+      </p>
+      <pre><code><span class="comment">// $nearVector — retrieve the k nearest embeddings</span>
+{
+  <span class="string">"embedding"</span>: {
+    <span class="string">"$nearVector"</span>: {
+      <span class="string">"$vector"</span>: [<span class="number">0.1</span>, <span class="number">0.2</span>, <span class="number">0.9</span>, <span class="comment">/* ... */</span>],
+      <span class="string">"$k"</span>:      <span class="number">10</span>,
+      <span class="string">"$metric"</span>: <span class="string">"cosine"</span>   <span class="comment">// "cosine" | "euclidean" | "dotproduct" (default: "cosine")</span>
+    }
+  }
+}
+
+<span class="keyword">float</span>[] queryVec = GetEmbedding(<span class="string">"search text"</span>);
+<span class="keyword">var</span> similar = col.Query(<span class="type">BlqlFilter</span>.NearVector(<span class="string">"embedding"</span>, queryVec, k: <span class="number">10</span>))
+                 .Take(<span class="number">10</span>)
+                 .ToList();</code></pre>
     </section>
 
     <!-- ═══════════════════════════════════════════════════════ Sort -->
@@ -232,12 +323,24 @@ engine.Commit();</code></pre>
             <td>→ <code>FormatException</code></td>
           </tr>
           <tr>
-            <td>Type confusion (<code>"$exists": 1</code>, <code>"$regex": 42</code>)</td>
-            <td>→ <code>FormatException</code></td>
+            <td>Type confusion (<code>"$exists": 1</code>, <code>"$startsWith": 42</code>, <code>"$mod": "bad"</code>, …)</td>
+            <td>→ <code>FormatException</code> — every operator validates its <code>JsonValueKind</code></td>
+          </tr>
+          <tr>
+            <td>Division by zero via <code>"$mod": [0, 0]</code></td>
+            <td>→ <code>FormatException</code> at parse time — never reaches evaluation</td>
           </tr>
           <tr>
             <td>ReDoS via <code>$regex</code></td>
             <td>→ <code>RegexOptions.NonBacktracking</code> eliminates catastrophic backtracking</td>
+          </tr>
+          <tr>
+            <td>Regex injection via <code>$startsWith</code> / <code>$endsWith</code> / <code>$contains</code></td>
+            <td>→ Patterns are literals (<code>StringComparison.Ordinal</code>) — no regex engine involved</td>
+          </tr>
+          <tr>
+            <td>Large <code>$in</code> / <code>$all</code> array DoS or oversized <code>$nearVector</code> payload</td>
+            <td>→ Bounded by JSON parse budget; 252 security tests verify resilience</td>
           </tr>
           <tr>
             <td>Deeply nested DoS (JSON depth &gt; 64)</td>

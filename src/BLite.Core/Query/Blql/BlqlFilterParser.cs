@@ -42,6 +42,30 @@ namespace BLite.Core.Query.Blql;
 /// // Regex
 /// { "name": { "$regex": "^Al" } }
 ///
+/// // String operators
+/// { "name": { "$startsWith": "Al" } }
+/// { "email": { "$endsWith": "@gmail.com" } }
+/// { "bio": { "$contains": "engineer" } }
+///
+/// // Array operators
+/// { "scores": { "$elemMatch": { "$gte": 80, "$lt": 90 } } }   // scalar array
+/// { "results": { "$elemMatch": { "score": { "$gte": 80 } } } } // document array
+/// { "tags": { "$size": 3 } }
+/// { "tags": { "$all": ["urgent", "reviewed"] } }
+///
+/// // Arithmetic
+/// { "qty": { "$mod": [4, 0] } }
+///
+/// // Field-level negation
+/// { "age": { "$not": { "$gt": 30 } } }
+///
+/// // Geospatial
+/// { "location": { "$geoWithin": { "$box": [[minLon, minLat], [maxLon, maxLat]] } } }
+/// { "location": { "$geoNear": { "$center": [lon, lat], "$maxDistance": 5.0 } } }
+///
+/// // Vector search
+/// { "embedding": { "$nearVector": { "$vector": [0.1, 0.2, ...], "$k": 10, "$metric": "cosine" } } }
+///
 /// // Null equality
 /// { "field": null }
 /// </code>
@@ -152,6 +176,38 @@ public static class BlqlFilterParser
                          System.Text.RegularExpressions.RegexOptions.NonBacktracking)
                     : throw new FormatException(
                          $"$regex requires a string value, got {op.Value.ValueKind}"),
+
+                // String operators
+                "$startswith" => op.Value.ValueKind == JsonValueKind.String
+                    ? BlqlFilter.StartsWith(field, op.Value.GetString()!)
+                    : throw new FormatException($"$startsWith requires a string value, got {op.Value.ValueKind}"),
+                "$endswith"   => op.Value.ValueKind == JsonValueKind.String
+                    ? BlqlFilter.EndsWith(field, op.Value.GetString()!)
+                    : throw new FormatException($"$endsWith requires a string value, got {op.Value.ValueKind}"),
+                "$contains"   => op.Value.ValueKind == JsonValueKind.String
+                    ? BlqlFilter.Contains(field, op.Value.GetString()!)
+                    : throw new FormatException($"$contains requires a string value, got {op.Value.ValueKind}"),
+
+                // Array operators
+                "$elemmatch"  => ParseElemMatch(field, op.Value),
+                "$size"       => BlqlFilter.Size(field, op.Value.GetInt32()),
+                "$all"        => BlqlFilter.All(field, ReadValueArray(op.Value)),
+
+                // Arithmetic
+                "$mod"        => ParseMod(field, op.Value),
+
+                // Field-level negation
+                "$not"        => op.Value.ValueKind == JsonValueKind.Object
+                    ? BlqlFilter.Not(ParseFieldCondition(field, op.Value))
+                    : throw new FormatException($"$not requires an object with operator conditions, got {op.Value.ValueKind}"),
+
+                // Geospatial operators
+                "$geowithin"  => ParseGeoWithin(field, op.Value),
+                "$geonear"    => ParseGeoNear(field, op.Value),
+
+                // Vector search
+                "$nearvector" => ParseNearVector(field, op.Value),
+
                 _ => throw new FormatException($"Unknown BLQL operator: {op.Name}")
             });
         }
@@ -199,12 +255,174 @@ public static class BlqlFilterParser
     private static BsonValue[] ReadValueArray(JsonElement arr)
     {
         if (arr.ValueKind != JsonValueKind.Array)
-            throw new FormatException($"Expected a JSON array for $in/$nin, got {arr.ValueKind}");
+            throw new FormatException($"Expected a JSON array for $in/$nin/$all, got {arr.ValueKind}");
 
         var result = new List<BsonValue>();
         foreach (var el in arr.EnumerateArray())
             result.Add(ReadScalar(el));
 
         return result.ToArray();
+    }
+
+    // ── Complex operator parsers ────────────────────────────────────────────
+
+    /// <summary>
+    /// Parses { "$elemMatch": { ... } }.
+    /// Inner object can be an operator map (for scalar arrays) or a field condition map (for document arrays).
+    /// For scalar arrays: { "$elemMatch": { "$gte": 80, "$lt": 90 } }
+    /// For document arrays: { "$elemMatch": { "score": { "$gte": 80 } } }
+    /// </summary>
+    private static BlqlFilter ParseElemMatch(string field, JsonElement val)
+    {
+        if (val.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"$elemMatch requires an object, got {val.ValueKind}");
+
+        // Detect whether inner keys are operators ($...) or field names.
+        // If all keys start with $, treat as scalar element conditions using the parent field name.
+        bool allOperators = true;
+        foreach (var prop in val.EnumerateObject())
+        {
+            if (!prop.Name.StartsWith('$'))
+            {
+                allOperators = false;
+                break;
+            }
+        }
+
+        BlqlFilter condition = allOperators
+            ? ParseFieldCondition(field, val)   // { "$gte": 80 } → compared using the parent field name
+            : ParseObject(val);                  // { "score": { "$gte": 80 } } → sub-document filter
+
+        return BlqlFilter.ElemMatch(field, condition);
+    }
+
+    /// <summary>
+    /// Parses { "$mod": [divisor, remainder] }.
+    /// </summary>
+    private static BlqlFilter ParseMod(string field, JsonElement val)
+    {
+        if (val.ValueKind != JsonValueKind.Array)
+            throw new FormatException("$mod requires an array [divisor, remainder]");
+
+        var items = new List<long>();
+        foreach (var el in val.EnumerateArray())
+            items.Add(el.GetInt64());
+
+        if (items.Count != 2)
+            throw new FormatException("$mod requires exactly 2 elements: [divisor, remainder]");
+
+        if (items[0] == 0)
+            throw new FormatException("$mod divisor must not be zero");
+
+        return BlqlFilter.Mod(field, items[0], items[1]);
+    }
+
+    /// <summary>
+    /// Parses { "$geoWithin": { "$box": [[minLon, minLat], [maxLon, maxLat]] } }.
+    /// </summary>
+    private static BlqlFilter ParseGeoWithin(string field, JsonElement val)
+    {
+        if (val.ValueKind != JsonValueKind.Object)
+            throw new FormatException("$geoWithin requires an object");
+
+        JsonElement box = default;
+        bool found = false;
+        foreach (var prop in val.EnumerateObject())
+        {
+            if (prop.Name.Equals("$box", StringComparison.OrdinalIgnoreCase))
+            {
+                box = prop.Value;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found || box.ValueKind != JsonValueKind.Array || box.GetArrayLength() != 2)
+            throw new FormatException("$geoWithin requires { \"$box\": [[minLon, minLat], [maxLon, maxLat]] }");
+
+        var min = box[0];
+        var max = box[1];
+        if (min.ValueKind != JsonValueKind.Array || min.GetArrayLength() != 2 ||
+            max.ValueKind != JsonValueKind.Array || max.GetArrayLength() != 2)
+            throw new FormatException("$geoWithin.$box elements must be [lon, lat] pairs");
+
+        return BlqlFilter.GeoWithin(field,
+            min[0].GetDouble(), min[1].GetDouble(),
+            max[0].GetDouble(), max[1].GetDouble());
+    }
+
+    /// <summary>
+    /// Parses { "$geoNear": { "$center": [lon, lat], "$maxDistance": radiusKm } }.
+    /// </summary>
+    private static BlqlFilter ParseGeoNear(string field, JsonElement val)
+    {
+        if (val.ValueKind != JsonValueKind.Object)
+            throw new FormatException("$geoNear requires an object");
+
+        double? lon = null, lat = null, maxDistance = null;
+
+        foreach (var prop in val.EnumerateObject())
+        {
+            switch (prop.Name.ToLowerInvariant())
+            {
+                case "$center":
+                    if (prop.Value.ValueKind != JsonValueKind.Array || prop.Value.GetArrayLength() != 2)
+                        throw new FormatException("$geoNear.$center must be a [lon, lat] array");
+                    lon = prop.Value[0].GetDouble();
+                    lat = prop.Value[1].GetDouble();
+                    break;
+                case "$maxdistance":
+                    maxDistance = prop.Value.GetDouble();
+                    break;
+                default:
+                    throw new FormatException($"Unknown $geoNear property: {prop.Name}");
+            }
+        }
+
+        if (lon == null || lat == null || maxDistance == null)
+            throw new FormatException("$geoNear requires $center and $maxDistance");
+
+        return BlqlFilter.GeoNear(field, lon.Value, lat.Value, maxDistance.Value);
+    }
+
+    /// <summary>
+    /// Parses { "$nearVector": { "$vector": [...], "$k": 10, "$metric": "cosine" } }.
+    /// </summary>
+    private static BlqlFilter ParseNearVector(string field, JsonElement val)
+    {
+        if (val.ValueKind != JsonValueKind.Object)
+            throw new FormatException("$nearVector requires an object");
+
+        float[]? vector = null;
+        int k = 10;
+        string metric = "cosine";
+
+        foreach (var prop in val.EnumerateObject())
+        {
+            switch (prop.Name.ToLowerInvariant())
+            {
+                case "$vector":
+                    if (prop.Value.ValueKind != JsonValueKind.Array)
+                        throw new FormatException("$nearVector.$vector must be an array of numbers");
+                    var floats = new List<float>();
+                    foreach (var el in prop.Value.EnumerateArray())
+                        floats.Add(el.GetSingle());
+                    vector = floats.ToArray();
+                    break;
+                case "$k":
+                    k = prop.Value.GetInt32();
+                    break;
+                case "$metric":
+                    metric = prop.Value.GetString() ?? "cosine";
+                    break;
+                default:
+                    throw new FormatException($"Unknown $nearVector property: {prop.Name}");
+            }
+        }
+
+        if (vector == null)
+            throw new FormatException("$nearVector requires $vector array");
+
+        return BlqlFilter.NearVector(field, vector, k, metric);
     }
 }

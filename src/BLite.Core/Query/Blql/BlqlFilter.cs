@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using BLite.Bson;
@@ -168,6 +169,68 @@ public abstract class BlqlFilter
     public static BlqlFilter Regex(string field, Regex regex)
         => new RegexFilter(field, regex);
 
+    /// <summary>Field starts with the given prefix. { field: { "$startsWith": "prefix" } }</summary>
+    public static BlqlFilter StartsWith(string field, string prefix)
+        => new StartsWithFilter(field, prefix);
+
+    /// <summary>Field ends with the given suffix. { field: { "$endsWith": "suffix" } }</summary>
+    public static BlqlFilter EndsWith(string field, string suffix)
+        => new EndsWithFilter(field, suffix);
+
+    /// <summary>Field contains the given substring. { field: { "$contains": "sub" } }</summary>
+    public static BlqlFilter Contains(string field, string substring)
+        => new ContainsFilter(field, substring);
+
+    // ── Factory: array operators ────────────────────────────────────────────
+
+    /// <summary>At least one array element satisfies all conditions. { field: { "$elemMatch": { ... } } }</summary>
+    public static BlqlFilter ElemMatch(string field, BlqlFilter condition)
+        => new ElemMatchFilter(field, condition);
+
+    /// <summary>Array field has the given length. { field: { "$size": n } }</summary>
+    public static BlqlFilter Size(string field, int size)
+        => new SizeFilter(field, size);
+
+    /// <summary>Array field contains all specified values. { field: { "$all": [values] } }</summary>
+    public static BlqlFilter All(string field, IEnumerable<BsonValue> values)
+        => new AllFilter(field, values.ToArray());
+
+    /// <inheritdoc cref="All(string, IEnumerable{BsonValue})"/>
+    public static BlqlFilter All(string field, params BsonValue[] values)
+        => new AllFilter(field, values);
+
+    public static BlqlFilter All(string field, params string[] values)
+        => All(field, values.Select(BsonValue.FromString));
+
+    public static BlqlFilter All(string field, params int[] values)
+        => All(field, values.Select(BsonValue.FromInt32));
+
+    // ── Factory: arithmetic operator ───────────────────────────────────────
+
+    /// <summary>Field value modulo divisor equals remainder. { field: { "$mod": [divisor, remainder] } }</summary>
+    public static BlqlFilter Mod(string field, long divisor, long remainder)
+        => new ModFilter(field, divisor, remainder);
+
+    // ── Factory: geospatial operators ──────────────────────────────────────
+
+    /// <summary>Geospatial bounding-box search. { field: { "$geoWithin": { "$box": [[minLon, minLat], [maxLon, maxLat]] } } }</summary>
+    public static BlqlFilter GeoWithin(string field, double minLon, double minLat, double maxLon, double maxLat)
+        => new GeoWithinFilter(field, minLon, minLat, maxLon, maxLat);
+
+    /// <summary>Geospatial proximity search. { field: { "$geoNear": { "$center": [lon, lat], "$maxDistance": radiusKm } } }</summary>
+    public static BlqlFilter GeoNear(string field, double lon, double lat, double maxDistanceKm)
+        => new GeoNearFilter(field, lon, lat, maxDistanceKm);
+
+    // ── Factory: vector search ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Vector similarity search. { field: { "$nearVector": { "$vector": [...], "$k": 10 } } }
+    /// Note: this filter is evaluated post-hoc on documents; the HNSW index acceleration
+    /// is handled by the query optimizer / execution layer.
+    /// </summary>
+    public static BlqlFilter NearVector(string field, float[] vector, int k, string metric = "cosine")
+        => new NearVectorFilter(field, vector, k, metric);
+
     // ── Factory: range helpers ─────────────────────────────────────────────
 
     /// <summary>Combines Gte + Lte into a closed range.</summary>
@@ -201,6 +264,13 @@ public abstract class BlqlFilter
     /// </summary>
     public abstract bool Matches(BsonDocument document);
 
+    /// <summary>
+    /// Tests whether a bare <see cref="BsonValue"/> satisfies this filter
+    /// when applied to an element of an array field named <paramref name="field"/>.
+    /// Used internally by <c>$elemMatch</c> for scalar-array evaluation.
+    /// </summary>
+    internal virtual bool MatchesValue(string field, BsonValue value) => false;
+
     // ── Internal node types ────────────────────────────────────────────────
 
     private enum CompareOp { Eq, Ne, Gt, Gte, Lt, Lte }
@@ -233,6 +303,17 @@ public abstract class BlqlFilter
                 return _op == CompareOp.Ne;
             }
 
+            return CompareValues(docValue);
+        }
+
+        internal override bool MatchesValue(string field, BsonValue value)
+        {
+            if (_field != field) return false;
+            return CompareValues(value);
+        }
+
+        private bool CompareValues(BsonValue docValue)
+        {
             var cmp = BsonValueComparer.Compare(docValue, _value);
             return _op switch
             {
@@ -286,6 +367,13 @@ public abstract class BlqlFilter
             return _negate ? !found : found;
         }
 
+        internal override bool MatchesValue(string field, BsonValue value)
+        {
+            if (_field != field) return false;
+            var found = _values.Any(v => BsonValueComparer.Compare(value, v) == 0);
+            return _negate ? !found : found;
+        }
+
         public override string ToString()
         {
             var op = _negate ? "$nin" : "$in";
@@ -316,6 +404,17 @@ public abstract class BlqlFilter
             };
         }
 
+        internal override bool MatchesValue(string field, BsonValue value)
+        {
+            return _op switch
+            {
+                LogicalOp.And => _filters.All(f => f.MatchesValue(field, value)),
+                LogicalOp.Or  => _filters.Any(f => f.MatchesValue(field, value)),
+                LogicalOp.Nor => _filters.All(f => !f.MatchesValue(field, value)),
+                _ => false
+            };
+        }
+
         public override string ToString()
         {
             var op = _op switch { LogicalOp.And => "$and", LogicalOp.Or => "$or", LogicalOp.Nor => "$nor", _ => "?" };
@@ -331,6 +430,8 @@ public abstract class BlqlFilter
         public NotFilter(BlqlFilter inner) { _inner = inner; }
 
         public override bool Matches(BsonDocument document) => !_inner.Matches(document);
+
+        internal override bool MatchesValue(string field, BsonValue value) => !_inner.MatchesValue(field, value);
 
         public override string ToString() => $"{{ \"$not\": {_inner} }}";
     }
@@ -397,5 +498,303 @@ public abstract class BlqlFilter
 
         public override string ToString()
             => $"{{ \"{_field}\": {{ \"$regex\": \"{_regex}\" }} }}";
+    }
+
+    // ── String: $startsWith, $endsWith, $contains ──────────────────────────
+
+    private sealed class StartsWithFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly string _prefix;
+
+        public StartsWithFilter(string field, string prefix)
+        {
+            _field = field.ToLowerInvariant();
+            _prefix = prefix;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (val.Type != BsonType.String) return false;
+            return val.AsString.StartsWith(_prefix, StringComparison.Ordinal);
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$startsWith\": \"{_prefix}\" }} }}";
+    }
+
+    private sealed class EndsWithFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly string _suffix;
+
+        public EndsWithFilter(string field, string suffix)
+        {
+            _field = field.ToLowerInvariant();
+            _suffix = suffix;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (val.Type != BsonType.String) return false;
+            return val.AsString.EndsWith(_suffix, StringComparison.Ordinal);
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$endsWith\": \"{_suffix}\" }} }}";
+    }
+
+    private sealed class ContainsFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly string _substring;
+
+        public ContainsFilter(string field, string substring)
+        {
+            _field = field.ToLowerInvariant();
+            _substring = substring;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (val.Type != BsonType.String) return false;
+            return val.AsString.Contains(_substring, StringComparison.Ordinal);
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$contains\": \"{_substring}\" }} }}";
+    }
+
+    // ── Array: $elemMatch, $size, $all ──────────────────────────────────────
+
+    private sealed class ElemMatchFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly BlqlFilter _condition;
+
+        public ElemMatchFilter(string field, BlqlFilter condition)
+        {
+            _field = field.ToLowerInvariant();
+            _condition = condition;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (val.Type != BsonType.Array) return false;
+
+            foreach (var item in val.AsArray)
+            {
+                if (item.Type == BsonType.Document)
+                {
+                    // Sub-document array: test condition against each sub-document
+                    if (_condition.Matches(item.AsDocument))
+                        return true;
+                }
+                else
+                {
+                    // Scalar array: use MatchesValue to evaluate the condition
+                    // against the bare element value.
+                    if (_condition.MatchesValue(_field, item))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$elemMatch\": {_condition} }} }}";
+    }
+
+    private sealed class SizeFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly int _size;
+
+        public SizeFilter(string field, int size)
+        {
+            _field = field.ToLowerInvariant();
+            _size = size;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (val.Type != BsonType.Array) return false;
+            return val.AsArray.Count == _size;
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$size\": {_size} }} }}";
+    }
+
+    private sealed class AllFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly BsonValue[] _values;
+
+        public AllFilter(string field, BsonValue[] values)
+        {
+            _field = field.ToLowerInvariant();
+            _values = values;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (val.Type != BsonType.Array) return false;
+            var arr = val.AsArray;
+            return _values.All(required =>
+                arr.Any(elem => BsonValueComparer.Compare(elem, required) == 0));
+        }
+
+        public override string ToString()
+        {
+            var vals = string.Join(", ", _values.Select(v => v.ToString()));
+            return $"{{ \"{_field}\": {{ \"$all\": [{vals}] }} }}";
+        }
+    }
+
+    // ── Arithmetic: $mod ────────────────────────────────────────────────────
+
+    private sealed class ModFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly long _divisor;
+        private readonly long _remainder;
+
+        public ModFilter(string field, long divisor, long remainder)
+        {
+            _field = field.ToLowerInvariant();
+            _divisor = divisor;
+            _remainder = remainder;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            long numValue = val.Type switch
+            {
+                BsonType.Int32 => val.AsInt32,
+                BsonType.Int64 => val.AsInt64,
+                BsonType.Double => (long)val.AsDouble,
+                _ => long.MinValue
+            };
+            if (numValue == long.MinValue) return false;
+            return numValue % _divisor == _remainder;
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$mod\": [{_divisor}, {_remainder}] }} }}";
+    }
+
+    // ── Geospatial: $geoWithin, $geoNear ───────────────────────────────────
+
+    private sealed class GeoWithinFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly double _minLon, _minLat, _maxLon, _maxLat;
+
+        public GeoWithinFilter(string field, double minLon, double minLat, double maxLon, double maxLat)
+        {
+            _field = field.ToLowerInvariant();
+            _minLon = minLon;
+            _minLat = minLat;
+            _maxLon = maxLon;
+            _maxLat = maxLat;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (!val.IsCoordinates) return false;
+            var (lat, lon) = val.AsCoordinates;
+            return lat >= _minLat && lat <= _maxLat &&
+                   lon >= _minLon && lon <= _maxLon;
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$geoWithin\": {{ \"$box\": [[{_minLon.ToString(CultureInfo.InvariantCulture)}, {_minLat.ToString(CultureInfo.InvariantCulture)}], [{_maxLon.ToString(CultureInfo.InvariantCulture)}, {_maxLat.ToString(CultureInfo.InvariantCulture)}]] }} }} }}";
+    }
+
+    private sealed class GeoNearFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly double _lon, _lat, _maxDistanceKm;
+
+        public GeoNearFilter(string field, double lon, double lat, double maxDistanceKm)
+        {
+            _field = field.ToLowerInvariant();
+            _lon = lon;
+            _lat = lat;
+            _maxDistanceKm = maxDistanceKm;
+        }
+
+        public override bool Matches(BsonDocument document)
+        {
+            if (!document.TryGetValue(_field, out var val)) return false;
+            if (!val.IsCoordinates) return false;
+            var (docLat, docLon) = val.AsCoordinates;
+            var distKm = Indexing.SpatialMath.DistanceKm(docLat, docLon, _lat, _lon);
+            return distKm <= _maxDistanceKm;
+        }
+
+        public override string ToString()
+            => $"{{ \"{_field}\": {{ \"$geoNear\": {{ \"$center\": [{_lon.ToString(CultureInfo.InvariantCulture)}, {_lat.ToString(CultureInfo.InvariantCulture)}], \"$maxDistance\": {_maxDistanceKm.ToString(CultureInfo.InvariantCulture)} }} }} }}";
+    }
+
+    // ── Vector: $nearVector ─────────────────────────────────────────────────
+
+    private sealed class NearVectorFilter : BlqlFilter
+    {
+        private readonly string _field;
+        private readonly float[] _vector;
+        private readonly int _k;
+        private readonly string _metric;
+
+        public NearVectorFilter(string field, float[] vector, int k, string metric)
+        {
+            _field = field.ToLowerInvariant();
+            _vector = vector;
+            _k = k;
+            _metric = metric;
+        }
+
+        /// <summary>
+        /// The field name for the vector index.
+        /// </summary>
+        public string Field => _field;
+
+        /// <summary>
+        /// The query vector.
+        /// </summary>
+        public float[] Vector => _vector;
+
+        /// <summary>
+        /// The number of nearest neighbors to retrieve.
+        /// </summary>
+        public int K => _k;
+
+        /// <summary>
+        /// The distance metric (e.g. "cosine", "euclidean").
+        /// </summary>
+        public string Metric => _metric;
+
+        public override bool Matches(BsonDocument document)
+        {
+            // $nearVector is an index-accelerated operator.
+            // Post-hoc evaluation: always true (documents are pre-filtered by the index layer).
+            // If the engine falls back to scan, we cannot recompute HNSW here.
+            return true;
+        }
+
+        public override string ToString()
+        {
+            var vecStr = string.Join(", ", _vector.Select(v => v.ToString(CultureInfo.InvariantCulture)));
+            return $"{{ \"{_field}\": {{ \"$nearVector\": {{ \"$vector\": [{vecStr}], \"$k\": {_k}, \"$metric\": \"{_metric}\" }} }} }}";
+        }
     }
 }

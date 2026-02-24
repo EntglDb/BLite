@@ -74,9 +74,14 @@ var docs = col.Query()
     .ToList();
 ```
 
-- **All MQL operators**: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$type`, `$regex`.
-- **Logical combinators**: `$and`, `$or`, `$nor`, `$not`, implicit AND for multiple top-level fields.
-- **Security-hardened**: Unknown `$` operators (e.g. `$where`, `$expr`) throw `FormatException`. ReDoS protected via `NonBacktracking` regex engine.
+- **Comparison**: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$type`, `$regex`.
+- **String**: `$startsWith`, `$endsWith`, `$contains` — ordinal comparison, no regex interpretation.
+- **Array**: `$elemMatch` (scalar and document arrays), `$size`, `$all`.
+- **Arithmetic**: `$mod` — modulo check with zero-divisor protection at parse time.
+- **Logical**: `$and`, `$or`, `$nor`, `$not` (top-level) and `$not` (field-level condition negation). Implicit AND for multiple top-level fields.
+- **Geospatial**: `$geoWithin` (bounding box) and `$geoNear` (Haversine radius in km).
+- **Vector**: `$nearVector` — index-accelerated ANN search via HNSW.
+- **Security-hardened**: Unknown `$` operators throw `FormatException`. Every operator validates its JSON type. `$mod` divisor=0 rejected at parse time. ReDoS protected via `NonBacktracking`. 252 dedicated security tests.
 
 ### 🤖 AI-Ready Vector Search
 BLite natively supports vector embeddings and fast similarity search.
@@ -512,6 +517,8 @@ var docs = col.Query()
 
 ### Supported Filter Operators
 
+**Comparison & field tests**
+
 | JSON syntax | C# equivalent | Description |
 |:---|:---|:---|
 | `{ "f": value }` | `BlqlFilter.Eq("f", v)` | Equality |
@@ -524,11 +531,52 @@ var docs = col.Query()
 | `{ "f": { "$nin": [...] } }` | `BlqlFilter.Nin("f", ...)` | Value not in set |
 | `{ "f": { "$exists": true } }` | `BlqlFilter.Exists("f")` | Field exists |
 | `{ "f": { "$type": 16 } }` | `BlqlFilter.Type("f", BsonType.Int32)` | BSON type check |
-| `{ "f": { "$regex": "^Al" } }` | `BlqlFilter.Regex("f", "^Al")` | Regex match |
+| `{ "f": { "$regex": "^Al" } }` | `BlqlFilter.Regex("f", "^Al")` | Regex (NonBacktracking) |
+
+**String operators**
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
+| `{ "f": { "$startsWith": "Al" } }` | `BlqlFilter.StartsWith("f", "Al")` | Prefix match (ordinal) |
+| `{ "f": { "$endsWith": ".com" } }` | `BlqlFilter.EndsWith("f", ".com")` | Suffix match (ordinal) |
+| `{ "f": { "$contains": "foo" } }` | `BlqlFilter.Contains("f", "foo")` | Substring match (ordinal) |
+
+**Array operators**
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
+| `{ "f": { "$elemMatch": { "$gt": 80 } } }` | `BlqlFilter.ElemMatch("f", BlqlFilter.Gt("f", 80))` | Any element satisfies condition |
+| `{ "f": { "$size": 3 } }` | `BlqlFilter.Size("f", 3)` | Array has exact length |
+| `{ "f": { "$all": ["a", "b"] } }` | `BlqlFilter.All("f", ...)` | Array contains all values |
+
+**Arithmetic**
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
+| `{ "f": { "$mod": [3, 0] } }` | `BlqlFilter.Mod("f", 3, 0)` | `field % divisor == remainder` |
+
+**Logical**
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
 | `{ "$and": [...] }` | `BlqlFilter.And(...)` | Logical AND |
 | `{ "$or": [...] }` | `BlqlFilter.Or(...)` | Logical OR |
 | `{ "$nor": [...] }` | `BlqlFilter.Nor(...)` | Logical NOR |
-| `{ "$not": {...} }` | `BlqlFilter.Not(...)` | Logical NOT |
+| `{ "$not": {...} }` | `BlqlFilter.Not(...)` | Top-level NOT |
+| `{ "f": { "$not": { "$gt": 0 } } }` | `BlqlFilter.Not(BlqlFilter.Gt("f", 0))` | Field-level condition negation |
+
+**Geospatial**
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
+| `{ "loc": { "$geoWithin": { "$box": [[minLon,minLat],[maxLon,maxLat]] } } }` | `BlqlFilter.GeoWithin("loc", minLon, minLat, maxLon, maxLat)` | Point inside bounding box |
+| `{ "loc": { "$geoNear": { "$center": [lon,lat], "$maxDistance": km } } }` | `BlqlFilter.GeoNear("loc", lon, lat, km)` | Point within radius (Haversine) |
+
+**Vector search**
+
+| JSON syntax | C# equivalent | Description |
+|:---|:---|:---|
+| `{ "emb": { "$nearVector": { "$vector": [...], "$k": 10, "$metric": "cosine" } } }` | `BlqlFilter.NearVector("emb", vector, k: 10)` | HNSW ANN similarity search |
 
 Multiple top-level fields in one JSON object produce an implicit AND:
 ```json
@@ -587,10 +635,12 @@ await foreach (var doc in col.Query(filter).AsAsyncEnumerable(ct))
 ### Security
 
 The JSON parser is **hardened against BLQL-injection**:
-- Unknown `$` operators at root level (`$where`, `$expr`, `$function`, …) → `FormatException`.
-- `$regex` patterns are compiled with `RegexOptions.NonBacktracking` (ReDoS-safe).
-- `$exists` requires a strict boolean — wrong types throw `FormatException`.
+- Unknown `$` operators (`$where`, `$expr`, `$function`, …) → `FormatException` — never passed through.
+- Every operator validates its JSON type (e.g. `$startsWith` requires string, `$mod` requires `[divisor, remainder]`) → `FormatException` on mismatch.
+- `$mod` with divisor `0` is rejected at parse time, preventing `DivideByZeroException` at evaluation.
+- `$regex` compiled with `RegexOptions.NonBacktracking` (ReDoS-safe). String operators (`$startsWith`, `$endsWith`, `$contains`) use ordinal comparison — regex metacharacters are literals.
 - Deeply nested JSON (> 64 levels) is rejected by `System.Text.Json` before evaluation.
+- **252 security tests** covering type-confusion, division-by-zero, deep nesting DoS, large `$in`/`$all` array DoS, and vector dimension bombing.
 
 ---
 
@@ -608,7 +658,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **Async I/O**: True async reads and writes — `FindByIdAsync`, `FindAllAsync` (`IAsyncEnumerable<T>`), `ToListAsync`/`ToArrayAsync`/`CountAsync`/`AnyAsync`/`AllAsync`/`FirstOrDefaultAsync`/`SingleOrDefaultAsync` for LINQ pipelines, `SaveChangesAsync`. `CancellationToken` propagates to `RandomAccess.ReadAsync` (IOCP on Windows).
 - ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
 - ✅ **Projection Push-down**: SELECT (and WHERE+SELECT) lambdas compile to a single-pass raw-BSON reader — `T` is never instantiated. `IBLiteQueryable<T>` preserves the async chain across all LINQ operators.
-- ✅ **BLQL**: MQL-inspired query language for `DynamicCollection` — filter, sort, project and page `BsonDocument` results from JSON strings or via a fluent C# API. Security-hardened against injection and ReDoS.
+- ✅ **BLQL**: MQL-inspired query language for `DynamicCollection` — filter, sort, project and page `BsonDocument` results from JSON strings or via a fluent C# API. Full operator set: comparison, string (`$startsWith`, `$endsWith`, `$contains`), array (`$elemMatch`, `$size`, `$all`), arithmetic (`$mod`), logical, geospatial (`$geoWithin`, `$geoNear`), and vector (`$nearVector`). Security-hardened against injection, ReDoS, and division-by-zero.
 
 ## 🔮 Future Vision
 
