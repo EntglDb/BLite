@@ -8,7 +8,12 @@ namespace BLite.Core.Storage;
 public readonly struct PageFileConfig
 {
     public int PageSize { get; init; }
-    public long InitialFileSize { get; init; }
+    /// <summary>
+    /// The file grows in fixed increments of this size.
+    /// Must be a multiple of <see cref="PageSize"/>.
+    /// Waste is bounded to at most one block regardless of database size.
+    /// </summary>
+    public int GrowthBlockSize { get; init; }
     public MemoryMappedFileAccess Access { get; init; }
 
     /// <summary>
@@ -16,8 +21,8 @@ public readonly struct PageFileConfig
     /// </summary>
     public static PageFileConfig Small => new()
     {
-        PageSize = 8192, // 8KB pages
-        InitialFileSize = 1024 * 1024, // 1MB initial
+        PageSize = 8192,          // 8KB pages
+        GrowthBlockSize = 512 * 1024,  // grow by 512KB at a time
         Access = MemoryMappedFileAccess.ReadWrite
     };
 
@@ -26,8 +31,8 @@ public readonly struct PageFileConfig
     /// </summary>
     public static PageFileConfig Default => new()
     {
-        PageSize = 16384, // 16KB pages
-        InitialFileSize = 2 * 1024 * 1024, // 2MB initial
+        PageSize = 16384,         // 16KB pages
+        GrowthBlockSize = 1024 * 1024, // grow by 1MB at a time
         Access = MemoryMappedFileAccess.ReadWrite
     };
 
@@ -36,8 +41,8 @@ public readonly struct PageFileConfig
     /// </summary>
     public static PageFileConfig Large => new()
     {
-        PageSize = 32768, // 32KB pages
-        InitialFileSize = 4 * 1024 * 1024, // 4MB initial
+        PageSize = 32768,              // 32KB pages
+        GrowthBlockSize = 2 * 1024 * 1024, // grow by 2MB at a time
         Access = MemoryMappedFileAccess.ReadWrite
     };
 }
@@ -52,7 +57,7 @@ public sealed class PageFile : IDisposable
     private readonly PageFileConfig _config;
     private FileStream? _fileStream;
     private MemoryMappedFile? _mappedFile;
-    private readonly object _lock = new();
+    private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _disposed;
     private uint _nextPageId;
     private uint _firstFreePageId;
@@ -68,11 +73,23 @@ public sealed class PageFile : IDisposable
     public int PageSize => _config.PageSize;
 
     /// <summary>
+    /// Rounds up <paramref name="requiredLength"/> to the next multiple of
+    /// <see cref="PageFileConfig.GrowthBlockSize"/>.
+    /// Growth is bounded: the file never over-allocates more than one block.
+    /// </summary>
+    private long AlignToBlock(long requiredLength)
+    {
+        long block = _config.GrowthBlockSize;
+        return (requiredLength + block - 1) / block * block;
+    }
+
+    /// <summary>
     /// Opens the page file, creating it if it doesn't exist
     /// </summary>
     public void Open()
     {
-        lock (_lock)
+        _lock.Wait();
+        try
         {
             if (_fileStream != null)
                 return; // Already open
@@ -89,8 +106,9 @@ public sealed class PageFile : IDisposable
 
             if (!fileExists || _fileStream.Length == 0)
             {
-                // Initialize new file with 2 pages (Header + Collection Metadata)
-                _fileStream.SetLength(_config.InitialFileSize < _config.PageSize * 2 ? _config.PageSize * 2 : _config.InitialFileSize);
+                // Allocate exactly enough for Header + Collection Metadata,
+                // rounded up to the nearest growth block.
+                _fileStream.SetLength(AlignToBlock((long)_config.PageSize * 2));
                 InitializeHeader();
             }
 
@@ -114,6 +132,10 @@ public sealed class PageFile : IDisposable
                 var header = PageHeader.ReadFrom(headerSpan);
                 _firstFreePageId = header.NextPageId;
             }
+        }
+        finally
+        {
+            _lock.Release();
         }
     }
 
@@ -221,13 +243,14 @@ public sealed class PageFile : IDisposable
         // Ensure file is large enough
         if (offset + _config.PageSize > _fileStream!.Length)
         {
-            lock (_lock)
+            _lock.Wait();
+            try
             {
                 if (offset + _config.PageSize > _fileStream.Length)
                 {
-                    var newSize = Math.Max(offset + _config.PageSize, _fileStream.Length * 2);
+                    var newSize = AlignToBlock(offset + _config.PageSize);
                     _fileStream.SetLength(newSize);
-                    
+
                     // Recreate memory-mapped file with new size
                     _mappedFile.Dispose();
                     _mappedFile = MemoryMappedFile.CreateFromFile(
@@ -238,6 +261,10 @@ public sealed class PageFile : IDisposable
                         HandleInheritability.None,
                         leaveOpen: true);
                 }
+            }
+            finally
+            {
+                _lock.Release();
             }
         }
 
@@ -253,7 +280,8 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public uint AllocatePage()
     {
-        lock (_lock)
+        _lock.Wait();
+        try
         {
             if (_fileStream == null)
                 throw new InvalidOperationException("File not open");
@@ -284,7 +312,7 @@ public sealed class PageFile : IDisposable
             var requiredLength = (long)(pageId + 1) * _config.PageSize;
             if (requiredLength > _fileStream.Length)
             {
-                var newSize = Math.Max(requiredLength, _fileStream.Length * 2);
+                var newSize = AlignToBlock(requiredLength);
                 _fileStream.SetLength(newSize);
                 
                 // Recreate memory-mapped file with new size
@@ -300,6 +328,10 @@ public sealed class PageFile : IDisposable
             
             return pageId;
         }
+        finally
+        {
+            _lock.Release();
+        }
     }
     
     /// <summary>
@@ -307,7 +339,8 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void FreePage(uint pageId)
     {
-        lock (_lock)
+        _lock.Wait();
+        try
         {
             if (_fileStream == null) throw new InvalidOperationException("File not open");
             if (pageId == 0) throw new InvalidOperationException("Cannot free header page 0");
@@ -334,6 +367,10 @@ public sealed class PageFile : IDisposable
             // 4. Update file header (Page 0)
             UpdateFileHeaderFreePtr(_firstFreePageId);
         }
+        finally
+        {
+            _lock.Release();
+        }
     }
     
     private void UpdateFileHeaderFreePtr(uint newHead)
@@ -357,9 +394,78 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void Flush()
     {
-        lock (_lock)
+        _lock.Wait();
+        try
         {
             _fileStream?.Flush(flushToDisk: true);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Async version of <see cref="Flush"/>. Uses <see cref="SemaphoreSlim.WaitAsync"/> to
+    /// avoid blocking a thread-pool thread while waiting.
+    /// </summary>
+    public async Task FlushAsync(CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_fileStream != null)
+                await _fileStream.FlushAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Creates a consistent file-level backup by flushing all dirty pages, then
+    /// copying the .db file (and .wal if present) to <paramref name="destinationPath"/>.
+    /// The lock is held for the duration of the copy so no resize or flush can
+    /// interleave. Reads are opened with <see cref="FileShare.ReadWrite"/> so the
+    /// engine does not need to be stopped.
+    /// </summary>
+    public async Task BackupAsync(string destinationPath, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_fileStream == null)
+                throw new InvalidOperationException("PageFile is not open.");
+
+            // 1. Flush dirty pages from MMF to the OS page cache, then to disk.
+            _fileStream.Flush(flushToDisk: true);
+
+            // 2. Copy .db file under the lock so no resize can race.
+            //    Re-use the existing _fileStream handle: _fileStream was opened with
+            //    FileShare.None so any attempt to open a second handle (even read-only
+            //    with FileShare.ReadWrite) would be rejected by the OS.
+            var destDir = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(destDir))
+                Directory.CreateDirectory(destDir);
+
+            var savedPosition = _fileStream.Position;
+            _fileStream.Position = 0;
+
+            await using var dst = new FileStream(
+                destinationPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 1024 * 1024, FileOptions.Asynchronous);
+
+            await _fileStream.CopyToAsync(dst, ct).ConfigureAwait(false);
+            await dst.FlushAsync(ct).ConfigureAwait(false);
+
+            _fileStream.Position = savedPosition;
+        }
+        finally
+        {
+            _lock.Release();
         }
     }
 
@@ -368,7 +474,8 @@ public sealed class PageFile : IDisposable
         if (_disposed)
             return;
 
-        lock (_lock)
+        _lock.Wait();
+        try
         {
             // 1. Flush any pending writes from memory-mapped file
             if (_fileStream != null)
@@ -383,6 +490,11 @@ public sealed class PageFile : IDisposable
             _fileStream?.Dispose();
             
             _disposed = true;
+        }
+        finally
+        {
+            _lock.Release();
+            _lock.Dispose();
         }
 
         GC.SuppressFinalize(this);
