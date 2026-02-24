@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.8.0"></a>
+## [1.8.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.8.0) (2026-02-24)
+
+### Features
+
+* **storage:** add hot backup support (BackupAsync) ([8a608bc](https://www.github.com/EntglDb/BLite/commit/8a608bc4104e11a4954d5b0339cee19841ff1c28))
+
+### Bug Fixes
+
+* ListCollections() now includes persisted collections (warm-up from storage catalog) ([64f7abb](https://www.github.com/EntglDb/BLite/commit/64f7abb32cda7694cf2354fcc177cbfc43902ce9))
+
 <a name="1.7.1"></a>
 ## [1.7.1](https://www.github.com/EntglDb/BLite/releases/tag/v1.7.1) (2026-02-23)
 
