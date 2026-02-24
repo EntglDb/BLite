@@ -8,6 +8,7 @@ set ROOT=%~dp0
 set PUBLISH_DIR=%ROOT%publish\win-x64
 set DIST_DIR=%ROOT%dist
 set WXS=%ROOT%tools\BLite.Studio\installer\windows\BLite.Studio.wxs
+set LICENSE_RTF=%ROOT%tools\BLite.Studio\installer\windows\LICENSE.rtf
 set MSI=%DIST_DIR%\BLite.Studio-%VERSION%-win-x64.msi
 
 echo.
@@ -25,7 +26,8 @@ echo [2/3] Building MSI...
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
 wix build "%WXS%" ^
     -d AppVersion=%VERSION% ^
-    "-d SourceDir=%PUBLISH_DIR%" ^
+    -d "SourceDir=%PUBLISH_DIR%" ^
+    -d "LicenseRtf=%LICENSE_RTF%" ^
     -arch x64 ^
     -ext WixToolset.UI.wixext ^
     -o "%MSI%"

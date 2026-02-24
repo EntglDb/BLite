@@ -67,11 +67,13 @@ jobs:
       - name: Build MSI
         run: |
           $sourceDir = "${{ github.workspace }}\publish\win-x64"
+          $licenseRtf = "${{ github.workspace }}\tools\BLite.Studio\installer\windows\LICENSE.rtf"
           New-Item -ItemType Directory -Force dist | Out-Null
           wix build `
             tools/BLite.Studio/installer/windows/BLite.Studio.wxs `
             -d AppVersion=${{ env.VERSION }} `
-            "-d SourceDir=$sourceDir" `
+            -d "SourceDir=$sourceDir" `
+            -d "LicenseRtf=$licenseRtf" `
             -arch x64 `
             -ext WixToolset.UI.wixext `
             -o dist/BLite.Studio-${{ env.VERSION }}-win-x64.msi
