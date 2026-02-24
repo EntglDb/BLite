@@ -45,6 +45,8 @@
                 Source="$(SourceDir)\BLite.Studio.exe"
                 KeyPath="yes" />
         </Component>
+        <!-- Harvest all remaining published files (DLLs, assets, etc.) -->
+        <Files Include="$(SourceDir)\**" Exclude="$(SourceDir)\BLite.Studio.exe" />
       </Directory>
     </StandardDirectory>
 
@@ -87,15 +89,9 @@
       </Component>
     </StandardDirectory>
 
-    <!-- All published files harvested from the SourceDir -->
-    <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER">
-      <Files Source="$(SourceDir)\**" Exclude="$(SourceDir)\BLite.Studio.exe" />
-    </ComponentGroup>
-
     <!-- Feature tree -->
     <Feature Id="ProductFeature" Title="BLite Studio" Level="1">
       <ComponentRef Id="BLiteStudioExe" />
-      <ComponentGroupRef Id="PublishedFiles" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
