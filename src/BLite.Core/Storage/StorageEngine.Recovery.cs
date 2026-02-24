@@ -113,6 +113,44 @@ public sealed partial class StorageEngine
             _commitLock.Release();
         }
     }
+
+    /// <summary>
+    /// Creates a consistent backup of this database to <paramref name="destinationDbPath"/>.
+    /// <para>
+    /// Strategy (fully safe under concurrent writes):
+    /// <list type="number">
+    ///   <item>Acquire the commit lock — no new transaction can commit while we work.</item>
+    ///   <item>Checkpoint: merge all committed WAL entries into the PageFile and flush.</item>
+    ///   <item>Copy the PageFile while holding the lock (no concurrent resize possible).</item>
+    ///   <item>Release the lock — normal writes resume.</item>
+    /// </list>
+    /// WAL is not copied because, after the checkpoint, it contains only housekeeping
+    /// data and the destination DB is consistent on its own.
+    /// </para>
+    /// </summary>
+    /// <param name="destinationDbPath">
+    /// Full path of the target .db file. Parent directory is created if missing.
+    /// </param>
+    public async Task BackupAsync(string destinationDbPath, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationDbPath);
+
+        await _commitLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // 1. Checkpoint: push committed WAL pages into the PageFile.
+            CheckpointInternal();
+
+            // 2. Copy the PageFile. _pageFile.BackupAsync acquires PageFile._lock,
+            //    which is safe because no other caller can hold _commitLock + PageFile._lock
+            //    simultaneously in the reverse order.
+            await _pageFile.BackupAsync(destinationDbPath, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _commitLock.Release();
+        }
+    }
     
     /// <summary>
     /// Recovers from crash by replaying WAL.

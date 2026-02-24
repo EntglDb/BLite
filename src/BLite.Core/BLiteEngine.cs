@@ -246,6 +246,27 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region Backup
+
+    /// <summary>
+    /// Creates a consistent, hot backup of this database to <paramref name="destinationDbPath"/>.
+    /// The engine does not need to be stopped or paused; concurrent reads and writes are safe.
+    /// <para>
+    /// The method checkpoints the WAL into the PageFile first, then copies the resulting file.
+    /// The destination file is a standalone, fully consistent database that can be opened
+    /// with a fresh <see cref="BLiteEngine"/> instance.
+    /// </para>
+    /// </summary>
+    /// <param name="destinationDbPath">Full path to the target .db file.</param>
+    public async Task BackupAsync(string destinationDbPath, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationDbPath);
+        await _storage.BackupAsync(destinationDbPath, ct).ConfigureAwait(false);
+    }
+
+    #endregion
+
     #region Convenience CRUD (collection + auto-commit)
 
     /// <summary>
