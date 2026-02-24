@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Query.Blql;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -107,12 +108,99 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
 
     public bool EditorIsOk => !EditorIsError && !string.IsNullOrEmpty(EditorMessage);
 
+    // ── BLQL Query ────────────────────────────────────────────────────────────
+    [ObservableProperty] private string _blqlFilterJson = "";
+    [ObservableProperty] private string _blqlSortJson   = "";
+    [ObservableProperty] private int    _blqlSkip       = 0;
+    [ObservableProperty] private int    _blqlTake       = 100;
+
+    public ObservableCollection<DocumentRowViewModel> BlqlResults { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BlqlStatusIsOk))]
+    private string _blqlStatusMessage = "";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BlqlStatusIsOk))]
+    private bool _blqlIsError;
+
+    public bool BlqlStatusIsOk => !BlqlIsError && !string.IsNullOrEmpty(BlqlStatusMessage);
+
+    [ObservableProperty] private bool _blqlHasResults;
+    [ObservableProperty] private int  _blqlResultCount;
+
     // ── Commands ──────────────────────────────────────────────────────────────
     [RelayCommand]
     private void PrevPage() { CurrentPage--; LoadPage(); }
 
     [RelayCommand]
     private void NextPage() { CurrentPage++; LoadPage(); }
+
+    [RelayCommand]
+    private void RunBlqlQuery()
+    {
+        BlqlStatusMessage = "";
+        BlqlIsError       = false;
+        BlqlResults.Clear();
+        BlqlHasResults    = false;
+        BlqlResultCount   = 0;
+
+        try
+        {
+            var filter = string.IsNullOrWhiteSpace(BlqlFilterJson)
+                ? BlqlFilter.Empty
+                : BlqlFilterParser.Parse(BlqlFilterJson);
+
+            var query = _collection.Query(filter);
+
+            if (!string.IsNullOrWhiteSpace(BlqlSortJson))
+                query = query.Sort(BlqlSortJson);
+
+            if (BlqlSkip > 0)  query = query.Skip(BlqlSkip);
+            if (BlqlTake > 0)  query = query.Take(BlqlTake);
+
+            foreach (var doc in query.AsEnumerable())
+            {
+                var fields = doc.EnumerateFields();
+                doc.TryGetId(out var bsonId);
+                var idStr   = fields.FirstOrDefault(f => f.Name == "_id").Value.ToString() ?? "";
+                var content = string.Join("  |  ",
+                    fields.Where(f => f.Name != "_id").Select(f => $"{f.Name}: {f.Value}"));
+                BlqlResults.Add(new DocumentRowViewModel
+                {
+                    BsonId     = bsonId,
+                    Id         = idStr,
+                    Content    = content,
+                    SizeBytes  = doc.Size
+                });
+            }
+
+            BlqlResultCount   = BlqlResults.Count;
+            BlqlHasResults    = BlqlResultCount > 0;
+            BlqlStatusMessage = BlqlResultCount == 0
+                ? "No documents matched."
+                : $"{BlqlResultCount} document{(BlqlResultCount == 1 ? "" : "s")} matched.";
+        }
+        catch (Exception ex)
+        {
+            BlqlStatusMessage = ex.Message;
+            BlqlIsError       = true;
+        }
+    }
+
+    [RelayCommand]
+    private void ClearBlqlQuery()
+    {
+        BlqlFilterJson    = "";
+        BlqlSortJson      = "";
+        BlqlSkip          = 0;
+        BlqlTake          = 100;
+        BlqlStatusMessage = "";
+        BlqlIsError       = false;
+        BlqlResults.Clear();
+        BlqlHasResults  = false;
+        BlqlResultCount = 0;
+    }
 
     [RelayCommand]
     private void CreateIndex()

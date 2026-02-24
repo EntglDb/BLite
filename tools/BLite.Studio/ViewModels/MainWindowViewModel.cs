@@ -2,6 +2,8 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.MemoryMappedFiles;
+using System.Reflection;
+using Avalonia.Platform;
 using BLite.Core;
 using BLite.Core.Storage;
 using BLite.Studio.Services;
@@ -20,6 +22,33 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _history = new ConnectionHistoryService();
         LoadRecentConnections();
+    }
+
+    // ── App info (version + license) ──────────────────────────────────────────
+    public string AppVersion
+    {
+        get
+        {
+            var v = Assembly.GetEntryAssembly()?.GetName().Version;
+            return v is null ? "dev" : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
+    }
+
+    private static string? _licenseText;
+    public string AppLicense => _licenseText ??= LoadLicense();
+
+    private static string LoadLicense()
+    {
+        try
+        {
+            using var stream = AssetLoader.Open(new Uri("avares://BLite.Studio/Assets/LICENSE.txt"));
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return "MIT License — © 2026 BLite Project";
+        }
     }
 
     // ── Recent connections ────────────────────────────────────────────────────

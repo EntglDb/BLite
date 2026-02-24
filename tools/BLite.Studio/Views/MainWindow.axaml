@@ -24,15 +24,22 @@
             BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
             BorderThickness="0,0,0,1"
             Padding="16,10">
-      <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-        <TextBlock Text="BLite" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
-        <TextBlock Text="Studio" FontSize="18" FontWeight="Light" VerticalAlignment="Center"/>
-        <TextBlock Text="—" Margin="8,0" Opacity="0.4" VerticalAlignment="Center"
-                   IsVisible="{Binding IsDatabaseOpen}"/>
-        <TextBlock Text="{Binding OpenDatabaseName}"
-                   FontSize="14" VerticalAlignment="Center" Opacity="0.7"
-                   IsVisible="{Binding IsDatabaseOpen}"/>
-      </StackPanel>
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="BLite" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+          <TextBlock Text="Studio" FontSize="18" FontWeight="Light" VerticalAlignment="Center"/>
+          <TextBlock Text="—" Margin="8,0" Opacity="0.4" VerticalAlignment="Center"
+                     IsVisible="{Binding IsDatabaseOpen}"/>
+          <TextBlock Text="{Binding OpenDatabaseName}"
+                     FontSize="14" VerticalAlignment="Center" Opacity="0.7"
+                     IsVisible="{Binding IsDatabaseOpen}"/>
+        </StackPanel>
+        <TextBlock Grid.Column="1"
+                   Text="{Binding AppVersion}"
+                   FontSize="11" Opacity="0.35"
+                   VerticalAlignment="Center"
+                   Margin="16,0,0,0"/>
+      </Grid>
     </Border>
 
     <!-- ── Body ─────────────────────────────────────────────────────── -->
@@ -187,6 +194,40 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </StackPanel>
+
+          <!-- ── About ──────────────────────────────────────────── -->
+          <Border Margin="0,40,0,8"
+                  BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                  BorderThickness="0,1,0,0"
+                  Padding="0,20,0,0">
+            <StackPanel Spacing="6">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                  <TextBlock Text="BLite Studio" FontWeight="SemiBold" FontSize="12"/>
+                  <TextBlock Text="{Binding AppVersion}"
+                             FontSize="12" Opacity="0.5"/>
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           Text="MIT License · © 2026 BLite Project"
+                           FontSize="11" Opacity="0.4"
+                           VerticalAlignment="Center"/>
+              </Grid>
+              <Expander Header="View license text" FontSize="11">
+                <Border Margin="0,8,0,0"
+                        Background="{DynamicResource SystemControlBackgroundAltMediumHighBrush}"
+                        CornerRadius="4"
+                        Padding="12">
+                  <ScrollViewer MaxHeight="160">
+                    <TextBlock Text="{Binding AppLicense}"
+                               FontFamily="Consolas,'Courier New',monospace"
+                               FontSize="10"
+                               Opacity="0.7"
+                               TextWrapping="Wrap"/>
+                  </ScrollViewer>
+                </Border>
+              </Expander>
+            </StackPanel>
+          </Border>
 
         </StackPanel>
       </ScrollViewer>
@@ -628,6 +669,164 @@
                             </ItemsControl.ItemTemplate>
                           </ItemsControl>
                         </StackPanel>
+
+                      </DockPanel>
+                    </TabItem>
+
+                    <!-- ── Tab: Query (BLQL) ── -->
+                    <TabItem Header="Query">
+                      <DockPanel>
+
+                        <!-- ── Top: filter input area ── -->
+                        <Border DockPanel.Dock="Top"
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,0,0,1"
+                                Padding="12,10">
+                          <StackPanel Spacing="8">
+
+                            <!-- Filter -->
+                            <TextBlock Text="BLQL Filter (JSON)"
+                                       FontWeight="SemiBold" FontSize="12"/>
+                            <TextBox AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     Text="{Binding BlqlFilterJson}"
+                                     Watermark="e.g. { &quot;field&quot;: { &quot;$gt&quot;: 0 } }  — leave empty to match all"
+                                     FontFamily="Monospace"
+                                     FontSize="12"
+                                     MinHeight="60"
+                                     MaxHeight="140"/>
+
+                            <!-- Sort + Skip + Take row -->
+                            <Grid ColumnDefinitions="*,110,110">
+                              <TextBox Grid.Column="0"
+                                       Text="{Binding BlqlSortJson}"
+                                       Watermark="Sort — e.g. { &quot;name&quot;: 1 }"
+                                       FontFamily="Monospace"
+                                       FontSize="12"
+                                       VerticalContentAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                              <TextBox Grid.Column="1"
+                                       Text="{Binding BlqlSkip}"
+                                       Watermark="Skip"
+                                       FontFamily="Monospace"
+                                       FontSize="12"
+                                       VerticalContentAlignment="Center"
+                                       Margin="0,0,6,0"/>
+                              <TextBox Grid.Column="2"
+                                       Text="{Binding BlqlTake}"
+                                       Watermark="Take (max)"
+                                       FontFamily="Monospace"
+                                       FontSize="12"
+                                       VerticalContentAlignment="Center"/>
+                            </Grid>
+
+                            <!-- Buttons + status -->
+                            <Grid ColumnDefinitions="Auto,Auto,*">
+                              <Button Grid.Column="0"
+                                      Content="▶ Run Query"
+                                      Command="{Binding RunBlqlQueryCommand}"
+                                      FontWeight="SemiBold"
+                                      Margin="0,0,8,0"/>
+                              <Button Grid.Column="1"
+                                      Content="✕ Clear"
+                                      Command="{Binding ClearBlqlQueryCommand}"/>
+                              <TextBlock Grid.Column="2"
+                                         Text="{Binding BlqlStatusMessage}"
+                                         VerticalAlignment="Center"
+                                         FontSize="12"
+                                         Margin="12,0,0,0"
+                                         TextWrapping="Wrap"
+                                         Classes.MsgErr="{Binding BlqlIsError}"
+                                         Classes.MsgOk="{Binding BlqlStatusIsOk}"
+                                         IsVisible="{Binding BlqlStatusMessage,
+                                             Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                            </Grid>
+
+                          </StackPanel>
+                        </Border>
+
+                        <!-- ── Results grid ── -->
+                        <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,1,0,0">
+                          <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                        VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+
+                              <!-- Header row -->
+                              <Grid ColumnDefinitions="110,200,80,*"
+                                    Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                                    IsVisible="{Binding BlqlHasResults}">
+                                <TextBlock Grid.Column="0" Text="Actions"
+                                           FontWeight="SemiBold" FontSize="12"
+                                           Margin="10,7"/>
+                                <TextBlock Grid.Column="1" Text="_id"
+                                           FontWeight="SemiBold" FontSize="12"
+                                           FontFamily="Monospace" Margin="8,7"/>
+                                <TextBlock Grid.Column="2" Text="Size"
+                                           FontWeight="SemiBold" FontSize="12"
+                                           Margin="8,7"/>
+                                <TextBlock Grid.Column="3" Text="Fields"
+                                           FontWeight="SemiBold" FontSize="12"
+                                           Margin="8,7"/>
+                              </Grid>
+
+                              <!-- Result rows -->
+                              <ItemsControl ItemsSource="{Binding BlqlResults}">
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate DataType="ex:DocumentRowViewModel"
+                                                x:CompileBindings="False">
+                                    <Grid ColumnDefinitions="110,200,80,*"
+                                          Classes="DocRow">
+                                      <StackPanel Grid.Column="0"
+                                                  Orientation="Horizontal"
+                                                  Spacing="4" Margin="6,4">
+                                        <Button Content="Open"
+                                                FontSize="11"
+                                                Padding="6,2"
+                                                Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"/>
+                                        <Button Content="✕"
+                                                FontSize="11"
+                                                Padding="6,2"
+                                                Classes="DangerBtn"
+                                                Command="{Binding DataContext.DeleteDocumentCommand, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"/>
+                                      </StackPanel>
+                                      <TextBlock Grid.Column="1"
+                                                 Text="{Binding Id}"
+                                                 FontFamily="Monospace"
+                                                 FontSize="12"
+                                                 TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center"
+                                                 Margin="8,0"/>
+                                      <TextBlock Grid.Column="2"
+                                                 Text="{Binding SizeDisplay}"
+                                                 FontFamily="Monospace"
+                                                 FontSize="11"
+                                                 Opacity="0.65"
+                                                 VerticalAlignment="Center"
+                                                 HorizontalAlignment="Right"
+                                                 Margin="4,0,8,0"/>
+                                      <TextBlock Grid.Column="3"
+                                                 Text="{Binding Content}"
+                                                 FontSize="12"
+                                                 TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center"
+                                                 Margin="8,0"/>
+                                    </Grid>
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+
+                              <!-- Empty state -->
+                              <TextBlock Text="Run a query to see results here."
+                                         Opacity="0.4" FontSize="12"
+                                         Margin="16,16"
+                                         IsVisible="{Binding !BlqlHasResults}"/>
+
+                            </StackPanel>
+                          </ScrollViewer>
+                        </Border>
 
                       </DockPanel>
                     </TabItem>

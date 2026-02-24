@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  BLite Studio — WiX 4 MSI definition
+  Build with:
+    wix build BLite.Studio.wxs \
+        -d AppVersion=1.0.0     \
+        -d SourceDir=path/to/publish/win-x64 \
+        -arch x64               \
+        -ext WixToolset.UI.wixext \
+        -o BLite.Studio-1.0.0-win-x64.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="BLite Studio"
+           Manufacturer="BLite Project"
+           Version="$(AppVersion)"
+           Language="1033"
+           UpgradeCode="3A7F2E14-9C6B-4D58-A021-5E8BF301C742"
+           Compressed="yes">
+
+    <SummaryInformation
+        Keywords="BLite Studio database explorer installer"
+        Description="BLite Studio v$(AppVersion)"
+        Manufacturer="BLite Project" />
+
+    <!--
+      Upgrade: remove old version before installing new one.
+      Downgrades are blocked with a friendly message.
+    -->
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of BLite Studio ([ProductLanguage]) is already installed. Please uninstall it first." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Minimal UI (welcome → progress → finish — no licence/path dialogs) -->
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <!-- Installation root: C:\Program Files\BLite Studio -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="BLite Studio">
+        <Component Id="BLiteStudioExe" Guid="*">
+          <File Id="BLiteStudioExeFile"
+                Source="$(SourceDir)\BLite.Studio.exe"
+                KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start-menu folder + shortcut -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="BLite Studio">
+        <Component Id="StartMenuShortcut" Guid="*">
+          <Shortcut Id="StartMenuLink"
+                    Name="BLite Studio"
+                    Description="BLite database explorer"
+                    Target="[INSTALLFOLDER]BLite.Studio.exe"
+                    WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveStartMenuFolder"
+                        Directory="ApplicationProgramsFolder"
+                        On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\BLiteProject\Studio"
+                         Name="installed"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Desktop shortcut (optional — comment out if unwanted) -->
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="*">
+        <Shortcut Id="DesktopLink"
+                  Name="BLite Studio"
+                  Description="BLite database explorer"
+                  Target="[INSTALLFOLDER]BLite.Studio.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\BLiteProject\Studio"
+                       Name="desktop"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- All published files harvested from the SourceDir -->
+    <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER">
+      <Files Source="$(SourceDir)\**" Exclude="$(SourceDir)\BLite.Studio.exe" />
+    </ComponentGroup>
+
+    <!-- Feature tree -->
+    <Feature Id="ProductFeature" Title="BLite Studio" Level="1">
+      <ComponentRef Id="BLiteStudioExe" />
+      <ComponentGroupRef Id="PublishedFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+  </Package>
+</Wix>
