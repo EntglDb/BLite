@@ -120,4 +120,13 @@ public sealed partial class StorageEngine : IDisposable
     }
 
     internal CDC.ChangeStreamDispatcher? Cdc => _cdc;
+
+    /// <summary>
+    /// Ensures the CDC dispatcher is initialized. No-op if already active.
+    /// Called by <see cref="BLiteEngine.SubscribeToChanges"/> before the first subscription.
+    /// </summary>
+    internal CDC.ChangeStreamDispatcher EnsureCdc()
+    {
+        return _cdc ??= new CDC.ChangeStreamDispatcher();
+    }
 }

@@ -543,6 +543,50 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region CDC
+
+    /// <summary>
+    /// Subscribes to post-commit CDC events for <paramref name="collectionName"/>.
+    /// The <paramref name="writer"/> receives one entry per document written after each successful commit.
+    /// Only <see cref="OperationType.Insert"/> and <see cref="OperationType.Update"/> events are forwarded.
+    /// Returns an <see cref="IDisposable"/> — dispose it to unsubscribe.
+    /// </summary>
+    /// <remarks>
+    /// <c>capturePayload</c> is intentionally <c>false</c>: callers receive the ID only.
+    /// The document is fetched from storage at processing time to avoid stale in-memory payloads.
+    /// </remarks>
+    public IDisposable SubscribeToChanges(
+        string collectionName,
+        System.Threading.Channels.ChannelWriter<(OperationType Op, BsonId Id)> writer)
+    {
+        ThrowIfDisposed();
+        var dispatcher = _storage.EnsureCdc();
+
+        var adapterChannel = System.Threading.Channels.Channel.CreateUnbounded<CDC.InternalChangeEvent>();
+        var subscription = dispatcher.Subscribe(collectionName, capturePayload: false, adapterChannel.Writer);
+
+        // Adapter pump: translate InternalChangeEvent → (OperationType, BsonId)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var e in adapterChannel.Reader.ReadAllAsync())
+                {
+                    if (e.Type is OperationType.Insert or OperationType.Update)
+                    {
+                        var id = BsonId.FromBytes(e.IdBytes.Span, e.IdType);
+                        writer.TryWrite((e.Type, id));
+                    }
+                }
+            }
+            catch (System.OperationCanceledException) { }
+        });
+
+        return subscription;
+    }
+
+    #endregion
+
     #region Disposal
 
     private void ThrowIfDisposed()

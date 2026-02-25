@@ -1,4 +1,5 @@
 using System;
+using BLite.Bson;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.CDC;
@@ -29,12 +30,15 @@ internal readonly struct InternalChangeEvent
     public ulong TransactionId { get; init; }
     public string CollectionName { get; init; }
     public OperationType Type { get; init; }
-    
+
+    /// <summary>Original BsonId type — required to reconstruct the ID from <see cref="IdBytes"/>.</summary>
+    public BsonIdType IdType { get; init; }
+
     /// <summary>
-    /// Raw BSON of the Document ID.
+    /// Raw bytes of the Document ID, serialized via <see cref="BsonId.ToBytes()"/>.
     /// </summary>
     public ReadOnlyMemory<byte> IdBytes { get; init; }
-    
+
     /// <summary>
     /// Raw BSON of the Entity. Null if payload not captured.
     /// </summary>

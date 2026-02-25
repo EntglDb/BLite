@@ -1,53 +1,0 @@
-[1mdiff --git a/src/BLite.SourceGenerators/CodeGenerator.cs b/src/BLite.SourceGenerators/CodeGenerator.cs[m
-[1mindex 780b496..8cb65a6 100644[m
-[1m--- a/src/BLite.SourceGenerators/CodeGenerator.cs[m
-[1m+++ b/src/BLite.SourceGenerators/CodeGenerator.cs[m
-[36m@@ -78,8 +78,20 @@[m [mnamespace BLite.SourceGenerators[m
-             sb.AppendLine($"        {methodSig}");[m
-             sb.AppendLine($"        {{");[m
-             sb.AppendLine($"            var startingPos = writer.BeginDocument();");[m
-[32m+[m[32m            sb.AppendLine($"            SerializeFields(entity, writer);");[m[41m[m
-[32m+[m[32m            sb.AppendLine($"            writer.EndDocument(startingPos);");[m[41m[m
-[32m+[m[32m            sb.AppendLine($"            return writer.Position;");[m[41m[m
-[32m+[m[32m            sb.AppendLine($"        }}");[m[41m[m
-             sb.AppendLine();[m
-             [m
-[32m+[m[32m            // Generate SerializeFields method (used by both root and nested, but important for nested to avoid double BeginDocument)[m[41m[m
-[32m+[m[32m            var fieldsMethodSig = isRoot[m[41m[m
-[32m+[m[32m                ? $"private void SerializeFields({entityType} entity, global::BLite.Bson.BsonSpanWriter writer)"[m[41m[m
-[32m+[m[32m                : $"public void SerializeFields({entityType} entity, global::BLite.Bson.BsonSpanWriter writer)";[m[41m[m
-[32m+[m[41m            [m
-[32m+[m[32m            sb.AppendLine($"        {fieldsMethodSig}");[m[41m[m
-[32m+[m[32m            sb.AppendLine($"        {{");[m[41m[m
-[32m+[m[41m            [m
-             foreach (var prop in entity.Properties)[m
-             {[m
-                 if (prop.IsKey && (prop.Name == "Id" || prop.Name == "_id"))[m
-[36m@@ -111,9 +123,6 @@[m [mnamespace BLite.SourceGenerators[m
-                 GenerateWriteProperty(sb, prop, mapperNamespace);[m
-             }[m
-             [m
-[31m-            sb.AppendLine();[m
-[31m-            sb.AppendLine($"            writer.EndDocument(startingPos);");[m
-[31m-            sb.AppendLine($"            return writer.Position;");[m
-             sb.AppendLine($"        }}");[m
-         }[m
-             [m
-[36m@@ -170,7 +179,7 @@[m [mnamespace BLite.SourceGenerators[m
-                      sb.AppendLine($"                var {prop.Name.ToLower()}ItemMapper = new global::{mapperNamespace}.{nestedMapperTypes}();");[m
-                      [m
-                      sb.AppendLine($"                var itemStartPos = writer.BeginDocument(i.ToString());");[m
-[31m-                     sb.AppendLine($"                {prop.Name.ToLower()}ItemMapper.Serialize(item, writer);");[m
-[32m+[m[32m                     sb.AppendLine($"                {prop.Name.ToLower()}ItemMapper.SerializeFields(item, writer);");[m[41m[m
-                      sb.AppendLine($"                writer.EndDocument(itemStartPos);");[m
-                  }[m
-                  else[m
-[36m@@ -194,7 +203,7 @@[m [mnamespace BLite.SourceGenerators[m
-                 sb.AppendLine($"                var {prop.Name.ToLower()}Pos = writer.BeginDocument(\"{fieldName}\");");[m
-                 var nestedMapperType = GetMapperName(prop.NestedTypeFullName!);[m
-                 sb.AppendLine($"                var {prop.Name.ToLower()}Mapper = new global::{mapperNamespace}.{nestedMapperType}();");[m
-[31m-                sb.AppendLine($"                {prop.Name.ToLower()}Mapper.Serialize(entity.{prop.Name}, writer);");[m
-[32m+[m[32m                sb.AppendLine($"                {prop.Name.ToLower()}Mapper.SerializeFields(entity.{prop.Name}, writer);");[m[41m[m
-                 sb.AppendLine($"                writer.EndDocument({prop.Name.ToLower()}Pos);");[m
-                 sb.AppendLine($"            }}");[m
-                 sb.AppendLine($"            else");[m
