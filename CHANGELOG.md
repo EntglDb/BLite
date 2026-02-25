@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.12.0"></a>
+## [1.12.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.12.0) (2026-02-26)
+
+### Features
+
+* native TimeSeries page type with retention pruning + Studio UI ([a119e9b](https://www.github.com/EntglDb/BLite/commit/a119e9b37010c67877765937c5d135de40ba3a5d))
+
 <a name="1.11.0"></a>
 ## [1.11.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.11.0) (2026-02-25)
 
