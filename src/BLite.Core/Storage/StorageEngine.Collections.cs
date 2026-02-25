@@ -1,11 +1,74 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Collections;
 
 namespace BLite.Core.Storage;
+
+/// <summary>
+/// Defines a single source field for text composition during vector embedding.
+/// When concatenated with other fields, these strings are vettorized together.
+/// </summary>
+public class VectorSourceField
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Prefix { get; set; }
+    public string? Suffix { get; set; }
+}
+
+/// <summary>
+/// Configuration for automatic text-to-vector embedding of documents in a collection.
+/// Specifies which fields to concatenate and how, so that documents can be
+/// vettorized into a specified vector field by an embedding service.
+/// </summary>
+public class VectorSourceConfig
+{
+    public List<VectorSourceField> Fields { get; } = new();
+    public string Separator { get; set; } = " ";
+
+    /// <summary>
+    /// Builds the combined text from a document using the configured fields and separator.
+    /// </summary>
+    public string BuildText(BsonDocument document)
+    {
+        if (Fields.Count == 0 || document == null)
+            return string.Empty;
+
+        var parts = new List<string>();
+        foreach (var field in Fields)
+        {
+            if (!document.TryGetValue(field.Path, out var value))
+                continue;
+
+            var text = ValueToString(value);
+            if (string.IsNullOrEmpty(text))
+                continue;
+
+            // Build: [prefix] + text + [suffix]
+            var part = string.Concat(field.Prefix ?? "", text, field.Suffix ?? "");
+            if (!string.IsNullOrEmpty(part))
+                parts.Add(part);
+        }
+
+        return string.Join(Separator, parts);
+    }
+
+    private static string ValueToString(BsonValue value) => value.Type switch
+    {
+        BsonType.String => value.AsString,
+        BsonType.Int32 => value.AsInt32.ToString(),
+        BsonType.Int64 => value.AsInt64.ToString(),
+        BsonType.Double => value.AsDouble.ToString("G"),
+        BsonType.Boolean => value.AsBoolean ? "true" : "false",
+        BsonType.Array => string.Join(" ", value.AsArray.Select(ValueToString)),
+        BsonType.ObjectId => value.AsObjectId.ToString(),
+        BsonType.DateTime => value.AsDateTime.ToString("O"),
+        _ => null
+    } ?? string.Empty;
+}
 
 public class CollectionMetadata
 {
@@ -13,6 +76,7 @@ public class CollectionMetadata
     public uint PrimaryRootPageId { get; set; }
     public uint SchemaRootPageId { get; set; }
     public List<IndexMetadata> Indexes { get; } = new();
+    public VectorSourceConfig? VectorSource { get; set; }
 }
 
 public class IndexMetadata
@@ -84,6 +148,34 @@ public sealed partial class StorageEngine
 
                         metadata.Indexes.Add(idx);
                     }
+
+                    // ── VectorSource (backward-compatible: only read if present) ────────
+                    if (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        bool hasVectorSource = reader.ReadBoolean();
+                        if (hasVectorSource)
+                        {
+                            var config = new VectorSourceConfig
+                            {
+                                Separator = reader.ReadString()
+                            };
+
+                            int fieldCount = reader.ReadInt32();
+                            for (int j = 0; j < fieldCount; j++)
+                            {
+                                var field = new VectorSourceField
+                                {
+                                    Path = reader.ReadString(),
+                                    Prefix = reader.ReadBoolean() ? reader.ReadString() : null,
+                                    Suffix = reader.ReadBoolean() ? reader.ReadString() : null
+                                };
+                                config.Fields.Add(field);
+                            }
+
+                            metadata.VectorSource = config;
+                        }
+                    }
+
                     return metadata;
                 }
                 catch
@@ -121,6 +213,24 @@ public sealed partial class StorageEngine
             {
                 writer.Write(idx.Dimensions);
                 writer.Write((byte)idx.Metric);
+            }
+        }
+
+        // ── VectorSource serialization ──────────────────────────────────────────
+        writer.Write(metadata.VectorSource != null);
+        if (metadata.VectorSource != null)
+        {
+            writer.Write(metadata.VectorSource.Separator);
+            writer.Write(metadata.VectorSource.Fields.Count);
+            foreach (var field in metadata.VectorSource.Fields)
+            {
+                writer.Write(field.Path);
+                writer.Write(field.Prefix != null);
+                if (field.Prefix != null)
+                    writer.Write(field.Prefix);
+                writer.Write(field.Suffix != null);
+                if (field.Suffix != null)
+                    writer.Write(field.Suffix);
             }
         }
 
@@ -319,6 +429,33 @@ public sealed partial class StorageEngine
                         }
 
                         metadata.Indexes.Add(idx);
+                    }
+
+                    // ── VectorSource (backward-compatible) ──────────────────────
+                    if (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        bool hasVectorSource = reader.ReadBoolean();
+                        if (hasVectorSource)
+                        {
+                            var config = new VectorSourceConfig
+                            {
+                                Separator = reader.ReadString()
+                            };
+
+                            int fieldCount = reader.ReadInt32();
+                            for (int j = 0; j < fieldCount; j++)
+                            {
+                                var field = new VectorSourceField
+                                {
+                                    Path = reader.ReadString(),
+                                    Prefix = reader.ReadBoolean() ? reader.ReadString() : null,
+                                    Suffix = reader.ReadBoolean() ? reader.ReadString() : null
+                                };
+                                config.Fields.Add(field);
+                            }
+
+                            metadata.VectorSource = config;
+                        }
                     }
 
                     result.Add(metadata);

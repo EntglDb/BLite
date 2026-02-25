@@ -13,6 +13,14 @@ using BLite.Core.Transactions;
 
 namespace BLite.Core;
 
+/// <summary>Typed descriptor for a secondary index on a DynamicCollection.</summary>
+public sealed record DynamicIndexDescriptor(
+    string Name,
+    IndexType Type,
+    string FieldPath,
+    int Dimensions,
+    VectorMetric Metric);
+
 /// <summary>
 /// Schema-less document collection for dynamic/server mode.
 /// Operates on BsonDocument and BsonId — no compile-time type information required.
@@ -1050,6 +1058,40 @@ public sealed class DynamicCollection : IDisposable
 
     /// <summary>Lists all secondary index names.</summary>
     public IReadOnlyList<string> ListIndexes() => _secondaryIndexes.Keys.ToList();
+
+    /// <summary>Gets the VectorSource configuration for this collection, or null if not configured.</summary>
+    public VectorSourceConfig? GetVectorSource()
+    {
+        var metadata = _storage.GetCollectionMetadata(_collectionName);
+        return metadata?.VectorSource;
+    }
+
+    /// <summary>Sets the VectorSource configuration for this collection and persists it.</summary>
+    public void SetVectorSource(VectorSourceConfig? config)
+    {
+        var metadata = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
+        metadata.VectorSource = config;
+        _storage.SaveCollectionMetadata(metadata);
+    }
+
+    /// <summary>Returns typed descriptors for all secondary indexes on this collection.</summary>
+    public IReadOnlyList<DynamicIndexDescriptor> GetIndexDescriptors()
+    {
+        return _secondaryIndexes.Select(kvp =>
+        {
+            var type = kvp.Value.Kind switch
+            {
+                DynamicIndexKind.Vector  => IndexType.Vector,
+                DynamicIndexKind.Spatial => IndexType.Spatial,
+                _                        => IndexType.BTree
+            };
+            return new DynamicIndexDescriptor(
+                kvp.Key, type,
+                kvp.Value.FieldPath,
+                kvp.Value.Options.Dimensions,
+                kvp.Value.Options.Metric);
+        }).ToList();
+    }
 
     internal void PersistIndexMetadata()
     {

@@ -510,6 +510,39 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region VectorSource Configuration
+
+    /// <summary>
+    /// Gets the VectorSource configuration for the named collection, or null if not configured.
+    /// </summary>
+    public VectorSourceConfig? GetVectorSource(string collectionName)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.GetVectorSource();
+    }
+
+    /// <summary>Returns typed descriptors for all secondary indexes of the named collection.</summary>
+    public IReadOnlyList<DynamicIndexDescriptor> GetIndexDescriptors(string collectionName)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.GetIndexDescriptors();
+    }
+
+    /// <summary>
+    /// Sets or updates the VectorSource configuration for the named collection.
+    /// Pass null to clear the configuration.
+    /// </summary>
+    public void SetVectorSource(string collectionName, VectorSourceConfig? config)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        collection.SetVectorSource(config);
+    }
+
+    #endregion
+
     #region Disposal
 
     private void ThrowIfDisposed()
