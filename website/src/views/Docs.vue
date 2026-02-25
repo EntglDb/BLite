@@ -16,7 +16,8 @@ const docSections = [
   { path: '/docs/converters', label: 'Custom ID Converters', icon: '🆔' },
   { path: '/docs/benchmarks', label: 'Benchmarks', icon: '⚡' },
   { path: '/docs/dynamic-api', label: 'Schema-less API', icon: '🔌' },
-  { path: '/docs/blql', label: 'BLQL', icon: '🔎' }
+  { path: '/docs/blql', label: 'BLQL', icon: '🔎' },
+  { path: '/docs/timeseries', label: 'TimeSeries', icon: '📈' }
 ]
 
 const isActive = (path: string) => route.path === path

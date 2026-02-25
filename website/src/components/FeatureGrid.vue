@@ -39,6 +39,11 @@ const features = [
     icon: '🖥️',
     title: 'BLite Studio',
     description: 'Official cross-platform GUI to browse, query and manage your embedded NoSQL databases. Available for Windows, Linux and macOS.'
+  },
+  {
+    icon: '📈',
+    title: 'Native TimeSeries',
+    description: 'Dedicated append-only page format for time-ordered data with automatic retention-based pruning. No background threads — pruning fires transparently on insert.'
   }
 ]
 </script>

@@ -16,6 +16,7 @@ import Benchmarks from '../views/docs/Benchmarks.vue'
 import DynamicAPI from '../views/docs/DynamicAPI.vue'
 import Comparisons from '../views/docs/Comparisons.vue'
 import BLQL from '../views/docs/BLQL.vue'
+import TimeSeries from '../views/docs/TimeSeries.vue'
 
 export const DEFAULT_TITLE = 'BLite – Embedded NoSQL Database for .NET'
 export const DEFAULT_DESC = 'BLite is the high-performance embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, CDC streams, and spatial indexing — no server, no cloud. Install via NuGet.'
@@ -137,6 +138,14 @@ export const routes: RouteRecordRaw[] = [
                 meta: {
                     title: 'BLQL — BLite Query Language',
                     description: 'BLQL is the MQL-inspired query language for DynamicCollection. Filter, sort, project, and page BsonDocument results using JSON strings or the fluent C# API. Built-in injection and ReDoS protection.'
+                }
+            },
+            {
+                path: 'timeseries',
+                component: TimeSeries,
+                meta: {
+                    title: 'TimeSeries — BLite',
+                    description: 'Native TimeSeries page type in BLite: append-only, time-indexed storage with automatic retention-based pruning. No background threads — pruning fires on insert.'
                 }
             }
         ]

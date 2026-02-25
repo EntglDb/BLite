@@ -183,7 +183,32 @@ db.People.Insert(new Person { Id = 1, Name = "Alice" });
 - **Async-First**: Full async/await support across reads, writes, and transactions.
 - **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management.
 
-### 🔄 Hot Backup
+### � Native TimeSeries
+BLite 1.12 introduces a dedicated `PageType.TimeSeries` — an append-only page format optimised for high-throughput time-ordered data.
+
+- **No background threads**: pruning fires transparently on insert (every 1 000 docs or 5 min).
+- **Page-level granularity**: entire expired pages are freed in a single pass — O(freed pages), not O(all documents).
+- **Transparent reads**: `FindAll()`, BLQL queries, and B-Tree lookups work unchanged.
+
+```csharp
+// Enable on any DynamicCollection
+var sensors = engine.GetOrCreateCollection("sensors");
+sensors.SetTimeSeries("timestamp", TimeSpan.FromDays(7));
+engine.Commit();
+
+// Insert as normal — routing to TS pages is automatic
+var doc = sensors.CreateDocument(
+    ["deviceId", "temperature", "timestamp"],
+    b => b.Set("deviceId", "sensor-42")
+          .Set("temperature", 23.5)
+          .Set("timestamp", DateTime.UtcNow));
+sensors.Insert(doc);
+
+// Force prune immediately (useful in tests)
+sensors.ForcePrune();
+```
+
+### �🔄 Hot Backup
 BLite supports hot backups of live databases without blocking readers. The engine uses a combination of the commit lock and WAL checkpointing to ensure the backup is a fully consistent, standalone database file.
 
 ```csharp
@@ -688,6 +713,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
 - ✅ **Projection Push-down**: SELECT (and WHERE+SELECT) lambdas compile to a single-pass raw-BSON reader — `T` is never instantiated. `IBLiteQueryable<T>` preserves the async chain across all LINQ operators.
 - ✅ **BLQL**: MQL-inspired query language for `DynamicCollection` — filter, sort, project and page `BsonDocument` results from JSON strings or via a fluent C# API. Full operator set: comparison, string (`$startsWith`, `$endsWith`, `$contains`), array (`$elemMatch`, `$size`, `$all`), arithmetic (`$mod`), logical, geospatial (`$geoWithin`, `$geoNear`), and vector (`$nearVector`). Security-hardened against injection, ReDoS, and division-by-zero.
+- ✅ **Native TimeSeries**: Dedicated `PageType.TimeSeries` (12) with append-only layout, `LastTimestamp` header field and automatic retention-based pruning. Triggered on insert — no background threads. `SetTimeSeries()`, `ForcePrune()`, `IsTimeSeries`, `GetTimeSeriesConfig()` on `DynamicCollection`. Studio UI: TimeSeries tab, TS badge in sidebar.
 
 ## 🔮 Future Vision
 
