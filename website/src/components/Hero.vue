@@ -13,7 +13,7 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
     
     <div class="container hero-content">
       <div class="badge animate-fade-in" style="animation-delay: 0.1s">
-        <span class="badge-dot"></span> v1.9.0 Released — BLite Studio &amp; BLQL
+        <span class="badge-dot"></span> v1.11.0 Released — macOS Studio &amp; Vector Sources
       </div>
       
       <h1 class="hero-title animate-fade-in" style="animation-delay: 0.2s">

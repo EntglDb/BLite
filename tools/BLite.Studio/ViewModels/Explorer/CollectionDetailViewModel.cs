@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Indexing;
 using BLite.Core.Query.Blql;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -37,13 +38,22 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     [ObservableProperty] private int _selectedTabIndex;
 
     // ── Index list ────────────────────────────────────────────────────────────
-    public ObservableCollection<string> IndexList { get; } = [];
+    public ObservableCollection<DynamicIndexDescriptor> IndexList { get; } = [];
 
     public bool HasNoIndexes => IndexList.Count == 0;
 
     [ObservableProperty] private string _newIndexField  = "";
     [ObservableProperty] private string _newIndexName   = "";
     [ObservableProperty] private bool   _isNewIndexUnique;
+
+    [ObservableProperty] private bool _isBTreeIndexType = true;
+    [ObservableProperty] private bool _isVectorIndexType;
+    [ObservableProperty] private bool _isSpatialIndexType;
+
+    [ObservableProperty] private int    _newIndexDimensions = 1536;
+    [ObservableProperty] private string _newIndexMetric     = "Cosine";
+
+    public List<string> AvailableMetrics { get; } = ["Cosine", "L2", "DotProduct"];
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IndexIsOk))]
@@ -107,6 +117,31 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     private bool _editorIsError;
 
     public bool EditorIsOk => !EditorIsError && !string.IsNullOrEmpty(EditorMessage);
+
+    // ── Schema / Vector Source ────────────────────────────────────────────────
+    public ObservableCollection<SchemaFieldViewModel> SchemaFields { get; } = [];
+    public ObservableCollection<VectorSourceFieldViewModel> VectorSourceFields { get; } = [];
+    [ObservableProperty] private string _vectorSourceSeparator = " ";
+
+    [ObservableProperty] private string _newVectorSourceFieldPath = "";
+    [ObservableProperty] private string? _newVectorSourcePrefix;
+    [ObservableProperty] private string? _newVectorSourceSuffix;
+
+    [ObservableProperty] private string _newSchemaFieldName = "";
+    [ObservableProperty] private BsonType _newSchemaFieldType = BsonType.String;
+
+    public List<BsonType> AvailableBsonTypes { get; } = Enum.GetValues<BsonType>().ToList();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SchemaIsOk))]
+    private string _schemaMessage = "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SchemaIsOk))]
+    private bool _schemaIsError;
+
+    public bool SchemaIsOk => !SchemaIsError && !string.IsNullOrEmpty(SchemaMessage);
+
+    [ObservableProperty] private bool _hasSchema;
 
     // ── BLQL Query ────────────────────────────────────────────────────────────
     [ObservableProperty] private string _blqlFilterJson = "";
@@ -217,10 +252,30 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         try
         {
             var name = string.IsNullOrWhiteSpace(NewIndexName) ? null : NewIndexName.Trim();
-            _collection.CreateIndex(field, name, IsNewIndexUnique);
+
+            if (IsVectorIndexType)
+            {
+                var metric = NewIndexMetric switch
+                {
+                    "L2"         => VectorMetric.L2,
+                    "DotProduct" => VectorMetric.DotProduct,
+                    _            => VectorMetric.Cosine
+                };
+                _collection.CreateVectorIndex(field, NewIndexDimensions, metric, name);
+            }
+            else if (IsSpatialIndexType)
+            {
+                _collection.CreateSpatialIndex(field, name);
+            }
+            else
+            {
+                _collection.CreateIndex(field, name, IsNewIndexUnique);
+            }
+
             _engine.Commit();
-            NewIndexField   = "";
-            NewIndexName    = "";
+
+            NewIndexField    = "";
+            NewIndexName     = "";
             IsNewIndexUnique = false;
             RefreshIndexes();
             IndexMessage = $"Index created.";
@@ -344,18 +399,202 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    private void AddVectorSourceField()
+    {
+        if (string.IsNullOrWhiteSpace(NewVectorSourceFieldPath)) return;
+        VectorSourceFields.Add(new VectorSourceFieldViewModel
+        {
+            Path = NewVectorSourceFieldPath.Trim(),
+            Prefix = NewVectorSourcePrefix,
+            Suffix = NewVectorSourceSuffix
+        });
+        NewVectorSourceFieldPath = "";
+        NewVectorSourcePrefix = null;
+        NewVectorSourceSuffix = null;
+    }
+
+    [RelayCommand]
+    private void RemoveVectorSourceField(VectorSourceFieldViewModel? field)
+    {
+        if (field is not null) VectorSourceFields.Remove(field);
+    }
+
+    [RelayCommand]
+    private void AddSchemaField()
+    {
+        if (string.IsNullOrWhiteSpace(NewSchemaFieldName)) return;
+        SchemaFields.Add(new SchemaFieldViewModel 
+        { 
+            Name = NewSchemaFieldName.Trim(), 
+            Type = NewSchemaFieldType 
+        });
+        NewSchemaFieldName = "";
+    }
+
+    [RelayCommand]
+    private void RemoveSchemaField(SchemaFieldViewModel? field)
+    {
+        if (field is not null) SchemaFields.Remove(field);
+    }
+
+    [RelayCommand]
+    private void InferSchema()
+    {
+        try
+        {
+            var docs = _collection.FindAll().Take(20).ToList();
+            if (docs.Count == 0)
+            {
+                SchemaMessage = "No documents found to infer schema.";
+                SchemaIsError = true;
+                return;
+            }
+
+            foreach (var doc in docs)
+            {
+                foreach (var field in doc.EnumerateFields())
+                {
+                    if (field.Name == "_id") continue;
+                    if (SchemaFields.Any(f => f.Name == field.Name)) continue;
+                    
+                    SchemaFields.Add(new SchemaFieldViewModel
+                    {
+                        Name = field.Name,
+                        Type = field.Value.Type,
+                        IsNullable = true
+                    });
+                }
+            }
+            SchemaMessage = "Schema inferred from first 20 documents.";
+            SchemaIsError = false;
+        }
+        catch (Exception ex)
+        {
+            SchemaMessage = "Inference failed: " + ex.Message;
+            SchemaIsError = true;
+        }
+    }
+
+    [RelayCommand]
+    private void AddSourcedFieldFromSchema(SchemaFieldViewModel? field)
+    {
+        if (field is null) return;
+        
+        // Prevent duplicates
+        if (VectorSourceFields.Any(v => v.Path == field.Name)) return;
+
+        VectorSourceFields.Add(new VectorSourceFieldViewModel
+        {
+            Path = field.Name,
+            Prefix = $"{field.Name}: "
+        });
+    }
+
+    [RelayCommand]
+    private void SaveSchema()
+    {
+        SchemaMessage = "";
+        SchemaIsError = false;
+        try
+        {
+            // Update BSON Schema
+            if (SchemaFields.Count > 0)
+            {
+                var bsonSchema = new BsonSchema { Title = Name, Version = 1 };
+                foreach (var s in SchemaFields)
+                {
+                    bsonSchema.Fields.Add(new BsonField
+                    {
+                        Name = s.Name,
+                        Type = s.Type,
+                        IsNullable = s.IsNullable
+                    });
+                }
+                _collection.SetSchema(bsonSchema);
+                HasSchema = true;
+            }
+
+            // Update Vector Source config
+            var config = new BLite.Core.Storage.VectorSourceConfig
+            {
+                Separator = VectorSourceSeparator ?? " "
+            };
+            foreach (var vm in VectorSourceFields)
+            {
+                config.Fields.Add(new BLite.Core.Storage.VectorSourceField
+                {
+                    Path = vm.Path,
+                    Prefix = vm.Prefix,
+                    Suffix = vm.Suffix
+                });
+            }
+            _collection.SetVectorSource(config);
+
+            _engine.Commit();
+            SchemaMessage = "Schema saved.";
+        }
+        catch (Exception ex)
+        {
+            SchemaMessage = ex.Message;
+            SchemaIsError = true;
+        }
+    }
+
     // ── Internal ──────────────────────────────────────────────────────────────
     private void RefreshMetadata()
     {
         DocumentCount = _collection.Count();
         TotalPages    = Math.Max(1, (DocumentCount + PageSize - 1) / PageSize);
         if (CurrentPage >= TotalPages) CurrentPage = Math.Max(0, TotalPages - 1);
+        RefreshSchema();
+    }
+
+    private void RefreshSchema()
+    {
+        VectorSourceFields.Clear();
+        var config = _collection.GetVectorSource();
+        if (config != null)
+        {
+            VectorSourceSeparator = config.Separator;
+            foreach (var field in config.Fields)
+            {
+                VectorSourceFields.Add(new VectorSourceFieldViewModel
+                {
+                    Path = field.Path,
+                    Prefix = field.Prefix,
+                    Suffix = field.Suffix
+                });
+            }
+        }
+        else
+        {
+            VectorSourceSeparator = " ";
+        }
+
+        SchemaFields.Clear();
+        var schemas = _collection.GetSchemas();
+        HasSchema = schemas.Count > 0;
+        if (HasSchema)
+        {
+            // Just take the latest (last) version of the schema
+            var latest = schemas[schemas.Count - 1];
+            foreach (var f in latest.Fields)
+            {
+                SchemaFields.Add(new SchemaFieldViewModel
+                {
+                    Name = f.Name,
+                    Type = f.Type,
+                    IsNullable = f.IsNullable
+                });
+            }
+        }
     }
 
     private void RefreshIndexes()
     {
         IndexList.Clear();
-        foreach (var idx in _collection.ListIndexes())
+        foreach (var idx in _collection.GetIndexDescriptors())
             IndexList.Add(idx);
         OnPropertyChanged(nameof(HasNoIndexes));
     }

@@ -2,6 +2,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:BLite.Studio.ViewModels"
         xmlns:ex="using:BLite.Studio.ViewModels.Explorer"
+        xmlns:core="using:BLite.Core"
+        xmlns:Bson="using:BLite.Bson"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="640"
@@ -603,13 +605,27 @@
                                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                                 BorderThickness="0,1,0,0"
                                 Padding="0,14,0,0">
-                          <StackPanel Spacing="8">
-                            <TextBlock Text="Create Index"
+                          <StackPanel Spacing="10">
+                            <TextBlock Text="Create New Index"
                                        FontWeight="SemiBold" FontSize="13"/>
+
+                            <!-- Index Type Selector -->
+                            <StackPanel Orientation="Horizontal" Spacing="24">
+                              <RadioButton HorizontalAlignment="Left"
+                                           Content="Standard (B-Tree)"
+                                           IsChecked="{Binding IsBTreeIndexType}"/>
+                              <RadioButton HorizontalAlignment="Left"
+                                           Content="Vector (HNSW)"
+                                           IsChecked="{Binding IsVectorIndexType}"/>
+                              <RadioButton HorizontalAlignment="Left"
+                                           Content="Geospatial (R-Tree)"
+                                           IsChecked="{Binding IsSpatialIndexType}"/>
+                            </StackPanel>
+
                             <Grid ColumnDefinitions="*,180,Auto,Auto">
                               <TextBox Grid.Column="0"
                                        Text="{Binding NewIndexField}"
-                                       Watermark="Field path (e.g. age)"
+                                       Watermark="Field path (e.g. metadata.age)"
                                        Margin="0,0,8,0"
                                        VerticalContentAlignment="Center"/>
                               <TextBox Grid.Column="1"
@@ -620,12 +636,37 @@
                               <CheckBox Grid.Column="2"
                                         Content="Unique"
                                         IsChecked="{Binding IsNewIndexUnique}"
+                                        IsVisible="{Binding IsBTreeIndexType}"
                                         Margin="0,0,8,0"
                                         VerticalAlignment="Center"/>
                               <Button Grid.Column="3"
-                                      Content="Create"
+                                      Content="Create Index"
+                                      Classes="PrimaryBtn"
                                       Command="{Binding CreateIndexCommand}"/>
                             </Grid>
+
+                            <!-- Extra fields for Vector -->
+                            <StackPanel Spacing="12"
+                                        IsVisible="{Binding IsVectorIndexType}"
+                                        Margin="0,4,0,0">
+                              <Grid ColumnDefinitions="*,*">
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                  <TextBlock Text="Dimensions"
+                                             FontSize="11" Opacity="0.5" Margin="2,0,0,4"/>
+                                  <NumericUpDown Value="{Binding NewIndexDimensions}"
+                                                 Minimum="1" Maximum="32768"
+                                                 FormatString="0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                  <TextBlock Text="Metric"
+                                             FontSize="11" Opacity="0.5" Margin="2,0,0,4"/>
+                                  <ComboBox ItemsSource="{Binding AvailableMetrics}"
+                                            SelectedItem="{Binding NewIndexMetric}"
+                                            HorizontalAlignment="Stretch"/>
+                                </StackPanel>
+                              </Grid>
+                            </StackPanel>
+
                             <TextBlock Text="{Binding IndexMessage}"
                                        FontSize="12"
                                        Classes.MsgErr="{Binding IndexIsError}"
@@ -644,32 +685,209 @@
                                      IsVisible="{Binding HasNoIndexes}"/>
                           <ItemsControl ItemsSource="{Binding IndexList}">
                             <ItemsControl.ItemTemplate>
-                              <DataTemplate x:DataType="x:String"
-                                            x:CompileBindings="False">
+                              <DataTemplate x:DataType="core:DynamicIndexDescriptor">
                                 <Grid ColumnDefinitions="*,Auto"
-                                      Margin="0,0,0,4">
+                                      Margin="0,0,0,6">
                                   <Border Classes="KeyRow"
                                           Grid.ColumnSpan="2"/>
-                                  <TextBlock Grid.Column="0"
-                                             Text="{Binding}"
-                                             FontFamily="Monospace"
-                                             FontSize="13"
-                                             VerticalAlignment="Center"
-                                             Margin="10,6"/>
+                                  
+                                  <StackPanel Grid.Column="0" Margin="14,10" Spacing="4">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                      <TextBlock Text="{Binding Name}"
+                                                 FontWeight="SemiBold"
+                                                 FontSize="13"/>
+                                      <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                                              CornerRadius="2"
+                                              Padding="4,2">
+                                        <TextBlock Text="{Binding Type}"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Opacity="0.8"
+                                                   VerticalAlignment="Center"/>
+                                      </Border>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding FieldPath}"
+                                               FontFamily="Monospace"
+                                               FontSize="12"
+                                               Opacity="0.8"/>
+                                    
+                                    <!-- Options summary (Vector) -->
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="12"
+                                                Opacity="0.6"
+                                                IsVisible="{Binding IsVector}">
+                                      <TextBlock FontSize="11"
+                                                 Text="{Binding Dimensions, StringFormat='Dimensions: \{0\}'}"/>
+                                      <TextBlock FontSize="11"
+                                                 Text="{Binding Metric, StringFormat='Metric: \{0\}'}"/>
+                                    </StackPanel>
+                                  </StackPanel>
+
                                   <Button Grid.Column="1"
                                           Content="Drop"
                                           FontSize="11"
-                                          Padding="8,2"
-                                          Margin="6,4"
+                                          Padding="8,3"
+                                          Margin="14,0"
                                           Classes="DangerBtn"
-                                          Command="{Binding DataContext.DropIndexCommand, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}"
-                                          CommandParameter="{Binding}"/>
+                                          VerticalAlignment="Center"
+                                          Command="{Binding $parent[ItemsControl].((ex:CollectionDetailViewModel)DataContext).DropIndexCommand}"
+                                          CommandParameter="{Binding Name}"/>
                                 </Grid>
                               </DataTemplate>
                             </ItemsControl.ItemTemplate>
                           </ItemsControl>
                         </StackPanel>
 
+                      </DockPanel>
+                    </TabItem>
+
+                    <!-- ── Tab: Schema (Metadata) ── -->
+                    <TabItem Header="Schema">
+                      <DockPanel Margin="20,16">
+                        
+                        <!-- Header / Info -->
+                        <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,20">
+                          <TextBlock Text="Collection Schema &amp; Vector Sources" 
+                                     FontWeight="SemiBold" FontSize="14"/>
+                          <TextBlock Text="Configure how text fields are concatenated for vector embeddings (RAG)." 
+                                     Opacity="0.6" FontSize="12"/>
+                        </StackPanel>
+
+                        <!-- Actions (Bottom) -->
+                        <Border DockPanel.Dock="Bottom" 
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,1,0,0"
+                                Padding="0,16,0,0">
+                          <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" 
+                                       Text="{Binding SchemaMessage}" 
+                                       FontSize="12" 
+                                       VerticalAlignment="Center"
+                                       Classes.MsgErr="{Binding SchemaIsError}"
+                                       Classes.MsgOk="{Binding SchemaIsOk}"
+                                       IsVisible="{Binding SchemaMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                            <Button Grid.Column="1" 
+                                    Content="Save Schema Configuration" 
+                                    Classes="PrimaryBtn"
+                                    Command="{Binding SaveSchemaCommand}"/>
+                          </Grid>
+                        </Border>
+
+                        <!-- Vector Source Fields Configuration -->
+                        <ScrollViewer>
+                          <Grid ColumnDefinitions="*,340">
+                             
+                            <!-- Left col: Schema Fields (if present) -->
+                            <StackPanel Grid.Column="0" Spacing="20" Margin="0,0,24,0">
+                              <Border Background="White" 
+                                      BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                      BorderThickness="1"
+                                      CornerRadius="4" Padding="12">
+                                <StackPanel Spacing="10">
+                                  <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Collection Schema (BSON Fields)" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Content="Suggest from Data" FontSize="10" Padding="8,2" Command="{Binding InferSchemaCommand}"/>
+                                  </Grid>
+                                  <TextBlock Text="Define the fields expected in this collection." Opacity="0.6" FontSize="11" Margin="0,0,0,4"/>
+                                  
+                                  <!-- New Field Form -->
+                                  <Grid ColumnDefinitions="*,120,Auto" Margin="0,0,0,8">
+                                    <TextBox Grid.Column="0" Text="{Binding NewSchemaFieldName}" Watermark="Field name" Margin="0,0,6,0"/>
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding AvailableBsonTypes}" SelectedItem="{Binding NewSchemaFieldType}" HorizontalAlignment="Stretch" Margin="0,0,6,0"/>
+                                    <Button Grid.Column="2" Content="Add" Command="{Binding AddSchemaFieldCommand}"/>
+                                  </Grid>
+
+                                  <ItemsControl ItemsSource="{Binding SchemaFields}">
+                                    <ItemsControl.ItemTemplate>
+                                      <DataTemplate DataType="ex:SchemaFieldViewModel">
+                                        <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,2">
+                                          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding Name}" FontFamily="Monospace" FontSize="12" VerticalAlignment="Center"/>
+                                          </StackPanel>
+                                          
+                                          <ComboBox Grid.Column="1" ItemsSource="{Binding $parent[ItemsControl].((ex:CollectionDetailViewModel)DataContext).AvailableBsonTypes}" 
+                                                    SelectedItem="{Binding Type}" FontSize="10" Padding="4,0" Margin="4,0" BorderThickness="0" Background="Transparent" VerticalAlignment="Center"/>
+                                          
+                                          <Button Grid.Column="2" Content="+ Use as Source" FontSize="10" Padding="8,2" Margin="4,0" 
+                                                  Command="{Binding $parent[ItemsControl].((ex:CollectionDetailViewModel)DataContext).AddSourcedFieldFromSchemaCommand}" 
+                                                  CommandParameter="{Binding}"/>
+                                          
+                                          <Button Grid.Column="3" Content="✕" Classes="DangerBtn" FontSize="10" Padding="6,2" 
+                                                  Command="{Binding $parent[ItemsControl].((ex:CollectionDetailViewModel)DataContext).RemoveSchemaFieldCommand}" 
+                                                  CommandParameter="{Binding}"/>
+                                        </Grid>
+                                      </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                  </ItemsControl>
+                                </StackPanel>
+                              </Border>
+
+                              <!-- Manual Field List -->
+                              <StackPanel Spacing="8">
+                                <TextBlock Text="Vector Source Configuration" FontWeight="SemiBold" FontSize="12"/>
+                                
+                                <!-- Entry Form -->
+                                <Border Background="White" 
+                                        BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="4" Padding="12">
+                                  <StackPanel Spacing="10">
+                                    <Grid ColumnDefinitions="*,*,*,Auto">
+                                      <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                        <TextBlock Text="Field Path" FontSize="11" Opacity="0.5" Margin="2,0,0,4"/>
+                                        <TextBox Text="{Binding NewVectorSourceFieldPath}" Watermark="e.g. title"/>
+                                      </StackPanel>
+                                      <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                                        <TextBlock Text="Prefix (opt)" FontSize="11" Opacity="0.5" Margin="2,0,0,4"/>
+                                        <TextBox Text="{Binding NewVectorSourcePrefix}" Watermark="e.g. Title: "/>
+                                      </StackPanel>
+                                      <StackPanel Grid.Column="2" Margin="0,0,8,0">
+                                        <TextBlock Text="Suffix (opt)" FontSize="11" Opacity="0.5" Margin="2,0,0,4"/>
+                                        <TextBox Text="{Binding NewVectorSourceSuffix}" Watermark="e.g. \n"/>
+                                      </StackPanel>
+                                      <Button Grid.Column="3" Content="Add" VerticalAlignment="Bottom" Command="{Binding AddVectorSourceFieldCommand}"/>
+                                    </Grid>
+                                  </StackPanel>
+                                </Border>
+
+                                <!-- Current Fields -->
+                                <ItemsControl ItemsSource="{Binding VectorSourceFields}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="ex:VectorSourceFieldViewModel">
+                                      <Grid ColumnDefinitions="*,*,*,Auto" Margin="0,4">
+                                        <Border Classes="KeyRow" Grid.ColumnSpan="4"/>
+                                        <TextBlock Grid.Column="0" Text="{Binding Path}" FontFamily="Monospace" FontSize="12" Margin="10,6" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Prefix}" FontSize="12" Margin="10,6" VerticalAlignment="Center" Opacity="0.7"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Suffix}" FontSize="12" Margin="10,6" VerticalAlignment="Center" Opacity="0.7"/>
+                                        <Button Grid.Column="3" Content="✕" Margin="6,4" Classes="DangerBtn" FontSize="10" Padding="6,2" Command="{Binding $parent[ItemsControl].((ex:CollectionDetailViewModel)DataContext).RemoveVectorSourceFieldCommand}" CommandParameter="{Binding}"/>
+                                      </Grid>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                              </StackPanel>
+                            </StackPanel>
+
+
+                            <!-- Right Col: Config settings -->
+                            <StackPanel Grid.Column="1" Spacing="20">
+                              <Border Background="White" 
+                                      BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                      BorderThickness="1"
+                                      CornerRadius="4" Padding="12">
+                                <StackPanel Spacing="12">
+                                  <TextBlock Text="General Settings" FontWeight="SemiBold" FontSize="12"/>
+                                  <StackPanel Spacing="4">
+                                    <TextBlock Text="Field Separator" FontSize="11" Opacity="0.5" Margin="2,0"/>
+                                    <TextBox Text="{Binding VectorSourceSeparator}" Watermark="e.g. space, newline, comma"/>
+                                  </StackPanel>
+                                </StackPanel>
+                              </Border>
+                            </StackPanel>
+
+                          </Grid>
+                        </ScrollViewer>
+                        
                       </DockPanel>
                     </TabItem>
 

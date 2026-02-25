@@ -41,11 +41,20 @@
       <h2>Initialize the Database</h2>
       <pre><code><span class="keyword">using</span> BLite.Core;
 
-<span class="comment">// Create database instance</span>
-<span class="keyword">var</span> db = <span class="keyword">new</span> <span class="type">DocumentDb</span>(<span class="string">"myapp.blite"</span>);
+<span class="comment">// Create database context (uses Source Generator for InitializeCollections)</span>
+<span class="keyword">public partial class</span> <span class="type">MyDbContext</span> : <span class="type">DocumentDbContext</span>
+{
+    <span class="keyword">public</span> <span class="type">DocumentCollection</span>&lt;<span class="type">ObjectId</span>, <span class="type">User</span>&gt; Users { <span class="keyword">get</span>; <span class="keyword">set</span>; } = <span class="keyword">null</span>!;
 
-<span class="comment">// Get a typed collection</span>
-<span class="keyword">var</span> users = db.GetCollection&lt;<span class="type">User</span>&gt;();</code></pre>
+    <span class="keyword">public</span> MyDbContext(<span class="keyword">string</span> path) : <span class="keyword">base</span>(path)
+    {
+        InitializeCollections();
+    }
+}
+
+<span class="comment">// Use the context</span>
+<span class="keyword">using var</span> db = <span class="keyword">new</span> <span class="type">MyDbContext</span>(<span class="string">"myapp.blite"</span>);
+<span class="keyword">var</span> users = db.Users;</code></pre>
     </section>
 
     <section>

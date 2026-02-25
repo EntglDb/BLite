@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.11.0"></a>
+## [1.11.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.11.0) (2026-02-25)
+
+### Features
+
+* adds vector source to collection metadata ([5905f20](https://www.github.com/EntglDb/BLite/commit/5905f20414cf0cefac4ae8c93a523b2ab416de58))
+
+### Bug Fixes
+
+* corrects the missing CDC in BLite Engine ([322542a](https://www.github.com/EntglDb/BLite/commit/322542a3db10e1b482ae4b3cc35d2662f8ba33f0))
+
 <a name="1.10.0"></a>
 ## [1.10.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.10.0) (2026-02-24)
 

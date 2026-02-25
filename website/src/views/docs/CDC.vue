@@ -16,13 +16,13 @@
 
     <section>
       <h2>Basic Usage</h2>
-      <pre><code><span class="keyword">var</span> users = db.GetCollection&lt;<span class="type">User</span>&gt;();
+      <pre><code><span class="comment">// 1. Typed Mode (DbContext)</span>
+<span class="keyword">var</span> users = db.GetCollection&lt;<span class="type">User</span>&gt;();
+users.Watch().Subscribe(change => { ... });
 
-<span class="comment">// Subscribe to all changes</span>
-users.Watch().Subscribe(change =>
-{
-    Console.WriteLine($<span class="string">"{change.OperationType}: {change.DocumentId}"</span>);
-});</code></pre>
+<span class="comment">// 2. Dynamic Mode (BLiteEngine) — v1.11.0</span>
+<span class="keyword">var</span> dynamicCol = engine.GetOrCreateCollection(<span class="string">"orders"</span>);
+dynamicCol.Watch().Subscribe(change => { ... });</code></pre>
     </section>
 
     <section>

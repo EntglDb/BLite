@@ -97,6 +97,24 @@ var results = db.Items.AsQueryable()
     .ToList();
 ```
 
+#### 🛠️ Vector Source Configuration (RAG Optimization)
+For sophisticated RAG (Retrieval-Augmented Generation) scenarios, BLite allows you to define a **Vector Source Configuration** directly on the collection metadata. This configuration specifies which BSON fields should be used to build the input text for your embedding model.
+
+```csharp
+// Define which fields to include in the normalized text for embedding
+var config = new VectorSourceConfig()
+    .Add("title",   weight: 2.0)   // Boost important fields
+    .Add("content", weight: 1.0)
+    .Add("tags",    weight: 0.5);
+
+// Set it on a collection
+engine.SetVectorSource("documents", config);
+
+// Use TextNormalizer to build the text from any BsonDocument
+string text = TextNormalizer.BuildEmbeddingText(doc, config);
+// -> "TITLE [Boost: 2.0] ... CONTENT ... TAGS [Boost: 0.5] ..."
+```
+
 ### 🌍 High-Performance Geospatial Indexing
 BLite features a built-in R-Tree implementation for lightning-fast proximity and bounding box searches.
 
@@ -162,8 +180,19 @@ db.People.Insert(new Person { Id = 1, Name = "Alice" });
 - **Durable**: WAL ensures data safety even in power loss.
 - **Isolated**: Snapshot isolation allowing concurrent readers and writers.
 - **Thread-Safe**: Protected with `SemaphoreSlim` to prevent race conditions in concurrent scenarios.
-- **Async-First**: Full async/await support across reads, writes, and transactions — with proper `CancellationToken` propagation throughout the entire stack (B-Tree traversal → page I/O → `RandomAccess.ReadAsync` on OS level).
-- **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management (like EF Core).
+- **Async-First**: Full async/await support across reads, writes, and transactions.
+- **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management.
+
+### 🔄 Hot Backup
+BLite supports hot backups of live databases without blocking readers. The engine uses a combination of the commit lock and WAL checkpointing to ensure the backup is a fully consistent, standalone database file.
+
+```csharp
+// 1. Embedded mode (DocumentDbContext)
+await db.BackupAsync("backups/mydb-2026-02-25.blite", cancellationToken);
+
+// 2. Schema-less mode (BLiteEngine)
+await engine.BackupAsync("backups/mydb-backup.blite");
+```
 
 ### ⚡ Async Read Operations
 

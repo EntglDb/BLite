@@ -1,6 +1,6 @@
 # BLite — AI Agent Context
 
-> Last updated: 2026-02-23 (v1.7.0)
+> Last updated: 2026-02-25 (v1.11.0)
 > Keep this file up to date after every development session (see `.agent/rules.md`).
 
 ---
@@ -220,9 +220,52 @@ tx.Commit();
 ## CDC (Change Data Capture)
 
 ```csharp
+// Typed Mode (DocumentDbContext)
 db.Users.Watch(change => {
     Console.WriteLine($"{change.OperationType}: {change.DocumentId}");
 });
+
+// Dynamic Mode (BLiteEngine)
+var collection = engine.GetOrCreateCollection("orders");
+collection.Watch(change => {
+    // change.Document is BsonDocument
+    Console.WriteLine($"{change.OperationType}: {change.DocumentId}");
+});
+```
+
+---
+
+## Hot Backup (v1.8.0)
+
+ACID-compliant live backups while the database is in use:
+```csharp
+// Typed Mode
+await db.BackupAsync("backup.db", cancellationToken);
+
+// Dynamic Mode
+await engine.BackupAsync("backup.db", cancellationToken);
+```
+
+---
+
+## Vector Source Configuration (v1.11.0)
+
+Used to optimize Retrieval-Augmented Generation (RAG) by weighting fields for text normalization:
+```csharp
+modelBuilder.Entity<Article>()
+    .HasVectorSource(x => new VectorSourceConfig
+    {
+        Fields = new List<VectorSourceField>
+        {
+            new VectorSourceField { Name = "Title", Weight = 1.0f },
+            new VectorSourceField { Name = "Content", Weight = 0.5f },
+            new VectorSourceField { Name = "Tags", Weight = 0.2f }
+        }
+    });
+
+// Usage in Dynamic Mode (metadata retrieval)
+var config = collection.Metadata.VectorSource;
+string text = TextNormalizer.BuildEmbeddingText(doc, config);
 ```
 
 ---
@@ -292,6 +335,10 @@ Vue 3 + Vite. Docs pages: `website/src/views/docs/*.vue`
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.11.0** | 2026-02-25 | `VectorSourceConfig` (RAG weights), `BLiteEngine` CDC support, macOS Studio links |
+| 1.10.0 | 2026-02-25 | macOS Studio builds (x64/ARM64), advanced BLQL filters |
+| 1.9.0 | 2026-02-24 | ARM64 Linux builds, increased WAL throughput |
+| 1.8.0 | 2026-02-24 | `BackupAsync` (Hot Backup) for ACID live copies |
 | **1.7.0** | 2026-02-23 | `BsonJsonConverter` (JSON↔BSON); nested `[Key] Id` fix; enum index fix |
 | 1.6.2 | 2026-02-23 | Document metadata page overflow fix |
 | 1.6.1 | 2026-02-22 | Full enum support in Source Generator |

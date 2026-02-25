@@ -117,6 +117,36 @@ engine.DropCollection(<span class="string">"orders"</span>);</code></pre>
     </section>
 
     <section>
+      <h2>Vector Source Configuration <span style="font-size:0.6em;vertical-align:middle;background:rgba(231,76,60,0.15);color:var(--blite-red);padding:2px 8px;border-radius:12px;font-weight:600">NEW in v1.11.0</span></h2>
+      <p>
+        BLite allows you to define a <strong>Vector Source Configuration</strong> on the collection metadata to optimize
+        RAG (Retrieval-Augmented Generation) scenarios. It defines which BSON fields should be used to build the normalized
+        input text for your embedding model.
+      </p>
+      <pre><code><span class="keyword">using</span> BLite.Core.Storage;
+
+<span class="comment">// 1. Define fields to include and their relative weights</span>
+<span class="keyword">var</span> config = <span class="keyword">new</span> <span class="type">VectorSourceConfig</span>()
+    .Add(<span class="string">"title"</span>,   weight: <span class="number">2.0</span>)   <span class="comment">// Boost important fields</span>
+    .Add(<span class="string">"content"</span>, weight: <span class="number">1.0</span>)
+    .Add(<span class="string">"tags"</span>,    weight: <span class="number">0.5</span>);
+
+<span class="comment">// 2. Set it on a collection metadata (persisted)</span>
+engine.SetVectorSource(<span class="string">"documents"</span>, config);
+
+<span class="comment">// 3. Retrieve it later</span>
+<span class="keyword">var</span> savedConfig = engine.GetVectorSource(<span class="string">"documents"</span>);
+
+<span class="comment">// 4. Use TextNormalizer to build final text from any document</span>
+<span class="keyword">string</span> text = <span class="type">TextNormalizer</span>.BuildEmbeddingText(doc, savedConfig);</code></pre>
+<div class="tip-box">
+  <strong>⚡ Efficient RAG</strong> — by storing the normalization rules in the database, your application can
+  reliably reconstruct the exact input string used for embeddings, ensuring consistency across different
+  indexing and retrieval agents.
+</div>
+    </section>
+
+    <section>
       <h2>Update &amp; Delete</h2>
       <pre><code><span class="comment">// Sync</span>
 <span class="keyword">bool</span> updated = orders.Update(id, newDoc);

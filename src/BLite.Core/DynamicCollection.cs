@@ -19,7 +19,12 @@ public sealed record DynamicIndexDescriptor(
     IndexType Type,
     string FieldPath,
     int Dimensions,
-    VectorMetric Metric);
+    VectorMetric Metric)
+{
+    public bool IsVector => Type == IndexType.Vector;
+    public bool IsSpatial => Type == IndexType.Spatial;
+    public bool IsStandard => Type == IndexType.BTree;
+}
 
 /// <summary>
 /// Schema-less document collection for dynamic/server mode.
@@ -1058,6 +1063,29 @@ public sealed class DynamicCollection : IDisposable
 
     /// <summary>Lists all secondary index names.</summary>
     public IReadOnlyList<string> ListIndexes() => _secondaryIndexes.Keys.ToList();
+
+    /// <summary>Gets all persisted schema versions for this collection.</summary>
+    public IReadOnlyList<BsonSchema> GetSchemas()
+    {
+        var metadata = _storage.GetCollectionMetadata(_collectionName);
+        if (metadata == null || metadata.SchemaRootPageId == 0)
+            return Array.Empty<BsonSchema>();
+
+        return _storage.GetSchemas(metadata.SchemaRootPageId);
+    }
+
+    /// <summary>Sets a new schema version for this collection and persists it.</summary>
+    public void SetSchema(BsonSchema schema)
+    {
+        if (schema == null) throw new ArgumentNullException(nameof(schema));
+        
+        var metadata = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
+        metadata.SchemaRootPageId = _storage.AppendSchema(metadata.SchemaRootPageId, schema);
+        _storage.SaveCollectionMetadata(metadata);
+        
+        // Ensure all keys used in the schema are registered in the global key map
+        _storage.RegisterKeys(schema.GetAllKeys().ToArray());
+    }
 
     /// <summary>Gets the VectorSource configuration for this collection, or null if not configured.</summary>
     public VectorSourceConfig? GetVectorSource()
