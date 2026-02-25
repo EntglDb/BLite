@@ -23,7 +23,12 @@ const features = [
   {
     icon: '🌍',
     title: 'Spatial Indexing',
-    description: 'Built-in R-Tree for geospatial queries and vector search.'
+    description: 'Built-in R-Tree for geospatial queries. 2D bounding-box, nearest-neighbour and intersection queries out of the box.'
+  },
+  {
+    icon: '🧠',
+    title: 'Vector Index',
+    description: 'Native HNSW vector index for semantic similarity search and RAG patterns. Store embeddings directly in your embedded DB — no external vector store needed.'
   },
   {
     icon: '🔒',

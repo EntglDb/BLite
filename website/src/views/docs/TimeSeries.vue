@@ -183,10 +183,136 @@ engine.Commit();</code></pre>
 </template>
 
 <style scoped>
+.doc-page {
+  max-width: 800px;
+}
+
+h1 {
+  font-size: 2.5rem;
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+
+.lead {
+  font-size: 1.2rem;
+  color: var(--text-secondary);
+  margin-bottom: 48px;
+  line-height: 1.7;
+}
+
+section {
+  margin-bottom: 48px;
+}
+
+h2 {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--blite-red);
+  border-bottom: 2px solid rgba(231, 76, 60, 0.2);
+  padding-bottom: 8px;
+}
+
+h3 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 24px 0 12px;
+  color: var(--text-primary);
+}
+
+p {
+  margin-bottom: 16px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+ul {
+  margin: 16px 0;
+  padding-left: 24px;
+}
+
+li {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+li strong {
+  color: var(--blite-red);
+}
+
+pre {
+  background: rgba(10, 10, 10, 0.6);
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  border-radius: 8px;
+  padding: 20px;
+  overflow-x: auto;
+  margin: 16px 0;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.keyword { color: var(--blite-red); }
+.type    { color: #06b6d4; }
+.string  { color: #a1a1aa; }
+.number  { color: #06b6d4; }
+.comment { color: #52525b; font-style: italic; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+}
+
+th, td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(231, 76, 60, 0.2);
+}
+
+th {
+  color: var(--blite-red);
+  font-weight: 600;
+}
+
+td {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.info-box {
+  background: rgba(231, 76, 60, 0.05);
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  border-left: 4px solid var(--blite-red);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 24px 0;
+}
+
+.info-header {
+  font-weight: 600;
+  color: var(--blite-red);
+  margin-bottom: 12px;
+  font-size: 1.1rem;
+}
+
 .info-box.warning {
+  background: rgba(232, 192, 64, 0.05);
+  border-color: rgba(232, 192, 64, 0.3);
   border-left-color: #e8c040;
 }
+
 .info-box.warning .info-header {
   color: #e8c040;
+}
+
+.info-box.warning p,
+.info-box.warning li {
+  color: #D0C090;
 }
 </style>
