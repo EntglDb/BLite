@@ -164,6 +164,28 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     [ObservableProperty] private bool _blqlHasResults;
     [ObservableProperty] private int  _blqlResultCount;
 
+    // ── TimeSeries ────────────────────────────────────────────────────────────
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TsRetentionLabel))]
+    private bool _isTimeSeries;
+
+    [ObservableProperty] private string _tsTtlFieldName = "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TsRetentionLabel))]
+    private double _tsRetentionDays = 30;
+
+    public string TsRetentionLabel => IsTimeSeries
+        ? $"Retention: {TsRetentionDays:0.##} day(s)  ({TsRetentionDays * 24 * 60:0} minutes)"
+        : "Not configured";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TsIsOk))]
+    private string _tsMessage = "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TsIsOk))]
+    private bool _tsIsError;
+    public bool TsIsOk => !TsIsError && !string.IsNullOrEmpty(TsMessage);
+
     // ── Commands ──────────────────────────────────────────────────────────────
     [RelayCommand]
     private void PrevPage() { CurrentPage--; LoadPage(); }
@@ -235,6 +257,53 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         BlqlResults.Clear();
         BlqlHasResults  = false;
         BlqlResultCount = 0;
+    }
+
+    [RelayCommand]
+    private void SaveTimeSeries()
+    {
+        TsMessage = "";
+        TsIsError = false;
+        if (TsRetentionDays <= 0)
+        {
+            TsMessage = "Retention must be greater than zero.";
+            TsIsError = true;
+            return;
+        }
+        try
+        {
+            var ttlField = TsTtlFieldName.Trim();
+            _collection.SetTimeSeries(ttlField, TimeSpan.FromDays(TsRetentionDays));
+            _engine.Commit();
+            IsTimeSeries = true;
+            var fieldLabel = string.IsNullOrEmpty(ttlField) ? "insertion time" : $"field '{ttlField}'";
+            TsMessage = $"TimeSeries enabled. Timestamp: {fieldLabel}. Retention: {TsRetentionDays:0.##} day(s).";
+        }
+        catch (Exception ex)
+        {
+            TsMessage = ex.Message;
+            TsIsError = true;
+        }
+    }
+
+    [RelayCommand]
+    private void ForcePrune()
+    {
+        TsMessage = "";
+        TsIsError = false;
+        try
+        {
+            _collection.ForcePrune();
+            _engine.Commit();
+            RefreshMetadata();
+            LoadPage();
+            TsMessage = "Pruning completed.";
+        }
+        catch (Exception ex)
+        {
+            TsMessage = ex.Message;
+            TsIsError = true;
+        }
     }
 
     [RelayCommand]
@@ -548,6 +617,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         TotalPages    = Math.Max(1, (DocumentCount + PageSize - 1) / PageSize);
         if (CurrentPage >= TotalPages) CurrentPage = Math.Max(0, TotalPages - 1);
         RefreshSchema();
+        RefreshTimeSeries();
     }
 
     private void RefreshSchema()
@@ -588,6 +658,17 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
                     IsNullable = f.IsNullable
                 });
             }
+        }
+    }
+
+    private void RefreshTimeSeries()
+    {
+        IsTimeSeries = _collection.IsTimeSeries;
+        if (IsTimeSeries)
+        {
+            var (retMs, ttlField) = _collection.GetTimeSeriesConfig();
+            TsTtlFieldName   = ttlField ?? "";
+            TsRetentionDays  = retMs > 0 ? retMs / 86_400_000.0 : 30;
         }
     }
 

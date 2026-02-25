@@ -322,6 +322,14 @@
                           <TextBlock Text="≡" Opacity="0.5"/>
                           <TextBlock Text="{Binding Label}"
                                      TextTrimming="CharacterEllipsis"/>
+                          <Border CornerRadius="3" Padding="4,1"
+                                  Background="#1E6B3C"
+                                  IsVisible="{Binding IsTimeSeries}"
+                                  VerticalAlignment="Center">
+                            <TextBlock Text="TS" FontSize="9" FontWeight="Bold"
+                                       Foreground="#55DD88"
+                                       VerticalAlignment="Center"/>
+                          </Border>
                         </StackPanel>
                       </Button>
                     </DataTemplate>
@@ -1045,6 +1053,139 @@
                             </StackPanel>
                           </ScrollViewer>
                         </Border>
+
+                      </DockPanel>
+                    </TabItem>
+
+                    <!-- ── Tab: TimeSeries ── -->
+                    <TabItem Header="TimeSeries">
+                      <DockPanel Margin="20,16">
+
+                        <!-- Header -->
+                        <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,14">
+                          <TextBlock Text="TimeSeries Configuration"
+                                     FontWeight="SemiBold" FontSize="14"/>
+                          <TextBlock Text="Enable append-only, time-indexed storage with automatic retention-based pruning."
+                                     Opacity="0.6" FontSize="12" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <!-- Conversion warning -->
+                        <Border DockPanel.Dock="Top"
+                                CornerRadius="6"
+                                Padding="14,11"
+                                Margin="0,0,0,20"
+                                Background="#2A2210"
+                                BorderBrush="#6B5500"
+                                BorderThickness="1">
+                          <StackPanel Spacing="6">
+                            <TextBlock Text="⚠  What happens when you enable TimeSeries on an existing collection"
+                                       FontWeight="SemiBold" FontSize="12"
+                                       Foreground="#E8C040"/>
+                            <StackPanel Spacing="4" Margin="4,0,0,0">
+                              <TextBlock FontSize="11" TextWrapping="Wrap" Foreground="#D0C090"
+                                         Text="• Existing documents are NOT migrated. They stay in their original slotted pages and are never pruned by the retention policy."/>
+                              <TextBlock FontSize="11" TextWrapping="Wrap" Foreground="#D0C090"
+                                         Text="• All indexes (primary B-Tree and secondary) remain fully valid and continue to work for both old and new documents."/>
+                              <TextBlock FontSize="11" TextWrapping="Wrap" Foreground="#D0C090"
+                                         Text="• Only documents inserted after enabling TimeSeries are written to TS pages and are subject to automatic pruning."/>
+                              <TextBlock FontSize="11" TextWrapping="Wrap" Foreground="#D0C090"
+                                         Text="• This is a one-way operation — there is no built-in way to convert back to standard mode once enabled."/>
+                            </StackPanel>
+                          </StackPanel>
+                        </Border>
+
+                        <!-- Actions (Bottom) -->
+                        <Border DockPanel.Dock="Bottom"
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,1,0,0"
+                                Padding="0,16,0,0">
+                          <Grid ColumnDefinitions="*,Auto,Auto">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding TsMessage}"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Classes.MsgErr="{Binding TsIsError}"
+                                       Classes.MsgOk="{Binding TsIsOk}"
+                                       IsVisible="{Binding TsMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                            <Button Grid.Column="1"
+                                    Content="⚡ Force Prune"
+                                    Margin="0,0,8,0"
+                                    IsVisible="{Binding IsTimeSeries}"
+                                    Command="{Binding ForcePruneCommand}"/>
+                            <Button Grid.Column="2"
+                                    Content="Save TimeSeries Configuration"
+                                    Classes="PrimaryBtn"
+                                    Command="{Binding SaveTimeSeriesCommand}"/>
+                          </Grid>
+                        </Border>
+
+                        <!-- Content -->
+                        <ScrollViewer>
+                          <StackPanel Spacing="20" MaxWidth="540">
+
+                            <!-- Status badge -->
+                            <Border CornerRadius="6"
+                                    Padding="14,10"
+                                    Background="{DynamicResource SystemControlBackgroundAltMediumHighBrush}">
+                              <Grid ColumnDefinitions="Auto,*">
+                                <Border Grid.Column="0"
+                                        CornerRadius="4"
+                                        Padding="8,4"
+                                        Margin="0,0,14,0"
+                                        Background="#1E6B3C"
+                                        IsVisible="{Binding IsTimeSeries}">
+                                  <TextBlock Text="TIME SERIES"
+                                             FontSize="10" FontWeight="Bold"
+                                             Foreground="#55DD88"
+                                             VerticalAlignment="Center"/>
+                                </Border>
+                                <Border Grid.Column="0"
+                                        CornerRadius="4"
+                                        Padding="8,4"
+                                        Margin="0,0,14,0"
+                                        Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                                        IsVisible="{Binding !IsTimeSeries}">
+                                  <TextBlock Text="STANDARD"
+                                             FontSize="10" FontWeight="Bold"
+                                             Opacity="0.5"
+                                             VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding TsRetentionLabel}"
+                                           VerticalAlignment="Center"
+                                           FontSize="12" Opacity="0.8"/>
+                              </Grid>
+                            </Border>
+
+                            <!-- Form -->
+                            <StackPanel Spacing="14">
+
+                              <StackPanel Spacing="6">
+                                <TextBlock Text="Timestamp / TTL field name"
+                                           FontWeight="SemiBold" FontSize="12"/>
+                                <TextBlock Text="The document field containing the timestamp (DateTime or Int64 ticks). Leave blank to use insertion time."
+                                           Opacity="0.55" FontSize="11" TextWrapping="Wrap"/>
+                                <TextBox Text="{Binding TsTtlFieldName}"
+                                         Watermark="e.g.  timestamp   (optional — leave blank to use insertion time)"
+                                         VerticalContentAlignment="Center"/>
+                              </StackPanel>
+
+                              <StackPanel Spacing="6">
+                                <TextBlock Text="Retention (days)"
+                                           FontWeight="SemiBold" FontSize="12"/>
+                                <TextBlock Text="Pages whose newest entry is older than this threshold are freed automatically on insert."
+                                           Opacity="0.55" FontSize="11" TextWrapping="Wrap"/>
+                                <NumericUpDown Value="{Binding TsRetentionDays}"
+                                               Minimum="0.001"
+                                               Maximum="36500"
+                                               Increment="1"
+                                               FormatString="0.###"/>
+                              </StackPanel>
+
+                            </StackPanel>
+
+                          </StackPanel>
+                        </ScrollViewer>
 
                       </DockPanel>
                     </TabItem>

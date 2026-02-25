@@ -77,6 +77,14 @@ public class CollectionMetadata
     public uint SchemaRootPageId { get; set; }
     public List<IndexMetadata> Indexes { get; } = new();
     public VectorSourceConfig? VectorSource { get; set; }
+
+    // ── TimeSeries Properties ──
+    public bool IsTimeSeries { get; set; }
+    public uint TimeSeriesHeadPageId { get; set; }
+    public long RetentionPolicyMs { get; set; }
+    public string? TtlFieldName { get; set; }
+    public long LastPruningTimestamp { get; set; }
+    public int InsertedSinceLastPruning { get; set; }
 }
 
 public class IndexMetadata
@@ -149,7 +157,21 @@ public sealed partial class StorageEngine
                         metadata.Indexes.Add(idx);
                     }
 
-                    // ── VectorSource (backward-compatible: only read if present) ────────
+                    // ── TimeSeries (backward-compatible) ────────
+                    if (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        metadata.IsTimeSeries = reader.ReadBoolean();
+                        if (metadata.IsTimeSeries)
+                        {
+                            metadata.TimeSeriesHeadPageId = reader.ReadUInt32();
+                            metadata.RetentionPolicyMs = reader.ReadInt64();
+                            metadata.TtlFieldName = reader.ReadBoolean() ? reader.ReadString() : null;
+                            metadata.LastPruningTimestamp = reader.ReadInt64();
+                            metadata.InsertedSinceLastPruning = reader.ReadInt32();
+                        }
+                    }
+
+                    // ── VectorSource (backward-compatible) ────────
                     if (reader.BaseStream.Position < reader.BaseStream.Length)
                     {
                         bool hasVectorSource = reader.ReadBoolean();
@@ -214,6 +236,19 @@ public sealed partial class StorageEngine
                 writer.Write(idx.Dimensions);
                 writer.Write((byte)idx.Metric);
             }
+        }
+
+        // ── TimeSeries Properties ────────
+        writer.Write(metadata.IsTimeSeries);
+        if (metadata.IsTimeSeries)
+        {
+            writer.Write(metadata.TimeSeriesHeadPageId);
+            writer.Write(metadata.RetentionPolicyMs);
+            writer.Write(metadata.TtlFieldName != null);
+            if (metadata.TtlFieldName != null)
+                writer.Write(metadata.TtlFieldName);
+            writer.Write(metadata.LastPruningTimestamp);
+            writer.Write(metadata.InsertedSinceLastPruning);
         }
 
         // ── VectorSource serialization ──────────────────────────────────────────

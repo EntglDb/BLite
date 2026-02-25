@@ -36,7 +36,7 @@ public sealed class RecentConnectionViewModel
         _ => "Default",
     };
 
-    public string AccessLabel => IsReadOnly ? "Solo lettura" : "R/W";
+    public string AccessLabel => IsReadOnly ? "Read-only" : "Read/Write";
 
     /// <summary>Short human-readable timestamp ("oggi", "ieri", "3 giorni fa…")</summary>
     public string RelativeTime

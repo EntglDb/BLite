@@ -39,5 +39,8 @@ public enum PageType : byte
     Vector = 9,
 
     /// <summary>GEO Spatial index page</summary>
-    Spatial = 11
+    Spatial = 11,
+
+    /// <summary>TimeSeries specific page</summary>
+    TimeSeries = 12,
 }

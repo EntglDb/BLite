@@ -43,6 +43,7 @@ public sealed class DynamicCollection : IDisposable
     private readonly Dictionary<uint, ushort> _freeSpaceMap = new();
     private readonly int _maxDocumentSizeForSinglePage;
     private uint _currentDataPage;
+    private bool _isTimeSeries;
 
     // ── Discriminated union for secondary indexes ─────────────────────────────
     private enum DynamicIndexKind { BTree, Vector, Spatial }
@@ -92,6 +93,7 @@ public sealed class DynamicCollection : IDisposable
         if (metadata != null)
         {
             primaryRootPageId = metadata.PrimaryRootPageId;
+            _isTimeSeries = metadata.IsTimeSeries;
 
             // Restore secondary indexes from metadata
             foreach (var idxMeta in metadata.Indexes)
@@ -149,6 +151,56 @@ public sealed class DynamicCollection : IDisposable
 
     /// <summary>The ID type used by this collection.</summary>
     public BsonIdType IdType => _idType;
+
+    /// <summary>Whether this collection is configured as a TimeSeries collection.</summary>
+    public bool IsTimeSeries => _isTimeSeries;
+
+    /// <summary>
+    /// Returns the current TimeSeries configuration (retention policy and TTL field name).
+    /// Returns <c>(0, null)</c> when the collection is not a TimeSeries.
+    /// </summary>
+    public (long RetentionPolicyMs, string? TtlFieldName) GetTimeSeriesConfig()
+    {
+        var meta = _storage.GetCollectionMetadata(_collectionName);
+        if (meta == null || !meta.IsTimeSeries) return (0, null);
+        return (meta.RetentionPolicyMs, meta.TtlFieldName);
+    }
+
+    /// <summary>
+    /// Configures the collection as a TimeSeries with a retention policy (TTL).
+    /// </summary>
+    public void SetTimeSeries(string ttlFieldName, TimeSpan retentionPolicy)
+    {
+        var meta = _storage.GetCollectionMetadata(_collectionName);
+        if (meta == null) meta = new CollectionMetadata { Name = _collectionName };
+        meta.IsTimeSeries = true;
+        meta.TtlFieldName = ttlFieldName;
+        meta.RetentionPolicyMs = (long)retentionPolicy.TotalMilliseconds;
+        meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
+        _storage.SaveCollectionMetadata(meta);
+        _isTimeSeries = true; // Update in-memory flag so subsequent inserts route to TS path
+    }
+
+    /// <summary>
+    /// Forces pruning of expired TimeSeries documents immediately, regardless of insert counters.
+    /// Primarily intended for testing; in production, pruning is triggered automatically on insert.
+    /// NOTE (v1 known limitation): the primary BTree index retains stale entries for pruned pages.
+    /// FindAll will silently skip null results from freed pages, so reads remain safe.
+    /// </summary>
+    public void ForcePrune()
+    {
+        if (!_isTimeSeries)
+            throw new InvalidOperationException("ForcePrune is only valid on TimeSeries collections.");
+
+        var meta = _storage.GetCollectionMetadata(_collectionName);
+        if (meta == null || meta.RetentionPolicyMs <= 0) return;
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        _storage.PruneTimeSeries(meta, transaction);
+        meta.InsertedSinceLastPruning = 0;
+        meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
+        _storage.SaveCollectionMetadata(meta);
+    }
 
     /// <summary>
     /// Applies a BLQL projection to a document using the database-level key maps.
@@ -214,7 +266,12 @@ public sealed class DynamicCollection : IDisposable
         var docData = document.RawData;
         DocumentLocation location;
 
-        if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
+        if (_isTimeSeries)
+        {
+            var loc = _storage.InsertTimeSeries(_collectionName, document, transaction);
+            location = new DocumentLocation(loc.PageId, (ushort)loc.SlotIndex);
+        }
+        else if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
         {
             var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
             if (pageId == 0) pageId = AllocateNewDataPage(transaction);
@@ -1207,6 +1264,26 @@ public sealed class DynamicCollection : IDisposable
         try
         {
             _storage.ReadPage(location.PageId, txnId, buffer);
+            var pageType = (PageType)buffer[4];
+
+            // Freed or otherwise invalid page – entry is stale (e.g. after TS pruning).
+            if (pageType == PageType.Free || pageType == PageType.Empty)
+                return null;
+
+            if (pageType == PageType.TimeSeries)
+            {
+                int offset = location.SlotIndex;
+                if (offset < TimeSeriesPage.DataOffset || offset + 4 > buffer.Length)
+                    return null;
+
+                int size = BitConverter.ToInt32(buffer.AsSpan(offset, 4));
+                if (size <= 0 || offset + size > buffer.Length)
+                    return null;
+
+                var data = buffer.AsSpan(offset, size).ToArray();
+                return new BsonDocument(data, _storage.GetKeyReverseMap());
+            }
+
             var header = SlottedPageHeader.ReadFrom(buffer);
 
             if (location.SlotIndex >= header.SlotCount)

@@ -80,11 +80,13 @@ public partial class DatabaseExplorerViewModel : ObservableObject
         // Collections
         foreach (var name in _engine.ListCollections().OrderBy(n => n))
         {
+            var col = _engine.GetOrCreateCollection(name);
             CollectionItems.Add(new SidebarItemViewModel
             {
                 Kind           = SidebarItemKind.Collection,
                 Label          = name,
                 CollectionName = name,
+                IsTimeSeries   = col.IsTimeSeries,
             });
         }
 

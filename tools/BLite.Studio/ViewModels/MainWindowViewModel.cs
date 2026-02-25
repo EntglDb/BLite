@@ -124,7 +124,7 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(AccessModeDisplay));
     }
 
-    public string AccessModeDisplay => IsReadOnly ? "Solo lettura" : "Lettura/Scrittura";
+    public string AccessModeDisplay => IsReadOnly ? "Read-only" : "Read/Write";
 
     // ── Computed display helpers ──────────────────────────────────────────────
     public string PageSizeDisplay => SelectedPreset switch

@@ -12,6 +12,9 @@ public partial class SidebarItemViewModel : ObservableObject
     /// <summary>Set only when Kind == Collection.</summary>
     public string? CollectionName  { get; init; }
 
+    /// <summary>True when the collection is a TimeSeries collection.</summary>
+    public bool IsTimeSeries { get; init; }
+
     [ObservableProperty]
     private bool _isSelected;
 }
