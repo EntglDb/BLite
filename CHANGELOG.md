@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.0"></a>
+## [2.0.0](https://www.github.com/EntglDb/BLite/releases/tag/v2.0.0) (2026-03-02)
+
+### Features
+
+* add netstandard2.1 multi-targeting ([7199025](https://www.github.com/EntglDb/BLite/commit/7199025e9b4f013deae2d4df366f61078c82705c))
+
+### Breaking Changes
+
+* add netstandard2.1 multi-targeting ([7199025](https://www.github.com/EntglDb/BLite/commit/7199025e9b4f013deae2d4df366f61078c82705c))
+
 <a name="1.12.0"></a>
 ## [1.12.0](https://www.github.com/EntglDb/BLite/releases/tag/v1.12.0) (2026-02-26)
 
