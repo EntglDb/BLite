@@ -173,7 +173,11 @@ public static class BlqlFilterParser
                     ? BlqlFilter.Regex(
                          field,
                          op.Value.GetString()!,
+#if NET7_0_OR_GREATER
                          System.Text.RegularExpressions.RegexOptions.NonBacktracking)
+#else
+                         System.Text.RegularExpressions.RegexOptions.None)
+#endif
                     : throw new FormatException(
                          $"$regex requires a string value, got {op.Value.ValueKind}"),
 

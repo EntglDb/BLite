@@ -97,12 +97,16 @@ public sealed class PageFile : IDisposable
             var fileExists = File.Exists(_filePath);
             
             _fileStream = new FileStream(
-                _filePath, 
-                FileMode.OpenOrCreate, 
-                FileAccess.ReadWrite, 
+                _filePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
                 FileShare.None,
                 bufferSize: 4096,
+#if NET6_0_OR_GREATER
                 FileOptions.RandomAccess | FileOptions.Asynchronous);
+#else
+                FileOptions.Asynchronous);
+#endif
 
             if (!fileExists || _fileStream.Length == 0)
             {
@@ -204,7 +208,8 @@ public sealed class PageFile : IDisposable
 
     /// <summary>
     /// Reads a page by ID into the provided buffer (asynchronous).
-    /// Uses <see cref="RandomAccess.ReadAsync"/> for true OS-level async I/O (IOCP on Windows).
+    /// On .NET 6+: uses <see cref="RandomAccess.ReadAsync"/> for true lock-free OS-level async I/O (IOCP on Windows).
+    /// On .NET Standard 2.1: uses seek + <see cref="Stream.ReadAsync(Memory{byte},CancellationToken)"/> under a lock.
     /// WAL/in-memory paths should be handled by the caller before invoking this method.
     /// </summary>
     /// <param name="pageId">The page to read.</param>
@@ -221,7 +226,22 @@ public sealed class PageFile : IDisposable
         var offset = (long)pageId * _config.PageSize;
         var slice = destination[.._config.PageSize];
 
+#if NET6_0_OR_GREATER
         var bytesRead = await RandomAccess.ReadAsync(_fileStream.SafeFileHandle, slice, offset, cancellationToken).ConfigureAwait(false);
+#else
+        // netstandard2.1: FileStream.Seek + ReadAsync — not lock-free, serialize under _lock.
+        await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        int bytesRead;
+        try
+        {
+            _fileStream.Seek(offset, SeekOrigin.Begin);
+            bytesRead = await _fileStream.ReadAsync(slice, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+#endif
 
         if (bytesRead < _config.PageSize)
             throw new IOException($"Incomplete page read: expected {_config.PageSize} bytes, got {bytesRead} (pageId={pageId})");
@@ -432,7 +452,12 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public async Task BackupAsync(string destinationPath, CancellationToken ct = default)
     {
+#if NET8_0_OR_GREATER
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+#else
+        if (string.IsNullOrWhiteSpace(destinationPath))
+            throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationPath));
+#endif
 
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try

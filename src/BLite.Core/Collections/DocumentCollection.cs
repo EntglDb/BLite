@@ -270,7 +270,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <param name="predicate">Function to evaluate raw BSON data</param>
     /// <param name="transaction">Optional transaction for isolation</param>
     /// <returns>Matching documents</returns>
-    public IEnumerable<T> Scan(Func<BsonSpanReader, bool> predicate)
+    public IEnumerable<T> Scan(BsonReaderPredicate predicate)
     {
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
@@ -308,7 +308,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// deserialising <typeparamref name="T"/> and then projecting via
     /// <see cref="System.Linq.Enumerable.Select{T,R}"/>, the projection runs at the storage level.
     /// </remarks>
-    public IEnumerable<TResult> Scan<TResult>(Func<BsonSpanReader, TResult?> projector)
+    public IEnumerable<TResult> Scan<TResult>(BsonReaderProjector<TResult> projector)
     {
         if (projector == null) throw new ArgumentNullException(nameof(projector));
 
@@ -332,7 +332,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         uint pageId,
         ulong txnId,
         byte[] buffer,
-        Func<BsonSpanReader, TResult?> projector,
+        BsonReaderProjector<TResult> projector,
         List<TResult> results)
     {
         _storage.ReadPage(pageId, txnId, buffer);
@@ -365,7 +365,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <param name="predicate">Function to evaluate raw BSON data</param>
     /// <param name="transaction">Optional transaction for isolation</param>
     /// <param name="degreeOfParallelism">Number of threads to use (default: -1 = ProcessorCount)</param>
-    public IEnumerable<T> ParallelScan(Func<BsonSpanReader, bool> predicate, int degreeOfParallelism = -1)
+    public IEnumerable<T> ParallelScan(BsonReaderPredicate predicate, int degreeOfParallelism = -1)
     {
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
@@ -397,7 +397,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             });
     }
 
-    private void ScanPage(uint pageId, ulong txnId, byte[] buffer, Func<BsonSpanReader, bool> predicate, List<T> results)
+    private void ScanPage(uint pageId, ulong txnId, byte[] buffer, BsonReaderPredicate predicate, List<T> results)
     {
         _storage.ReadPage(pageId, txnId, buffer);
         var header = SlottedPageHeader.ReadFrom(buffer);
@@ -1039,7 +1039,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     private TId EnsureId(T entity)
     {
         var id = _mapper.GetId(entity);
-        if (EqualityComparer<TId>.Default.Equals(id, default))
+        if (EqualityComparer<TId>.Default.Equals(id, default!))
         {
             if (typeof(TId) == typeof(ObjectId))
             {

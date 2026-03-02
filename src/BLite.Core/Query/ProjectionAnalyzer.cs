@@ -96,8 +96,10 @@ internal static class ProjectionAnalyzer
             || underlying == typeof(string)
             || underlying == typeof(DateTime)
             || underlying == typeof(DateTimeOffset)
+#if NET6_0_OR_GREATER
             || underlying == typeof(DateOnly)
             || underlying == typeof(TimeOnly)
+#endif
             || underlying == typeof(TimeSpan)
             || underlying == typeof(Guid)
             || underlying.FullName == "BLite.Bson.ObjectId"  // no hard dep on BLite.Bson here
@@ -113,7 +115,7 @@ internal static class ProjectionAnalyzer
         public bool IsSimple { get; private set; } = true;
 
         /// <summary>Ordered unique property names → CLR type (insertion order preserved).</summary>
-        public OrderedDictionary<string, Type> Accessed { get; } = new();
+        public Dictionary<string, Type> Accessed { get; } = new();
 
         public FieldAccessVisitor(ParameterExpression param) => _param = param;
 

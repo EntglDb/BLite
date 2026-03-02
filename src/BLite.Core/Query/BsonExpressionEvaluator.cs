@@ -5,7 +5,7 @@ namespace BLite.Core.Query;
 
 internal static class BsonExpressionEvaluator
 {
-    public static Func<BsonSpanReader, bool>? TryCompile<T>(LambdaExpression expression)
+    public static BsonReaderPredicate? TryCompile<T>(LambdaExpression expression)
     {
         // Simple optimization for: x => x.Prop op Constant
         if (expression.Body is BinaryExpression binary)
@@ -51,7 +51,7 @@ internal static class BsonExpressionEvaluator
         _ => type
     };
 
-    private static Func<BsonSpanReader, bool>? CreatePredicate(string propertyName, object? targetValue, ExpressionType op)
+    private static BsonReaderPredicate? CreatePredicate(string propertyName, object? targetValue, ExpressionType op)
     {
         // We need to return a delegate that searches for propertyName in BsonSpanReader and compares
         

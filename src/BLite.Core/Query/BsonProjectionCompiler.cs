@@ -30,7 +30,7 @@ internal static class BsonProjectionCompiler
     ///   Optional WHERE predicate.  When supplied the projector returns <c>null</c> (= skipped) for
     ///   documents that fail the predicate, so the caller's scan loop naturally omits them.
     /// </param>
-    public static Func<BsonSpanReader, TResult?>? TryCompile<T, TResult>(
+    public static BsonReaderProjector<TResult>? TryCompile<T, TResult>(
         LambdaExpression selectLambda,
         LambdaExpression? whereLambda = null)
     {

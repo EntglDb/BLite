@@ -289,7 +289,13 @@ public static class BsonJsonConverter
     /// <summary>Converts a 24-char hex string to an <see cref="ObjectId"/>.</summary>
     private static ObjectId ParseObjectId(string hex)
     {
-        var bytes = Convert.FromHexString(hex);   // net5+ / net10
+#if NET5_0_OR_GREATER
+        var bytes = Convert.FromHexString(hex);
+#else
+        var bytes = new byte[hex.Length / 2];
+        for (var i = 0; i < bytes.Length; i++)
+            bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+#endif
         return new ObjectId(bytes);
     }
 

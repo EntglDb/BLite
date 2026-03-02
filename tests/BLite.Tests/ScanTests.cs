@@ -36,7 +36,7 @@ namespace BLite.Tests
             _db.SaveChanges();
 
             // Act: Find users older than 28
-            var results = _db.Users.Scan(reader => ParseAge(reader) > 28).ToList();
+            var results = _db.Users.Scan((BsonReaderPredicate)(reader => ParseAge(reader) > 28)).ToList();
 
             // Assert
             Assert.Equal(2, results.Count);

@@ -133,7 +133,12 @@ public sealed partial class StorageEngine
     /// </param>
     public async Task BackupAsync(string destinationDbPath, CancellationToken ct = default)
     {
+#if NET8_0_OR_GREATER
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDbPath);
+#else
+        if (string.IsNullOrWhiteSpace(destinationDbPath))
+            throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationDbPath));
+#endif
 
         await _commitLock.WaitAsync(ct).ConfigureAwait(false);
         try

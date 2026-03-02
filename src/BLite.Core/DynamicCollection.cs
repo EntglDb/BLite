@@ -465,7 +465,7 @@ public sealed class DynamicCollection : IDisposable
     /// Scans all documents applying a predicate at the BSON level (no deserialization to T).
     /// The predicate receives a BsonSpanReader positioned at the start of each document.
     /// </summary>
-    public IEnumerable<BsonDocument> Scan(Func<BsonSpanReader, bool> predicate)
+    public IEnumerable<BsonDocument> Scan(BsonReaderPredicate predicate)
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
         var txnId = transaction.TransactionId;
@@ -1312,6 +1312,26 @@ public sealed class DynamicCollection : IDisposable
         try
         {
             await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+
+            var pageType = (PageType)buffer[4];
+
+            if (pageType == PageType.Free || pageType == PageType.Empty)
+                return null;
+
+            if (pageType == PageType.TimeSeries)
+            {
+                int offset = location.SlotIndex;
+                if (offset < TimeSeriesPage.DataOffset || offset + 4 > buffer.Length)
+                    return null;
+
+                int size = BitConverter.ToInt32(buffer.AsSpan(offset, 4));
+                if (size <= 0 || offset + size > buffer.Length)
+                    return null;
+
+                // ToArray() copies before buffer is returned to the pool
+                var tsData = buffer.AsSpan(offset, size).ToArray();
+                return new BsonDocument(tsData, _storage.GetKeyReverseMap());
+            }
 
             var header = SlottedPageHeader.ReadFrom(buffer);
             if (location.SlotIndex >= header.SlotCount) return null;

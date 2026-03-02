@@ -57,7 +57,12 @@ public struct PageHeader
         if (destination.Length < 32)
             throw new ArgumentException("Destination must be at least 32 bytes");
 
+#if NET5_0_OR_GREATER
         MemoryMarshal.Write(destination, in this);
+#else
+        var copy = this;
+        MemoryMarshal.Write(destination, ref copy);
+#endif
     }
 
     /// <summary>

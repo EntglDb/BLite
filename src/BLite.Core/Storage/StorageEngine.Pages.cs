@@ -96,7 +96,11 @@ public sealed partial class StorageEngine
         {
             var length = Math.Min(uncommittedData.Length, destination.Length);
             uncommittedData.AsMemory(0, length).CopyTo(destination);
+#if NET5_0_OR_GREATER
             return ValueTask.CompletedTask;
+#else
+            return default;
+#endif
         }
 
         // 2. WAL index — committed but not yet checkpointed (synchronous, no I/O)
@@ -104,7 +108,11 @@ public sealed partial class StorageEngine
         {
             var length = Math.Min(committedData.Length, destination.Length);
             committedData.AsMemory(0, length).CopyTo(destination);
+#if NET5_0_OR_GREATER
             return ValueTask.CompletedTask;
+#else
+            return default;
+#endif
         }
 
         // 3. PageFile — true async OS read

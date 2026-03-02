@@ -159,9 +159,13 @@ public abstract class BlqlFilter
     public static BlqlFilter Regex(string field, string pattern, RegexOptions options = RegexOptions.None)
     {
         // NonBacktracking and Compiled are mutually exclusive in .NET
+#if NET7_0_OR_GREATER
         var finalOptions = options.HasFlag(RegexOptions.NonBacktracking)
             ? options
             : options | RegexOptions.Compiled;
+#else
+        var finalOptions = options | RegexOptions.Compiled;
+#endif
         return new RegexFilter(field, new Regex(pattern, finalOptions));
     }
 

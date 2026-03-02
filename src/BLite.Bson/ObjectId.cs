@@ -44,7 +44,11 @@ public readonly struct ObjectId : IEquatable<ObjectId>
     public static ObjectId NewObjectId()
     {
         var timestamp = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+#if NET6_0_OR_GREATER
         var random = Random.Shared.NextInt64();
+#else
+        var random = (long)((ulong)new Random().Next() << 32 | (ulong)(uint)new Random().Next());
+#endif
         return new ObjectId(timestamp, random);
     }
 
@@ -89,6 +93,10 @@ public readonly struct ObjectId : IEquatable<ObjectId>
     {
         Span<byte> bytes = stackalloc byte[12];
         WriteTo(bytes);
+#if NET5_0_OR_GREATER
         return Convert.ToHexString(bytes).ToLowerInvariant();
+#else
+        return BitConverter.ToString(bytes.ToArray()).Replace("-", "").ToLowerInvariant();
+#endif
     }
 }

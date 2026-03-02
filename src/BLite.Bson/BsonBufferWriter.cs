@@ -145,7 +145,11 @@ public ref struct BsonBufferWriter
     private void WriteDoubleInternal(double value)
     {
         var span = _writer.GetSpan(8);
+#if NET5_0_OR_GREATER
         BinaryPrimitives.WriteDoubleLittleEndian(span, value);
+#else
+        BinaryPrimitives.WriteInt64LittleEndian(span, BitConverter.DoubleToInt64Bits(value));
+#endif
         _writer.Advance(8);
         _totalBytesWritten += 8;
     }

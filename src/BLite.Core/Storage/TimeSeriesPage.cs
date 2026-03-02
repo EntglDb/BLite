@@ -20,10 +20,18 @@ public sealed class TimeSeriesPage
     public const int DataOffset = 48;
     
     public static long GetLastTimestamp(ReadOnlySpan<byte> page) => MemoryMarshal.Read<long>(page.Slice(32, 8));
+#if NET5_0_OR_GREATER
     public static void SetLastTimestamp(Span<byte> page, long timestamp) => MemoryMarshal.Write(page.Slice(32, 8), in timestamp);
+#else
+    public static void SetLastTimestamp(Span<byte> page, long timestamp) => MemoryMarshal.Write(page.Slice(32, 8), ref timestamp);
+#endif
     
     public static int GetEntryCount(ReadOnlySpan<byte> page) => MemoryMarshal.Read<int>(page.Slice(40, 4));
+#if NET5_0_OR_GREATER
     public static void SetEntryCount(Span<byte> page, int count) => MemoryMarshal.Write(page.Slice(40, 4), in count);
+#else
+    public static void SetEntryCount(Span<byte> page, int count) => MemoryMarshal.Write(page.Slice(40, 4), ref count);
+#endif
 
     public static void Initialize(Span<byte> page, uint pageId)
     {

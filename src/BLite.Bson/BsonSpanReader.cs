@@ -128,7 +128,7 @@ public ref struct BsonSpanReader
         if (Remaining < 8)
             throw new InvalidOperationException("Not enough bytes to read Double");
 
-        var value = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
+        var value = ReadDoubleLE();
         _position += 8;
         return value;
     }
@@ -145,13 +145,13 @@ public ref struct BsonSpanReader
         // Element 0: skip type byte, skip 2-byte key (ASCII or raw uint16), read Double
         _position += 1; // type
         SkipArrayKey();
-        var x = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
+        var x = ReadDoubleLE();
         _position += 8;
 
         // Element 1: skip type byte, skip 2-byte key, read Double
         _position += 1; // type
         SkipArrayKey();
-        var y = BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
+        var y = ReadDoubleLE();
         _position += 8;
 
         // Skip end of array marker (1 byte)
@@ -212,6 +212,7 @@ public ref struct BsonSpanReader
         return TimeSpan.FromTicks(ticks);
     }
 
+#if NET6_0_OR_GREATER
     /// <summary>
     /// Reads a DateOnly from BSON Int32 (day number)
     /// </summary>
@@ -229,6 +230,7 @@ public ref struct BsonSpanReader
         var ticks = ReadInt64();
         return new TimeOnly(ticks);
     }
+#endif
 
     public Guid ReadGuid()
     {
@@ -364,4 +366,14 @@ public ref struct BsonSpanReader
     }
 
     public ReadOnlySpan<byte> RemainingBytes() => _buffer[_position..];
+
+    // ── Compatibility helpers ──────────────────────────────────────────────────
+    private double ReadDoubleLE()
+    {
+#if NET5_0_OR_GREATER
+        return BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position, 8));
+#else
+        return BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(_buffer.Slice(_position, 8)));
+#endif
+    }
 }

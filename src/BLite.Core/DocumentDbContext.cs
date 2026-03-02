@@ -21,15 +21,17 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
     internal readonly CDC.ChangeStreamDispatcher _cdc;
     protected bool _disposed;
     private readonly SemaphoreSlim _transactionLock = new SemaphoreSlim(1, 1);
+    private ITransaction? _currentTransaction;
     public ITransaction? CurrentTransaction
     {
         get
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(DocumentDbContext));
-            return field != null && (field.State == TransactionState.Active) ? field : null;
+            return _currentTransaction != null && (_currentTransaction.State == TransactionState.Active)
+                ? _currentTransaction : null;
         }
-        private set;
+        private set => _currentTransaction = value;
     }
 
     /// <summary>

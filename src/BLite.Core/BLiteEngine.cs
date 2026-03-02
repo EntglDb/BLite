@@ -25,6 +25,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _transactionLock = new(1, 1);
     private bool _disposed;
+    private ITransaction? _currentTransaction;
 
     /// <summary>
     /// Gets or sets the current transaction. Returns null if no active transaction exists.
@@ -34,9 +35,10 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         get
         {
             ThrowIfDisposed();
-            return field != null && field.State == TransactionState.Active ? field : null;
+            return _currentTransaction != null && _currentTransaction.State == TransactionState.Active
+                ? _currentTransaction : null;
         }
-        private set;
+        private set => _currentTransaction = value;
     }
 
     #region Constructors
@@ -261,7 +263,12 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     public async Task BackupAsync(string destinationDbPath, CancellationToken ct = default)
     {
         ThrowIfDisposed();
+#if NET8_0_OR_GREATER
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDbPath);
+#else
+        if (string.IsNullOrWhiteSpace(destinationDbPath))
+            throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationDbPath));
+#endif
         await _storage.BackupAsync(destinationDbPath, ct).ConfigureAwait(false);
     }
 
@@ -539,6 +546,53 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
         collection.SetVectorSource(config);
+    }
+
+    #endregion
+
+    #region Schema
+
+    /// <summary>Returns all persisted schema versions for the named collection. Latest version is last.</summary>
+    public IReadOnlyList<BsonSchema> GetSchemas(string collectionName)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.GetSchemas();
+    }
+
+    /// <summary>Appends a new schema version to the named collection.</summary>
+    public void SetSchema(string collectionName, BsonSchema schema)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        collection.SetSchema(schema);
+    }
+
+    #endregion
+
+    #region TimeSeries Configuration
+
+    /// <summary>
+    /// Configures the named collection as a TimeSeries with a retention policy.
+    /// This operation is irreversible once documents have been written.
+    /// </summary>
+    public void SetTimeSeries(string collectionName, string ttlFieldName, TimeSpan retentionPolicy)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        collection.SetTimeSeries(ttlFieldName, retentionPolicy);
+    }
+
+    /// <summary>
+    /// Returns the TimeSeries configuration for the named collection.
+    /// </summary>
+    public (bool IsTimeSeries, long RetentionPolicyMs, string? TtlFieldName) GetTimeSeriesConfig(string collectionName)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        if (!collection.IsTimeSeries) return (false, 0, null);
+        var (retentionMs, ttlField) = collection.GetTimeSeriesConfig();
+        return (true, retentionMs, ttlField);
     }
 
     #endregion

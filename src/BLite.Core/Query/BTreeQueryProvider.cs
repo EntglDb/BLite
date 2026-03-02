@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using BLite.Bson;
 using BLite.Core.Collections;
 using static BLite.Core.Query.IndexOptimizer;
 
@@ -109,7 +110,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         // B. Try Scan Optimization (if no index used)
         if (sourceData == null)
         {
-            Func<BLite.Bson.BsonSpanReader, bool>? bsonPredicate = null;
+            BsonReaderPredicate? bsonPredicate = null;
             if (model.WhereClause != null)
             {
                 bsonPredicate = BsonExpressionEvaluator.TryCompile<T>(model.WhereClause);

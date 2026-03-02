@@ -98,7 +98,11 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     private static int ComputeHashCode(ReadOnlySpan<byte> data)
     {
         var hash = new HashCode();
+#if NET8_0_OR_GREATER
         hash.AddBytes(data);
+#else
+        foreach (var b in data) hash.Add(b);
+#endif
         return hash.ToHashCode();
     }
 

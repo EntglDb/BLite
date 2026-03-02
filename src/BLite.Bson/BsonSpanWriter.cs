@@ -118,7 +118,7 @@ public ref struct BsonSpanWriter
     public void WriteDouble(string name, double value)
     {
         WriteElementHeader(BsonType.Double, name);
-        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), value);
+        WriteDoubleLE(_position, value);
         _position += 8;
     }
 
@@ -137,14 +137,14 @@ public ref struct BsonSpanWriter
         _buffer[_position++] = (byte)BsonType.Double;
         _buffer[_position++] = 0x30; // '0'
         _buffer[_position++] = 0x00; // Null
-        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), coordinates.Item1);
+        WriteDoubleLE(_position, coordinates.Item1);
         _position += 8;
 
         // Element 1: Y
         _buffer[_position++] = (byte)BsonType.Double;
         _buffer[_position++] = 0x31; // '1'
         _buffer[_position++] = 0x00; // Null
-        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), coordinates.Item2);
+        WriteDoubleLE(_position, coordinates.Item2);
         _position += 8;
 
         _buffer[_position++] = 0x00; // End of array marker
@@ -197,6 +197,7 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+#if NET6_0_OR_GREATER
     public void WriteDateOnly(string name, DateOnly value)
     {
         WriteElementHeader(BsonType.Int32, name);
@@ -210,6 +211,7 @@ public ref struct BsonSpanWriter
         BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value.Ticks);
         _position += 8;
     }
+#endif
 
     public void WriteGuid(string name, Guid value)
     {
@@ -312,7 +314,7 @@ public ref struct BsonSpanWriter
     public void WriteArrayDouble(int index, double value)
     {
         WriteArrayElementHeader(BsonType.Double, index);
-        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position, 8), value);
+        WriteDoubleLE(_position, value);
         _position += 8;
     }
 
@@ -382,6 +384,7 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+#if NET6_0_OR_GREATER
     public void WriteArrayDateOnly(int index, DateOnly value)
     {
         WriteArrayElementHeader(BsonType.Int32, index);
@@ -395,6 +398,7 @@ public ref struct BsonSpanWriter
         BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), value.Ticks);
         _position += 8;
     }
+#endif
 
     public void WriteArrayGuid(int index, Guid value)
     {
@@ -420,5 +424,15 @@ public ref struct BsonSpanWriter
     {
         WriteEndOfDocument();
         PatchDocumentSize(sizePosition);
+    }
+
+    // ── Compatibility helpers ──────────────────────────────────────────────────
+    private void WriteDoubleLE(int position, double value)
+    {
+#if NET5_0_OR_GREATER
+        BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(position, 8), value);
+#else
+        BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(position, 8), BitConverter.DoubleToInt64Bits(value));
+#endif
     }
 }

@@ -55,8 +55,13 @@ public struct SlottedPageHeader
     {
         if (destination.Length < Size)
             throw new ArgumentException($"Destination must be at least {Size} bytes");
-        
+
+#if NET5_0_OR_GREATER
         MemoryMarshal.Write(destination, in this);
+#else
+        var copy = this;
+        MemoryMarshal.Write(destination, ref copy);
+#endif
     }
     
     /// <summary>
@@ -99,8 +104,13 @@ public struct SlotEntry
     {
         if (destination.Length < Size)
             throw new ArgumentException($"Destination must be at least {Size} bytes");
-        
+
+#if NET5_0_OR_GREATER
         MemoryMarshal.Write(destination, in this);
+#else
+        var copy = this;
+        MemoryMarshal.Write(destination, ref copy);
+#endif
     }
     
     /// <summary>

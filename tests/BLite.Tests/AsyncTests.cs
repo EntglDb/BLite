@@ -1,3 +1,4 @@
+using BLite.Bson;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -114,7 +115,7 @@ public class AsyncTests : IDisposable
         await db.SaveChangesAsync();
 
         // Verify count
-        var count = db.AsyncDocs.Scan(_ => true).Count();
+        var count = db.AsyncDocs.Scan((BsonReaderPredicate)(_ => true)).Count();
         Assert.Equal(threadCount * docsPerThread, count);
     }
 }
