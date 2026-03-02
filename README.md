@@ -1,17 +1,17 @@
 # ⚡ BLite
-### High-Performance BSON Database Engine for .NET 10
+### High-Performance BSON Database Engine for .NET
 
 [![NuGet](https://img.shields.io/nuget/v/BLite?label=nuget&color=red)](https://www.nuget.org/packages/BLite)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/BLite?label=downloads)](https://www.nuget.org/packages/BLite)
 [![Buy Me a Coffee](https://img.shields.io/badge/sponsor-Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/lucafabbriu)
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Platform](https://img.shields.io/badge/platform-.NET%2010-purple)
+![Platform](https://img.shields.io/badge/platform-.NET%2010%20%7C%20netstandard2.1-purple)
 ![Status](https://img.shields.io/badge/status-active%20development-orange)
 
 **BLite** is an embedded, ACID-compliant, document-oriented database built from scratch for **maximum performance** and **zero allocation**. It leverages modern .NET features like `Span<T>`, `Memory<T>`, and Source Generators to eliminate runtime overhead.
 
-> **Note**: Currently targets **.NET 10** to maximize performance with `Span<T>` and modern hardware intrinsics. Future support for `.netstandard2.1` is being evaluated.
+> **Compatibility**: Targets **net10.0** and **netstandard2.1** — works with .NET 5+, Unity, Xamarin, MAUI, and any netstandard2.1-compatible runtime.
 
 ---
 
@@ -726,7 +726,7 @@ We are actively building the core. Here is where we stand:
 - **Internal Dispatcher**: Keeps specialized indices updated automatically via CDC.
 
 ### 3. Performance & Optimization
-- **Portability**: Evaluate `.netstandard2.1` support for broader compatibility (Unity, MAUI, etc.).
+- **Portability**: ✅ `.netstandard2.1` support shipped in v2.0 — compatible with Unity, MAUI, Xamarin, and .NET 5+.
 
 ---
 
