@@ -49,6 +49,11 @@ const features = [
     icon: '📈',
     title: 'Native TimeSeries',
     description: 'Dedicated append-only page format for time-ordered data with automatic retention-based pruning. No background threads — pruning fires transparently on insert.'
+  },
+  {
+    icon: '🌐',
+    title: 'netstandard2.1',
+    description: 'Works everywhere .NET runs — Unity, Xamarin, MAUI, .NET 5, 6, 7, 8, 9 and 10. One package, one binary protocol, all platforms.'
   }
 ]
 </script>
@@ -57,7 +62,7 @@ const features = [
   <section class="features">
     <div class="container">
       <h2 class="section-title">Built for<span class="brand-gradient"> Performance</span></h2>
-      <p class="section-subtitle">The most capable embedded NoSQL database for .NET 10 — zero allocations, ACID transactions, real-time CDC</p>
+      <p class="section-subtitle">The most capable embedded NoSQL database for .NET — zero allocations, ACID transactions, real-time CDC, netstandard2.1 compatible</p>
       
       <div class="feature-grid">
         <div v-for="(feature, index) in features" :key="index" class="feature-card animate-fade-in" :style="`animation-delay: ${0.1 * index}s`">

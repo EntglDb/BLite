@@ -13,7 +13,7 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
     
     <div class="container hero-content">
       <div class="badge animate-fade-in" style="animation-delay: 0.1s">
-        <span class="badge-dot"></span> v1.12.0 Released — Native TimeSeries Page Type
+        <span class="badge-dot"></span> v2.0.0 Released — netstandard2.1 support (Unity, Xamarin, MAUI)
       </div>
       
       <h1 class="hero-title animate-fade-in" style="animation-delay: 0.2s">
@@ -61,6 +61,11 @@ users.Insert(<span class="code-keyword">new</span> <span class="code-type">User<
         <div class="stat">
           <div class="stat-value">ACID</div>
           <div class="stat-label">Transactions</div>
+        </div>
+        <div class="stat-sep"></div>
+        <div class="stat">
+          <div class="stat-value">NS2.1</div>
+          <div class="stat-label">Compatible</div>
         </div>
       </div>
     </div>

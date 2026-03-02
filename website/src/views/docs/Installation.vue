@@ -13,7 +13,7 @@
 
       <p>Or add directly to your <code>.csproj</code>:</p>
       <pre><code>&lt;<span class="keyword">ItemGroup</span>&gt;
-  &lt;<span class="keyword">PackageReference</span> <span class="type">Include</span>=<span class="string">"BLite"</span> <span class="type">Version</span>=<span class="string">"1.6.1"</span> /&gt;
+  &lt;<span class="keyword">PackageReference</span> <span class="type">Include</span>=<span class="string">"BLite"</span> <span class="type">Version</span>=<span class="string">"2.0.0"</span> /&gt;
 &lt;/<span class="keyword">ItemGroup</span>&gt;</code></pre>
     </section>
 
@@ -47,13 +47,13 @@ dotnet build -c Release</code></pre>
     <section>
       <h2>Requirements</h2>
       <ul>
-        <li><strong>.NET 10 SDK</strong> or later</li>
+        <li><strong>.NET 5+ SDK</strong> (including .NET 10) or any <strong>netstandard2.1-compatible</strong> runtime</li>
         <li><strong>Windows, Linux, or macOS</strong></li>
-        <li><strong>C# 13</strong> language features</li>
+        <li><strong>C# 13+</strong> recommended for optimal API ergonomics (lambda to delegate conversion)</li>
       </ul>
 
-      <div class="warning-box">
-        <strong>⚠️ Note:</strong> BLite currently targets .NET 10 to leverage modern performance features like <code>Span&lt;T&gt;</code> optimizations. Support for .NET Standard 2.1 is under consideration.
+      <div class="info-box">
+        <strong>✅ Multi-target:</strong> BLite 2.0 ships <code>net10.0</code> and <code>netstandard2.1</code> targets in the same NuGet package — Unity, Xamarin, MAUI, and .NET 5–9 are all supported out of the box.
       </div>
     </section>
 
