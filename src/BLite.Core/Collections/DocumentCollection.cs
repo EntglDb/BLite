@@ -164,6 +164,31 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Asynchronously creates a secondary index on the specified property.
+    /// </summary>
+    public async Task<CollectionSecondaryIndex<TId, T>> CreateIndexAsync<TKey>(
+        System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+        string? name = null,
+        bool unique = false,
+        CancellationToken ct = default)
+    {
+        if (keySelector == null)
+            throw new ArgumentNullException(nameof(keySelector));
+
+        using (var txn = _storage.BeginTransaction())
+        {
+            var index = _indexManager.CreateIndex(keySelector, name, unique);
+
+            // Rebuild index for existing documents
+            await RebuildIndexAsync(index, ct);
+
+            txn.Commit();
+
+            return index;
+        }
+    }
+
+    /// <summary>
     /// Creates a vector (HNSW) index for similarity search.
     /// </summary>
     public CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(
@@ -178,6 +203,27 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         {
             var index = _indexManager.CreateVectorIndex(keySelector, dimensions, metric, name);
             RebuildIndex(index);
+            txn.Commit();
+            return index;
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously creates a vector (HNSW) index for similarity search.
+    /// </summary>
+    public async Task<CollectionSecondaryIndex<TId, T>> CreateVectorIndexAsync<TKey>(
+        System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+        int dimensions,
+        VectorMetric metric = VectorMetric.Cosine,
+        string? name = null,
+        CancellationToken ct = default)
+    {
+        if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
+
+        using (var txn = _storage.BeginTransaction())
+        {
+            var index = _indexManager.CreateVectorIndex(keySelector, dimensions, metric, name);
+            await RebuildIndexAsync(index, ct);
             txn.Commit();
             return index;
         }
@@ -210,6 +256,33 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Asynchronously ensures that an index exists on the specified property.
+    /// If the index already exists, it is returned without modification (idempotent).
+    /// If it doesn't exist, it is created and populated.
+    /// </summary>
+    public async Task<CollectionSecondaryIndex<TId, T>> EnsureIndexAsync<TKey>(
+        System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+        string? name = null,
+        bool unique = false,
+        CancellationToken ct = default)
+    {
+        if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
+
+        // 1. Check if index already exists (fast path)
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
+        var indexName = name ?? $"idx_{string.Join("_", propertyPaths)}";
+
+        var existingIndex = GetIndex(indexName);
+        if (existingIndex != null)
+        {
+            return existingIndex;
+        }
+
+        // 2. Create if missing (slow path: rebuilds index)
+        return await CreateIndexAsync(keySelector, name, unique, ct);
+    }
+
+    /// <summary>
     /// Drops (removes) an existing secondary index by name.
     /// The primary index (_id) cannot be dropped.
     /// </summary>
@@ -225,6 +298,26 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             throw new InvalidOperationException("Cannot drop primary index");
 
         return _indexManager.DropIndex(name);
+    }
+
+    /// <summary>
+    /// Asynchronously drops (removes) an existing secondary index by name.
+    /// The primary index (_id) cannot be dropped.
+    /// </summary>
+    /// <param name="name">Name of the index to drop</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>True if the index was found and dropped, false otherwise</returns>
+    public Task<bool> DropIndexAsync(string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Index name cannot be empty", nameof(name));
+
+        // Prevent dropping primary index
+        if (name.Equals("_id", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot drop primary index");
+
+        // DropIndex is synchronous (no heavy I/O), wrap in Task
+        return Task.FromResult(_indexManager.DropIndex(name));
     }
 
     /// <summary>
@@ -293,6 +386,69 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Asynchronously scans the entire collection using a raw BSON predicate.
+    /// This avoids deserializing documents that don't match the criteria.
+    /// </summary>
+    /// <param name="predicate">Function to evaluate raw BSON data</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching documents</returns>
+    public async IAsyncEnumerable<T> ScanAsync(
+        BsonReaderPredicate predicate,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var txnId = transaction.TransactionId;
+        var pageCount = _storage.PageCount;
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+
+        try
+        {
+            for (uint pageId = 0; pageId < pageCount; pageId++)
+            {
+                ct.ThrowIfCancellationRequested();
+                await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
+
+                var header = SlottedPageHeader.ReadFrom(buffer);
+                if (header.PageType != PageType.Data) continue;
+
+                // Collect matching locations first (no Span across yield)
+                var matchingLocations = new List<(uint pageId, ushort slotIndex)>();
+                {
+                    var slots = MemoryMarshal.Cast<byte, SlotEntry>(
+                        buffer.AsSpan(SlottedPageHeader.Size, header.SlotCount * SlotEntry.Size));
+
+                    for (int i = 0; i < header.SlotCount; i++)
+                    {
+                        var slot = slots[i];
+                        if (slot.Flags.HasFlag(SlotFlags.Deleted)) continue;
+
+                        var data = buffer.AsSpan(slot.Offset, slot.Length);
+                        var reader = new BsonSpanReader(data, _storage.GetKeyReverseMap());
+
+                        if (predicate(reader))
+                        {
+                            matchingLocations.Add((pageId, (ushort)i));
+                        }
+                    }
+                }
+
+                // Now yield matching documents (Span is out of scope)
+                foreach (var (pid, idx) in matchingLocations)
+                {
+                    var doc = await FindByLocationAsync(new DocumentLocation(pid, idx), txnId, ct);
+                    if (doc != null) yield return doc;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>
     /// Scans the entire collection applying a <paramref name="projector"/> directly to raw BSON
     /// bytes.  Only the fields accessed by the projector are read; the full entity <typeparamref
     /// name="T"/> is never instantiated.
@@ -325,6 +481,70 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
             foreach (var result in pageResults)
                 yield return result;
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously scans the entire collection applying a <paramref name="projector"/> directly
+    /// to raw BSON bytes. Only the fields accessed by the projector are read.
+    /// </summary>
+    /// <typeparam name="TResult">The projected result type.</typeparam>
+    /// <param name="projector">
+    ///   A delegate that receives a <see cref="BsonSpanReader"/> positioned at the start of each
+    ///   document and returns the projected value, or <c>null</c> to skip the document.
+    /// </param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of projected results</returns>
+    public async IAsyncEnumerable<TResult> ScanAsync<TResult>(
+        BsonReaderProjector<TResult> projector,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (projector == null) throw new ArgumentNullException(nameof(projector));
+
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var txnId = transaction.TransactionId;
+        var pageCount = _storage.PageCount;
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+
+        try
+        {
+            for (uint pageId = 0; pageId < pageCount; pageId++)
+            {
+                ct.ThrowIfCancellationRequested();
+                await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
+
+                var header = SlottedPageHeader.ReadFrom(buffer);
+                if (header.PageType != PageType.Data) continue;
+
+                // Process all slots and collect results (no Span across yield)
+                var pageResults = new List<TResult>();
+                {
+                    var slots = MemoryMarshal.Cast<byte, SlotEntry>(
+                        buffer.AsSpan(SlottedPageHeader.Size, header.SlotCount * SlotEntry.Size));
+
+                    var keyMap = _storage.GetKeyReverseMap();
+                    for (int i = 0; i < header.SlotCount; i++)
+                    {
+                        var slot = slots[i];
+                        if (slot.Flags.HasFlag(SlotFlags.Deleted)) continue;
+
+                        var data = buffer.AsSpan(slot.Offset, slot.Length);
+                        var reader = new BsonSpanReader(data, keyMap);
+                        var result = projector(reader);
+                        if (result is not null) pageResults.Add(result);
+                    }
+                }
+
+                // Yield results after Span is out of scope
+                foreach (var result in pageResults)
+                {
+                    yield return result;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -395,6 +615,108 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
                 // ERROR: I am clearing localResults in the loop. I need to accumulate results for the range.
                 // Correct logic: Accumulate for the whole range, then return.
             });
+    }
+
+    /// <summary>
+    /// Asynchronously scans the collection in parallel using multiple tasks.
+    /// Useful for large collections on multi-core machines.
+    /// </summary>
+    /// <param name="predicate">Function to evaluate raw BSON data</param>
+    /// <param name="degreeOfParallelism">Number of concurrent tasks (default: -1 = ProcessorCount)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching documents</returns>
+    public async IAsyncEnumerable<T> ParallelScanAsync(
+        BsonReaderPredicate predicate,
+        int degreeOfParallelism = -1,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var txnId = transaction.TransactionId;
+        var pageCount = (int)_storage.PageCount;
+
+        if (degreeOfParallelism <= 0)
+            degreeOfParallelism = Environment.ProcessorCount;
+
+        var semaphore = new SemaphoreSlim(degreeOfParallelism);
+        var tasks = new List<Task<List<T>>>();
+
+        for (uint pageId = 0; pageId < pageCount; pageId++)
+        {
+            await semaphore.WaitAsync(ct);
+            var localPageId = pageId;
+
+            var task = Task.Run(async () =>
+            {
+                try
+                {
+                    var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                    var results = new List<T>();
+
+                    try
+                    {
+                        await _storage.ReadPageAsync(localPageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
+
+                        var header = SlottedPageHeader.ReadFrom(buffer);
+                        if (header.PageType != PageType.Data) return results;
+
+                        // First pass: collect matching locations (Span scope)
+                        var matchingIndices = new List<ushort>();
+                        {
+                            var slots = MemoryMarshal.Cast<byte, SlotEntry>(
+                                buffer.AsSpan(SlottedPageHeader.Size, header.SlotCount * SlotEntry.Size));
+
+                            for (int i = 0; i < header.SlotCount; i++)
+                            {
+                                var slot = slots[i];
+                                if (slot.Flags.HasFlag(SlotFlags.Deleted)) continue;
+
+                                var data = buffer.AsSpan(slot.Offset, slot.Length);
+                                var reader = new BsonSpanReader(data, _storage.GetKeyReverseMap());
+
+                                if (predicate(reader))
+                                {
+                                    matchingIndices.Add((ushort)i);
+                                }
+                            }
+                        }
+
+                        // Second pass: fetch documents (no Span, safe to await)
+                        foreach (var idx in matchingIndices)
+                        {
+                            var doc = await FindByLocationAsync(new DocumentLocation(localPageId, idx), txnId, ct);
+                            if (doc != null) results.Add(doc);
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+
+                    return results;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }, ct);
+
+            tasks.Add(task);
+        }
+
+        // Yield results as tasks complete
+        while (tasks.Count > 0)
+        {
+            var completedTask = await Task.WhenAny(tasks);
+            tasks.Remove(completedTask);
+
+            var results = await completedTask;
+            foreach (var doc in results)
+            {
+                yield return doc;
+            }
+        }
     }
 
     private void ScanPage(uint pageId, ulong txnId, byte[] buffer, BsonReaderPredicate predicate, List<T> results)
@@ -468,6 +790,37 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Asynchronously queries a specific index for a range of values.
+    /// Returns matching documents using the index for efficient retrieval.
+    /// </summary>
+    /// <param name="indexName">Name of the index to query</param>
+    /// <param name="minKey">Minimum key value (inclusive)</param>
+    /// <param name="maxKey">Maximum key value (inclusive)</param>
+    /// <param name="ascending">True for ascending order, false for descending</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching documents</returns>
+    public async IAsyncEnumerable<T> QueryIndexAsync(
+        string indexName,
+        object? minKey,
+        object? maxKey,
+        bool ascending = true,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var index = GetIndex(indexName);
+        if (index == null) throw new ArgumentException($"Index {indexName} not found");
+
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
+
+        foreach (var location in index.Range(minKey, maxKey, direction, transaction))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await FindByLocationAsync(location, transaction.TransactionId, ct);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
     /// Rebuilds an index by scanning all existing documents and re-inserting them.
     /// Called automatically when creating a new index.
     /// </summary>
@@ -483,6 +836,32 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             try
             {
                 var document = FindByLocation(entry.Location);
+                if (document != null)
+                {
+                    index.Insert(document, entry.Location, transaction);
+                }
+            }
+            catch
+            {
+                // Skip documents that fail to load or index
+                // Production: should log errors
+            }
+        }
+    }
+
+    private async Task RebuildIndexAsync(CollectionSecondaryIndex<TId, T> index, CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        // Iterate all documents in the collection via primary index
+        var minKey = new IndexKey(Array.Empty<byte>());
+        var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 32).ToArray());
+
+        foreach (var entry in _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, transaction.TransactionId))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var document = await FindByLocationAsync(entry.Location, transaction.TransactionId, ct);
                 if (document != null)
                 {
                     index.Insert(document, entry.Location, transaction);
@@ -900,12 +1279,12 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <summary>
     /// Asynchronously inserts a new document into the collection
     /// </summary>
-    public async Task<TId> InsertAsync(T entity)
+    public async Task<TId> InsertAsync(T entity, CancellationToken ct = default)
     {
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        await _collectionLock.WaitAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             try
@@ -967,7 +1346,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <summary>
     /// Asynchronously inserts multiple documents in a single transaction.
     /// </summary>
-    public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities)
+    public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
     {
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
@@ -975,7 +1354,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         var entityList = entities.ToList();
         var ids = new List<TId>(entityList.Count);
 
-        await _collectionLock.WaitAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             try
@@ -1362,11 +1741,11 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <summary>
     /// Asynchronously updates an existing document in the collection
     /// </summary>
-    public async Task<bool> UpdateAsync(T entity)
+    public async Task<bool> UpdateAsync(T entity, CancellationToken ct = default)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        await _collectionLock.WaitAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var result = UpdateCore(entity);
@@ -1400,14 +1779,14 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <summary>
     /// Asynchronously updates multiple documents in a single transaction.
     /// </summary>
-    public async Task<int> UpdateBulkAsync(IEnumerable<T> entities)
+    public async Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
     {
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
         int updateCount = 0;
 
-        await _collectionLock.WaitAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             updateCount = UpdateBulkInternal(entityList);
@@ -1575,9 +1954,9 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <summary>
     /// Asynchronously deletes a document by its primary key.
     /// </summary>
-    public async Task<bool> DeleteAsync(TId id)
+    public async Task<bool> DeleteAsync(TId id, CancellationToken ct = default)
     {
-        await _collectionLock.WaitAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var result = DeleteCore(id);
@@ -1613,12 +1992,12 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// <summary>
     /// Asynchronously deletes multiple documents in a single transaction.
     /// </summary>
-    public async Task<int> DeleteBulkAsync(IEnumerable<TId> ids)
+    public async Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default)
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         int deleteCount = 0;
-        await _collectionLock.WaitAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             deleteCount = DeleteBulkInternal(ids);
@@ -1730,6 +2109,22 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     public int Count()
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        // Count all entries in primary index
+        // Use generic min/max keys for the index
+        var minKey = IndexKey.MinKey;
+        var maxKey = IndexKey.MaxKey;
+        return _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, transaction.TransactionId).Count();
+    }
+
+    /// <summary>
+    /// Asynchronously counts all documents in the collection.
+    /// If called within a transaction, will count uncommitted changes.
+    /// </summary>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Number of documents</returns>
+    public async Task<int> CountAsync(CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         // Count all entries in primary index
         // Use generic min/max keys for the index
         var minKey = IndexKey.MinKey;
@@ -1900,6 +2295,36 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Asynchronously performs a vector similarity search on the specified index and returns up to
+    /// the top-k matching documents.
+    /// </summary>
+    /// <param name="indexName">The name of the index to search</param>
+    /// <param name="query">The query vector</param>
+    /// <param name="k">Maximum number of nearest neighbors to return</param>
+    /// <param name="efSearch">Size of the dynamic candidate list during search</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching documents</returns>
+    public async IAsyncEnumerable<T> VectorSearchAsync(
+        string indexName,
+        float[] query,
+        int k,
+        int efSearch = 100,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var index = _indexManager.GetIndex(indexName);
+        if (index == null)
+            throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
+
+        foreach (var result in index.VectorSearch(query, k, efSearch, transaction))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await FindByLocationAsync(result.Location, transaction.TransactionId, ct);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
     /// Finds all documents located within a specified radius of a geographic center point using a spatial index.
     /// </summary>
     /// <param name="indexName">The name of the spatial index to use for the search. Cannot be null or empty.</param>
@@ -1919,6 +2344,34 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         foreach (var loc in index.Near(center, radiusKm, transaction))
         {
             var doc = FindByLocation(loc);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously finds all documents located within a specified radius of a geographic center
+    /// point using a spatial index.
+    /// </summary>
+    /// <param name="indexName">The name of the spatial index to use for the search</param>
+    /// <param name="center">Latitude and longitude of the center point</param>
+    /// <param name="radiusKm">The search radius in kilometers</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching documents</returns>
+    public async IAsyncEnumerable<T> NearAsync(
+        string indexName,
+        (double Latitude, double Longitude) center,
+        double radiusKm,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var index = _indexManager.GetIndex(indexName);
+        if (index == null)
+            throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
+
+        foreach (var loc in index.Near(center, radiusKm, transaction))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await FindByLocationAsync(loc, transaction.TransactionId, ct);
             if (doc != null) yield return doc;
         }
     }
@@ -1945,6 +2398,34 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
         foreach (var loc in index.Within(min, max, transaction))
         {
             var doc = FindByLocation(loc);
+            if (doc != null) yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously returns all documents within the specified rectangular geographic area from
+    /// the given spatial index.
+    /// </summary>
+    /// <param name="indexName">The name of the spatial index to search within</param>
+    /// <param name="min">Minimum latitude and longitude coordinates</param>
+    /// <param name="max">Maximum latitude and longitude coordinates</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching documents</returns>
+    public async IAsyncEnumerable<T> WithinAsync(
+        string indexName,
+        (double Latitude, double Longitude) min,
+        (double Latitude, double Longitude) max,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var index = _indexManager.GetIndex(indexName);
+        if (index == null)
+            throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
+
+        foreach (var loc in index.Within(min, max, transaction))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await FindByLocationAsync(loc, transaction.TransactionId, ct);
             if (doc != null) yield return doc;
         }
     }
