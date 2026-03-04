@@ -18,6 +18,7 @@
     <Project Path="tests/BLite.CheckpointTest/DocumentDb.CheckpointTest.csproj" />
     <Project Path="tests/BLite.ConsoleSample/BLite.ConsoleSample.csproj" />
     <Project Path="tests/BLite.Debug/BLite.Debug.csproj" />
+    <Project Path="tests/BLite.NetStandard21.Tests/BLite.NetStandard21.Tests.csproj" />
     <Project Path="tests/BLite.Shared/BLite.Shared.csproj" Id="c1cb8033-8381-4f75-8a26-23ea9f8f8f4e" />
     <Project Path="tests/BLite.Tests/BLite.Tests.csproj" />
   </Folder>
