@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.1"></a>
+## [2.0.1](https://www.github.com/EntglDb/BLite/releases/tag/v2.0.1) (2026-03-04)
+
+### Bug Fixes
+
+* adds all Async methods to DocumentCollection ([954d2cd](https://www.github.com/EntglDb/BLite/commit/954d2cd7ddd3c2555db069aee887ad3d23762a46))
+
 <a name="2.0.0"></a>
 ## [2.0.0](https://www.github.com/EntglDb/BLite/releases/tag/v2.0.0) (2026-03-02)
 
