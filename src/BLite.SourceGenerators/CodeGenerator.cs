@@ -407,9 +407,9 @@ namespace BLite.SourceGenerators
             // Construct object - different approach if needs reflection
             if (needsReflection)
             {
-                // Use GetUninitializedObject + Expression Trees for private setters
+                // Use RuntimeHelpers.GetUninitializedObject + Expression Trees for private setters
                 sb.AppendLine($"            // Creating instance without calling constructor (has private members)");
-                sb.AppendLine($"            var entity = (global::{entity.FullTypeName})global::System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(global::{entity.FullTypeName}));");
+                sb.AppendLine($"            var entity = (global::{entity.FullTypeName})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(global::{entity.FullTypeName}));");
                 sb.AppendLine();
                 
                 // Set properties using setters (Expression Trees for private, direct for public)

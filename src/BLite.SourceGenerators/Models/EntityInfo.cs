@@ -76,6 +76,8 @@ namespace BLite.SourceGenerators.Models
         public string Namespace { get; set; } = "";
         public string FullTypeName { get; set; } = "";
         public int Depth { get; set; }
+        public bool HasPrivateOrNoConstructor { get; set; }
+        public bool HasPrivateSetters { get; set; }
         
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();

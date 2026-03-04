@@ -19,11 +19,29 @@ public class DbContextInfo
     public bool HasBaseDbContext { get; set; } // True if inherits from another DbContext (not DocumentDbContext directly)
     public List<EntityInfo> Entities { get; set; } = new List<EntityInfo>();
     public Dictionary<string, NestedTypeInfo> GlobalNestedTypes { get; set; } = new Dictionary<string, NestedTypeInfo>();
+    public List<BLiteDiagnostic> Diagnostics { get; } = new List<BLiteDiagnostic>();
+}
+
+public readonly struct BLiteDiagnostic
+{
+    public readonly string Id;
+    public readonly string Message;
+    public readonly bool IsError;
+    public BLiteDiagnostic(string id, string message, bool isError) { Id = id; Message = message; IsError = isError; }
 }
 
     [Generator]
     public class MapperGenerator : IIncrementalGenerator
     {
+        // ── Diagnostic descriptors ─────────────────────────────────────────────
+        private static readonly DiagnosticDescriptor DiagError = new DiagnosticDescriptor(
+            "BLITE001", "BLite Generator Error", "{0}",
+            "BLite.SourceGenerators", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+        private static readonly DiagnosticDescriptor DiagWarning = new DiagnosticDescriptor(
+            "BLITE002", "BLite Generator Warning", "{0}",
+            "BLite.SourceGenerators", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
             // Find all classes that inherit from DocumentDbContext
@@ -39,6 +57,13 @@ public class DbContextInfo
             context.RegisterSourceOutput(dbContextClasses, static (spc, dbContext) =>
             {
                 if (dbContext == null) return;
+
+                // ── Emit collected diagnostics ─────────────────────────────────
+                foreach (var diag in dbContext.Diagnostics)
+                {
+                    var descriptor = diag.IsError ? DiagError : DiagWarning;
+                    spc.ReportDiagnostic(Diagnostic.Create(descriptor, Location.None, diag.Message));
+                }
 
                 var sb = new StringBuilder();
                 sb.AppendLine($"// Found DbContext: {dbContext.ClassName}");
@@ -113,8 +138,10 @@ public class DbContextInfo
                         { 
                             Name = nested.Name, 
                             Namespace = nested.Namespace,
-                            FullTypeName = nested.FullTypeName, // Ensure FullTypeName is copied
+                            FullTypeName = nested.FullTypeName,
                             IsNestedTypeMapper = true,
+                            HasPrivateOrNoConstructor = nested.HasPrivateOrNoConstructor,
+                            HasPrivateSetters = nested.HasPrivateSetters,
                         };
                         nestedEntity.Properties.AddRange(nested.Properties);
                         
@@ -329,6 +356,15 @@ public class DbContextInfo
                 IsPartial = classDecl.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)),
                 HasBaseDbContext = hasBaseDbContext
             };
+
+            if (!info.IsPartial)
+            {
+                info.Diagnostics.Add(new BLiteDiagnostic(
+                    "BLITE001",
+                    $"'{classSymbol.Name}' must be declared 'partial'. " +
+                    $"The generator cannot emit InitializeCollections() or Set<TId,T>() without the partial keyword.",
+                    isError: true));
+            }
             
             // Analyze OnModelCreating to find entities
             var onModelCreating = classDecl.Members
@@ -340,32 +376,67 @@ public class DbContextInfo
                 var entityCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "Entity");
                 foreach (var call in entityCalls)
                 {
-                    var typeName = SyntaxHelper.GetGenericTypeArgument(call);
-                    if (typeName != null)
+                    // Resolve directly from the type argument syntax node via semantic model.
+                    // Name-based lookups (GetSymbolsWithName / GetTypeByMetadataName with a simple
+                    // name) fail for types defined in referenced assemblies.
+                    INamedTypeSymbol? entityType = null;
+                    string? syntaxTypeName = SyntaxHelper.GetGenericTypeArgument(call);
+
+                    if (call.Expression is MemberAccessExpressionSyntax memberAccess &&
+                        memberAccess.Name is GenericNameSyntax genericName &&
+                        genericName.TypeArgumentList.Arguments.Count > 0)
                     {
-                        // Try to find the symbol
-                        INamedTypeSymbol? entityType = null;
-                        
-                        // 1. Try by name in current compilation (simple name)
-                        var symbols = semanticModel.Compilation.GetSymbolsWithName(typeName);
-                        entityType = symbols.OfType<INamedTypeSymbol>().FirstOrDefault();
-                        
-                        // 2. Try by metadata name (if fully qualified)
-                        if (entityType == null)
+                        var typeArgSyntax = genericName.TypeArgumentList.Arguments[0];
+                        entityType = semanticModel.GetSymbolInfo(typeArgSyntax).Symbol as INamedTypeSymbol;
+                    }
+
+                    if (entityType == null)
+                    {
+                        info.Diagnostics.Add(new BLiteDiagnostic(
+                            "BLITE001",
+                            $"[{info.ClassName}] Entity<{syntaxTypeName ?? "?"}> could not be resolved via semantic model. " +
+                            $"Ensure the type is accessible and the assembly is referenced. No mapper will be generated for it.",
+                            isError: true));
+                        continue;
+                    }
+
+                    // Check for duplicates
+                    var fullTypeName = SyntaxHelper.GetFullName(entityType);
+                    if (!info.Entities.Any(e => e.FullTypeName == fullTypeName))
+                    {
+                        EntityInfo entityInfo;
+                        try
                         {
-                            entityType = semanticModel.Compilation.GetTypeByMetadataName(typeName);
+                            entityInfo = EntityAnalyzer.Analyze(entityType, semanticModel);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            info.Diagnostics.Add(new BLiteDiagnostic(
+                                "BLITE001",
+                                $"[{info.ClassName}] Exception analyzing entity '{entityType.Name}': {ex.Message}",
+                                isError: true));
+                            continue;
                         }
 
-                        if (entityType != null)
+                        if (entityInfo.Properties.Count == 0)
                         {
-                            // Check for duplicates
-                            var fullTypeName = SyntaxHelper.GetFullName(entityType);
-                            if (!info.Entities.Any(e => e.FullTypeName == fullTypeName))
-                            {
-                                var entityInfo = EntityAnalyzer.Analyze(entityType, semanticModel);
-                                info.Entities.Add(entityInfo);
-                            }
+                            info.Diagnostics.Add(new BLiteDiagnostic(
+                                "BLITE002",
+                                $"[{info.ClassName}] Entity '{entityType.Name}' has no serializable properties. " +
+                                $"Ensure properties have at least a getter. Private setters are supported via Expression Trees.",
+                                isError: false));
                         }
+
+                        if (entityInfo.IdProperty == null)
+                        {
+                            info.Diagnostics.Add(new BLiteDiagnostic(
+                                "BLITE001",
+                                $"[{info.ClassName}] Entity '{entityType.Name}' has no primary key property. " +
+                                $"Add [Key] attribute or ensure a property named 'Id' exists and is visible to the analyzer.",
+                                isError: true));
+                        }
+
+                        info.Entities.Add(entityInfo);
                     }
                 }
             }

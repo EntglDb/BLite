@@ -259,6 +259,13 @@ namespace BLite.SourceGenerators
 
                  // Analyze properties of this nested type
                  AnalyzeProperties(nestedTypeSymbol, nestedInfo.Properties);
+                 
+                 // Check if nested type needs reflection-based deserialization
+                 var hasPublicParameterlessCtor = nestedTypeSymbol.Constructors
+                     .Any(c => c.DeclaredAccessibility == Accessibility.Public && c.Parameters.Length == 0);
+                 nestedInfo.HasPrivateOrNoConstructor = !hasPublicParameterlessCtor;
+                 nestedInfo.HasPrivateSetters = nestedInfo.Properties.Any(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter);
+                 
                  targetNestedTypes[fullTypeName] = nestedInfo;
 
                  // Recurse
