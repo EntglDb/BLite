@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.2"></a>
+## [2.0.2](https://www.github.com/EntglDb/BLite/releases/tag/v2.0.2) (2026-03-05)
+
+### Bug Fixes
+
+* corrects missing mapper creation for ValueObjects ([cfde540](https://www.github.com/EntglDb/BLite/commit/cfde540ac4467e5f753481ff09cd367bb7a877b8))
+
 <a name="2.0.1"></a>
 ## [2.0.1](https://www.github.com/EntglDb/BLite/releases/tag/v2.0.1) (2026-03-04)
 
