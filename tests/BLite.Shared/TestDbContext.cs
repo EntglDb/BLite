@@ -91,8 +91,9 @@ public partial class TestDbContext : DocumentDbContext
             .ToCollection("geo_items")
             .HasSpatialIndex(x => x.Location, name: "idx_spatial");
 
+        // Custom value converter for complex Id type - now clearly tied to the property
         modelBuilder.Entity<Order>()
-            .HasKey(x => x.Id)
+            .Property(x => x.Id)
             .HasConversion<OrderIdConverter>();
 
         // Source Generator Feature Tests

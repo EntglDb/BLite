@@ -3,6 +3,17 @@ using System.Linq.Expressions;
 
 namespace BLite.Core.Metadata;
 
+/// <summary>
+/// Fluent API for configuring entity mappings and indexes.
+/// 
+/// Configuration Priority (highest to lowest):
+/// 1. ModelBuilder (OnModelCreating) - analyzed by Source Generator at compile-time
+/// 2. Attributes on entity classes ([Table], [Key], [BsonConverter], etc.)
+/// 3. Conventions (property named "Id", class name + "s" for collection, etc.)
+/// 
+/// The Source Generator analyzes OnModelCreating and embeds all configurations into the generated mapper.
+/// At runtime, only indexes are applied dynamically from ModelBuilder.
+/// </summary>
 public class EntityTypeBuilder<T> where T : class
 {
     public string? CollectionName { get; private set; }
@@ -43,21 +54,21 @@ public class EntityTypeBuilder<T> where T : class
         return this;
     }
 
-    public EntityTypeBuilder<T> HasConversion<TConverter>()
-    {
-        if (!string.IsNullOrEmpty(PrimaryKeyName))
-        {
-            PropertyConverters[PrimaryKeyName] = typeof(TConverter);
-        }
-        return this;
-    }
-
+    /// <summary>
+    /// Configures a property for custom mapping behavior.
+    /// Use .HasConversion() to specify value converters for complex types (including Id properties).
+    /// Example: modelBuilder.Entity&lt;Order&gt;().Property(x => x.Id).HasConversion&lt;OrderIdConverter&gt;();
+    /// </summary>
     public PropertyBuilder Property<TProperty>(Expression<Func<T, TProperty>> propertyExpression)
     {
         var propertyName = ExpressionAnalyzer.ExtractPropertyPaths(propertyExpression).FirstOrDefault();
         return new PropertyBuilder(this, propertyName);
     }
 
+    /// <summary>
+    /// Fluent builder for configuring individual property mappings.
+    /// Always explicitly tied to a specific property via Property(x => x.PropertyName).
+    /// </summary>
     public class PropertyBuilder
     {
         private readonly EntityTypeBuilder<T> _parent;
@@ -69,6 +80,9 @@ public class EntityTypeBuilder<T> where T : class
             _propertyName = propertyName;
         }
 
+        /// <summary>
+        /// Marks the property for automatic value generation on insert (applies to primary keys).
+        /// </summary>
         public PropertyBuilder ValueGeneratedOnAdd()
         {
             if (_propertyName == _parent.PrimaryKeyName)
@@ -78,6 +92,12 @@ public class EntityTypeBuilder<T> where T : class
             return this;
         }
 
+        /// <summary>
+        /// Specifies a value converter for this property to convert between model and storage types.
+        /// The converter must inherit from ValueConverter&lt;TModel, TProvider&gt;.
+        /// Example: Property(x => x.Id).HasConversion&lt;OrderIdConverter&gt;()
+        /// This works for any property, including primary keys.
+        /// </summary>
         public PropertyBuilder HasConversion<TConverter>()
         {
             if (!string.IsNullOrEmpty(_propertyName))

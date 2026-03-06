@@ -71,6 +71,22 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
 
     /// <summary>
     /// Override to configure the model using Fluent API.
+    /// 
+    /// This method is used in two phases:
+    /// 1. Compile-time: The Source Generator analyzes this method to extract entity configurations
+    ///    (collection names, keys, converters, etc.) and embeds them into generated mappers.
+    /// 2. Runtime: Configuration is used to dynamically apply indexes to collections.
+    /// 
+    /// Configuration priority: ModelBuilder > Attributes > Conventions
+    /// 
+    /// Example:
+    ///   modelBuilder.Entity&lt;Order&gt;()
+    ///       .ToCollection("orders")
+    ///       .HasIndex(x => x.Status);
+    ///   
+    ///   modelBuilder.Entity&lt;Order&gt;()
+    ///       .Property(x => x.Id)
+    ///       .HasConversion&lt;OrderIdConverter&gt;();
     /// </summary>
     protected virtual void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -442,6 +442,8 @@ public readonly struct BLiteDiagnostic
             }
 
             // Analyze OnModelCreating for HasConversion
+            // Pattern: modelBuilder.Entity<T>().Property(x => x.PropertyName).HasConversion<TConverter>()
+            // This works for any property, including primary keys (Id)
             if (onModelCreating != null)
             {
                 var conversionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "HasConversion");
@@ -450,10 +452,10 @@ public readonly struct BLiteDiagnostic
                     var converterName = SyntaxHelper.GetGenericTypeArgument(call);
                     if (converterName == null) continue;
 
-                    // Trace back: .Property(x => x.Id).HasConversion<T>() or .HasKey(x => x.Id).HasConversion<T>()
+                    // Trace back: .Property(x => x.PropertyName).HasConversion<T>()
                     if (call.Expression is MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax propertyCall } &&
                         propertyCall.Expression is MemberAccessExpressionSyntax { Name: IdentifierNameSyntax { Identifier: { Text: var propertyMethod } } } &&
-                        (propertyMethod == "Property" || propertyMethod == "HasKey"))
+                        propertyMethod == "Property")
                     {
                         var propertyName = SyntaxHelper.GetPropertyName(propertyCall.ArgumentList.Arguments.FirstOrDefault()?.Expression);
                         if (propertyName == null) continue;
