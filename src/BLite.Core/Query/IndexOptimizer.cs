@@ -214,18 +214,44 @@ internal static class IndexOptimizer
 
             if (left is MemberExpression member && right is ConstantExpression constant)
             {
-                if (member.Expression == parameter)
-                    return (member.Member.Name, constant.Value, nodeType);
+                // Extract full property path (supports nested properties like Address.City.Name)
+                var propertyPath = ExtractMemberPath(member, parameter);
+                if (propertyPath != null)
+                    return (propertyPath, constant.Value, nodeType);
             }
             
             // Handle Convert
             if (left is UnaryExpression unary && unary.Operand is MemberExpression member2 && right is ConstantExpression constant2)
             {
-                 if (member2.Expression == parameter)
-                    return (member2.Member.Name, constant2.Value, nodeType);
+                var propertyPath = ExtractMemberPath(member2, parameter);
+                if (propertyPath != null)
+                    return (propertyPath, constant2.Value, nodeType);
             }
         }
         return (null, null, ExpressionType.Default);
+    }
+
+    /// <summary>
+    /// Extracts full dot-notation path from a MemberExpression chain.
+    /// Returns null if the expression doesn't start from the expected parameter.
+    /// Example: p.Address.City.Name -> "Address.City.Name"
+    /// </summary>
+    private static string? ExtractMemberPath(MemberExpression memberExpr, ParameterExpression expectedParameter)
+    {
+        var parts = new List<string>();
+        Expression? current = memberExpr;
+
+        while (current is MemberExpression member)
+        {
+            parts.Insert(0, member.Member.Name);
+            current = member.Expression;
+        }
+
+        // Should terminate at the parameter (e.g., 'p' in p => p.Name)
+        if (current != expectedParameter)
+            return null;
+
+        return string.Join(".", parts);
     }
 
     private static ExpressionType Flip(ExpressionType type) => type switch

@@ -430,18 +430,37 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         
         if (paths.Length == 1)
         {
-            body = Expression.PropertyOrField(param, paths[0]);
+            // Handle nested paths like "MainAddress.City.Name"
+            body = BuildNestedPropertyAccess(param, paths[0]);
         }
         else
         {
+            // Compound key with multiple paths
             body = Expression.NewArrayInit(typeof(object), 
-                paths.Select(p => Expression.Convert(Expression.PropertyOrField(param, p), typeof(object))));
+                paths.Select(p => Expression.Convert(BuildNestedPropertyAccess(param, p), typeof(object))));
         }
         
         var objectBody = Expression.Convert(body, typeof(object));
         var lambda = Expression.Lambda<Func<T, object>>(objectBody, param);
         
         return new CollectionIndexDefinition<T>(name, paths, lambda, isUnique, type, false, dimensions, metric);
+    }
+
+    /// <summary>
+    /// Builds nested property access expression from dot-notation path.
+    /// Example: "MainAddress.City.Name" -> param.MainAddress.City.Name
+    /// </summary>
+    private static Expression BuildNestedPropertyAccess(Expression param, string path)
+    {
+        var parts = path.Split('.');
+        Expression current = param;
+        
+        foreach (var part in parts)
+        {
+            current = Expression.PropertyOrField(current, part);
+        }
+        
+        return current;
     }
 
     public uint PrimaryRootPageId => _metadata.PrimaryRootPageId;
@@ -495,21 +514,23 @@ public static class ExpressionAnalyzer
 {
     /// <summary>
     /// Extracts property paths from a lambda expression.
-    /// Supports simple property access (p => p.Age) and anonymous types (p => new { p.City, p.Age }).
+    /// Supports simple property access (p => p.Age), nested properties (p => p.Address.City.Name),
+    /// and anonymous types (p => new { p.City, p.Age }).
+    /// Returns full dot-notation paths for nested properties (e.g., "Address.City.Name").
     /// </summary>
     public static string[] ExtractPropertyPaths(LambdaExpression expression)
     {
         if (expression.Body is MemberExpression memberExpr)
         {
-            // Simple property: p => p.Age
-            return new[] { memberExpr.Member.Name };
+            // Simple or nested property: p => p.Age or p => p.Address.City.Name
+            return new[] { ExtractFullPath(memberExpr) };
         }
         else if (expression.Body is NewExpression newExpr)
         {
-            // Compound key via anonymous type: p => new { p.City, p.Age }
+            // Compound key via anonymous type: p => new { p.City, p.Address.Country }
             return newExpr.Arguments
                 .OfType<MemberExpression>()
-                .Select(m => m.Member.Name)
+                .Select(ExtractFullPath)
                 .ToArray();
         }
         else if (expression.Body is UnaryExpression { NodeType: ExpressionType.Convert } unaryExpr)
@@ -518,14 +539,14 @@ public static class ExpressionAnalyzer
             if (unaryExpr.Operand is MemberExpression innerMember)
             {
                 // Wrapped property: p => (object)p.Age
-                return new[] { innerMember.Member.Name };
+                return new[] { ExtractFullPath(innerMember) };
             }
             else if (unaryExpr.Operand is NewExpression innerNew)
             {
                  // Wrapped anonymous type: p => (object)new { p.City, p.Age }
                  return innerNew.Arguments
                     .OfType<MemberExpression>()
-                    .Select(m => m.Member.Name)
+                    .Select(ExtractFullPath)
                     .ToArray();
             }
         }
@@ -533,5 +554,32 @@ public static class ExpressionAnalyzer
         throw new ArgumentException(
             "Expression must be a property accessor (p => p.Property) or anonymous type (p => new { p.Prop1, p.Prop2 })",
             nameof(expression));
+    }
+
+    /// <summary>
+    /// Extracts full dot-notation path from a MemberExpression chain.
+    /// Example: p.Address.City.Name -> "Address.City.Name"
+    /// </summary>
+    private static string ExtractFullPath(MemberExpression memberExpr)
+    {
+        var parts = new List<string>();
+        Expression? current = memberExpr;
+
+        while (current is MemberExpression member)
+        {
+            parts.Insert(0, member.Member.Name);
+            current = member.Expression;
+        }
+
+        // Current should now be the parameter (e.g., 'p' in p => p.Name)
+        // If we hit something else (e.g., a method call), that's an error
+        if (current is not ParameterExpression)
+        {
+            throw new ArgumentException(
+                $"Property path must start from the parameter, got {current?.GetType().Name}",
+                nameof(memberExpr));
+        }
+
+        return string.Join(".", parts);
     }
 }

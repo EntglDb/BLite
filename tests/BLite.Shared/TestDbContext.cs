@@ -59,6 +59,12 @@ public partial class TestDbContext : DocumentDbContext
     // NestedObject with [Key] Id – regression tests
     public DocumentCollection<ObjectId, PersonWithContact> PeopleWithContacts { get; set; } = null!;
 
+    // Embedded Index Tests
+    public DocumentCollection<int, PersonWithEmbeddedAddress> PeopleWithEmbeddedAddress { get; set; } = null!;
+
+    // Self-Referencing Collection Tests
+    public DocumentCollection<ObjectId, TreeNode> TreeNodes { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
         InitializeCollections();
@@ -119,6 +125,18 @@ public partial class TestDbContext : DocumentDbContext
 
         // NestedObject with [Key] Id – regression
         modelBuilder.Entity<PersonWithContact>().ToCollection("people_with_contacts");
+
+        // Embedded Index Tests - secondary indexes on nested nullable properties
+        modelBuilder.Entity<PersonWithEmbeddedAddress>()
+            .ToCollection("people_with_embedded_address")
+            .HasKey(p => p.Id)
+            .HasIndex(p => p.MainAddress!.City.Name) // Index on nested property path
+            .HasIndex(p => p.BillingAddress!.City.Name); // Second nested index
+
+        // Self-Referencing Collection Tests
+        modelBuilder.Entity<TreeNode>()
+            .ToCollection("tree_nodes")
+            .HasKey(t => t.Id);
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);

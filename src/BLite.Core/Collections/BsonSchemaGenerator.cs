@@ -5,17 +5,21 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using BLite.Bson;
 using System;
+using System.Threading;
 
 namespace BLite.Core.Collections;
 
 public static class BsonSchemaGenerator
 {
+    private static readonly ConcurrentDictionary<Type, BsonSchema> _cache = new();
+    
+    // Thread-local stack to track types currently being processed to prevent infinite recursion
+    private static readonly ThreadLocal<HashSet<Type>> _processingStack = new(() => new HashSet<Type>());
+
     public static BsonSchema FromType<T>()
     {
         return FromType(typeof(T));
     }
-
-    private static readonly ConcurrentDictionary<Type, BsonSchema> _cache = new();
 
     public static BsonSchema FromType(Type type)
     {
@@ -24,24 +28,40 @@ public static class BsonSchemaGenerator
 
     private static BsonSchema GenerateSchema(Type type)
     {
-        var schema = new BsonSchema { Title = type.Name };
-        var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        var fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
-
-        foreach (var prop in properties)
+        // Check if we're already processing this type in the current call stack
+        if (!_processingStack.Value!.Add(type))
         {
-            if (prop.GetIndexParameters().Length > 0) continue; // Skip indexers
-            if (!prop.CanRead) continue;
-
-            AddField(schema, prop.Name, prop.PropertyType);
+            // Circular reference detected at top level (should be rare)
+            // Return minimal schema - the actual circular fields will be handled by GetBsonType
+            return new BsonSchema { Title = type.Name };
         }
 
-        foreach (var field in fields)
+        try
         {
-            AddField(schema, field.Name, field.FieldType);
-        }
+            var schema = new BsonSchema { Title = type.Name };
+            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            var fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
 
-        return schema;
+            foreach (var prop in properties)
+            {
+                if (prop.GetIndexParameters().Length > 0) continue; // Skip indexers
+                if (!prop.CanRead) continue;
+
+                AddField(schema, prop.Name, prop.PropertyType);
+            }
+
+            foreach (var field in fields)
+            {
+                AddField(schema, field.Name, field.FieldType);
+            }
+
+            return schema;
+        }
+        finally
+        {
+            // Remove type from processing stack
+            _processingStack.Value!.Remove(type);
+        }
     }
 
     private static void AddField(BsonSchema schema, string name, Type type)
@@ -97,6 +117,14 @@ public static class BsonSchemaGenerator
         if (type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type))
         {
             var itemType = GetCollectionItemType(type);
+            
+            // Check if item type causes circular reference
+            if (_processingStack.Value!.Contains(itemType))
+            {
+                // Circular reference in collection - return Array with Document items but no nested schema
+                return (BsonType.Array, null, BsonType.Document);
+            }
+            
             var (itemBsonType, itemNested, _) = GetBsonType(itemType);
             
             // For arrays, if item is Document, we use NestedSchema to describe the item
@@ -107,6 +135,13 @@ public static class BsonSchemaGenerator
         // If it's not a string, not a primitive, and not an array/list, treat as Document
         if (type != typeof(string) && !type.IsPrimitive && !type.IsEnum)
         {
+            // Check if this type causes circular reference
+            if (_processingStack.Value!.Contains(type))
+            {
+                // Circular reference - return Document type but no nested schema
+                return (BsonType.Document, null, null);
+            }
+            
             return (BsonType.Document, FromType(type), null);
         }
 

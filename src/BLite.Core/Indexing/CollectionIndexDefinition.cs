@@ -141,6 +141,41 @@ public sealed class CollectionIndexDefinition<T> where T : class
         return true;
     }
 
+    /// <summary>
+    /// Tries to extract the index key from a document with null-safe traversal.
+    /// Returns false if any intermediate property in a nested path is null.
+    /// </summary>
+    /// <param name="document">Document instance</param>
+    /// <param name="key">Extracted key value (null if traversal failed)</param>
+    /// <returns>True if key was successfully extracted, false if null encountered</returns>
+    public bool TryGetKey(T document, out object? key)
+    {
+        try
+        {
+            key = KeySelector(document);
+            
+            // KeySelector succeeded, but we need to verify nested path wasn't interrupted by null
+            // For simple properties, null is a valid value (nullable types)
+            // For nested properties (e.g., Address.City), we treat null intermediate as missing key
+            if (key == null && PropertyPaths.Length == 1 && PropertyPaths[0].Contains('.'))
+            {
+                // Nested property returned null - could be:
+                // 1. Intermediate null (Address = null -> Address.City fails)
+                // 2. Final property null (Address.City = null is valid)
+                // Since KeySelector doesn't throw, we assume (2) and allow null keys
+                return true;
+            }
+            
+            return true;
+        }
+        catch (NullReferenceException)
+        {
+            // Null encountered during traversal (e.g., document.Address.City when Address is null)
+            key = null;
+            return false;
+        }
+    }
+
     public override string ToString()
     {
         var uniqueStr = IsUnique ? "Unique" : "Non-Unique";

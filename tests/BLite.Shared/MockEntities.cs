@@ -129,6 +129,30 @@ namespace BLite.Shared
         public (double Latitude, double Longitude) Location { get; set; }
     }
 
+    /// <summary>
+    /// Entity with nullable embedded properties for testing secondary indexes on nested paths.
+    /// Tests both null-safety and query optimization on embedded objects.
+    /// </summary>
+    public class PersonWithEmbeddedAddress
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public Address? MainAddress { get; set; }
+        public Address? BillingAddress { get; set; }
+    }
+
+    /// <summary>
+    /// Tree node entity with self-referencing collection for testing recursive structures.
+    /// Tests schema generation and serialization of entities that contain collections of themselves.
+    /// </summary>
+    public class TreeNode
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = "";
+        public int Value { get; set; }
+        public List<TreeNode> Children { get; set; } = new();
+    }
+
     public record OrderId(string Value)
     {
         public OrderId() : this(string.Empty) { }

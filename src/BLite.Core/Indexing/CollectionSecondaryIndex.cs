@@ -79,10 +79,9 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         if (document == null)
             throw new ArgumentNullException(nameof(document));
         
-        // Extract key using compiled selector (fast!)
-        var keyValue = _definition.KeySelector(document);
-        if (keyValue == null)
-            return; // Skip null keys
+        // Extract key with null-safe traversal for embedded properties
+        if (!_definition.TryGetKey(document, out var keyValue) || keyValue == null)
+            return; // Skip null keys or failed traversal
         
         if (_vectorIndex != null)
         {
@@ -133,9 +132,9 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         if (newDocument == null)
             throw new ArgumentNullException(nameof(newDocument));
         
-        // Extract keys from both versions
-        var oldKey = _definition.KeySelector(oldDocument);
-        var newKey = _definition.KeySelector(newDocument);
+        // Extract keys with null-safe traversal
+        _definition.TryGetKey(oldDocument, out var oldKey);
+        _definition.TryGetKey(newDocument, out var newKey);
         
         // If keys are the same, no index update needed (optimization)
         if (Equals(oldKey, newKey))
@@ -171,9 +170,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         if (document == null)
             throw new ArgumentNullException(nameof(document));
         
-        // Extract key
-        var keyValue = _definition.KeySelector(document);
-        if (keyValue == null)
+        // Extract key with null-safe traversal
+        if (!_definition.TryGetKey(document, out var keyValue) || keyValue == null)
             return; // Nothing to delete
         
         var userKey = ConvertToIndexKey(keyValue);
