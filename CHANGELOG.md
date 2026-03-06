@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.0.0"></a>
+## [3.0.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.0.0) (2026-03-06)
+
+### Features
+
+* Add support for embedded property indexes and self-referencing collections ([fd5f9e8](https://www.github.com/EntglDb/BLite/commit/fd5f9e8b4ef46fede0925e84719890dabcc3fc08))
+
+### Breaking Changes
+
+* clarify ModelBuilder configuration precedence and tie HasConversion to Property() ([a5827a5](https://www.github.com/EntglDb/BLite/commit/a5827a50d690d307e96b2941d2c45f5a46f63d87))
+
 <a name="2.0.2"></a>
 ## [2.0.2](https://www.github.com/EntglDb/BLite/releases/tag/v2.0.2) (2026-03-05)
 
