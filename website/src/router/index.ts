@@ -56,64 +56,64 @@ export const routes: RouteRecordRaw[] = [
                 path: 'transactions',
                 component: Transactions,
                 meta: {
-                    title: 'ACID Transactions – BLite',
-                    description: 'BLite supports full ACID transactions with Write-Ahead Logging and Snapshot Isolation. Learn how to compose atomic operations in your .NET apps.'
+                    title: 'ACID Transactions in BLite – WAL, Snapshot Isolation & Implicit Commits',
+                    description: 'BLite supports full ACID transactions with Write-Ahead Logging and Snapshot Isolation. Learn implicit SaveChanges() and explicit BeginTransaction() patterns for .NET embedded databases.'
                 }
             },
             {
                 path: 'crud',
                 component: CRUD,
                 meta: {
-                    title: 'CRUD Operations – BLite',
-                    description: 'Insert, update, delete and read documents in BLite. Type-safe, no reflection — all serialization is generated at compile time via source generators.'
+                    title: 'CRUD Operations in BLite – Insert, Query, Update & Delete Documents',
+                    description: 'Perform type-safe Insert, FindById, Update and Delete operations in BLite. No reflection — all BSON serialization is generated at compile time via C# source generators.'
                 }
             },
             {
                 path: 'querying',
                 component: Querying,
                 meta: {
-                    title: 'Querying with LINQ – BLite',
-                    description: 'BLite ships a full LINQ IQueryable provider. Write expressive, type-safe queries that run on bare metal without an ORM layer.'
+                    title: 'LINQ Queries in BLite – IQueryable, B-Tree Index Optimization & Async',
+                    description: 'BLite ships a full LINQ IQueryable provider with automatic B-Tree index usage, async streaming, GroupBy, Join, projection push-down, and nested property index support.'
                 }
             },
             {
                 path: 'generators',
                 component: Generators,
                 meta: {
-                    title: 'Source Generators – BLite',
-                    description: 'BLite uses Roslyn source generators to produce compile-time BSON mappers. Zero reflection, zero overhead — maximum startup and runtime performance.'
+                    title: 'C# Source Generators in BLite – Zero-Reflection Compile-Time BSON Mappers',
+                    description: 'BLite uses Roslyn source generators to produce compile-time BSON serializers. Zero reflection, zero overhead — supports nested objects, self-referencing types, enums, and nullable collections.'
                 }
             },
             {
                 path: 'cdc',
                 component: CDC,
                 meta: {
-                    title: 'Change Data Capture (CDC) – BLite',
-                    description: 'Subscribe to real-time document change streams in BLite. Supports 1000+ concurrent CDC subscribers with a zero-blocking, event-driven architecture.'
+                    title: 'Change Data Capture (CDC) in BLite – Real-Time Document Change Streams',
+                    description: 'Subscribe to transactional document change events in BLite. Zero-allocation, event-driven CDC with 1000+ concurrent subscribers — events fire only after a successful commit.'
                 }
             },
             {
                 path: 'spatial',
                 component: Spatial,
                 meta: {
-                    title: 'Spatial Indexing – BLite',
-                    description: 'BLite includes a built-in R-Tree for geospatial and vector search queries. Query by bounding box, radius, or nearest-neighbour without external plugins.'
+                    title: 'Geospatial Indexing in BLite – R-Tree, Bounding Box & Proximity Search',
+                    description: 'BLite includes a built-in zero-allocation R-Tree for geospatial queries. Search by bounding box or Haversine radius directly from LINQ — no external plugins needed.'
                 }
             },
             {
                 path: 'architecture',
                 component: Architecture,
                 meta: {
-                    title: 'Architecture – BLite',
-                    description: "Dive into BLite's internals: the Span-based I/O pipeline, WAL engine, B-Tree/R-Tree indexes, and how source generators wire everything together."
+                    title: 'BLite Architecture – Span-based I/O, WAL, B-Tree Indexes & Source Generators',
+                    description: "Deep dive into BLite's internals: the Span<byte> I/O pipeline, Write-Ahead Log protocol, B-Tree / R-Tree / HNSW index structures, and how Roslyn source generators eliminate reflection."
                 }
             },
             {
                 path: 'converters',
                 component: Converters,
                 meta: {
-                    title: 'Custom Converters – BLite',
-                    description: 'Register custom BSON type converters in BLite to control exactly how your domain types are serialized and deserialized without allocations.'
+                    title: 'Custom Type Converters in BLite – ValueObject & BSON Type Mapping',
+                    description: 'Register custom BSON type converters and ValueObject converters (HasConversion) in BLite to control exactly how your domain types are serialized and deserialized without allocations.'
                 }
             },
             {
@@ -144,8 +144,8 @@ export const routes: RouteRecordRaw[] = [
                 path: 'timeseries',
                 component: TimeSeries,
                 meta: {
-                    title: 'TimeSeries — BLite',
-                    description: 'Native TimeSeries page type in BLite: append-only, time-indexed storage with automatic retention-based pruning. No background threads — pruning fires on insert.'
+                    title: 'Native TimeSeries in BLite – Append-Only Storage with Automatic Retention',
+                    description: 'BLite 3.0 ships a dedicated TimeSeries page type for high-throughput time-ordered data. Append-only layout, page-level retention pruning, SetTimeSeries() and ForcePrune() APIs — no background threads.'
                 }
             }
         ]
