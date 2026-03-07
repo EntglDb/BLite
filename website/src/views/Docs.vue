@@ -17,7 +17,8 @@ const docSections = [
   { path: '/docs/benchmarks', label: 'Benchmarks', icon: '⚡' },
   { path: '/docs/dynamic-api', label: 'Schema-less API', icon: '🔌' },
   { path: '/docs/blql', label: 'BLQL', icon: '🔎' },
-  { path: '/docs/timeseries', label: 'TimeSeries', icon: '📈' }
+  { path: '/docs/timeseries', label: 'TimeSeries', icon: '📈' },
+  { path: '/docs/kv-store', label: 'Key-Value Store', icon: '🗝️' }
 ]
 
 const isActive = (path: string) => route.path === path

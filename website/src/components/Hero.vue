@@ -13,7 +13,7 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
     
     <div class="container hero-content">
       <div class="badge animate-fade-in" style="animation-delay: 0.1s">
-        <span class="badge-dot"></span> v3.0.0 Released — Nested property indexes &amp; self-referencing collections
+        <span class="badge-dot"></span> v3.1.0 Released — Embedded Key-Value store &amp; IDistributedCache
       </div>
       
       <h1 class="hero-title animate-fade-in" style="animation-delay: 0.2s">
@@ -61,6 +61,11 @@ users.Insert(<span class="code-keyword">new</span> <span class="code-type">User<
         <div class="stat">
           <div class="stat-value">ACID</div>
           <div class="stat-label">Transactions</div>
+        </div>
+        <div class="stat-sep"></div>
+        <div class="stat">
+          <div class="stat-value">KV</div>
+          <div class="stat-label">Store</div>
         </div>
         <div class="stat-sep"></div>
         <div class="stat">

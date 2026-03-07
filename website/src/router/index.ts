@@ -17,6 +17,7 @@ import DynamicAPI from '../views/docs/DynamicAPI.vue'
 import Comparisons from '../views/docs/Comparisons.vue'
 import BLQL from '../views/docs/BLQL.vue'
 import TimeSeries from '../views/docs/TimeSeries.vue'
+import KvStore from '../views/docs/KvStore.vue'
 
 export const DEFAULT_TITLE = 'BLite – Embedded NoSQL Database for .NET'
 export const DEFAULT_DESC = 'BLite is the high-performance embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, CDC streams, and spatial indexing — no server, no cloud. Install via NuGet.'
@@ -146,6 +147,14 @@ export const routes: RouteRecordRaw[] = [
                 meta: {
                     title: 'Native TimeSeries in BLite – Append-Only Storage with Automatic Retention',
                     description: 'BLite 3.0 ships a dedicated TimeSeries page type for high-throughput time-ordered data. Append-only layout, page-level retention pruning, SetTimeSeries() and ForcePrune() APIs — no background threads.'
+                }
+            },
+            {
+                path: 'kv-store',
+                component: KvStore,
+                meta: {
+                    title: 'Embedded Key-Value Store in BLite – IBLiteKvStore, TTL & Batches',
+                    description: 'BLite 1.13 ships a persistent key-value store co-located in the same database file. Zero extra processes — raw byte values, optional TTL, atomic batches, prefix scan via IBLiteKvStore.'
                 }
             }
         ]

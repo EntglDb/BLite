@@ -51,6 +51,16 @@ const features = [
     description: 'Dedicated append-only page format for time-ordered data with automatic retention-based pruning. No background threads — pruning fires transparently on insert.'
   },
   {
+    icon: '🗝️',
+    title: 'Embedded Key-Value Store',
+    description: 'Persistent KV store co-located in the same database file. Raw byte values, optional TTL, atomic batches, prefix scan. Zero extra processes — accessed via IBLiteKvStore on any BLiteEngine or DocumentDbContext.'
+  },
+  {
+    icon: '🚀',
+    title: 'IDistributedCache (BLite.Caching)',
+    description: 'Drop-in IDistributedCache backed by the BLite KV store. Typed get/set via System.Text.Json, sliding expiry, thundering-herd-safe GetOrSet. One NuGet package, zero external dependencies.'
+  },
+  {
     icon: '🌐',
     title: 'netstandard2.1',
     description: 'Works everywhere .NET runs — Unity, Xamarin, MAUI, .NET 5, 6, 7, 8, 9 and 10. One package, one binary protocol, all platforms.'

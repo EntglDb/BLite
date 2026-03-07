@@ -354,6 +354,87 @@ BLite supports standard .NET Data Annotations for mapping and validation:
 > [!IMPORTANT]
 > Validation attributes (`[Required]`, `[Range]`, etc.) throw a `System.ComponentModel.DataAnnotations.ValidationException` during serialization if rules are violated.
 
+### 🗝️ Embedded Key-Value Store
+BLite 1.13 ships a persistent key-value store **co-located in the same database file** — no extra process, no extra file. Access it via `IBLiteKvStore` on any `BLiteEngine` or `DocumentDbContext`.
+
+- **Raw bytes**: values are `byte[]` / `ReadOnlySpan<byte>` — serialize however you like.
+- **Optional TTL**: per-entry expiry with lazy purge (`PurgeExpired()`) or auto-purge on open.
+- **Prefix scan**: enumerate all keys with a given prefix.
+- **Atomic batches**: set + delete multiple keys under a single lock acquisition.
+
+```csharp
+using var engine = new BLiteEngine("data.db");
+IBLiteKvStore kv = engine.KvStore;
+
+// Write (optional TTL)
+kv.Set("session:abc", Encoding.UTF8.GetBytes("payload"), TimeSpan.FromHours(1));
+
+// Read
+byte[]? value = kv.Get("session:abc");
+
+// Exists / Delete
+bool exists = kv.Exists("session:abc");
+kv.Delete("session:abc");
+
+// Refresh expiry without rewriting value
+kv.Refresh("session:abc", TimeSpan.FromHours(2));
+
+// Prefix scan
+IEnumerable<string> sessionKeys = kv.ScanKeys("session:");
+
+// Atomic batch (one lock)
+kv.Batch()
+  .Set("k1", data1)
+  .Set("k2", data2, TimeSpan.FromMinutes(30))
+  .Delete("k3")
+  .Execute();
+
+// Options (passed to BLiteEngine / DocumentDbContext constructor)
+var options = new BLiteKvOptions
+{
+    DefaultTtl         = TimeSpan.FromDays(1),
+    PurgeExpiredOnOpen = true
+};
+using var db = new MyDbContext("app.db", options);
+IBLiteKvStore kv = db.KvStore;
+```
+
+### 🚀 BLite.Caching — `IDistributedCache`
+`BLite.Caching` wraps the embedded KV store as a fully compliant **`IDistributedCache`** — drop it in anywhere you'd use Redis or SQL Server cache, with zero external dependencies.
+
+```
+dotnet add package BLite.Caching
+```
+
+```csharp
+// ASP.NET Core DI registration
+builder.Services.AddBLiteDistributedCache("cache.db");
+
+// Optionally with KV options
+builder.Services.AddBLiteDistributedCache("cache.db", new BLiteKvOptions
+{
+    DefaultTtl         = TimeSpan.FromMinutes(30),
+    PurgeExpiredOnOpen = true
+});
+```
+
+The package also exposes `IBLiteCache` — a typed superset of `IDistributedCache`:
+
+```csharp
+// Typed helpers (uses System.Text.Json internally)
+await cache.SetAsync("user:42", myUser, new DistributedCacheEntryOptions
+{
+    SlidingExpiration = TimeSpan.FromMinutes(20)
+});
+
+User? user = await cache.GetAsync<User>("user:42");
+
+// GetOrSet — built-in thundering-herd protection (per-key SemaphoreSlim)
+User user = await cache.GetOrSetAsync("user:42",
+    factory: async ct => await db.LoadUserAsync(42, ct),
+    options: new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) });
+```
+
 ---
 
 ## 📚 Documentation
