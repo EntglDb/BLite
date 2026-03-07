@@ -30,6 +30,11 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
                 case "Skip":
                     VisitSkip(node);
                     break;
+                default:
+                    // GroupBy, Join, Sum, Average, Min, Max with selectors, etc.
+                    // These cannot be handled by the direct pipeline.
+                    _model.HasComplexOperators = true;
+                    break;
             }
         }
         

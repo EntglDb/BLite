@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
@@ -184,14 +185,49 @@ internal static class IndexOptimizer
     private static T EvaluateExpression<T>(Expression expression)
     {
         if (expression is ConstantExpression constant)
-        {
             return (T)constant.Value!;
+
+        // Fast path: closure capture chain — no Compile/DynamicInvoke needed.
+        if (TryWalkMemberChain(expression, out var walked))
+            return (T)walked!;
+
+        // Rare fallback: arithmetic, ternary, method calls, etc.
+        var lambda = Expression.Lambda(expression);
+        return (T)lambda.Compile().DynamicInvoke()!;
+    }
+
+    /// <summary>
+    /// Resolves a <see cref="MemberExpression"/> chain rooted in a <see cref="ConstantExpression"/>
+    /// (compiler-generated closure) via <see cref="FieldInfo"/>/<see cref="PropertyInfo"/> only.
+    /// </summary>
+    private static bool TryWalkMemberChain(Expression expr, out object? value)
+    {
+        var chain = new Stack<MemberInfo>();
+        Expression? current = expr;
+
+        while (current is MemberExpression me)
+        {
+            chain.Push(me.Member);
+            current = me.Expression;
         }
 
-        // Evaluate more complex expressions (closures, properties, etc.)
-        var lambda = Expression.Lambda(expression);
-        var compiled = lambda.Compile();
-        return (T)compiled.DynamicInvoke()!;
+        if (current is not ConstantExpression root)
+        {
+            value = null;
+            return false;
+        }
+
+        object? obj = root.Value;
+        foreach (var member in chain)
+        {
+            if (obj is null) { value = null; return true; }
+            obj = member is FieldInfo fi
+                ? fi.GetValue(obj)
+                : ((PropertyInfo)member).GetValue(obj);
+        }
+
+        value = obj;
+        return true;
     }
 
     private static bool Matches(CollectionIndexInfo index, string propertyName)

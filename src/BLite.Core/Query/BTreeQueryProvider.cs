@@ -26,6 +26,13 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Single(m => m.Name == "Scan" && m.IsGenericMethodDefinition);
 
+    // ── Per-projection-type MakeGenericMethod cache (Fase 3) ─────────────────
+    // Keyed on TProj. Avoids calling MakeGenericMethod on every query execution.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo>
+        s_compiledSelectMethods = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo>
+        s_compiledScanMethods = new();
+
     public BTreeQueryProvider(DocumentCollection<TId, T> collection, ValueConverterRegistry? registry = null)
     {
         _collection = collection;
@@ -34,18 +41,33 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
     public IQueryable CreateQuery(Expression expression)
     {
-        var elementType = expression.Type.GetGenericArguments()[0];
-        try 
+        // IQueryProvider.CreateQuery(Expression) is called only for operators that produce a
+        // different element type at runtime (e.g. GroupBy, Cast).  Delegate immediately to the
+        // generic overload via a cached factory to avoid Activator.CreateInstance per call.
+        var elementType = expression.Type.IsGenericType
+            ? expression.Type.GetGenericArguments()[0]
+            : typeof(T);
+
+        if (elementType == typeof(T))
+            return new BTreeQueryable<T>(this, expression);
+
+        // Rare: element type differs from T — use cached factory method.
+        var factory = s_createQueryFactories.GetOrAdd(elementType, t =>
         {
-            return (IQueryable)Activator.CreateInstance(
-                typeof(BTreeQueryable<>).MakeGenericType(elementType), 
-                new object[] { this, expression })!;
-        }
-        catch (TargetInvocationException ex)
-        {
-            throw ex.InnerException ?? ex;
-        }
+            var method = typeof(BTreeQueryProvider<TId, T>)
+                .GetMethod(nameof(CreateQueryTyped), BindingFlags.NonPublic | BindingFlags.Instance)!
+                .MakeGenericMethod(t);
+            return (Func<Expression, IQueryable>)(expr =>
+                (IQueryable)method.Invoke(this, [expr])!);
+        });
+        return factory(expression);
     }
+
+    private BTreeQueryable<TElement> CreateQueryTyped<TElement>(Expression expression)
+        => new(this, expression);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Func<Expression, IQueryable>>
+        s_createQueryFactories = new();
 
     // Explicit implementation satisfies IQueryProvider contract.
     // The runtime object is always BTreeQueryable<TElement> : IBLiteQueryable<TElement>,
@@ -64,19 +86,14 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
     public TResult Execute<TResult>(Expression expression)
     {
-        // 1. Visit to get model using strict BTreeExpressionVisitor (for optimization only)
-        // We only care about WHERE clause for optimization.
-        // GroupBy, Select, OrderBy, etc. are handled by EnumerableRewriter.
-        
+        // 1. Parse the LINQ expression tree into a flat QueryModel.
         var visitor = new BTreeExpressionVisitor();
         visitor.Visit(expression);
         var model = visitor.GetModel();
 
-        // ── Push-down SELECT (+ optional WHERE)  ──────────────────────────────
-        // When the query has a projection and no post-scan ordering/paging,
-        // scan raw BSON bytes building TProj directly — T is never instantiated.
-        // OrderBy / Take / Skip fall through to the standard path which pipes the
-        // already-projected IEnumerable<TProj> through EnumerableRewriter.
+        // ── Push-down SELECT (+ optional WHERE) ───────────────────────────────
+        // Single-pass BSON projection: no T instantiation, no EnumerableRewriter.
+        // Only applicable when there is no post-scan ordering or paging.
         if (model.SelectClause is not null
             && model.OrderByClause is null
             && !model.Take.HasValue
@@ -85,80 +102,147 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             var pushed = TryPushDownSelect<TResult>(model.SelectClause, model.WhereClause);
             if (pushed is not null) return pushed;
         }
-        // ─────────────────────────────────────────────────────────────────────
-        
-        // 2. Data Fetching Strategy (Optimized or Full Scan)
-        IEnumerable<T> sourceData = null!;
-        
-        // A. Try Index Optimization (Only if Where clause exists)
+
+        // 2. Data fetching — index / BSON-scan / full scan.
+        IEnumerable<T> sourceData;
+        bool whereAlreadyApplied = false;
+
         var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes(), _converterRegistry);
         if (indexOpt != null)
         {
-             if (indexOpt.IsVectorSearch)
-             {
-                 sourceData = _collection.VectorSearch(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K);
-             }
-             else if (indexOpt.IsSpatialSearch)
-             {
-                 sourceData = indexOpt.SpatialType == SpatialQueryType.Near 
-                     ? _collection.Near(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm)
-                     : _collection.Within(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax);
-             }
-             else
-             {
-                 sourceData = _collection.QueryIndex(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue);
-             }
+            if (indexOpt.IsVectorSearch)
+            {
+                sourceData = _collection.VectorSearch(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K);
+            }
+            else if (indexOpt.IsSpatialSearch)
+            {
+                sourceData = indexOpt.SpatialType == SpatialQueryType.Near
+                    ? _collection.Near(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm)
+                    : _collection.Within(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax);
+            }
+            else
+            {
+                sourceData = _collection.QueryIndex(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue);
+            }
         }
-        
-        // B. Try Scan Optimization (if no index used)
-        if (sourceData == null)
+        else if (model.WhereClause != null &&
+                 BsonExpressionEvaluator.TryCompile<T>(model.WhereClause, _converterRegistry) is { } bsonPred)
         {
-            BsonReaderPredicate? bsonPredicate = null;
-            if (model.WhereClause != null)
-            {
-                bsonPredicate = BsonExpressionEvaluator.TryCompile<T>(model.WhereClause, _converterRegistry);
-            }
-
-            if (bsonPredicate != null)
-            {
-                sourceData = _collection.Scan(bsonPredicate);
-            }
+            sourceData = _collection.Scan(bsonPred);
+            whereAlreadyApplied = true;
         }
-
-        // C. Fallback to Full Scan
-        if (sourceData == null)
+        else
         {
             sourceData = _collection.FindAll();
         }
-        
-        // 3. Rewrite Expression Tree to use Enumerable
-        // Replace the "Root" IQueryable with our sourceData IEnumerable
-        
-        // We need to find the root IQueryable in the expression to replace it.
-        // It's likely the first argument of the first method call, or a constant.
-        
-        var rootFinder = new RootFinder();
-        rootFinder.Visit(expression);
-        var root = rootFinder.Root;
-        
-        if (root == null) throw new InvalidOperationException("Could not find root Queryable in expression");
 
-        var rewriter = new EnumerableRewriter(root, sourceData);
-        var rewrittenExpression = rewriter.Visit(expression);
-        
-        // 4. Compile and Execute
-        // The rewritten expression is now a tree of IEnumerable calls returning TResult.
-        // We need to turn it into a Func<TResult> and invoke it.
-        
-        if (rewrittenExpression.Type != typeof(TResult))
+        // ── Complex-operator fallback ──────────────────────────────────────────
+        // GroupBy, Join, Sum/Average/Min/Max with selectors — operators the direct
+        // pipeline cannot model.  We still benefit from index / BSON-scan fetch,
+        // then let EnumerableRewriter translate the remaining Queryable calls to
+        // Enumerable equivalents and compile the residual expression once.
+        if (model.HasComplexOperators)
+            return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
+
+        // 3. Direct pipeline — no expression-tree rewrite, no EnumerableRewriter, no Compile().
+        return ExecutePipeline<TResult>(model, sourceData, whereAlreadyApplied);
+    }
+
+    /// <summary>
+    /// Applies WHERE / ORDER BY / SKIP / TAKE / SELECT directly on the materialized
+    /// <see cref="IEnumerable{T}"/> source without rewriting the original expression tree.
+    /// Terminal results (<c>IEnumerable&lt;T&gt;</c>, <c>List&lt;T&gt;</c>, scalar aggregates)
+    /// are dispatched via a type-switch to avoid any reflection call per invocation.
+    /// </summary>
+    private TResult ExecutePipeline<TResult>(QueryModel model, IEnumerable<T> source, bool whereAlreadyApplied)
+    {
+        IEnumerable<T> data = source;
+
+        // WHERE (residual — when the BSON scan didn't already filter)
+        if (!whereAlreadyApplied && model.WhereClause != null)
         {
-            // If TResult is object (non-generic Execute), we need to cast
-             rewrittenExpression = Expression.Convert(rewrittenExpression, typeof(TResult));
+            var pred = model.WhereClause.Compile() as Func<T, bool>
+                       ?? (Func<T, bool>)model.WhereClause.Compile();
+            data = data.Where(pred);
         }
 
-        var lambda = Expression.Lambda<Func<TResult>>(rewrittenExpression);
-        var compiled = lambda.Compile();
-        return compiled();
+        // ORDER BY — compile key selector to Func<T, object> (boxing) to avoid
+        // MakeGenericMethod for Enumerable.OrderBy<T,TKey> with runtime-only TKey.
+        if (model.OrderByClause != null)
+        {
+            var param = model.OrderByClause.Parameters[0];
+            var boxed = Expression.Lambda<Func<T, object>>(
+                Expression.Convert(model.OrderByClause.Body, typeof(object)), param).Compile();
+            data = model.OrderDescending
+                ? data.OrderByDescending(x => (IComparable?)boxed(x))
+                : data.OrderBy(x => (IComparable?)boxed(x));
+        }
+
+        // SKIP / TAKE
+        if (model.Skip.HasValue) data = data.Skip(model.Skip.Value);
+        if (model.Take.HasValue) data = data.Take(model.Take.Value);
+
+        // SELECT (with ORDER BY / SKIP / TAKE — rare path, push-down already handled the common case)
+        if (model.SelectClause != null)
+            return ProjectEnumerable<TResult>(data, model.SelectClause);
+
+        // Terminal dispatch — no reflection, no Compile(), no MakeGenericMethod.
+        return TerminalReturn<TResult>(data);
+    }
+
+    /// <summary>
+    /// Projects <paramref name="source"/> via the given SELECT lambda.
+    /// The generic dispatch (<c>ProjectTyped&lt;TProj&gt;</c>) is resolved via a cached
+    /// <see cref="MethodInfo"/>: <c>MakeGenericMethod</c> is called once per projection type.
+    /// </summary>
+    private TResult ProjectEnumerable<TResult>(IEnumerable<T> source, LambdaExpression selectLambda)
+    {
+        var resultType = typeof(TResult);
+        if (!resultType.IsGenericType || resultType.GetGenericTypeDefinition() != typeof(IEnumerable<>))
+            return default!;
+
+        var projType = resultType.GetGenericArguments()[0];
+        var method = s_projectMethodCache.GetOrAdd(
+            projType,
+            t => typeof(BTreeQueryProvider<TId, T>)
+                .GetMethod(nameof(ProjectTyped), BindingFlags.NonPublic | BindingFlags.Static)!
+                .MakeGenericMethod(t));
+
+        return (TResult)method.Invoke(null, [source, selectLambda])!;
+    }
+
+    /// <summary>Compiles <paramref name="selectLambda"/> as <c>Func&lt;T, TProj&gt;</c> and projects the source.</summary>
+    private static IEnumerable<TProj> ProjectTyped<TProj>(IEnumerable<T> source, LambdaExpression selectLambda)
+    {
+        var selector = (Func<T, TProj>)selectLambda.Compile();
+        return source.Select(selector);
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo>
+        s_projectMethodCache = new();
+
+    /// <summary>
+    /// Type-switch dispatch for terminal results — first-match, no reflection per call.
+    /// Covers all standard LINQ terminal operators: First/Single/Count/Any/All/ToList/ToArray.
+    /// </summary>
+    private static TResult TerminalReturn<TResult>(IEnumerable<T> data)
+    {
+        if (typeof(TResult) == typeof(IEnumerable<T>)) return (TResult)data;
+        if (typeof(TResult) == typeof(List<T>))        return (TResult)(object)data.ToList();
+        if (typeof(TResult) == typeof(T[]))            return (TResult)(object)data.ToArray();
+        if (typeof(TResult) == typeof(T))              return (TResult)(object)data.First();
+        if (typeof(TResult) == typeof(int))            return (TResult)(object)data.Count();
+        if (typeof(TResult) == typeof(long))           return (TResult)(object)(long)data.Count();
+        if (typeof(TResult) == typeof(bool))           return (TResult)(object)data.Any();
+        if (typeof(TResult) == typeof(object))         return (TResult)(object)(data.ToList());
+
+        // Unknown terminal: materialise and attempt a cast — handles e.g. First<SubType>.
+        var list = data.ToList();
+        if (list.Count > 0 && list[0] is TResult first) return first;
+        if (list is TResult asResult) return asResult;
+
+        throw new NotSupportedException(
+            $"BLite query pipeline: unsupported terminal result type '{typeof(TResult)}'.");
     }
     
     // ─── Push-down SELECT helper ──────────────────────────────────────────────
@@ -186,17 +270,21 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         object? projector;
         try
         {
-            var compileMethod = s_tryCompileMethod.MakeGenericMethod(typeof(T), projType);
+            var compileMethod = s_compiledSelectMethods.GetOrAdd(
+                projType,
+                t => s_tryCompileMethod.MakeGenericMethod(typeof(T), t));
             projector = compileMethod.Invoke(null, [selectLambda, whereLambda]);
         }
         catch { return default; }
 
         if (projector is null) return default; // compilation soft-failed
 
-        // Invoke _collection.Scan<TProj>(projector) via reflection.
+        // Invoke _collection.Scan<TProj>(projector) — MethodInfo cached per TProj.
         try
         {
-            var scanMethod = s_scanProjectorMethod.MakeGenericMethod(projType);
+            var scanMethod = s_compiledScanMethods.GetOrAdd(
+                projType,
+                t => s_scanProjectorMethod.MakeGenericMethod(t));
             var result = scanMethod.Invoke(_collection, [projector]);
             return (TResult?)result;
         }
@@ -205,19 +293,38 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
     // ─── Expression-tree helpers ──────────────────────────────────────────────
 
-    private class RootFinder : ExpressionVisitor
+    /// <summary>
+    /// Fallback for queries containing operators the direct pipeline cannot handle
+    /// (GroupBy, Join, Sum/Average/Min/Max with selectors, etc.).
+    /// The source data has already been fetched (and filtered by index/BSON-scan),
+    /// so we only need to rewrite the remaining <c>Queryable.*</c> calls to
+    /// <c>Enumerable.*</c> equivalents before compiling and executing.
+    /// </summary>
+    private TResult ExecuteViaEnumerableRewriter<TResult>(Expression expression, IEnumerable<T> sourceData)
+    {
+        var rootFinder = new RootFinder();
+        rootFinder.Visit(expression);
+        var root = rootFinder.Root;
+        if (root == null)
+            throw new InvalidOperationException("Could not find root IQueryable in expression.");
+
+        var rewriter = new EnumerableRewriter(root, sourceData);
+        var rewritten = rewriter.Visit(expression);
+
+        if (rewritten.Type != typeof(TResult))
+            rewritten = Expression.Convert(rewritten, typeof(TResult));
+
+        return Expression.Lambda<Func<TResult>>(rewritten).Compile()();
+    }
+
+    private sealed class RootFinder : ExpressionVisitor
     {
         public IQueryable? Root { get; private set; }
 
         protected override Expression VisitConstant(ConstantExpression node)
         {
-            // If we found a Queryable, that's our root source
             if (Root == null && node.Value is IQueryable q)
-            {
-                // We typically want the "base" queryable (the BTreeQueryable instance)
-                // In a chain like Coll.Where.Select, the root is Coll.
                 Root = q;
-            }
             return base.VisitConstant(node);
         }
     }

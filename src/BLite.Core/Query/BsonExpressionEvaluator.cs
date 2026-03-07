@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 using BLite.Bson;
 using BLite.Core.Metadata;
 
@@ -141,7 +142,9 @@ internal static class BsonExpressionEvaluator
 
     /// <summary>
     /// Evaluates an expression to a concrete value at query-plan time.
-    /// Handles both <see cref="ConstantExpression"/> and closure captures (e.g. <c>value(closure).field</c>).
+    /// Fast path: walks <c>MemberExpression(ConstantExpression, ...)</c> chains using
+    /// <see cref="FieldInfo"/>/<see cref="PropertyInfo"/> directly — no <c>Compile()</c>/<c>DynamicInvoke()</c>.
+    /// Falls back to <c>Expression.Lambda.Compile()</c> only for genuinely complex sub-trees.
     /// Returns <c>(false, null)</c> if evaluation fails.
     /// </summary>
     private static (bool Ok, object? Value) TryEvaluate(Expression expression)
@@ -151,6 +154,10 @@ internal static class BsonExpressionEvaluator
             if (expression is ConstantExpression constant)
                 return (true, constant.Value);
 
+            if (TryWalkMemberChain(expression, out var walked))
+                return (true, walked);
+
+            // Rare fallback: arbitrary sub-expression (method calls, arithmetic, etc.)
             var lambda = Expression.Lambda(expression);
             return (true, lambda.Compile().DynamicInvoke());
         }
@@ -158,6 +165,42 @@ internal static class BsonExpressionEvaluator
         {
             return (false, null);
         }
+    }
+
+    /// <summary>
+    /// Walks a chain of <see cref="MemberExpression"/> nodes rooted in a <see cref="ConstantExpression"/>
+    /// (i.e. a compiler-generated closure capture) and resolves the value via reflection —
+    /// this is the common case for <c>x => x.Id == localVar</c> predicates.
+    /// No lambda compilation or <c>DynamicInvoke</c> required.
+    /// </summary>
+    private static bool TryWalkMemberChain(Expression expr, out object? value)
+    {
+        var chain = new Stack<MemberInfo>();
+        Expression? current = expr;
+
+        while (current is MemberExpression me)
+        {
+            chain.Push(me.Member);
+            current = me.Expression;
+        }
+
+        if (current is not ConstantExpression root)
+        {
+            value = null;
+            return false;
+        }
+
+        object? obj = root.Value;
+        foreach (var member in chain)
+        {
+            if (obj is null) { value = null; return true; }
+            obj = member is FieldInfo fi
+                ? fi.GetValue(obj)
+                : ((PropertyInfo)member).GetValue(obj);
+        }
+
+        value = obj;
+        return true;
     }
 
     private static bool IsKnownBsonPrimitive(Type? type)
