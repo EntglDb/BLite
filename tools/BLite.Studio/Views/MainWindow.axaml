@@ -293,6 +293,18 @@
                   </StackPanel>
                 </Button>
 
+                <!-- Key-Value Store item -->
+                <Button Classes="NavItem"
+                        Classes.NavItemActive="{Binding Explorer.SidebarItems[1].IsSelected}"
+                        Command="{Binding Explorer.SelectItemCommand}"
+                        CommandParameter="{Binding Explorer.SidebarItems[1]}"
+                        HorizontalAlignment="Stretch">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="🗝" Opacity="0.7"/>
+                    <TextBlock Text="Key-Value Store"/>
+                  </StackPanel>
+                </Button>
+
                 <!-- Collections section -->
                 <StackPanel Margin="12,16,12,4" Orientation="Horizontal" Spacing="6">
                   <TextBlock Text="COLLECTIONS"
@@ -355,6 +367,240 @@
           <ContentControl Grid.Column="2"
                           Content="{Binding Explorer.DetailContent}">
             <ContentControl.DataTemplates>
+
+              <!-- KV Store detail -->
+              <DataTemplate DataType="ex:KvStoreDetailViewModel">
+                <Grid RowDefinitions="Auto,*">
+
+                  <!-- Header -->
+                  <StackPanel Grid.Row="0" Spacing="8" Margin="20,14,20,8">
+                    <TextBlock Text="Key-Value Store" FontSize="18" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                      <Border Classes="StatCard">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="Entries" FontSize="11" Opacity="0.5"/>
+                          <TextBlock Text="{Binding EntryCount}" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+                  </StackPanel>
+
+                  <!-- Content -->
+                  <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+
+                    <!-- List pane -->
+                    <DockPanel Grid.Column="0">
+
+                      <!-- Toolbar -->
+                      <Border DockPanel.Dock="Top"
+                              Padding="8,6"
+                              BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                              BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="*,Auto,Auto">
+                          <TextBox Grid.Column="0"
+                                   Text="{Binding ScanPrefix}"
+                                   Watermark="Filter by prefix…"
+                                   VerticalContentAlignment="Center"
+                                   Margin="0,0,8,0"/>
+                          <Button Grid.Column="1"
+                                  Content="↻ Refresh"
+                                  Command="{Binding RefreshCommand}"
+                                  Margin="0,0,8,0"/>
+                          <Button Grid.Column="2"
+                                  Content="+ New Entry"
+                                  Command="{Binding NewEntryCommand}"/>
+                        </Grid>
+                      </Border>
+
+                      <!-- Bottom bar -->
+                      <Border DockPanel.Dock="Bottom"
+                              BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                              BorderThickness="0,1,0,0"
+                              Padding="12,6">
+                        <Grid ColumnDefinitions="Auto,*">
+                          <Button Grid.Column="0"
+                                  Content="🗑 Purge Expired"
+                                  Command="{Binding PurgeExpiredCommand}"
+                                  Margin="0,0,12,0"/>
+                          <TextBlock Grid.Column="1"
+                                     Text="{Binding StatusMessage}"
+                                     VerticalAlignment="Center"
+                                     FontSize="12"
+                                     TextWrapping="Wrap"
+                                     Classes.MsgErr="{Binding StatusIsError}"
+                                     Classes.MsgOk="{Binding StatusIsOk}"
+                                     IsVisible="{Binding StatusMessage,
+                                         Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                        </Grid>
+                      </Border>
+
+                      <!-- Table -->
+                      <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                              BorderThickness="0,1,0,0">
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto">
+                          <StackPanel>
+                            <!-- Header row -->
+                            <Grid ColumnDefinitions="110,*,80,180"
+                                  Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
+                              <TextBlock Grid.Column="0" Text="Actions"
+                                         FontWeight="SemiBold" FontSize="12" Margin="10,7"/>
+                              <TextBlock Grid.Column="1" Text="Key"
+                                         FontWeight="SemiBold" FontSize="12"
+                                         FontFamily="Monospace" Margin="8,7"/>
+                              <TextBlock Grid.Column="2" Text="Size"
+                                         FontWeight="SemiBold" FontSize="12" Margin="8,7"/>
+                              <TextBlock Grid.Column="3" Text="Value preview"
+                                         FontWeight="SemiBold" FontSize="12" Margin="8,7"/>
+                            </Grid>
+                            <!-- Rows -->
+                            <ItemsControl ItemsSource="{Binding Entries}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="ex:KvEntryRowViewModel">
+                                  <Grid ColumnDefinitions="110,*,80,180" Classes="DocRow">
+                                    <StackPanel Grid.Column="0"
+                                                Orientation="Horizontal"
+                                                Spacing="4" Margin="6,4">
+                                      <Button Content="Open"
+                                              FontSize="11" Padding="6,2"
+                                              Command="{Binding $parent[ItemsControl].((ex:KvStoreDetailViewModel)DataContext).OpenEntryCommand}"
+                                              CommandParameter="{Binding}"/>
+                                      <Button Content="✕"
+                                              FontSize="11" Padding="6,2"
+                                              Classes="DangerBtn"
+                                              Command="{Binding $parent[ItemsControl].((ex:KvStoreDetailViewModel)DataContext).DeleteEntryCommand}"
+                                              CommandParameter="{Binding}"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Key}"
+                                               FontFamily="Monospace" FontSize="12"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center" Margin="8,0"/>
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding SizeDisplay}"
+                                               FontFamily="Monospace" FontSize="11" Opacity="0.65"
+                                               HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Margin="4,0,8,0"/>
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding ValuePreview}"
+                                               FontSize="11" Opacity="0.7"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center" Margin="8,0"/>
+                                  </Grid>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </ScrollViewer>
+                      </Border>
+
+                    </DockPanel>
+
+                    <!-- Right panel: viewer / insert form -->
+                    <Border Grid.Column="1"
+                            Width="380"
+                            IsVisible="{Binding IsPanelOpen}"
+                            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                            BorderThickness="1,0,0,0">
+                      <DockPanel>
+
+                        <!-- Panel header -->
+                        <Grid DockPanel.Dock="Top"
+                              ColumnDefinitions="*,Auto"
+                              Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                              Height="36">
+                          <TextBlock Grid.Column="0"
+                                     Text="{Binding PanelTitle}"
+                                     FontFamily="Monospace" FontSize="12"
+                                     TextTrimming="CharacterEllipsis"
+                                     VerticalAlignment="Center" Margin="12,0"/>
+                          <Button Grid.Column="1"
+                                  Content="✕" Padding="8,0" Height="36"
+                                  Command="{Binding ClosePanelCommand}"/>
+                        </Grid>
+
+                        <!-- Panel footer -->
+                        <Border DockPanel.Dock="Bottom"
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,1,0,0"
+                                Padding="10,6">
+                          <Grid ColumnDefinitions="*,Auto,Auto">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding StatusMessage}"
+                                       VerticalAlignment="Center" FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Classes.MsgErr="{Binding StatusIsError}"
+                                       Classes.MsgOk="{Binding StatusIsOk}"
+                                       IsVisible="{Binding StatusMessage,
+                                           Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                            <!-- Delete — visible when viewing -->
+                            <Button Grid.Column="1"
+                                    Content="🗑 Delete"
+                                    Classes="DangerBtn"
+                                    IsVisible="{Binding !IsInsertMode}"
+                                    Command="{Binding DeleteEntryCommand}"
+                                    CommandParameter="{Binding SelectedEntry}"
+                                    Margin="0,0,8,0"/>
+                            <!-- Save — visible when inserting -->
+                            <Button Grid.Column="2"
+                                    Content="💾 Save"
+                                    IsVisible="{Binding IsInsertMode}"
+                                    Command="{Binding SaveEntryCommand}"/>
+                          </Grid>
+                        </Border>
+
+                        <!-- Viewer (read-only value display) -->
+                        <TextBox IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 Text="{Binding ViewerValue}"
+                                 FontFamily="Monospace" FontSize="11"
+                                 BorderThickness="0" CornerRadius="0"
+                                 IsVisible="{Binding !IsInsertMode}"/>
+
+                        <!-- Insert form -->
+                        <ScrollViewer IsVisible="{Binding IsInsertMode}" Padding="12">
+                          <StackPanel Spacing="12">
+
+                            <StackPanel Spacing="4">
+                              <TextBlock Text="Key" FontWeight="SemiBold" FontSize="12"/>
+                              <TextBox Text="{Binding NewKey}"
+                                       FontFamily="Monospace" FontSize="12"
+                                       Watermark="e.g. session:user-42"
+                                       VerticalContentAlignment="Center"/>
+                            </StackPanel>
+
+                            <StackPanel Spacing="4">
+                              <TextBlock Text="Value (UTF-8 text)" FontWeight="SemiBold" FontSize="12"/>
+                              <TextBox AcceptsReturn="True"
+                                       TextWrapping="Wrap"
+                                       MinHeight="80"
+                                       Text="{Binding NewValue}"
+                                       FontFamily="Monospace" FontSize="12"
+                                       Watermark="Enter any text or JSON…"/>
+                            </StackPanel>
+
+                            <CheckBox Content="Set expiry (TTL)"
+                                      IsChecked="{Binding HasNewTtl}"/>
+
+                            <StackPanel Spacing="4" IsVisible="{Binding HasNewTtl}">
+                              <TextBlock Text="TTL (hours)" FontSize="12" Opacity="0.6"/>
+                              <NumericUpDown Value="{Binding NewTtlHours}"
+                                             Minimum="0.001"
+                                             Maximum="876000"
+                                             Increment="1"
+                                             FormatString="0.###"/>
+                            </StackPanel>
+
+                          </StackPanel>
+                        </ScrollViewer>
+
+                      </DockPanel>
+                    </Border>
+
+                  </Grid>
+                </Grid>
+              </DataTemplate>
 
               <!-- Field Keys detail -->
               <DataTemplate DataType="ex:FieldKeysDetailViewModel">

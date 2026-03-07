@@ -90,6 +90,56 @@ users.Update(user);</code></pre>
     </section>
 
     <section>
+      <h2>BLite.Caching — IDistributedCache</h2>
+      <p>
+        Need a drop-in <code>IDistributedCache</code> for ASP.NET Core or any hosted .NET service?
+        Install the companion package:
+      </p>
+      <pre><code>dotnet add package BLite.Caching</code></pre>
+
+      <h3>Register in ASP.NET Core</h3>
+      <pre><code><span class="comment">// Program.cs</span>
+builder.Services.AddBLiteDistributedCache(<span class="string">"cache.db"</span>);
+
+<span class="comment">// With default TTL and auto-purge on open</span>
+builder.Services.AddBLiteDistributedCache(<span class="string">"cache.db"</span>, <span class="keyword">new</span> <span class="type">BLiteKvOptions</span>
+{
+    DefaultTtl         = <span class="type">TimeSpan</span>.FromMinutes(<span class="number">30</span>),
+    PurgeExpiredOnOpen = <span class="keyword">true</span>
+});</code></pre>
+
+      <h3>Typed helpers (IBLiteCache)</h3>
+      <p>
+        Inject <code>IBLiteCache</code> for typed get/set via <code>System.Text.Json</code>
+        and a thundering-herd-safe <code>GetOrSetAsync</code>:
+      </p>
+      <pre><code><span class="comment">// Typed set</span>
+<span class="keyword">await</span> cache.SetAsync(<span class="string">"user:42"</span>, myUser,
+    <span class="keyword">new</span> <span class="type">DistributedCacheEntryOptions</span> { SlidingExpiration = <span class="type">TimeSpan</span>.FromMinutes(<span class="number">20</span>) });
+
+<span class="comment">// Typed get</span>
+<span class="type">User</span>? user = <span class="keyword">await</span> cache.GetAsync&lt;<span class="type">User</span>&gt;(<span class="string">"user:42"</span>);
+
+<span class="comment">// GetOrSet — one factory call even under concurrent load</span>
+<span class="type">User</span> user = <span class="keyword">await</span> cache.GetOrSetAsync&lt;<span class="type">User</span>&gt;(<span class="string">"user:42"</span>,
+    factory: <span class="keyword">async</span> ct =&gt; <span class="keyword">await</span> db.LoadUserAsync(<span class="number">42</span>, ct),
+    options: <span class="keyword">new</span> <span class="type">DistributedCacheEntryOptions</span>
+    {
+        AbsoluteExpirationRelativeToNow = <span class="type">TimeSpan</span>.FromHours(<span class="number">1</span>)
+    });</code></pre>
+
+      <div class="info-box">
+        <div class="info-header">📌 Note</div>
+        <p>
+          <code>IBLiteCache</code> is a superset of <code>IDistributedCache</code>.
+          The same <code>AddBLiteDistributedCache()</code> registration satisfies both interfaces —
+          inject whichever fits your code. See <router-link to="/docs/kv-store">Key-Value Store</router-link>
+          for the full API reference and raw KV usage.
+        </p>
+      </div>
+    </section>
+
+    <section>
       <h2>Next Steps</h2>
       <div class="next-links">
         <router-link to="/docs/crud" class="next-card">
@@ -230,5 +280,21 @@ code {
   font-size: 0.9rem;
   margin: 0;
   color: var(--text-muted);
+}
+
+.info-box {
+  background: rgba(231, 76, 60, 0.05);
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  border-left: 4px solid var(--blite-red);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 24px 0;
+}
+
+.info-header {
+  font-weight: 600;
+  color: var(--blite-red);
+  margin-bottom: 12px;
+  font-size: 1.1rem;
 }
 </style>

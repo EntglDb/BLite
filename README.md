@@ -355,7 +355,7 @@ BLite supports standard .NET Data Annotations for mapping and validation:
 > Validation attributes (`[Required]`, `[Range]`, etc.) throw a `System.ComponentModel.DataAnnotations.ValidationException` during serialization if rules are violated.
 
 ### 🗝️ Embedded Key-Value Store
-BLite 1.13 ships a persistent key-value store **co-located in the same database file** — no extra process, no extra file. Access it via `IBLiteKvStore` on any `BLiteEngine` or `DocumentDbContext`.
+BLite 3.2.0 ships a persistent key-value store **co-located in the same database file** — no extra process, no extra file. Access it via `IBLiteKvStore` on any `BLiteEngine` or `DocumentDbContext`.
 
 - **Raw bytes**: values are `byte[]` / `ReadOnlySpan<byte>` — serialize however you like.
 - **Optional TTL**: per-entry expiry with lazy purge (`PurgeExpired()`) or auto-purge on open.

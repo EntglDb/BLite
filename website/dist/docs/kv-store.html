@@ -1,0 +1,144 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><!-- Primary meta --><title>Embedded Key-Value Store in BLite – IBLiteKvStore, TTL &amp; Batches</title><meta name="description" content="BLite 1.13 ships a persistent key-value store co-located in the same database file. Zero extra processes — raw byte values, optional TTL, atomic batches, prefix scan via IBLiteKvStore."><meta name="keywords" content="embedded NoSQL database for .NET, embedded NoSQL .NET, NoSQL database C#, embedded document database .NET, BSON document store, embedded database .NET, zero allocation .NET database, ACID transactions .NET, LiteDB alternative, local-first database .NET, .NET 10 database, netstandard2.1 database, .NET Standard database, Unity embedded database, Xamarin database, NoSQL NuGet package, embedded database NuGet, document store C#, BLite"><meta name="author" content="BLite Project"><meta name="robots" content="index, follow"><meta name="theme-color" content="#e74c3c"><link rel="canonical" href="https://blitedb.com/docs/kv-store"><!-- Favicon --><link rel="icon" type="image/svg+xml" href="/icon.svg"><!-- Open Graph --><meta property="og:type" content="website"><meta property="og:site_name" content="BLite"><meta property="og:url" content="https://blitedb.com/docs/kv-store"><meta property="og:title" content="Embedded Key-Value Store in BLite – IBLiteKvStore, TTL &amp; Batches"><meta property="og:description" content="BLite 1.13 ships a persistent key-value store co-located in the same database file. Zero extra processes — raw byte values, optional TTL, atomic batches, prefix scan via IBLiteKvStore."><meta property="og:image" content="https://blitedb.com/og-image.png"><!-- Twitter Card --><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Embedded Key-Value Store in BLite – IBLiteKvStore, TTL &amp; Batches"><meta name="twitter:description" content="BLite 1.13 ships a persistent key-value store co-located in the same database file. Zero extra processes — raw byte values, optional TTL, atomic batches, prefix scan via IBLiteKvStore."><meta name="twitter:image" content="https://blitedb.com/og-image.png"><!-- JSON-LD Structured Data --><script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "BLite",
+    "alternateName": "BLite Embedded NoSQL Database",
+    "url": "https://blitedb.com",
+    "description": "BLite is the high-performance embedded NoSQL database for .NET. Zero-allocation BSON document store with ACID transactions, Change Data Capture streams, R-Tree spatial indexing, and compile-time source generators. No cloud, no server — install via NuGet.",
+    "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "Embedded NoSQL Database",
+    "operatingSystem": "Windows, Linux, macOS",
+    "programmingLanguage": "C#",
+    "softwareVersion": "2.0.0",
+    "license": "https://opensource.org/licenses/MIT",
+    "codeRepository": "https://github.com/EntglDb/BLite",
+    "downloadUrl": "https://www.nuget.org/packages/BLite",
+    "featureList": [
+      "Embedded NoSQL document store for .NET",
+      "Zero-allocation BSON serialization",
+      "ACID transactions with Write-Ahead Logging",
+      "Change Data Capture (CDC) with 1000+ subscribers",
+      "R-Tree spatial and vector indexing",
+      "Compile-time source generators — no reflection",
+      "LINQ IQueryable provider",
+      "Schema-less DynamicCollection API",
+      "BLQL query language",
+      "netstandard2.1 compatible — Unity, Xamarin, MAUI, .NET 5+",
+      "Local-first, no cloud required"
+    ],
+    "keywords": "embedded NoSQL database for .NET, embedded database .NET, BSON document store, NoSQL C#, ACID .NET, zero allocation, LiteDB alternative",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    }
+  }</script><!-- FAQ Structured Data --><script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is BLite?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "BLite is a high-performance embedded NoSQL database for .NET. It stores BSON documents locally inside your application with zero allocations, ACID transactions, and no external server or cloud dependency."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How do I install BLite in a .NET project?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Run 'dotnet add package BLite' in your .NET project. BLite targets .NET 10 and .NET Standard 2.1, and is available on NuGet."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is BLite a good alternative to LiteDB for .NET?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. BLite offers significantly higher throughput and zero heap allocations compared to LiteDB, plus modern features like Change Data Capture, R-Tree spatial indexing, and compile-time source generators."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does BLite require a cloud service or external server?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. BLite is a fully embedded database that runs entirely inside your .NET process. There is no external server, no cloud service, and no network dependency."
+        }
+      }
+    ]
+  }</script><script type="module" async="" crossorigin="" src="/assets/app-C90P_YXG.js"></script><link rel="stylesheet" crossorigin="" href="/assets/app-ovU-8TrO.css"></head><body><div id="app" data-server-rendered="true"><div class="app-layout" data-v-8d29d9f5=""><header class="main-header glass-panel" data-v-8d29d9f5=""><div class="container header-content" data-v-8d29d9f5=""><a href="/" class="logo-link" data-v-8d29d9f5=""><img src="/icon.svg" alt="BLite" class="logo-img" data-v-8d29d9f5=""><div class="logo-text" data-v-8d29d9f5="">BLite<span class="dot" data-v-8d29d9f5="">.</span></div></a><nav data-v-8d29d9f5=""><a href="/" class="" data-v-8d29d9f5="">Home</a><a href="/docs" class="router-link-active" data-v-8d29d9f5="">Docs</a><a href="/studio" class="" data-v-8d29d9f5="">Studio</a><a href="/comparisons" class="" data-v-8d29d9f5="">Comparisons</a><a href="https://github.com/EntglDb/BLite" target="_blank" class="github-link" data-v-8d29d9f5="">GitHub ↗</a></nav></div></header><main data-v-8d29d9f5=""><div class="docs-layout" data-v-8d29d9f5="" data-v-abae5626=""><aside class="docs-sidebar" data-v-abae5626=""><div class="sidebar-header" data-v-abae5626=""><h2 data-v-abae5626="">Documentation</h2></div><nav class="sidebar-nav" data-v-abae5626=""><!--[--><a href="/docs/getting-started" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🚀</span><span class="nav-label" data-v-abae5626="">Getting Started</span></a><a href="/docs/installation" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">📦</span><span class="nav-label" data-v-abae5626="">Installation</span></a><a href="/docs/transactions" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🔄</span><span class="nav-label" data-v-abae5626="">Transactions &amp; Async</span></a><a href="/docs/crud" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">✏️</span><span class="nav-label" data-v-abae5626="">CRUD Operations</span></a><a href="/docs/querying" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🔍</span><span class="nav-label" data-v-abae5626="">Querying</span></a><a href="/docs/generators" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🤖</span><span class="nav-label" data-v-abae5626="">Source Generators</span></a><a href="/docs/cdc" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">📡</span><span class="nav-label" data-v-abae5626="">Change Data Capture</span></a><a href="/docs/spatial" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🌍</span><span class="nav-label" data-v-abae5626="">Spatial Indexing</span></a><a href="/docs/architecture" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🏗️</span><span class="nav-label" data-v-abae5626="">Architecture</span></a><a href="/docs/converters" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🆔</span><span class="nav-label" data-v-abae5626="">Custom ID Converters</span></a><a href="/docs/benchmarks" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">⚡</span><span class="nav-label" data-v-abae5626="">Benchmarks</span></a><a href="/docs/dynamic-api" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🔌</span><span class="nav-label" data-v-abae5626="">Schema-less API</span></a><a href="/docs/blql" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🔎</span><span class="nav-label" data-v-abae5626="">BLQL</span></a><a href="/docs/timeseries" class="nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">📈</span><span class="nav-label" data-v-abae5626="">TimeSeries</span></a><a aria-current="page" href="/docs/kv-store" class="router-link-active router-link-exact-active active nav-item" data-v-abae5626=""><span class="nav-icon" data-v-abae5626="">🗝️</span><span class="nav-label" data-v-abae5626="">Key-Value Store</span></a><!--]--></nav></aside><main class="docs-content" data-v-abae5626=""><div class="container" data-v-abae5626=""><div class="doc-page" data-v-abae5626="" data-v-9580a382=""><h1 data-v-9580a382="">🗝️ <span class="title-gradient" data-v-9580a382="">Embedded Key-Value Store</span></h1><p class="lead" data-v-9580a382="">BLite 3.2.0 ships a persistent <strong data-v-9580a382="">key-value store co-located in the same database file</strong> — no extra process, no extra file, no separate daemon. Access it via <code data-v-9580a382="">IBLiteKvStore</code> on any <code data-v-9580a382="">BLiteEngine</code> or <code data-v-9580a382="">DocumentDbContext</code>.</p><div class="info-box" data-v-9580a382=""><div class="info-header" data-v-9580a382="">📌 How it works</div><p data-v-9580a382="">The KV engine uses a dedicated <code data-v-9580a382="">PageType.KeyValue = 13</code> page chain stored alongside your document collections. A compact in-memory index is rebuilt at startup and keeps all lookups O(1). Writes, deletes, and batch operations are serialized through a single write lock — ACID-safe without blocking concurrent document reads.</p></div><section data-v-9580a382=""><h2 data-v-9580a382="">Installation</h2><p data-v-9580a382="">The KV store is built into <code data-v-9580a382="">BLite.Core</code> — no extra NuGet package required.</p><pre data-v-9580a382=""><code data-v-9580a382="">dotnet add package BLite</code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">Basic Usage</h2><pre data-v-9580a382=""><code data-v-9580a382=""><span class="keyword" data-v-9580a382="">using</span> BLite.Core;
+<span class="keyword" data-v-9580a382="">using</span> BLite.Core.KeyValue;
+
+<span class="keyword" data-v-9580a382="">using var</span> engine = <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">BLiteEngine</span>(<span class="string" data-v-9580a382="">"data.db"</span>);
+<span class="type" data-v-9580a382="">IBLiteKvStore</span> kv = engine.KvStore;
+
+<span class="comment" data-v-9580a382="">// Write — optional TTL per entry</span>
+kv.Set(<span class="string" data-v-9580a382="">"session:abc"</span>, Encoding.UTF8.GetBytes(<span class="string" data-v-9580a382="">"payload"</span>), <span class="type" data-v-9580a382="">TimeSpan</span>.FromHours(<span class="number" data-v-9580a382="">1</span>));
+
+<span class="comment" data-v-9580a382="">// Read — returns null if absent or expired</span>
+<span class="keyword" data-v-9580a382="">byte</span>[]? value = kv.Get(<span class="string" data-v-9580a382="">"session:abc"</span>);
+
+<span class="comment" data-v-9580a382="">// Check / Delete</span>
+<span class="keyword" data-v-9580a382="">bool</span> exists = kv.Exists(<span class="string" data-v-9580a382="">"session:abc"</span>);
+kv.Delete(<span class="string" data-v-9580a382="">"session:abc"</span>);
+
+<span class="comment" data-v-9580a382="">// Extend the expiry without rewriting the value</span>
+kv.Refresh(<span class="string" data-v-9580a382="">"session:abc"</span>, <span class="type" data-v-9580a382="">TimeSpan</span>.FromHours(<span class="number" data-v-9580a382="">2</span>));</code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">Prefix Scan</h2><pre data-v-9580a382=""><code data-v-9580a382=""><span class="comment" data-v-9580a382="">// All keys starting with "session:"</span>
+<span class="type" data-v-9580a382="">IEnumerable</span>&lt;<span class="keyword" data-v-9580a382="">string</span>&gt; sessionKeys = kv.ScanKeys(<span class="string" data-v-9580a382="">"session:"</span>);
+
+<span class="comment" data-v-9580a382="">// Every key in the store</span>
+<span class="type" data-v-9580a382="">IEnumerable</span>&lt;<span class="keyword" data-v-9580a382="">string</span>&gt; allKeys = kv.ScanKeys();</code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">Atomic Batches</h2><p data-v-9580a382=""><code data-v-9580a382="">Batch()</code> groups multiple set/delete operations under a <strong data-v-9580a382="">single lock acquisition</strong>. All operations succeed or none do.</p><pre data-v-9580a382=""><code data-v-9580a382=""><span class="keyword" data-v-9580a382="">int</span> applied = kv.Batch()
+    .Set(<span class="string" data-v-9580a382="">"k1"</span>, data1)
+    .Set(<span class="string" data-v-9580a382="">"k2"</span>, data2, <span class="type" data-v-9580a382="">TimeSpan</span>.FromMinutes(<span class="number" data-v-9580a382="">30</span>))
+    .Delete(<span class="string" data-v-9580a382="">"k3"</span>)
+    .Execute();   <span class="comment" data-v-9580a382="">// returns number of operations applied</span></code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">Options</h2><p data-v-9580a382="">Pass <code data-v-9580a382="">BLiteKvOptions</code> to the engine or context constructor:</p><pre data-v-9580a382=""><code data-v-9580a382=""><span class="keyword" data-v-9580a382="">var</span> kvOptions = <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">BLiteKvOptions</span>
+{
+    DefaultTtl         = <span class="type" data-v-9580a382="">TimeSpan</span>.FromDays(<span class="number" data-v-9580a382="">1</span>),  <span class="comment" data-v-9580a382="">// applied when no explicit TTL is given</span>
+    PurgeExpiredOnOpen = <span class="keyword" data-v-9580a382="">true</span>               <span class="comment" data-v-9580a382="">// sweep on startup</span>
+};
+
+<span class="comment" data-v-9580a382="">// With BLiteEngine</span>
+<span class="keyword" data-v-9580a382="">using var</span> engine = <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">BLiteEngine</span>(<span class="string" data-v-9580a382="">"data.db"</span>, kvOptions);
+
+<span class="comment" data-v-9580a382="">// With DocumentDbContext</span>
+<span class="keyword" data-v-9580a382="">using var</span> db = <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">MyDbContext</span>(<span class="string" data-v-9580a382="">"app.db"</span>, kvOptions);</code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">Using with DocumentDbContext</h2><pre data-v-9580a382=""><code data-v-9580a382=""><span class="keyword" data-v-9580a382="">public partial class</span> <span class="type" data-v-9580a382="">MyDbContext</span> : <span class="type" data-v-9580a382="">DocumentDbContext</span>
+{
+    <span class="keyword" data-v-9580a382="">public</span> <span class="type" data-v-9580a382="">DocumentCollection</span>&lt;<span class="type" data-v-9580a382="">ObjectId</span>, <span class="type" data-v-9580a382="">User</span>&gt; Users { <span class="keyword" data-v-9580a382="">get</span>; <span class="keyword" data-v-9580a382="">set</span>; } = <span class="keyword" data-v-9580a382="">null</span>!;
+
+    <span class="keyword" data-v-9580a382="">public</span> MyDbContext(<span class="keyword" data-v-9580a382="">string</span> path) : <span class="keyword" data-v-9580a382="">base</span>(path) =&gt; InitializeCollections();
+    <span class="keyword" data-v-9580a382="">public</span> MyDbContext(<span class="keyword" data-v-9580a382="">string</span> path, <span class="type" data-v-9580a382="">BLiteKvOptions</span> kv) : <span class="keyword" data-v-9580a382="">base</span>(path, kv) =&gt; InitializeCollections();
+}
+
+<span class="keyword" data-v-9580a382="">using var</span> db = <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">MyDbContext</span>(<span class="string" data-v-9580a382="">"app.db"</span>);
+db.KvStore.Set(<span class="string" data-v-9580a382="">"last-sync"</span>, BitConverter.GetBytes(<span class="type" data-v-9580a382="">DateTime</span>.UtcNow.Ticks));</code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">Purge Expired Entries</h2><p data-v-9580a382="">Expired entries are soft-deleted on first access, so reads never return stale data. <code data-v-9580a382="">PurgeExpired()</code> does a full-page sweep and reclaims wasted disk space.</p><pre data-v-9580a382=""><code data-v-9580a382=""><span class="keyword" data-v-9580a382="">int</span> removed = kv.PurgeExpired();</code></pre></section><section data-v-9580a382=""><h2 data-v-9580a382="">BLite.Caching — IDistributedCache</h2><p data-v-9580a382=""><code data-v-9580a382="">BLite.Caching</code> wraps the embedded KV store as a fully compliant <code data-v-9580a382="">IDistributedCache</code>. Drop it in anywhere you would use Redis or SQL Server cache — zero external dependencies.</p><pre data-v-9580a382=""><code data-v-9580a382="">dotnet add package BLite.Caching</code></pre><h3 data-v-9580a382="">Register in ASP.NET Core</h3><pre data-v-9580a382=""><code data-v-9580a382=""><span class="comment" data-v-9580a382="">// Program.cs</span>
+builder.Services.AddBLiteDistributedCache(<span class="string" data-v-9580a382="">"cache.db"</span>);
+
+<span class="comment" data-v-9580a382="">// With options</span>
+builder.Services.AddBLiteDistributedCache(<span class="string" data-v-9580a382="">"cache.db"</span>, <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">BLiteKvOptions</span>
+{
+    DefaultTtl         = <span class="type" data-v-9580a382="">TimeSpan</span>.FromMinutes(<span class="number" data-v-9580a382="">30</span>),
+    PurgeExpiredOnOpen = <span class="keyword" data-v-9580a382="">true</span>
+});</code></pre><h3 data-v-9580a382="">Standard IDistributedCache</h3><pre data-v-9580a382=""><code data-v-9580a382=""><span class="comment" data-v-9580a382="">// Inject IDistributedCache — works with any existing caching code</span>
+<span class="keyword" data-v-9580a382="">await</span> cache.SetStringAsync(<span class="string" data-v-9580a382="">"key"</span>, <span class="string" data-v-9580a382="">"value"</span>, <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">DistributedCacheEntryOptions</span>
+{
+    SlidingExpiration = <span class="type" data-v-9580a382="">TimeSpan</span>.FromMinutes(<span class="number" data-v-9580a382="">20</span>)
+});
+<span class="keyword" data-v-9580a382="">string</span>? value = <span class="keyword" data-v-9580a382="">await</span> cache.GetStringAsync(<span class="string" data-v-9580a382="">"key"</span>);</code></pre><h3 data-v-9580a382="">Typed helpers (IBLiteCache)</h3><p data-v-9580a382="">Inject <code data-v-9580a382="">IBLiteCache</code> for typed get/set via <code data-v-9580a382="">System.Text.Json</code> and a thundering-herd-safe <code data-v-9580a382="">GetOrSetAsync</code> backed by per-key <code data-v-9580a382="">SemaphoreSlim</code>.</p><pre data-v-9580a382=""><code data-v-9580a382=""><span class="comment" data-v-9580a382="">// Typed set</span>
+<span class="keyword" data-v-9580a382="">await</span> cache.SetAsync(<span class="string" data-v-9580a382="">"user:42"</span>, myUser, <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">DistributedCacheEntryOptions</span>
+{
+    AbsoluteExpirationRelativeToNow = <span class="type" data-v-9580a382="">TimeSpan</span>.FromHours(<span class="number" data-v-9580a382="">1</span>)
+});
+
+<span class="comment" data-v-9580a382="">// Typed get</span>
+<span class="type" data-v-9580a382="">User</span>? user = <span class="keyword" data-v-9580a382="">await</span> cache.GetAsync&lt;<span class="type" data-v-9580a382="">User</span>&gt;(<span class="string" data-v-9580a382="">"user:42"</span>);
+
+<span class="comment" data-v-9580a382="">// GetOrSet — stampede-safe factory</span>
+<span class="type" data-v-9580a382="">User</span> user = <span class="keyword" data-v-9580a382="">await</span> cache.GetOrSetAsync&lt;<span class="type" data-v-9580a382="">User</span>&gt;(<span class="string" data-v-9580a382="">"user:42"</span>,
+    factory: <span class="keyword" data-v-9580a382="">async</span> ct =&gt; <span class="keyword" data-v-9580a382="">await</span> db.LoadUserAsync(<span class="number" data-v-9580a382="">42</span>, ct),
+    options: <span class="keyword" data-v-9580a382="">new</span> <span class="type" data-v-9580a382="">DistributedCacheEntryOptions</span>
+    {
+        SlidingExpiration = <span class="type" data-v-9580a382="">TimeSpan</span>.FromMinutes(<span class="number" data-v-9580a382="">20</span>)
+    });</code></pre><div class="info-box" data-v-9580a382=""><div class="info-header" data-v-9580a382="">📌 Note</div><p data-v-9580a382=""><code data-v-9580a382="">IBLiteCache</code> is a superset of <code data-v-9580a382="">IDistributedCache</code>. The same <code data-v-9580a382="">AddBLiteDistributedCache()</code> registration satisfies both interfaces — inject whichever fits your code.</p></div></section><section data-v-9580a382=""><h2 data-v-9580a382="">BLite Studio</h2><p data-v-9580a382="">The <strong data-v-9580a382="">Key-Value Store</strong> panel in BLite Studio lets you browse, inspect, create, and delete entries without writing code. A <em data-v-9580a382="">Purge Expired</em> button reclaims disk space on demand.</p></section><section data-v-9580a382=""><h2 data-v-9580a382="">API Reference</h2><table data-v-9580a382=""><thead data-v-9580a382=""><tr data-v-9580a382=""><th data-v-9580a382="">Method</th><th data-v-9580a382="">Description</th></tr></thead><tbody data-v-9580a382=""><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">Get(key)</code></td><td data-v-9580a382="">Returns the raw bytes for <em data-v-9580a382="">key</em>, or <code data-v-9580a382="">null</code> if absent or expired.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">Set(key, value, ttl?)</code></td><td data-v-9580a382="">Writes a value. Optional TTL overrides <code data-v-9580a382="">BLiteKvOptions.DefaultTtl</code>.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">Delete(key)</code></td><td data-v-9580a382="">Removes the entry. Returns <code data-v-9580a382="">true</code> if found.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">Exists(key)</code></td><td data-v-9580a382="">Returns <code data-v-9580a382="">true</code> if the key exists and has not expired.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">Refresh(key, ttl)</code></td><td data-v-9580a382="">Extends the expiry without rewriting the value.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">ScanKeys(prefix="")</code></td><td data-v-9580a382="">Enumerates all live keys with the given prefix.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">PurgeExpired()</code></td><td data-v-9580a382="">Reclaims storage used by expired entries. Returns count removed.</td></tr><tr data-v-9580a382=""><td data-v-9580a382=""><code data-v-9580a382="">Batch()</code></td><td data-v-9580a382="">Returns a <code data-v-9580a382="">KvBatch</code> builder for atomic multi-key operations.</td></tr></tbody></table></section></div></div></main></div></main><footer class="main-footer" data-v-8d29d9f5=""><div class="container footer-inner" data-v-8d29d9f5=""><div class="footer-col" data-v-8d29d9f5=""><p data-v-8d29d9f5="">© 2026 BLite Project. Open Source (MIT).</p><p class="tagline" data-v-8d29d9f5="">"Sky is Blite, no Clouds today."</p></div><div class="footer-col footer-downloads" data-v-8d29d9f5=""><p class="footer-dl-title" data-v-8d29d9f5="">⬇ Download BLite Studio v3.2.0</p><div class="footer-dl-links" data-v-8d29d9f5=""><a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.2.0/BLite.Studio-3.2.0-win-x64.msi" data-v-8d29d9f5="">🪟 Windows MSI</a><a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.2.0/BLite.Studio-3.2.0-win-x64-portable.zip" data-v-8d29d9f5="">🪟 Windows Portable</a><a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.2.0/blite-studio_3.2.0_amd64.deb" data-v-8d29d9f5="">🐧 Linux .deb</a><a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.2.0/BLite.Studio-3.2.0-linux-x64.tar.gz" data-v-8d29d9f5="">🐧 Linux tar.gz</a><a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.2.0/BLite.Studio-3.2.0-osx-arm64.dmg" data-v-8d29d9f5="">🍎 macOS Apple Silicon</a><a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.2.0/BLite.Studio-3.2.0-osx-x64.dmg" data-v-8d29d9f5="">🍎 macOS Intel</a></div></div></div></footer></div></div></body></html>

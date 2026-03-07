@@ -77,6 +77,13 @@ public partial class DatabaseExplorerViewModel : ObservableObject
             Label = "Field Keys",
         });
 
+        // Key-Value Store
+        SidebarItems.Add(new SidebarItemViewModel
+        {
+            Kind  = SidebarItemKind.KvStore,
+            Label = "Key-Value Store",
+        });
+
         // Collections
         foreach (var name in _engine.ListCollections().OrderBy(n => n))
         {
@@ -111,6 +118,9 @@ public partial class DatabaseExplorerViewModel : ObservableObject
         {
             SidebarItemKind.FieldKeys  =>
                 new FieldKeysDetailViewModel(_engine.GetKeyMap()),
+
+            SidebarItemKind.KvStore =>
+                new KvStoreDetailViewModel(_engine.KvStore),
 
             SidebarItemKind.Collection when SelectedItem.CollectionName is { } cn =>
                 new CollectionDetailViewModel(cn, _engine),
