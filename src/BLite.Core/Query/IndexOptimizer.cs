@@ -227,7 +227,44 @@ internal static class IndexOptimizer
                 if (propertyPath != null)
                     return (propertyPath, constant2.Value, nodeType);
             }
+
+            // Handle closure captures on the right side (e.g. e.Prop == closureVar.Field)
+            if (left is MemberExpression memberLeft)
+            {
+                var propertyPath = ExtractMemberPath(memberLeft, parameter);
+                if (propertyPath != null)
+                {
+                    try { return (propertyPath, EvaluateExpression<object>(right), nodeType); }
+                    catch { }
+                }
+            }
+
+            // Handle Convert on left with closure on right
+            if (left is UnaryExpression unaryLeft && unaryLeft.Operand is MemberExpression memberLeft2)
+            {
+                var propertyPath = ExtractMemberPath(memberLeft2, parameter);
+                if (propertyPath != null)
+                {
+                    try { return (propertyPath, EvaluateExpression<object>(right), nodeType); }
+                    catch { }
+                }
+            }
         }
+
+        // Handle .Equals() method call: e.Id.Equals(item.Id) or e.Prop.Equals(constant)
+        if (expression is MethodCallExpression equalsCall &&
+            equalsCall.Method.Name == "Equals" &&
+            equalsCall.Arguments.Count == 1 &&
+            equalsCall.Object is MemberExpression equalsOnMember)
+        {
+            var propertyPath = ExtractMemberPath(equalsOnMember, parameter);
+            if (propertyPath != null)
+            {
+                try { return (propertyPath, EvaluateExpression<object>(equalsCall.Arguments[0]), ExpressionType.Equal); }
+                catch { }
+            }
+        }
+
         return (null, null, ExpressionType.Default);
     }
 
