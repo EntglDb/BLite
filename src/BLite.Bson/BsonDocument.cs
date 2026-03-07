@@ -401,6 +401,35 @@ public sealed class BsonDocumentBuilder
     }
 
     /// <summary>
+    /// Adds a nested document field using a builder action.
+    /// The inner builder shares the same key map for consistent field registration.
+    /// </summary>
+    public BsonDocumentBuilder AddDocument(string name, Action<BsonDocumentBuilder> buildAction)
+    {
+        // Create inner builder sharing the same key maps
+        var innerBuilder = _reverseKeyMap != null
+            ? new BsonDocumentBuilder(_keyMap, _reverseKeyMap)
+            : new BsonDocumentBuilder(_keyMap);
+        buildAction(innerBuilder);
+        var innerDoc = innerBuilder.Build();
+        var rawBytes = innerDoc.RawData;
+
+        // elem type (1) + key (variable) + doc bytes
+        EnsureCapacity(rawBytes.Length + name.Length + 16);
+
+        // Write element header: type = 0x03 (Document)
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
+        writer.WriteElementHeader(BsonType.Document, name);
+        _position += writer.Position;
+
+        // Embed raw nested document bytes (includes size + fields + 0x00 end marker)
+        rawBytes.CopyTo(_buffer.AsSpan(_position));
+        _position += rawBytes.Length;
+
+        return this;
+    }
+
+    /// <summary>
     /// Writes a float array as a BSON array of double elements (same format as the source generator).
     /// The numeric index keys ("0", "1", ...) must have been pre-registered in the key map;
     /// they are typically registered by <c>CreateVectorIndex</c>.

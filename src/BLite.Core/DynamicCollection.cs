@@ -1024,7 +1024,10 @@ public sealed class DynamicCollection : IDisposable
 
     #region Index Management
 
-    /// <summary>Creates a secondary B-Tree index on a field path.</summary>
+    /// <summary>
+    /// Creates a secondary B-Tree index on a field path.
+    /// Supports nested properties using dot-notation (e.g., "address.city.name").
+    /// </summary>
     public void CreateIndex(string fieldPath, string? name = null, bool unique = false)
     {
         name ??= $"idx_{fieldPath.ToLowerInvariant()}";
@@ -1033,7 +1036,8 @@ public sealed class DynamicCollection : IDisposable
         if (_secondaryIndexes.ContainsKey(name))
             throw new InvalidOperationException($"Index '{name}' already exists");
 
-        _storage.RegisterKeys(new[] { fieldPath });
+        // Register all key components for nested paths (e.g., "address.city.name" → ["address", "city", "name"])
+        RegisterNestedPathKeys(fieldPath);
 
         var opts = unique ? IndexOptions.CreateUnique(fieldPath) : IndexOptions.CreateBTree(fieldPath);
         var btree = new BTreeIndex(_storage, opts);
@@ -1053,6 +1057,7 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>
     /// Creates a vector (HNSW) index for similarity search on a float-array field.
     /// The field must be stored as a BSON Array of numeric values.
+    /// Supports nested properties using dot-notation.
     /// </summary>
     public void CreateVectorIndex(string fieldPath, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
     {
@@ -1062,7 +1067,8 @@ public sealed class DynamicCollection : IDisposable
         if (_secondaryIndexes.ContainsKey(name))
             throw new InvalidOperationException($"Index '{name}' already exists");
 
-        _storage.RegisterKeys(new[] { fieldPath });
+        // Register all key components for nested paths
+        RegisterNestedPathKeys(fieldPath);
 
         var opts = IndexOptions.CreateVector(dimensions, metric, 16, 200, fieldPath);
         var vector = new VectorSearchIndex(_storage, opts);
@@ -1082,6 +1088,7 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>
     /// Creates a geospatial (R-Tree) index for <c>Near</c> and <c>Within</c> queries.
     /// The field must be stored as a BSON coordinates array <c>[lat, lon]</c>.
+    /// Supports nested properties using dot-notation.
     /// </summary>
     public void CreateSpatialIndex(string fieldPath, string? name = null)
     {
@@ -1091,7 +1098,8 @@ public sealed class DynamicCollection : IDisposable
         if (_secondaryIndexes.ContainsKey(name))
             throw new InvalidOperationException($"Index '{name}' already exists");
 
-        _storage.RegisterKeys(new[] { fieldPath });
+        // Register all key components for nested paths
+        RegisterNestedPathKeys(fieldPath);
 
         var opts = IndexOptions.CreateSpatial(fieldPath);
         var spatial = new RTreeIndex(_storage, opts, 0);
@@ -1220,7 +1228,8 @@ public sealed class DynamicCollection : IDisposable
 
     private void IndexInsert(DynamicSecondaryIndex idx, BsonDocument document, DocumentLocation location, ITransaction transaction)
     {
-        if (!document.TryGetValue(idx.FieldPath, out var val)) return;
+        // Support nested paths with dot-notation (e.g., "address.city.name")
+        if (!TryGetNestedValue(document, idx.FieldPath, out var val)) return;
 
         switch (idx.Kind)
         {
@@ -1241,7 +1250,8 @@ public sealed class DynamicCollection : IDisposable
 
     private void IndexDelete(DynamicSecondaryIndex idx, BsonDocument document, DocumentLocation location, ITransaction transaction)
     {
-        if (!document.TryGetValue(idx.FieldPath, out var val)) return;
+        // Support nested paths with dot-notation
+        if (!TryGetNestedValue(document, idx.FieldPath, out var val)) return;
 
         switch (idx.Kind)
         {
@@ -1547,6 +1557,55 @@ public sealed class DynamicCollection : IDisposable
         if (value.Type != BsonType.Array) return null;
         try { return value.AsCoordinates; }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// Tries to get a value from a BsonDocument using a dot-notation path (e.g., "address.city.name").
+    /// Returns false if any intermediate property is null or not a document.
+    /// </summary>
+    private static bool TryGetNestedValue(BsonDocument document, string path, out BsonValue value)
+    {
+        value = BsonValue.Null;
+        
+        // Simple case: no dots, direct field access
+        if (!path.Contains('.'))
+        {
+            return document.TryGetValue(path, out value);
+        }
+
+        // Nested case: traverse the path
+        var parts = path.Split('.');
+        BsonDocument current = document;
+        
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            if (!current.TryGetValue(parts[i], out var intermediate))
+                return false; // Intermediate field not found
+            
+            if (intermediate.Type != BsonType.Document)
+                return false; // Intermediate value is not a document (can't traverse further)
+            
+            current = intermediate.AsDocument;
+        }
+        
+        // Get the final value
+        return current.TryGetValue(parts[^1], out value);
+    }
+
+    /// <summary>
+    /// Registers all key components of a nested path for BSON dictionary caching.
+    /// Example: "address.city.name" → ["address", "city", "name"]
+    /// </summary>
+    private void RegisterNestedPathKeys(string path)
+    {
+        if (!path.Contains('.'))
+        {
+            _storage.RegisterKeys(new[] { path });
+            return;
+        }
+
+        var parts = path.Split('.');
+        _storage.RegisterKeys(parts);
     }
 
     private static IndexKey CreateIndexKeyFromObject(object value) => value switch

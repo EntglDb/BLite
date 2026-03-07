@@ -321,7 +321,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
         var docData = reader.RemainingBytes()[..docSize].ToArray();
         // Advance reader past the subdocument
         for (int i = 0; i < docSize; i++) reader.ReadByte();
-        return FromDocument(new BsonDocument(docData));
+        return FromDocument(new BsonDocument(docData, reader.Keys));
     }
 
     #endregion

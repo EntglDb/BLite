@@ -23,6 +23,7 @@ public ref struct BsonSpanReader
 
     public int Position => _position;
     public int Remaining => _buffer.Length - _position;
+    public System.Collections.Concurrent.ConcurrentDictionary<ushort, string> Keys => _keys;
 
     /// <summary>
     /// Reads the document size (first 4 bytes of a BSON document)

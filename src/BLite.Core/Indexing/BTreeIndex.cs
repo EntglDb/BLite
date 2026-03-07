@@ -504,33 +504,46 @@ public sealed class BTreeIndex
 
     private void InsertIntoLeaf(uint leafPageId, IndexEntry entry, Span<byte> pageBuffer, ulong transactionId)
     {
-        // Read current entries to determine offset
         var header = BTreeNodeHeader.ReadFrom(pageBuffer[32..]);
         var dataOffset = 32 + 20;
 
-        // Skip existing entries to find free space
+        // Find sorted insertion point: first existing entry >= new key
+        int insertOffset = -1;
         for (int i = 0; i < header.EntryCount; i++)
         {
             var keyLen = BitConverter.ToInt32(pageBuffer.Slice(dataOffset, 4));
-            dataOffset += 4 + keyLen + DocumentLocation.SerializedSize; // Length + Key + DocumentLocation
+            var existingKey = new IndexKey(pageBuffer.Slice(dataOffset + 4, keyLen).ToArray());
+            if (insertOffset == -1 && entry.Key.CompareTo(existingKey) <= 0)
+                insertOffset = dataOffset;
+            dataOffset += 4 + keyLen + DocumentLocation.SerializedSize;
         }
 
-        // Write key length
-        BitConverter.TryWriteBytes(pageBuffer.Slice(dataOffset, 4), entry.Key.Data.Length);
-        dataOffset += 4;
+        // Append at end if no earlier insertion point found
+        if (insertOffset == -1)
+            insertOffset = dataOffset;
 
-        // Write key data
-        entry.Key.Data.CopyTo(pageBuffer.Slice(dataOffset, entry.Key.Data.Length));
-        dataOffset += entry.Key.Data.Length;
+        int entrySize = 4 + entry.Key.Data.Length + DocumentLocation.SerializedSize;
+        int currentEnd = dataOffset;
 
-        // Write DocumentLocation (6 bytes)
-        entry.Location.WriteTo(pageBuffer.Slice(dataOffset, DocumentLocation.SerializedSize));
+        // Shift existing entries right to make room for the new entry
+        if (insertOffset < currentEnd)
+        {
+            int bytesToShift = currentEnd - insertOffset;
+            var temp = new byte[bytesToShift];
+            pageBuffer.Slice(insertOffset, bytesToShift).CopyTo(temp);
+            temp.AsSpan().CopyTo(pageBuffer.Slice(insertOffset + entrySize, bytesToShift));
+        }
 
-        // Update header
+        // Write new entry at sorted insertion point
+        int writePos = insertOffset;
+        BitConverter.TryWriteBytes(pageBuffer.Slice(writePos, 4), entry.Key.Data.Length);
+        writePos += 4;
+        entry.Key.Data.CopyTo(pageBuffer.Slice(writePos, entry.Key.Data.Length));
+        writePos += entry.Key.Data.Length;
+        entry.Location.WriteTo(pageBuffer.Slice(writePos, DocumentLocation.SerializedSize));
+
         header.EntryCount++;
         header.WriteTo(pageBuffer.Slice(32, 20));
-
-        // Write page back
         WritePage(leafPageId, transactionId, pageBuffer);
     }
 
