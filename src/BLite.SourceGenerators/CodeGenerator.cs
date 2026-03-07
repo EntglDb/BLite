@@ -64,24 +64,29 @@ namespace BLite.SourceGenerators
                 sb.AppendLine();
             }
 
-            // Generate field setters for DDD private backing fields
-            // Pattern: private List<T> _items; + public IReadOnlyCollection<T> Items => _items.AsReadOnly()
-            // Note: fields may be readonly, so Expression.Assign cannot be used.
-            // We use FieldInfo.SetValue which works for both readonly and mutable fields.
+            // Generate field accessors for DDD private backing fields
+            // Pattern: private readonly List<T> _items; + public IReadOnlyCollection<T> Items => _items.AsReadOnly()
+            // NET8+: [UnsafeAccessor] — zero-overhead, AOT-safe, no reflection.
+            // netstandard2.1 fallback: FieldInfo.SetValue (reflection, not AOT-safe but functional).
             var backingFieldProps = entity.Properties.Where(p => p.HasPrivateBackingFieldAccess && p.IsCollection).ToList();
             if (backingFieldProps.Any())
             {
-                sb.AppendLine($"        // FieldInfo + lambda setters for DDD private (readonly) backing fields");
+                sb.AppendLine($"        // DDD private backing field accessors");
                 foreach (var prop in backingFieldProps)
                 {
                     var entityType = $"global::{entity.FullTypeName}";
                     var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
                     var listType = $"global::System.Collections.Generic.List<{itemType}>";
-                    // Cache the FieldInfo once, then build a typed lambda around SetValue
+                    // NET8+: UnsafeAccessor for the private field — AOT-safe, trimmer-safe.
+                    sb.AppendLine($"#if NET8_0_OR_GREATER");
+                    sb.AppendLine($"        [global::System.Runtime.CompilerServices.UnsafeAccessor(");
+                    sb.AppendLine($"            global::System.Runtime.CompilerServices.UnsafeAccessorKind.Field, Name = \"{prop.BackingFieldName}\")]");
+                    sb.AppendLine($"        private static extern ref {listType} __UnsafeField_{prop.Name}({entityType} obj);");
+                    sb.AppendLine($"#else");
+                    // netstandard2.1 fallback: FieldInfo.SetValue
                     sb.AppendLine($"        private static readonly global::System.Reflection.FieldInfo _fi_{prop.Name} =");
                     sb.AppendLine($"            typeof({entityType}).GetField(\"{prop.BackingFieldName}\", global::System.Reflection.BindingFlags.Instance | global::System.Reflection.BindingFlags.NonPublic)!;");
-                    sb.AppendLine($"        private static readonly global::System.Action<{entityType}, {listType}> _fieldSetter_{prop.Name} =");
-                    sb.AppendLine($"            (obj, val) => _fi_{prop.Name}.SetValue(obj, val);");
+                    sb.AppendLine($"#endif");
                 }
                 sb.AppendLine();
             }
@@ -474,9 +479,14 @@ namespace BLite.SourceGenerators
                     // Use appropriate setter
                     if (prop.HasPrivateBackingFieldAccess && prop.IsCollection)
                     {
-                        // DDD pattern: set the private backing field directly (_fieldName) via Expression.Field setter.
-                        // The temp var is already List<T>; no conversion to IReadOnlyCollection needed.
-                        sb.AppendLine($"            _fieldSetter_{prop.Name}(entity, {propValue});");
+                        // DDD pattern: write directly to the private backing field.
+                        // NET8+: UnsafeAccessor ref-return — one instruction, AOT-safe.
+                        // netstandard2.1: FieldInfo.SetValue fallback.
+                        sb.AppendLine($"#if NET8_0_OR_GREATER");
+                        sb.AppendLine($"            __UnsafeField_{prop.Name}(entity) = {propValue};");
+                        sb.AppendLine($"#else");
+                        sb.AppendLine($"            _fi_{prop.Name}.SetValue(entity, {propValue});");
+                        sb.AppendLine($"#endif");
                     }
                     else if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
                     {
