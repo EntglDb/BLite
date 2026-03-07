@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;
 using BLite.Core.Collections;
+using BLite.Core.Metadata;
 using static BLite.Core.Query.IndexOptimizer;
 
 namespace BLite.Core.Query;
@@ -10,6 +11,7 @@ namespace BLite.Core.Query;
 public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 {
     private readonly DocumentCollection<TId, T> _collection;
+    private readonly ValueConverterRegistry _converterRegistry;
 
     // ── Reflection cache (computed once per TId+T combination) ────────────────
     // BsonProjectionCompiler.TryCompile<T, TResult> generic method definition.
@@ -24,9 +26,10 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Single(m => m.Name == "Scan" && m.IsGenericMethodDefinition);
 
-    public BTreeQueryProvider(DocumentCollection<TId, T> collection)
+    public BTreeQueryProvider(DocumentCollection<TId, T> collection, ValueConverterRegistry? registry = null)
     {
         _collection = collection;
+        _converterRegistry = registry ?? ValueConverterRegistry.Empty;
     }
 
     public IQueryable CreateQuery(Expression expression)
@@ -88,7 +91,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         IEnumerable<T> sourceData = null!;
         
         // A. Try Index Optimization (Only if Where clause exists)
-        var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes());
+        var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes(), _converterRegistry);
         if (indexOpt != null)
         {
              if (indexOpt.IsVectorSearch)
@@ -113,7 +116,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             BsonReaderPredicate? bsonPredicate = null;
             if (model.WhereClause != null)
             {
-                bsonPredicate = BsonExpressionEvaluator.TryCompile<T>(model.WhereClause);
+                bsonPredicate = BsonExpressionEvaluator.TryCompile<T>(model.WhereClause, _converterRegistry);
             }
 
             if (bsonPredicate != null)

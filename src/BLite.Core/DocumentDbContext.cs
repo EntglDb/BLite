@@ -117,6 +117,11 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         // Apply configurations from ModelBuilder
         if (builder != null)
         {
+            // Register value converters so the query engine can convert ValueObjects
+            // to BSON primitives at query-plan time.
+            if (builder.PropertyConverters.Count > 0)
+                collection.SetConverterRegistry(new ValueConverterRegistry(builder.PropertyConverters));
+
             foreach (var indexBuilder in builder.Indexes)
             {
                 collection.ApplyIndexBuilder(indexBuilder);

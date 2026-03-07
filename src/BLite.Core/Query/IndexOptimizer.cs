@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using BLite.Core.Indexing;
+using BLite.Core.Metadata;
 
 namespace BLite.Core.Query;
 
@@ -25,20 +26,20 @@ internal static class IndexOptimizer
 
     public enum SpatialQueryType { Near, Within }
 
-    public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes)
+    public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
     {
         if (model.WhereClause == null) return null;
 
-        return OptimizeExpression(model.WhereClause.Body, model.WhereClause.Parameters[0], indexes);
+        return OptimizeExpression(model.WhereClause.Body, model.WhereClause.Parameters[0], indexes, registry);
     }
 
-    private static OptimizationResult? OptimizeExpression(Expression expression, ParameterExpression parameter, IEnumerable<CollectionIndexInfo> indexes)
+    private static OptimizationResult? OptimizeExpression(Expression expression, ParameterExpression parameter, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
     {
         // ... (Existing AndAlso logic remains the same) ...
         if (expression is BinaryExpression binary && binary.NodeType == ExpressionType.AndAlso)
         {
-            var left = OptimizeExpression(binary.Left, parameter, indexes);
-            var right = OptimizeExpression(binary.Right, parameter, indexes);
+            var left = OptimizeExpression(binary.Left, parameter, indexes, registry);
+            var right = OptimizeExpression(binary.Right, parameter, indexes, registry);
 
             if (left != null && right != null && left.IndexName == right.IndexName)
             {
@@ -54,7 +55,7 @@ internal static class IndexOptimizer
         }
 
         // Handle Simple Binary Predicates
-        var (propertyName, value, op) = ParseSimplePredicate(expression, parameter);
+        var (propertyName, value, op) = ParseSimplePredicate(expression, parameter, registry);
         if (propertyName != null)
         {
             var index = indexes.FirstOrDefault(i => Matches(i, propertyName));
@@ -198,7 +199,7 @@ internal static class IndexOptimizer
         return index.PropertyPaths[0].Equals(propertyName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static (string? propertyName, object? value, ExpressionType op) ParseSimplePredicate(Expression expression, ParameterExpression parameter)
+    private static (string? propertyName, object? value, ExpressionType op) ParseSimplePredicate(Expression expression, ParameterExpression parameter, ValueConverterRegistry? registry = null)
     {
         if (expression is BinaryExpression binary)
         {
@@ -234,7 +235,12 @@ internal static class IndexOptimizer
                 var propertyPath = ExtractMemberPath(memberLeft, parameter);
                 if (propertyPath != null)
                 {
-                    try { return (propertyPath, EvaluateExpression<object>(right), nodeType); }
+                    try
+                    {
+                        var val = EvaluateExpression<object>(right);
+                        val = TryApplyConverter(propertyPath, val, registry);
+                        return (propertyPath, val, nodeType);
+                    }
                     catch { }
                 }
             }
@@ -245,7 +251,12 @@ internal static class IndexOptimizer
                 var propertyPath = ExtractMemberPath(memberLeft2, parameter);
                 if (propertyPath != null)
                 {
-                    try { return (propertyPath, EvaluateExpression<object>(right), nodeType); }
+                    try
+                    {
+                        var val = EvaluateExpression<object>(right);
+                        val = TryApplyConverter(propertyPath, val, registry);
+                        return (propertyPath, val, nodeType);
+                    }
                     catch { }
                 }
             }
@@ -260,12 +271,25 @@ internal static class IndexOptimizer
             var propertyPath = ExtractMemberPath(equalsOnMember, parameter);
             if (propertyPath != null)
             {
-                try { return (propertyPath, EvaluateExpression<object>(equalsCall.Arguments[0]), ExpressionType.Equal); }
+                try
+                {
+                    var val = EvaluateExpression<object>(equalsCall.Arguments[0]);
+                    val = TryApplyConverter(propertyPath, val, registry);
+                    return (propertyPath, val, ExpressionType.Equal);
+                }
                 catch { }
             }
         }
 
         return (null, null, ExpressionType.Default);
+    }
+
+    private static object? TryApplyConverter(string propertyPath, object? value, ValueConverterRegistry? registry)
+    {
+        if (registry == null || value == null) return value;
+        // Use top-level property name (first segment) for registry lookup
+        var topProp = propertyPath.Contains('.') ? propertyPath[..propertyPath.IndexOf('.')] : propertyPath;
+        return registry.TryConvert(topProp, value, out var pv) ? pv : value;
     }
 
     /// <summary>

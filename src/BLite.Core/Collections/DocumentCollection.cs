@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using BLite.Bson;
 using BLite.Core.Indexing;
+using BLite.Core.Metadata;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System.Runtime.CompilerServices;
@@ -57,6 +58,14 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     private readonly SemaphoreSlim _collectionLock = new(1, 1);
 
     private readonly int _maxDocumentSizeForSinglePage;
+
+    // Value converters registered via OnModelCreating (e.g. ValueObject Id converters).
+    // Exposed to BTreeQueryProvider so the query engine can convert ValueObjects to BSON
+    // primitives at query-plan time, enabling index lookups on ValueObject-keyed collections.
+    internal ValueConverterRegistry ConverterRegistry { get; private set; } = ValueConverterRegistry.Empty;
+
+    internal void SetConverterRegistry(ValueConverterRegistry registry) =>
+        ConverterRegistry = registry ?? ValueConverterRegistry.Empty;
 
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
@@ -758,7 +767,7 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     /// </summary>
     public IBLiteQueryable<T> AsQueryable()
     {
-        return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this));
+        return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this, ConverterRegistry));
     }
 
     /// <summary>

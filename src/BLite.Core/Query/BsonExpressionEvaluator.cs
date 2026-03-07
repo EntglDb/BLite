@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using BLite.Bson;
+using BLite.Core.Metadata;
 
 namespace BLite.Core.Query;
 
@@ -15,8 +16,8 @@ internal static class BsonExpressionEvaluator
         typeof(ObjectId)
     ];
 
-    public static BsonReaderPredicate? TryCompile<T>(LambdaExpression expression)
-        => TryCompileBody(expression.Body, expression.Parameters[0]);
+    public static BsonReaderPredicate? TryCompile<T>(LambdaExpression expression, ValueConverterRegistry? registry = null)
+        => TryCompileBody(expression.Body, expression.Parameters[0], registry);
 
     /// <summary>
     /// Recursively compiles an expression node into a <see cref="BsonReaderPredicate"/>.
@@ -25,7 +26,7 @@ internal static class BsonExpressionEvaluator
     /// - <c>.Equals()</c> method calls: treated as equality
     /// - Closure captures: evaluated at plan-time via <see cref="TryEvaluate"/>
     /// </summary>
-    private static BsonReaderPredicate? TryCompileBody(Expression body, ParameterExpression parameter)
+    private static BsonReaderPredicate? TryCompileBody(Expression body, ParameterExpression parameter, ValueConverterRegistry? registry = null)
     {
         // ── AndAlso ────────────────────────────────────────────────────────────
         // Pattern: (item.Id != null) && e.Id.Equals(item.Id)
@@ -35,13 +36,13 @@ internal static class BsonExpressionEvaluator
             bool leftTouches  = TouchesParameter(andAlso.Left,  parameter);
             bool rightTouches = TouchesParameter(andAlso.Right, parameter);
 
-            if (leftTouches && !rightTouches)  return TryCompileBody(andAlso.Left,  parameter);
-            if (rightTouches && !leftTouches)  return TryCompileBody(andAlso.Right, parameter);
+            if (leftTouches && !rightTouches)  return TryCompileBody(andAlso.Left,  parameter, registry);
+            if (rightTouches && !leftTouches)  return TryCompileBody(andAlso.Right, parameter, registry);
 
             if (leftTouches && rightTouches)
             {
-                var lp = TryCompileBody(andAlso.Left,  parameter);
-                var rp = TryCompileBody(andAlso.Right, parameter);
+                var lp = TryCompileBody(andAlso.Left,  parameter, registry);
+                var rp = TryCompileBody(andAlso.Right, parameter, registry);
                 if (lp != null && rp != null) return reader => lp(reader) && rp(reader);
                 return lp ?? rp;
             }
@@ -57,12 +58,19 @@ internal static class BsonExpressionEvaluator
             methodCall.Object is MemberExpression equalsOnMember &&
             equalsOnMember.Expression == parameter)
         {
-            var propertyName = equalsOnMember.Member.Name.ToLowerInvariant();
-            if (propertyName == "id") propertyName = "_id";
+            var fieldName   = equalsOnMember.Member.Name;
+            var bsonName    = fieldName.ToLowerInvariant();
+            if (bsonName == "id") bsonName = "_id";
 
             var (ok, value) = TryEvaluate(methodCall.Arguments[0]);
             if (ok && IsKnownBsonPrimitive(value?.GetType()))
-                return CreatePredicate(propertyName, value, ExpressionType.Equal);
+                return CreatePredicate(bsonName, value, ExpressionType.Equal);
+
+            // Try ValueObject → provider conversion
+            if (ok && value != null &&
+                registry?.TryConvert(fieldName, value, out var pv) == true &&
+                IsKnownBsonPrimitive(pv?.GetType()))
+                return CreatePredicate(bsonName, pv, ExpressionType.Equal);
 
             return null;
         }
@@ -84,13 +92,20 @@ internal static class BsonExpressionEvaluator
 
             if (left is MemberExpression member && member.Expression == parameter)
             {
-                var propertyName = member.Member.Name.ToLowerInvariant();
-                if (propertyName == "id") propertyName = "_id";
+                var fieldName = member.Member.Name;
+                var bsonName  = fieldName.ToLowerInvariant();
+                if (bsonName == "id") bsonName = "_id";
 
                 // Right side: ConstantExpression or closure capture (any non-parameter expr)
                 var (ok, value) = TryEvaluate(right);
                 if (ok && IsKnownBsonPrimitive(value?.GetType()))
-                    return CreatePredicate(propertyName, value, nodeType);
+                    return CreatePredicate(bsonName, value, nodeType);
+
+                // Try ValueObject → provider conversion
+                if (ok && value != null &&
+                    registry?.TryConvert(fieldName, value, out var pv) == true &&
+                    IsKnownBsonPrimitive(pv?.GetType()))
+                    return CreatePredicate(bsonName, pv, nodeType);
             }
         }
 
