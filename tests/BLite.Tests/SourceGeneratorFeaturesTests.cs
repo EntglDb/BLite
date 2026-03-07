@@ -525,6 +525,72 @@ public class SourceGeneratorFeaturesTests : IDisposable
 
     #endregion
 
+    #region DDD Private Backing Field Tests
+
+    [Fact]
+    public void DddAggregate_WithPrivateBackingField_CanPersistAndReload()
+    {
+        var agg = DddAggregate.Create("Invoice #1");
+        agg.AddItem("Widget", 3);
+        agg.AddItem("Gadget", 1);
+        agg.AddTag("urgent");
+        agg.AddTag("b2b");
+
+        _db.DddAggregates.Insert(agg);
+        _db.SaveChanges();
+
+        var loaded = _db.DddAggregates.FindById(agg.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Invoice #1", loaded.Title);
+        Assert.Equal(2, loaded.Items.Count);
+        Assert.Contains(loaded.Items, i => i.Name == "Widget" && i.Quantity == 3);
+        Assert.Contains(loaded.Items, i => i.Name == "Gadget" && i.Quantity == 1);
+        Assert.Equal(2, loaded.Tags.Count);
+        Assert.Contains(loaded.Tags, t => t == "urgent");
+        Assert.Contains(loaded.Tags, t => t == "b2b");
+    }
+
+    [Fact]
+    public void DddAggregate_EmptyCollections_RoundTrip()
+    {
+        var agg = DddAggregate.Create("Empty Invoice");
+        _db.DddAggregates.Insert(agg);
+        _db.SaveChanges();
+
+        var loaded = _db.DddAggregates.FindById(agg.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Empty Invoice", loaded.Title);
+        Assert.Empty(loaded.Items);
+        Assert.Empty(loaded.Tags);
+    }
+
+    [Fact]
+    public void DddAggregate_MultipleDocuments_FindAll_Works()
+    {
+        var agg1 = DddAggregate.Create("Order A");
+        agg1.AddItem("X", 10);
+
+        var agg2 = DddAggregate.Create("Order B");
+        agg2.AddItem("Y", 5);
+        agg2.AddItem("Z", 2);
+
+        _db.DddAggregates.Insert(agg1);
+        _db.DddAggregates.Insert(agg2);
+        _db.SaveChanges();
+
+        var all = _db.DddAggregates.FindAll().ToList();
+
+        Assert.Equal(2, all.Count);
+        var a = all.Single(x => x.Title == "Order A");
+        var b = all.Single(x => x.Title == "Order B");
+        Assert.Single(a.Items);
+        Assert.Equal(2, b.Items.Count);
+    }
+
+    #endregion
+
     public void Dispose()
     {
         _db?.Dispose();

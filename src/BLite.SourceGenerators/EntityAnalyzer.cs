@@ -37,8 +37,9 @@ namespace BLite.SourceGenerators
             AnalyzeProperties(entityType, entityInfo.Properties);
 
             // Check if entity needs reflection-based deserialization
-            // Include properties with private setters or init-only setters (which can't be set outside initializers)
-            entityInfo.HasPrivateSetters = entityInfo.Properties.Any(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter);
+            // Include properties with private setters, init-only setters, or DDD backing field pattern
+            entityInfo.HasPrivateSetters = entityInfo.Properties.Any(p =>
+                (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter || p.HasPrivateBackingFieldAccess);
             
             // Check if entity has public parameterless constructor
             var hasPublicParameterlessConstructor = entityType.Constructors
@@ -99,8 +100,16 @@ namespace BLite.SourceGenerators
                     
                     // Skip computed getter-only properties (no setter, no backing field)
                     bool isReadOnlyGetter = prop.SetMethod == null && !SyntaxHelper.HasBackingField(prop);
+                    Microsoft.CodeAnalysis.IFieldSymbol? conventionalBackingField = null;
                     if (isReadOnlyGetter)
-                        continue;
+                    {
+                        // DDD pattern: public IReadOnlyCollection<T> Lines => _lines.AsReadOnly()
+                        // Check for a conventional private backing field named _propertyName.
+                        conventionalBackingField = SyntaxHelper.FindConventionalBackingField(prop);
+                        if (conventionalBackingField == null)
+                            continue; // True computed property — skip as before
+                        // Fall through: backing field found, include this property
+                    }
 
                 var columnAttr = AttributeHelper.GetAttribute(prop, "Column");
                 var bsonFieldName = AttributeHelper.GetAttributeStringValue(prop, "BsonProperty") ?? 
@@ -125,9 +134,12 @@ namespace BLite.SourceGenerators
                         HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
                         HasAnySetter = prop.SetMethod != null,
                         IsReadOnlyGetter = isReadOnlyGetter,
-                        BackingFieldName = (prop.SetMethod?.DeclaredAccessibility != Accessibility.Public) 
-                            ? $"<{prop.Name}>k__BackingField" 
-                            : null
+                        HasPrivateBackingFieldAccess = conventionalBackingField != null,
+                        BackingFieldName = conventionalBackingField != null
+                            ? conventionalBackingField.Name
+                            : (prop.SetMethod?.DeclaredAccessibility != Accessibility.Public)
+                                ? $"<{prop.Name}>k__BackingField"
+                                : null
                     };
 
                 // MaxLength / MinLength

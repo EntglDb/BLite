@@ -153,6 +153,46 @@ namespace BLite.Shared
         public List<TreeNode> Children { get; set; } = new();
     }
 
+    // ========================================
+    // DDD aggregate with private backing fields
+    // ========================================
+
+    /// <summary>
+    /// Simulates a DDD aggregate root where collection properties are exposed as
+    /// read-only via a private backing field — the typical DDD pattern.
+    /// <code>
+    /// private readonly List&lt;DddLineItem&gt; _items = new();
+    /// public IReadOnlyCollection&lt;DddLineItem&gt; Items =&gt; _items.AsReadOnly();
+    /// </code>
+    /// The source generator must detect the <c>_items</c> backing field and use a
+    /// <c>Expression.Field</c> setter during deserialization instead of trying to set
+    /// the getter-only <c>Items</c> property.
+    /// </summary>
+    public class DddAggregate
+    {
+        public ObjectId Id { get; private set; }
+        public string Title { get; private set; } = string.Empty;
+
+        private readonly List<DddLineItem> _items = new();
+        public IReadOnlyCollection<DddLineItem> Items => _items.AsReadOnly();
+
+        private readonly List<string> _tags = new();
+        public IReadOnlyCollection<string> Tags => _tags.AsReadOnly();
+
+        // Factory / domain method
+        public static DddAggregate Create(string title)
+            => new DddAggregate { Id = ObjectId.NewObjectId(), Title = title };
+
+        public void AddItem(string name, int qty) => _items.Add(new DddLineItem { Name = name, Quantity = qty });
+        public void AddTag(string tag) => _tags.Add(tag);
+    }
+
+    public class DddLineItem
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Quantity { get; set; }
+    }
+
     public record OrderId(string Value)
     {
         public OrderId() : this(string.Empty) { }

@@ -65,6 +65,9 @@ public partial class TestDbContext : DocumentDbContext
     // Self-Referencing Collection Tests
     public DocumentCollection<ObjectId, TreeNode> TreeNodes { get; set; } = null!;
 
+    // DDD private backing field Tests
+    public DocumentCollection<ObjectId, DddAggregate> DddAggregates { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
         InitializeCollections();
@@ -137,6 +140,9 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<TreeNode>()
             .ToCollection("tree_nodes")
             .HasKey(t => t.Id);
+
+        // DDD private backing field Tests
+        modelBuilder.Entity<DddAggregate>().ToCollection("ddd_aggregates");
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);

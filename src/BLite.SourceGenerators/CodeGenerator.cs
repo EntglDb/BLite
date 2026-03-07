@@ -64,6 +64,28 @@ namespace BLite.SourceGenerators
                 sb.AppendLine();
             }
 
+            // Generate field setters for DDD private backing fields
+            // Pattern: private List<T> _items; + public IReadOnlyCollection<T> Items => _items.AsReadOnly()
+            // Note: fields may be readonly, so Expression.Assign cannot be used.
+            // We use FieldInfo.SetValue which works for both readonly and mutable fields.
+            var backingFieldProps = entity.Properties.Where(p => p.HasPrivateBackingFieldAccess && p.IsCollection).ToList();
+            if (backingFieldProps.Any())
+            {
+                sb.AppendLine($"        // FieldInfo + lambda setters for DDD private (readonly) backing fields");
+                foreach (var prop in backingFieldProps)
+                {
+                    var entityType = $"global::{entity.FullTypeName}";
+                    var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
+                    var listType = $"global::System.Collections.Generic.List<{itemType}>";
+                    // Cache the FieldInfo once, then build a typed lambda around SetValue
+                    sb.AppendLine($"        private static readonly global::System.Reflection.FieldInfo _fi_{prop.Name} =");
+                    sb.AppendLine($"            typeof({entityType}).GetField(\"{prop.BackingFieldName}\", global::System.Reflection.BindingFlags.Instance | global::System.Reflection.BindingFlags.NonPublic)!;");
+                    sb.AppendLine($"        private static readonly global::System.Action<{entityType}, {listType}> _fieldSetter_{prop.Name} =");
+                    sb.AppendLine($"            (obj, val) => _fi_{prop.Name}.SetValue(obj, val);");
+                }
+                sb.AppendLine();
+            }
+
             // Collection Name (only for root)
             if (isRoot)
             {
@@ -425,6 +447,10 @@ namespace BLite.SourceGenerators
                         {
                             propValue += ".ToArray()";
                         }
+                        else if (prop.HasPrivateBackingFieldAccess)
+                        {
+                            // DDD backing field is List<T> — no conversion; assign temp List<T> directly to the field.
+                        }
                         else if (prop.CollectionConcreteTypeName != null)
                         {
                             var concreteType = prop.CollectionConcreteTypeName;
@@ -446,7 +472,13 @@ namespace BLite.SourceGenerators
                     }
                     
                     // Use appropriate setter
-                    if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
+                    if (prop.HasPrivateBackingFieldAccess && prop.IsCollection)
+                    {
+                        // DDD pattern: set the private backing field directly (_fieldName) via Expression.Field setter.
+                        // The temp var is already List<T>; no conversion to IReadOnlyCollection needed.
+                        sb.AppendLine($"            _fieldSetter_{prop.Name}(entity, {propValue});");
+                    }
+                    else if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
                     {
                         // Use Expression Tree setter (for private or init-only setters)
                         sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue} ?? default!);");

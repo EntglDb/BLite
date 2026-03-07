@@ -42,6 +42,13 @@ namespace BLite.SourceGenerators.Models
         public bool HasAnySetter { get; set; }
         public bool IsReadOnlyGetter { get; set; }
         public string? BackingFieldName { get; set; }
+
+        /// <summary>
+        /// True when this is a getter-only property backed by a conventional private field
+        /// following the DDD pattern: <c>private List&lt;T&gt; _items</c> + <c>public IReadOnlyCollection&lt;T&gt; Items =&gt; _items.AsReadOnly()</c>.
+        /// The <see cref="BackingFieldName"/> holds the private field name (e.g. <c>_items</c>).
+        /// </summary>
+        public bool HasPrivateBackingFieldAccess { get; set; }
         
         public bool IsKey { get; set; }
         public bool IsRequired { get; set; }

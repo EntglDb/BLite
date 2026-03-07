@@ -216,5 +216,23 @@ namespace BLite.SourceGenerators.Helpers
                 .OfType<IFieldSymbol>()
                 .Any(f => f.AssociatedSymbol?.Equals(property, SymbolEqualityComparer.Default) == true);
         }
+
+        /// <summary>
+        /// Looks for a manually-declared private backing field that follows DDD conventions.
+        /// Pattern: <c>private readonly List&lt;T&gt; _lines = new();</c>
+        /// paired with <c>public IReadOnlyCollection&lt;T&gt; Lines =&gt; _lines.AsReadOnly();</c>
+        /// Convention: field named <c>_propertyName</c> (underscore + camelCase).
+        /// </summary>
+        public static IFieldSymbol? FindConventionalBackingField(IPropertySymbol property)
+        {
+            var conventionalName = "_" + char.ToLower(property.Name[0]) + property.Name.Substring(1);
+            return property.ContainingType.GetMembers()
+                .OfType<IFieldSymbol>()
+                .FirstOrDefault(f => f.Name == conventionalName &&
+                                     !f.IsStatic &&
+                                     !f.IsConst &&
+                                     (f.DeclaredAccessibility == Accessibility.Private ||
+                                      f.DeclaredAccessibility == Accessibility.Protected));
+        }
     }
 }
