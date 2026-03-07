@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/BLite.Bson/BLite.Bson.csproj" />
+    <Project Path="src/BLite.Caching/BLite.Caching.csproj" />
     <Project Path="src/BLite.Core/BLite.Core.csproj" />
     <Project Path="src/BLite.SourceGenerators/BLite.SourceGenerators.csproj" />
     <Project Path="src/BLite/BLite.csproj" />

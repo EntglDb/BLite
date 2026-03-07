@@ -60,6 +60,7 @@ public sealed partial class StorageEngine : IDisposable
         }
         
         InitializeDictionary();
+        InitializeKv();
         
         // Create and start checkpoint manager
         // _checkpointManager = new Transactions.CheckpointManager(this);

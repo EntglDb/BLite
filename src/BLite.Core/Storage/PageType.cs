@@ -43,4 +43,7 @@ public enum PageType : byte
 
     /// <summary>TimeSeries specific page</summary>
     TimeSeries = 12,
+
+    /// <summary>Key-Value store page (raw byte values, no BSON)</summary>
+    KeyValue = 13,
 }

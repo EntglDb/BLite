@@ -1,7 +1,8 @@
 using BLite.Core.Collections;
+using BLite.Core.KeyValue;
+using BLite.Core.Metadata;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
-using BLite.Core.Metadata;
 using System.Threading;
 using System;
 using System.Collections.Generic;
@@ -19,6 +20,7 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
 {
     protected readonly StorageEngine _storage;
     internal readonly CDC.ChangeStreamDispatcher _cdc;
+    private readonly BLiteKvStore _kvStore;
     protected bool _disposed;
     private readonly SemaphoreSlim _transactionLock = new SemaphoreSlim(1, 1);
     private ITransaction? _currentTransaction;
@@ -38,14 +40,30 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
     /// Creates a new database context with default configuration
     /// </summary>
     protected DocumentDbContext(string databasePath)
-        : this(databasePath, PageFileConfig.Default)
+        : this(databasePath, PageFileConfig.Default, null)
     {
     }
 
     /// <summary>
-    /// Creates a new database context with custom configuration
+    /// Creates a new database context with custom page configuration.
     /// </summary>
     protected DocumentDbContext(string databasePath, PageFileConfig config)
+        : this(databasePath, config, null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new database context with custom Key-Value store options.
+    /// </summary>
+    protected DocumentDbContext(string databasePath, BLiteKvOptions kvOptions)
+        : this(databasePath, PageFileConfig.Default, kvOptions)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new database context with custom page and Key-Value store configuration.
+    /// </summary>
+    protected DocumentDbContext(string databasePath, PageFileConfig config, BLiteKvOptions? kvOptions)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
@@ -53,12 +71,25 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
         _storage.RegisterCdc(_cdc);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
 
         // Initialize model before collections
         var modelBuilder = new ModelBuilder();
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
+    }
+
+    /// <summary>
+    /// Provides access to the embedded Key-Value store that shares the same database file.
+    /// </summary>
+    public IBLiteKvStore KvStore
+    {
+        get
+        {
+            if (_disposed) throw new ObjectDisposedException(GetType().Name);
+            return _kvStore;
+        }
     }
 
     protected virtual void InitializeCollections()

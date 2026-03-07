@@ -38,14 +38,10 @@ public struct PageHeader
     [FieldOffset(23)]
     public uint DictionaryRootPageId;
 
+    /// <summary>Key-Value store root page ID (Only used in Page 0 / File Header). 0 = not initialised.</summary>
     [FieldOffset(27)]
-    private byte _reserved5;
-    [FieldOffset(28)]
-    private byte _reserved6;
-    [FieldOffset(29)]
-    private byte _reserved7;
-    [FieldOffset(30)]
-    private byte _reserved8;
+    public uint KvRootPageId;
+
     [FieldOffset(31)]
     private byte _reserved9;
 

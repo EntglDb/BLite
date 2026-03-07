@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.KeyValue;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
@@ -24,6 +25,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     private readonly StorageEngine _storage;
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _transactionLock = new(1, 1);
+    private readonly BLiteKvStore _kvStore;
     private bool _disposed;
     private ITransaction? _currentTransaction;
 
@@ -48,21 +50,48 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// </summary>
     /// <param name="databasePath">Path to the database file</param>
     public BLiteEngine(string databasePath)
-        : this(databasePath, PageFileConfig.Default)
+        : this(databasePath, PageFileConfig.Default, null)
     {
     }
 
     /// <summary>
     /// Creates a new BLiteEngine with custom page configuration.
     /// </summary>
-    /// <param name="databasePath">Path to the database file</param>
-    /// <param name="config">Page file configuration</param>
     public BLiteEngine(string databasePath, PageFileConfig config)
+        : this(databasePath, config, null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new BLiteEngine with custom Key-Value store options.
+    /// </summary>
+    public BLiteEngine(string databasePath, BLiteKvOptions kvOptions)
+        : this(databasePath, PageFileConfig.Default, kvOptions)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new BLiteEngine with custom page and Key-Value store configuration.
+    /// </summary>
+    public BLiteEngine(string databasePath, PageFileConfig config, BLiteKvOptions? kvOptions)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
 
         _storage = new StorageEngine(databasePath, config);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    #endregion
+
+    #region Key-Value Store
+
+    /// <summary>
+    /// Provides access to the embedded Key-Value store that shares the same database file.
+    /// </summary>
+    public IBLiteKvStore KvStore
+    {
+        get { ThrowIfDisposed(); return _kvStore; }
     }
 
     #endregion
