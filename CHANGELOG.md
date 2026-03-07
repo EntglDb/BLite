@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.1.1"></a>
+## [3.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.1.1) (2026-03-07)
+
+### Features
+
+* **sourcegen:** supporto DDD private backing field per collezioni ([46f4e9a](https://www.github.com/EntglDb/BLite/commit/46f4e9a570a0d80aad7a0701b209724f9bce0bb0))
+
+### Bug Fixes
+
+* IndexOptimizer regressione con chiavi ValueObject senza registry ([50c5938](https://www.github.com/EntglDb/BLite/commit/50c5938dcbc41be36b2059c833c23aa83a532e96))
+
 <a name="3.1.0"></a>
 ## [3.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.1.0) (2026-03-07)
 
