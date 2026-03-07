@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.0.1"></a>
+## [3.0.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.0.1) (2026-03-07)
+
+### Bug Fixes
+
+* **schema:** prevent buffer overflow when serializing schemas larger than PageSize ([2495d20](https://www.github.com/EntglDb/BLite/commit/2495d20d4449e3c6028d386099e3b522f3bb862d))
+
 <a name="3.0.0"></a>
 ## [3.0.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.0.0) (2026-03-06)
 
