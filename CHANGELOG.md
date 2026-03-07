@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.1.0"></a>
+## [3.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.1.0) (2026-03-07)
+
+### Features
+
+* integrate ValueConverter registry into query pipeline ([4de5919](https://www.github.com/EntglDb/BLite/commit/4de5919ff1cfbfcf4b0b55d247765db42f7a4588))
+
+### Bug Fixes
+
+* **query:** support AndAlso, .Equals() calls and closure captures in expression analysis ([715a77d](https://www.github.com/EntglDb/BLite/commit/715a77d10e5e36b46168babe3714e5a2fc2ef13f))
+
 <a name="3.0.1"></a>
 ## [3.0.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.0.1) (2026-03-07)
 
