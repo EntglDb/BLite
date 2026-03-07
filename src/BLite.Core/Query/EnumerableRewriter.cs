@@ -1,8 +1,6 @@
-using System.Collections.Concurrent;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text;
 
 namespace BLite.Core.Query;
 
@@ -14,10 +12,6 @@ internal class EnumerableRewriter : ExpressionVisitor
         typeof(Enumerable)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .ToLookup(m => m.Name);
-
-    // Resolved + instantiated MethodInfo keyed by "Name|argCount|type1,type2,...".
-    // MakeGenericMethod is called at most once per unique (operator, type-args) combination.
-    private static readonly ConcurrentDictionary<string, MethodInfo?> s_resolvedCache = new();
 
     // ── Instance ──────────────────────────────────────────────────────────────────
     private readonly IQueryable _source;
@@ -56,15 +50,20 @@ internal class EnumerableRewriter : ExpressionVisitor
                 args[i] = arg;
             }
 
-            // Resolve the corresponding Enumerable method once per type combination.
-            var cacheKey = BuildCacheKey(methodName, args.Length, typeArgs);
-            var resolved = s_resolvedCache.GetOrAdd(
-                cacheKey, _ => ResolveMethod(methodName, args.Length, typeArgs));
-
-            if (resolved is not null)
+            // Try every matching Enumerable overload until one accepts the
+            // actual argument types.  .NET 6+ added defaultValue overloads for
+            // First/FirstOrDefault/Single/SingleOrDefault/Last/LastOrDefault
+            // that share the same generic-arg and param counts, so a name+arity
+            // key is no longer sufficient for a single-entry cache.
+            foreach (var candidate in s_enumerableMethods[methodName])
             {
-                try { return Expression.Call(resolved, args); }
-                catch { /* arg types incompatible for this overload — fall through */ }
+                if (candidate.GetGenericArguments().Length != typeArgs.Length) continue;
+                if (candidate.GetParameters().Length != args.Length) continue;
+                MethodInfo closed;
+                try { closed = candidate.MakeGenericMethod(typeArgs); }
+                catch { continue; }
+                try { return Expression.Call(closed, args); }
+                catch { continue; }
             }
         }
 
@@ -72,31 +71,4 @@ internal class EnumerableRewriter : ExpressionVisitor
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
-
-    private static MethodInfo? ResolveMethod(string name, int argCount, Type[] typeArgs)
-    {
-        foreach (var m in s_enumerableMethods[name])
-        {
-            if (m.GetGenericArguments().Length != typeArgs.Length) continue;
-            if (m.GetParameters().Length != argCount) continue;
-            try { return m.MakeGenericMethod(typeArgs); }
-            catch { }
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Builds a string cache key from the operator name, argument count, and closed type arguments.
-    /// Example: <c>GroupBy|3|System.String,BLite.Tests.TestDocument</c>
-    /// </summary>
-    private static string BuildCacheKey(string name, int argCount, Type[] typeArgs)
-    {
-        var sb = new StringBuilder(name).Append('|').Append(argCount).Append('|');
-        for (int i = 0; i < typeArgs.Length; i++)
-        {
-            if (i > 0) sb.Append(',');
-            sb.Append(typeArgs[i].FullName ?? typeArgs[i].Name);
-        }
-        return sb.ToString();
-    }
 }

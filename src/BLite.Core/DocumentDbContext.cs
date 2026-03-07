@@ -37,10 +37,11 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
     }
 
     /// <summary>
-    /// Creates a new database context with default configuration
+    /// Creates a new database context with default configuration.
+    /// Auto-detects the page size for existing database files.
     /// </summary>
     protected DocumentDbContext(string databasePath)
-        : this(databasePath, PageFileConfig.Default, null)
+        : this(databasePath, PageFileConfig.DetectFromFile(databasePath) ?? PageFileConfig.Default, null)
     {
     }
 

@@ -220,7 +220,19 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             _engine?.Dispose();
-            _engine = new BLiteEngine(path, CurrentConfig);
+
+            // Auto-detect page size for existing files; fall back to user preset for new ones.
+            var detected = PageFileConfig.DetectFromFile(path);
+            var config   = detected ?? CurrentConfig;
+            if (detected.HasValue)
+            {
+                var access = IsReadOnly
+                    ? MemoryMappedFileAccess.Read
+                    : MemoryMappedFileAccess.ReadWrite;
+                config = detected.Value with { Access = access };
+            }
+
+            _engine = new BLiteEngine(path, config);
 
             // Persist to history
             _history.AddOrUpdate(path, presetValue, readOnly);

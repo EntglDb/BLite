@@ -45,6 +45,48 @@ public readonly struct PageFileConfig
         GrowthBlockSize = 2 * 1024 * 1024, // grow by 2MB at a time
         Access = MemoryMappedFileAccess.ReadWrite
     };
+
+    /// <summary>
+    /// Detects the page size from an existing database file by reading the page-0 header.
+    /// Returns a matching <see cref="PageFileConfig"/> with <see cref="MemoryMappedFileAccess.ReadWrite"/> access.
+    /// Returns <c>null</c> if the file does not exist or is empty.
+    /// </summary>
+    public static PageFileConfig? DetectFromFile(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        if (fs.Length < 32)
+            return null;
+
+        var arr = new byte[32];
+        int totalRead = 0;
+        while (totalRead < 32)
+        {
+            int n = fs.Read(arr, totalRead, 32 - totalRead);
+            if (n == 0) return null;
+            totalRead += n;
+        }
+        var header = PageHeader.ReadFrom(arr);
+        if (header.PageType != PageType.Header)
+            return null;
+
+        int detectedPageSize = header.FreeBytes + 32;
+
+        return detectedPageSize switch
+        {
+            8192  => Small,
+            16384 => Default,
+            32768 => Large,
+            _     => new PageFileConfig
+            {
+                PageSize = detectedPageSize,
+                GrowthBlockSize = detectedPageSize * 64,
+                Access = MemoryMappedFileAccess.ReadWrite
+            }
+        };
+    }
 }
 
 /// <summary>
@@ -114,6 +156,32 @@ public sealed class PageFile : IDisposable
                 // rounded up to the nearest growth block.
                 _fileStream.SetLength(AlignToBlock((long)_config.PageSize * 2));
                 InitializeHeader();
+            }
+            else if (_fileStream.Length >= 32)
+            {
+                // Validate page size matches the existing file
+                Span<byte> probe = stackalloc byte[32];
+#if NET6_0_OR_GREATER
+                _fileStream.ReadExactly(probe);
+#else
+                var probeArr = new byte[32];
+                int probeRead = 0;
+                while (probeRead < 32)
+                {
+                    int n = _fileStream.Read(probeArr, probeRead, 32 - probeRead);
+                    if (n == 0) break;
+                    probeRead += n;
+                }
+                probeArr.AsSpan().CopyTo(probe);
+#endif
+                _fileStream.Position = 0;
+                var fileHeader = PageHeader.ReadFrom(probe);
+                int actualPageSize = fileHeader.FreeBytes + 32;
+                if (actualPageSize != _config.PageSize)
+                    throw new InvalidOperationException(
+                        $"Page size mismatch: file was created with {actualPageSize} byte pages, "
+                      + $"but the configuration specifies {_config.PageSize} byte pages. "
+                      + $"Use PageFileConfig.DetectFromFile() or the correct preset.");
             }
 
             // Initialize next page ID based on file length

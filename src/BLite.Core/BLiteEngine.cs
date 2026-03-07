@@ -47,10 +47,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     /// <summary>
     /// Creates a new BLiteEngine opening or creating a database at the given path.
+    /// Auto-detects the page size for existing files; uses <see cref="PageFileConfig.Default"/> for new databases.
     /// </summary>
     /// <param name="databasePath">Path to the database file</param>
     public BLiteEngine(string databasePath)
-        : this(databasePath, PageFileConfig.Default, null)
+        : this(databasePath, PageFileConfig.DetectFromFile(databasePath) ?? PageFileConfig.Default, null)
     {
     }
 
