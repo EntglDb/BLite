@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace BLite.Core.Metadata;
@@ -26,11 +27,18 @@ public sealed class ValueConverterRegistry
             var method = FindConvertToProvider(converterType);
             if (method == null) continue;
 
-            // Instantiate the converter once (converters are stateless by convention)
+            // Instantiate the converter once (converters are stateless by convention).
             var instance = Activator.CreateInstance(converterType)
                 ?? throw new InvalidOperationException($"Could not create converter instance of type '{converterType}'.");
 
-            _toProvider[propertyName] = value => method.Invoke(instance, [value]);
+            // Compile a direct Func<object, object?> delegate so that the hot query path
+            // never uses MethodInfo.Invoke. Compilation is paid once per converter type.
+            var modelType = GetModelType(converterType);
+            var param     = Expression.Parameter(typeof(object), "v");
+            var castInput = Expression.Convert(param, modelType);
+            var callExpr  = Expression.Call(Expression.Constant(instance, converterType), method, castInput);
+            var boxOutput = Expression.Convert(callExpr, typeof(object));
+            _toProvider[propertyName] = Expression.Lambda<Func<object, object?>>(boxOutput, param).Compile();
         }
     }
 
@@ -61,7 +69,7 @@ public sealed class ValueConverterRegistry
     public bool HasConverter(string propertyName) =>
         _toProvider.ContainsKey(propertyName);
 
-    // ── Private helpers ────────────────────────────────────────────────────────
+    // ── Private helpers ──────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Finds the concrete <c>ConvertToProvider</c> method on a
@@ -69,18 +77,34 @@ public sealed class ValueConverterRegistry
     /// </summary>
     private static MethodInfo? FindConvertToProvider(Type converterType)
     {
-        // Walk the base-type chain to find ValueConverter<TModel, TProvider>
-        var baseType = converterType.BaseType;
-        while (baseType != null)
+        var baseType = FindValueConverterBase(converterType);
+        return baseType is null ? null
+            : converterType.GetMethod(
+                nameof(ValueConverter<object, object>.ConvertToProvider),
+                BindingFlags.Public | BindingFlags.Instance);
+    }
+
+    /// <summary>
+    /// Extracts the model type <c>TModel</c> from the <c>ValueConverter&lt;TModel, TProvider&gt;</c>
+    /// base type.  Used to build the typed input cast in the compiled delegate.
+    /// </summary>
+    private static Type GetModelType(Type converterType)
+    {
+        var baseType = FindValueConverterBase(converterType)
+            ?? throw new InvalidOperationException(
+                $"Cannot determine model type for converter '{converterType}': " +
+                "it does not inherit ValueConverter<TModel, TProvider>.");
+        return baseType.GetGenericArguments()[0];
+    }
+
+    private static Type? FindValueConverterBase(Type converterType)
+    {
+        var bt = converterType.BaseType;
+        while (bt != null)
         {
-            if (baseType.IsGenericType &&
-                baseType.GetGenericTypeDefinition() == typeof(ValueConverter<,>))
-            {
-                return converterType.GetMethod(
-                    nameof(ValueConverter<object, object>.ConvertToProvider),
-                    BindingFlags.Public | BindingFlags.Instance);
-            }
-            baseType = baseType.BaseType;
+            if (bt.IsGenericType && bt.GetGenericTypeDefinition() == typeof(ValueConverter<,>))
+                return bt;
+            bt = bt.BaseType;
         }
         return null;
     }

@@ -41,9 +41,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
     public IQueryable CreateQuery(Expression expression)
     {
-        // IQueryProvider.CreateQuery(Expression) is called only for operators that produce a
-        // different element type at runtime (e.g. GroupBy, Cast).  Delegate immediately to the
-        // generic overload via a cached factory to avoid Activator.CreateInstance per call.
+        // IQueryProvider.CreateQuery(Expression) is called only for operators that change the element
+        // type at runtime (e.g. GroupBy, Cast).  For the common case (same T) create directly.
         var elementType = expression.Type.IsGenericType
             ? expression.Type.GetGenericArguments()[0]
             : typeof(T);
@@ -51,23 +50,31 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         if (elementType == typeof(T))
             return new BTreeQueryable<T>(this, expression);
 
-        // Rare: element type differs from T — use cached factory method.
-        var factory = s_createQueryFactories.GetOrAdd(elementType, t =>
+        // Rare path: element type differs from T.
+        // Cache a compiled delegate Func<BTreeQueryProvider<TId,T>, Expression, IQueryable>.
+        // Using a 2-param delegate (provider, expr) avoids capturing 'this' in the static cache
+        // — which would be a bug: the cached lambda would call the FIRST provider instance forever.
+        var del = s_createQueryDelegates.GetOrAdd(elementType, t =>
         {
             var method = typeof(BTreeQueryProvider<TId, T>)
                 .GetMethod(nameof(CreateQueryTyped), BindingFlags.NonPublic | BindingFlags.Instance)!
                 .MakeGenericMethod(t);
-            return (Func<Expression, IQueryable>)(expr =>
-                (IQueryable)method.Invoke(this, [expr])!);
+            var providerParam = Expression.Parameter(typeof(BTreeQueryProvider<TId, T>), "p");
+            var exprParam     = Expression.Parameter(typeof(Expression), "e");
+            var callExpr      = Expression.Call(providerParam, method, exprParam);
+            var castResult    = Expression.Convert(callExpr, typeof(IQueryable));
+            return Expression.Lambda<Func<BTreeQueryProvider<TId, T>, Expression, IQueryable>>(
+                castResult, providerParam, exprParam).Compile();
         });
-        return factory(expression);
+        return del(this, expression);
     }
 
     private BTreeQueryable<TElement> CreateQueryTyped<TElement>(Expression expression)
         => new(this, expression);
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Func<Expression, IQueryable>>
-        s_createQueryFactories = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Type, Func<BTreeQueryProvider<TId, T>, Expression, IQueryable>>
+        s_createQueryDelegates = new();
 
     // Explicit implementation satisfies IQueryProvider contract.
     // The runtime object is always BTreeQueryable<TElement> : IBLiteQueryable<TElement>,
