@@ -93,4 +93,27 @@ public partial class BsonSchema
             }
         }
     }
+
+    /// <summary>
+    /// Calculates the exact number of bytes this schema will occupy when serialized
+    /// via <see cref="ToBson"/>. Used to pre-allocate the correct buffer size.
+    /// </summary>
+    public int CalculateSize()
+    {
+        int size = 4; // BeginDocument (size placeholder)
+        if (Title != null)
+            size += 3 + 4 + System.Text.Encoding.UTF8.GetByteCount(Title) + 1; // WriteString("t", Title)
+        if (Version != null)
+            size += 7; // WriteInt32("_v", version): header(3) + int32(4)
+        // BeginArray("f"): WriteElementHeader(Array,"f")(3) + size-placeholder(4) = 7
+        size += 7;
+        foreach (var field in Fields)
+        {
+            size += 3;                    // WriteArrayElementHeader: type(1) + ushort-index(2)
+            size += field.CalculateSize();
+        }
+        size += 1; // EndArray  (end-of-array marker)
+        size += 1; // EndDocument (end-of-document marker)
+        return size;
+    }
 }

@@ -80,6 +80,25 @@ public partial class BsonField
         return hash.ToHashCode();
     }
 
+    /// <summary>
+    /// Calculates the exact number of bytes this field will occupy when serialized
+    /// via <see cref="ToBson"/>. Used to pre-allocate the correct buffer size.
+    /// </summary>
+    public int CalculateSize()
+    {
+        int nameBytes = System.Text.Encoding.UTF8.GetByteCount(Name);
+        int size = 4;                       // BeginDocument (size placeholder)
+        size += 3 + 4 + nameBytes + 1;     // WriteString("n", Name): header(3) + length-prefix(4) + bytes + null(1)
+        size += 7;                          // WriteInt32("t", type): header(3) + int32(4)
+        size += 4;                          // WriteBoolean("b", nullable): header(3) + bool(1)
+        if (NestedSchema != null)
+            size += 3 + NestedSchema.CalculateSize(); // WriteElementHeader("s")(3) + nested schema
+        if (ArrayItemType != null)
+            size += 7;                      // WriteInt32("a", arrayItemType): header(3) + int32(4)
+        size += 1;                          // EndDocument (end-of-document marker)
+        return size;
+    }
+
     public bool Equals(BsonField? other)
     {
         if (other == null) return false;

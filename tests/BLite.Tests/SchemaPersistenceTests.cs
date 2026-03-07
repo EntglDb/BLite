@@ -228,4 +228,190 @@ public class SchemaPersistenceTests : IDisposable
             Assert.Equal("01000000", valueHex);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Large-schema tests: schemi che superano una singola PageSize.
+    // Riproduce il crash reale:
+    //   ArgumentOutOfRangeException in BsonSpanWriter.WriteString
+    //   dovuto al buffer fisso di PageSize in AppendSchema.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Verifica che <see cref="BsonSchema.CalculateSize"/> produca un valore
+    /// uguale ai byte effettivamente scritti da <see cref="BsonSchema.ToBson"/>.
+    /// </summary>
+    [Fact]
+    public void BsonSchema_CalculateSize_MatchesActualSerializedSize()
+    {
+        var schema = BuildWideSchema(fieldCount: 40);
+
+        int calculated = schema.CalculateSize();
+
+        // Serialize to a buffer sized by CalculateSize() itself – must not throw.
+        var buffer = new byte[calculated];
+        var keyMap = BuildKeyMapForSchema(schema);
+        var writer = new BsonSpanWriter(buffer, keyMap);
+        schema.ToBson(ref writer);
+
+        Assert.Equal(calculated, writer.Position);
+    }
+
+    /// <summary>
+    /// Uno schema con molti campi flat supera 8 KB (PageFileConfig.Small).
+    /// <see cref="StorageEngine.AppendSchema"/> non deve più lanciare
+    /// <see cref="ArgumentOutOfRangeException"/> e deve persistere lo schema
+    /// su più pagine collegate.
+    /// </summary>
+    [Fact]
+    public void AppendSchema_LargerThanOnePage_DoesNotThrow_And_RoundTrips()
+    {
+        // Each flat string field costs ≈ 36 bytes serialized.
+        // Use 600 fields to guarantee > 16 KB (the default PageSize = 16384).
+        var schema = BuildWideSchema(fieldCount: 600);
+
+        int serializedSize = schema.CalculateSize();
+        Assert.True(serializedSize > _db.Storage.PageSize,
+            $"Pre-condition failed: schema is {serializedSize} bytes but PageSize is {_db.Storage.PageSize}. Increase fieldCount.");
+
+        // Must not throw ArgumentOutOfRangeException.
+        uint rootId = _db.Storage.AppendSchema(0, schema);
+        Assert.NotEqual(0u, rootId);
+
+        // Must round-trip correctly.
+        var loaded = _db.Storage.GetSchemas(rootId);
+        Assert.Single(loaded);
+        Assert.Equal(schema.Title, loaded[0].Title);
+        Assert.Equal(schema.Fields.Count, loaded[0].Fields.Count);
+        Assert.True(schema.Equals(loaded[0]), "Round-tripped schema hash mismatch.");
+    }
+
+    /// <summary>
+    /// Aggiunge due versioni di schema entrambe superiori a PageSize e verifica
+    /// che entrambe vengano recuperate correttamente.
+    /// </summary>
+    [Fact]
+    public void AppendSchema_MultiVersionLargeSchemas_RoundTrip()
+    {
+        var schema1 = BuildWideSchema(fieldCount: 600, titleSuffix: "V1");
+        var schema2 = BuildWideSchema(fieldCount: 610, titleSuffix: "V2");
+
+        var rootId = _db.Storage.AppendSchema(0, schema1);
+        _db.Storage.AppendSchema(rootId, schema2);
+
+        var loaded = _db.Storage.GetSchemas(rootId);
+        Assert.Equal(2, loaded.Count);
+        Assert.Contains("V1", loaded[0].Title);
+        Assert.Contains("V2", loaded[1].Title);
+        Assert.Equal(schema1.Fields.Count, loaded[0].Fields.Count);
+        Assert.Equal(schema2.Fields.Count, loaded[1].Fields.Count);
+    }
+
+    /// <summary>
+    /// Verifica che uno schema con oggetti annidati su 4 livelli (simulando
+    /// strutture dominio reali come SalesRecord) si serializzi e si legga
+    /// correttamente anche quando il totale supera PageSize.
+    /// </summary>
+    [Fact]
+    public void AppendSchema_DeeplyNestedSchema_LargerThanOnePage_RoundTrips()
+    {
+        var schema = BuildDeeplyNestedSchema(topLevelFields: 15, nestingDepth: 4, leafFields: 5);
+
+        int serializedSize = schema.CalculateSize();
+
+        // Serialize and deserialize regardless of size.
+        uint rootId = _db.Storage.AppendSchema(0, schema);
+        var loaded = _db.Storage.GetSchemas(rootId);
+
+        Assert.Single(loaded);
+        Assert.Equal(schema.Title, loaded[0].Title);
+        Assert.True(schema.Equals(loaded[0]),
+            $"Hash mismatch for deeply nested schema " +
+            $"(serializedSize={serializedSize}, pageSize={_db.Storage.PageSize}).");
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Constructs a flat schema with <paramref name="fieldCount"/> string fields.
+    /// Long enough names (field_000 … field_NNN) ensure the serialized size
+    /// grows proportionally and can exceed a single page.
+    /// </summary>
+    private static BsonSchema BuildWideSchema(int fieldCount, string titleSuffix = "")
+    {
+        var schema = new BsonSchema { Title = $"WideEntity{titleSuffix}" };
+        for (int i = 0; i < fieldCount; i++)
+        {
+            schema.Fields.Add(new BsonField
+            {
+                Name = $"field_{i:D3}",   // 9-char name → UTF-8 9 bytes
+                Type = BsonType.String,
+                IsNullable = true
+            });
+        }
+        return schema;
+    }
+
+    /// <summary>
+    /// Constructs a schema with <paramref name="topLevelFields"/> top-level document
+    /// fields, each containing a nested schema recursed to <paramref name="nestingDepth"/>
+    /// levels, with <paramref name="leafFields"/> leaf string fields at the bottom.
+    /// </summary>
+    private static BsonSchema BuildDeeplyNestedSchema(int topLevelFields, int nestingDepth, int leafFields)
+    {
+        var root = new BsonSchema { Title = "DeepEntity" };
+        for (int t = 0; t < topLevelFields; t++)
+        {
+            root.Fields.Add(new BsonField
+            {
+                Name = $"top_{t:D2}",
+                Type = BsonType.Document,
+                NestedSchema = BuildNestedLevel(nestingDepth, leafFields)
+            });
+        }
+        return root;
+    }
+
+    private static BsonSchema BuildNestedLevel(int depth, int leafFields)
+    {
+        var schema = new BsonSchema();
+        if (depth <= 0)
+        {
+            for (int i = 0; i < leafFields; i++)
+                schema.Fields.Add(new BsonField { Name = $"leaf_{i}", Type = BsonType.String });
+            return schema;
+        }
+        schema.Fields.Add(new BsonField
+        {
+            Name = $"nested_d{depth}",
+            Type = BsonType.Document,
+            NestedSchema = BuildNestedLevel(depth - 1, leafFields)
+        });
+        return schema;
+    }
+
+    /// <summary>
+    /// Builds a minimal key map covering all field names that appear in
+    /// <paramref name="schema"/> plus the fixed schema meta-keys used by ToBson.
+    /// </summary>
+    private static System.Collections.Concurrent.ConcurrentDictionary<string, ushort> BuildKeyMapForSchema(BsonSchema schema)
+    {
+        var map = new System.Collections.Concurrent.ConcurrentDictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+        ushort id = 1;
+
+        // Fixed keys used by BsonSchema.ToBson / BsonField.ToBson
+        foreach (var k in new[] { "t", "_v", "f", "n", "b", "s", "a" })
+        {
+            if (!map.ContainsKey(k)) map[k] = id++;
+        }
+
+        // Dynamic keys from the schema itself
+        foreach (var key in schema.GetAllKeys())
+        {
+            if (!map.ContainsKey(key)) map[key] = id++;
+        }
+
+        return map;
+    }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using BLite.Bson;
 
 namespace BLite.Core.Storage;
@@ -11,109 +12,137 @@ public sealed partial class StorageEngine
         var schemas = new List<BsonSchema>();
         if (rootPageId == 0) return schemas;
 
-        var pageId = rootPageId;
-        var buffer = new byte[PageSize];
+        // Collect all raw bytes from the schema page chain into one contiguous buffer.
+        // This allows a single schema document to span multiple pages transparently.
+        var allBytes = CollectSchemaPageBytes(rootPageId);
+        if (allBytes.Length == 0) return schemas;
 
-        while (pageId != 0)
+        var reader = new BsonSpanReader(allBytes, GetKeyReverseMap());
+        while (reader.Remaining >= 4)
         {
-            ReadPage(pageId, null, buffer);
-            var header = PageHeader.ReadFrom(buffer);
-            
-            if (header.PageType != PageType.Schema) break;
+            var docSize = reader.PeekInt32();
+            if (docSize <= 0 || docSize > reader.Remaining) break;
 
-            int used = PageSize - 32 - header.FreeBytes;
-            if (used > 0)
-            {
-                var reader = new BsonSpanReader(buffer.AsSpan(32, used), GetKeyReverseMap());
-                while (reader.Remaining >= 4)
-                {
-                    var docSize = reader.PeekInt32();
-                    if (docSize <= 0 || docSize > reader.Remaining) break;
-
-                    var schema = BsonSchema.FromBson(ref reader);
-                    schemas.Add(schema);
-                }
-            }
-
-            pageId = header.NextPageId;
+            var schema = BsonSchema.FromBson(ref reader);
+            schemas.Add(schema);
         }
 
         return schemas;
     }
 
     /// <summary>
-    /// Appends a new schema version. Returns the root page ID (which might be new if it was 0 initially).
+    /// Appends a new schema version. Supports schemas larger than a single page by
+    /// streaming the serialized bytes across a chain of schema pages.
+    /// Returns the root page ID (which may be newly allocated when rootPageId is 0).
     /// </summary>
     public uint AppendSchema(uint rootPageId, BsonSchema schema)
     {
+        // Serialize schema to an exactly-sized buffer.
+        // CalculateSize() avoids a fixed PageSize limit and prevents buffer overflow.
+        var schemaBytes = SerializeSchema(schema);
+        int schemaSize = schemaBytes.Length;
+        int pagePayload = PageSize - 32; // usable bytes per page (after the 32-byte header)
+
         var buffer = new byte[PageSize];
-        
-        // Serialize schema to temporary buffer to calculate size
-        var tempBuffer = new byte[PageSize];
-        var tempWriter = new BsonSpanWriter(tempBuffer, GetKeyMap());
-        schema.ToBson(ref tempWriter);
-        var schemaSize = tempWriter.Position;
+        int schemaOffset = 0;
+        uint currentPageId;
+        int currentUsed; // bytes already occupied in the current page body
 
         if (rootPageId == 0)
         {
-            rootPageId = AllocatePage();
-            InitializeSchemaPage(buffer, rootPageId);
-            tempBuffer.AsSpan(0, schemaSize).CopyTo(buffer.AsSpan(32));
-            
-            var header = PageHeader.ReadFrom(buffer);
-            header.FreeBytes = (ushort)(PageSize - 32 - schemaSize);
-            header.WriteTo(buffer);
-
-            WritePageImmediate(rootPageId, buffer);
-            return rootPageId;
-        }
-
-        // Find last page in chain
-        uint currentPageId = rootPageId;
-        uint lastPageId = rootPageId;
-        while (currentPageId != 0)
-        {
-            ReadPage(currentPageId, null, buffer);
-            var header = PageHeader.ReadFrom(buffer);
-            lastPageId = currentPageId;
-            if (header.NextPageId == 0) break;
-            currentPageId = header.NextPageId;
-        }
-
-        // Buffer now contains the last page
-        var lastHeader = PageHeader.ReadFrom(buffer);
-        int currentUsed = PageSize - 32 - lastHeader.FreeBytes;
-        int lastOffset = 32 + currentUsed;
-        
-        if (lastHeader.FreeBytes >= schemaSize)
-        {
-            // Fits in current page
-            tempBuffer.AsSpan(0, schemaSize).CopyTo(buffer.AsSpan(lastOffset));
-            
-            lastHeader.FreeBytes -= (ushort)schemaSize;
-            lastHeader.WriteTo(buffer);
-
-            WritePageImmediate(lastPageId, buffer);
+            // No schema storage yet — create the first schema page.
+            currentPageId = AllocatePage();
+            rootPageId = currentPageId;
+            InitializeSchemaPage(buffer, currentPageId);
+            currentUsed = 0;
         }
         else
         {
-            // Allocate new page
-            var newPageId = AllocatePage();
-            lastHeader.NextPageId = newPageId;
-            lastHeader.WriteTo(buffer);
-            WritePageImmediate(lastPageId, buffer);
+            // Navigate to the last page in the existing chain.
+            currentPageId = rootPageId;
+            while (true)
+            {
+                ReadPage(currentPageId, null, buffer);
+                var h = PageHeader.ReadFrom(buffer);
+                if (h.NextPageId == 0) break;
+                currentPageId = h.NextPageId;
+            }
+            var lastHeader = PageHeader.ReadFrom(buffer);
+            currentUsed = pagePayload - lastHeader.FreeBytes;
+        }
 
-            InitializeSchemaPage(buffer, newPageId);
-            tempBuffer.AsSpan(0, schemaSize).CopyTo(buffer.AsSpan(32));
-            
-            var newHeader = PageHeader.ReadFrom(buffer);
-            newHeader.FreeBytes = (ushort)(PageSize - 32 - schemaSize);
-            newHeader.WriteTo(buffer);
+        // Write schema bytes in chunks, allocating new pages as needed.
+        while (schemaOffset < schemaSize)
+        {
+            var pageHeader = PageHeader.ReadFrom(buffer);
+            int available = pageHeader.FreeBytes;
 
-            WritePageImmediate(newPageId, buffer);
+            if (available == 0)
+            {
+                // Current page is full — link a new page and continue there.
+                var newPageId = AllocatePage();
+                pageHeader.NextPageId = newPageId;
+                pageHeader.WriteTo(buffer);
+                WritePageImmediate(currentPageId, buffer);
+
+                currentPageId = newPageId;
+                InitializeSchemaPage(buffer, currentPageId);
+                currentUsed = 0;
+                available = pagePayload;
+                pageHeader = PageHeader.ReadFrom(buffer);
+            }
+
+            int chunk = Math.Min(schemaSize - schemaOffset, available);
+            schemaBytes.AsSpan(schemaOffset, chunk).CopyTo(buffer.AsSpan(32 + currentUsed));
+
+            pageHeader.FreeBytes -= (ushort)chunk;
+            pageHeader.WriteTo(buffer);
+            WritePageImmediate(currentPageId, buffer);
+
+            schemaOffset += chunk;
+            currentUsed += chunk;
         }
 
         return rootPageId;
+    }
+
+    /// <summary>
+    /// Serializes <paramref name="schema"/> to a byte array sized exactly by
+    /// <see cref="BsonSchema.CalculateSize"/>, avoiding any fixed-size buffer limit.
+    /// </summary>
+    private byte[] SerializeSchema(BsonSchema schema)
+    {
+        int requiredSize = schema.CalculateSize();
+        var buffer = new byte[requiredSize];
+        var writer = new BsonSpanWriter(buffer, GetKeyMap());
+        schema.ToBson(ref writer);
+        return buffer;
+    }
+
+    /// <summary>
+    /// Accumulates all schema page bodies into a single flat byte array so that
+    /// schema documents spanning multiple pages can be read atomically.
+    /// </summary>
+    private byte[] CollectSchemaPageBytes(uint rootPageId)
+    {
+        var buffer = new byte[PageSize];
+        using var stream = new MemoryStream();
+
+        var pageId = rootPageId;
+        while (pageId != 0)
+        {
+            ReadPage(pageId, null, buffer);
+            var header = PageHeader.ReadFrom(buffer);
+            if (header.PageType != PageType.Schema) break;
+
+            int used = PageSize - 32 - header.FreeBytes;
+            if (used > 0)
+                stream.Write(buffer, 32, used);
+
+            pageId = header.NextPageId;
+        }
+
+        return stream.ToArray();
     }
 
     private void InitializeSchemaPage(Span<byte> page, uint pageId)
