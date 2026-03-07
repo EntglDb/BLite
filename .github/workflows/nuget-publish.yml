@@ -54,6 +54,9 @@ jobs:
       - name: Build BLite
         run: dotnet build src/BLite/BLite.csproj --no-restore --configuration Release
       
+      - name: Build BLite.Caching
+        run: dotnet build src/BLite.Caching/BLite.Caching.csproj --no-restore --configuration Release
+      
       - name: Build Tests
         run: dotnet build tests/BLite.Tests/BLite.Tests.csproj --no-restore --configuration Release
 
@@ -73,6 +76,7 @@ jobs:
           dotnet pack src/BLite.Core/BLite.Core.csproj --no-build --configuration Release --output ./packages
           dotnet pack src/BLite.SourceGenerators/BLite.SourceGenerators.csproj --no-build --configuration Release --output ./packages
           dotnet pack src/BLite/BLite.csproj --no-build --configuration Release --output ./packages
+          dotnet pack src/BLite.Caching/BLite.Caching.csproj --no-build --configuration Release --output ./packages
 
       # 7. Pubblica tutti i pacchetti .nupkg creati nel passo precedente
       - name: Publish to NuGet
