@@ -52,7 +52,36 @@ var users = collection.AsQueryable()
 ### 🔍 Advanced Indexing
 - **B-Tree Indexes**: Logarithmic time complexity for lookups.
 - **Composite Indexes**: Support for multi-column keys.
+- **Nested Property Indexes**: Index on embedded sub-object fields using lambda expressions (`x => x.Address.City`) for typed collections, or dot-notation strings (`"address.city"`) for schema-less collections. Intermediate null values are safely skipped.
 - **Vector Search (HNSW)**: Fast similarity search for AI embeddings using Hierarchical Navigable Small World algorithm.
+
+#### 🏷️ Secondary Indexes on Nested Properties (Typed Collections)
+
+Configure secondary indexes on embedded sub-object properties using a standard lambda path in `OnModelCreating`:
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    // Index on a top-level property
+    modelBuilder.Entity<Customer>()
+        .HasIndex(x => x.Email);
+
+    // Index on a nested property — dot-notation path is inferred automatically
+    modelBuilder.Entity<Customer>()
+        .HasIndex(x => x.Address.City);
+
+    // Deeper nesting is supported too
+    modelBuilder.Entity<Order>()
+        .HasIndex(x => x.Shipping.Address.PostalCode);
+}
+
+// The index is then used automatically by the LINQ engine
+var italianCustomers = db.Customers.AsQueryable()
+    .Where(c => c.Address.City == "Milan")
+    .ToList(); // → B-Tree index hit on "address.city"
+```
+
+> **Note**: If an intermediate property is `null` (e.g. `Address` is `null`) the record is simply skipped by the indexer — no exception is thrown.
 
 ### 🔎 BLQL — BLite Query Language
 MQL-inspired query language for schema-less (`DynamicCollection`) scenarios. Filter, sort, project, and page `BsonDocument` results using either a fluent C# API or JSON strings — no compile-time types required.
@@ -293,7 +322,7 @@ The source generator handles a wide range of modern C# patterns:
 | **Nullable Value Types** | ✅ | `ObjectId?`, `int?`, `DateTime?` are correctly serialized/deserialized |
 | **Nullable Collections** | ✅ | `List<T>?`, `string?` with proper null handling |
 | **Unlimited Nesting** | ✅ | Deeply nested object graphs with circular reference protection |
-| **Self-Referencing** | ✅ | Entities can reference themselves (e.g., `Manager` property in `Employee`) |
+| **Self-Referencing** | ✅ | Entities can reference themselves (e.g., `Manager` property in `Employee`). Schema generation is recursion-safe — cycles are detected and terminated automatically |
 | **N-N Relationships** | ✅ | Collections of ObjectIds for efficient document referencing |
 
 #### ❌ Limitations & Design Choices
@@ -506,11 +535,17 @@ orders.CreateIndex("placed_at", unique: false);
 // Unique index
 orders.CreateIndex("order_number", unique: true);
 
-// Vector index (HNSW)
-orders.CreateVectorIndex("embedding", dimensions: 1536, metric: VectorMetric.Cosine);
+// Nested path index (dot-notation) — indexes a field inside an embedded document
+orders.CreateIndex("shipping.city");                  // indexes doc["shipping"]["city"]
+orders.CreateIndex("customer.address.zip");           // arbitrary depth; null intermediates skipped
 
-// Spatial index (R-Tree)
+// Vector index (HNSW) — supports nested paths too
+orders.CreateVectorIndex("embedding", dimensions: 1536, metric: VectorMetric.Cosine);
+orders.CreateVectorIndex("meta.embedding", dimensions: 768, metric: VectorMetric.Cosine);
+
+// Spatial index (R-Tree) — supports nested paths too
 orders.CreateSpatialIndex("location");
+orders.CreateSpatialIndex("store.location");
 
 // Introspect
 IReadOnlyList<string> indexes = orders.ListIndexes();
@@ -710,7 +745,8 @@ We are actively building the core. Here is where we stand:
 - ✅ **Query Engine**: Hybrid execution (Index/Scan + LINQ to Objects).
 - ✅ **Advanced LINQ**: GroupBy, Joins, Aggregations, Complex Projections.
 - ✅ **Async I/O**: True async reads and writes — `FindByIdAsync`, `FindAllAsync` (`IAsyncEnumerable<T>`), `ToListAsync`/`ToArrayAsync`/`CountAsync`/`AnyAsync`/`AllAsync`/`FirstOrDefaultAsync`/`SingleOrDefaultAsync` for LINQ pipelines, `SaveChangesAsync`. `CancellationToken` propagates to `RandomAccess.ReadAsync` (IOCP on Windows).
-- ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support.
+- ✅ **Source Generators**: Auto-map POCO/DDD classes with robust nested objects, collections, and ref struct support. Self-referencing types (recursive cycles) are handled safely.
+- ✅ **Nested Property Indexes**: Index on embedded sub-object fields via lambda paths (`x => x.Address.City`) for typed collections and dot-notation strings (`"address.city"`) for schema-less collections. Null intermediates skipped.
 - ✅ **Projection Push-down**: SELECT (and WHERE+SELECT) lambdas compile to a single-pass raw-BSON reader — `T` is never instantiated. `IBLiteQueryable<T>` preserves the async chain across all LINQ operators.
 - ✅ **BLQL**: MQL-inspired query language for `DynamicCollection` — filter, sort, project and page `BsonDocument` results from JSON strings or via a fluent C# API. Full operator set: comparison, string (`$startsWith`, `$endsWith`, `$contains`), array (`$elemMatch`, `$size`, `$all`), arithmetic (`$mod`), logical, geospatial (`$geoWithin`, `$geoNear`), and vector (`$nearVector`). Security-hardened against injection, ReDoS, and division-by-zero.
 - ✅ **Native TimeSeries**: Dedicated `PageType.TimeSeries` (12) with append-only layout, `LastTimestamp` header field and automatic retention-based pruning. Triggered on insert — no background threads. `SetTimeSeries()`, `ForcePrune()`, `IsTimeSeries`, `GetTimeSeriesConfig()` on `DynamicCollection`. Studio UI: TimeSeries tab, TS badge in sidebar.

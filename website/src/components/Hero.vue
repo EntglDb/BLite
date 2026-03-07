@@ -13,7 +13,7 @@ const goGithub = () => window.open('https://github.com/EntglDb/BLite', '_blank')
     
     <div class="container hero-content">
       <div class="badge animate-fade-in" style="animation-delay: 0.1s">
-        <span class="badge-dot"></span> v2.0.0 Released — netstandard2.1 support (Unity, Xamarin, MAUI)
+        <span class="badge-dot"></span> v3.0.0 Released — Nested property indexes &amp; self-referencing collections
       </div>
       
       <h1 class="hero-title animate-fade-in" style="animation-delay: 0.2s">

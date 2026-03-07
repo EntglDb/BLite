@@ -167,20 +167,45 @@ engine.SetVectorSource(<span class="string">"documents"</span>, config);
 
     <section>
       <h2>Index Management</h2>
-      <pre><code><span class="comment">// B-Tree secondary index</span>
+      <pre><code><span class="comment">// B-Tree secondary index on a top-level field</span>
 orders.CreateIndex(<span class="string">"status"</span>);
 orders.CreateIndex(<span class="string">"placed_at"</span>, unique: <span class="keyword">false</span>);
 orders.CreateIndex(<span class="string">"order_number"</span>, unique: <span class="keyword">true</span>);
 
-<span class="comment">// Vector index (HNSW)</span>
-orders.CreateVectorIndex(<span class="string">"embedding"</span>, dimensions: <span class="number">1536</span>, metric: <span class="type">VectorMetric</span>.Cosine);
+<span class="comment">// Nested path index (dot-notation) — NEW in v3.0.0</span>
+orders.CreateIndex(<span class="string">"shipping.city"</span>);           <span class="comment">// indexes doc["shipping"]["city"]</span>
+orders.CreateIndex(<span class="string">"customer.address.zip"</span>);     <span class="comment">// arbitrary depth; null intermediates skipped</span>
 
-<span class="comment">// Spatial index (R-Tree)</span>
+<span class="comment">// Vector index (HNSW) — also supports nested paths</span>
+orders.CreateVectorIndex(<span class="string">"embedding"</span>, dimensions: <span class="number">1536</span>, metric: <span class="type">VectorMetric</span>.Cosine);
+orders.CreateVectorIndex(<span class="string">"meta.embedding"</span>, dimensions: <span class="number">768</span>, metric: <span class="type">VectorMetric</span>.Cosine);
+
+<span class="comment">// Spatial index (R-Tree) — also supports nested paths</span>
 orders.CreateSpatialIndex(<span class="string">"location"</span>);
+orders.CreateSpatialIndex(<span class="string">"store.location"</span>);
 
 <span class="comment">// Introspect / drop</span>
 <span class="type">IReadOnlyList</span>&lt;<span class="keyword">string</span>&gt; indexes = orders.ListIndexes();
 orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
+
+      <div class="info-box">
+        <div class="info-header">🗂️ Nested path indexes (v3.0.0)</div>
+        When you pass a dot-separated path such as <code>"shipping.city"</code>, BLite registers all path components as known field-name keys and traverses the document graph at index time. If an intermediate document is missing or <code>null</code>, that record is silently skipped — no exception is thrown.
+        <pre><code><span class="comment">// Build a document with a nested sub-object using AddDocument</span>
+<span class="keyword">var</span> doc = orders.CreateDocument(
+    [<span class="string">"status"</span>, <span class="string">"total"</span>, <span class="string">"shipping"</span>, <span class="string">"city"</span>, <span class="string">"country"</span>],
+    b => b
+        .Set(<span class="string">"status"</span>, <span class="string">"pending"</span>)
+        .Set(<span class="string">"total"</span>,  <span class="number">99.0</span>)
+        .AddDocument(<span class="string">"shipping"</span>, inner => inner
+            .Set(<span class="string">"city"</span>,    <span class="string">"Milan"</span>)
+            .Set(<span class="string">"country"</span>, <span class="string">"IT"</span>)));
+
+orders.Insert(doc);
+
+<span class="comment">// Now query via B-Tree range index on "shipping.city"</span>
+<span class="keyword">var</span> results = orders.QueryIndex(<span class="string">"idx_shipping.city"</span>, <span class="string">"Milan"</span>, <span class="string">"Milan"</span>);</code></pre>
+      </div>
     </section>
 
     <section>
@@ -258,7 +283,7 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
           <tr><th>Method</th><th>Returns</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>CreateDocument(fields, builder)</code></td><td><code>BsonDocument</code></td></tr>
+          <tr><td><code>CreateDocument(fields, builder)</code></td><td><code>BsonDocument</code> — builder supports <code>.AddDocument(name, inner => ...)</code> for embedded sub-objects</td></tr>
           <tr><td><code>Insert(doc)</code></td><td><code>BsonId</code></td></tr>
           <tr><td><code>InsertAsync(doc, ct)</code></td><td><code>Task&lt;BsonId&gt;</code></td></tr>
           <tr><td><code>InsertBulk(docs)</code></td><td><code>List&lt;BsonId&gt;</code></td></tr>
@@ -283,7 +308,7 @@ orders.DropIndex(<span class="string">"idx_status"</span>);</code></pre>
           <tr><td><code>DeleteAsync(id, ct)</code></td><td><code>Task&lt;bool&gt;</code></td></tr>
           <tr><td><code>DeleteBulk(ids)</code></td><td><code>int</code></td></tr>
           <tr><td><code>DeleteBulkAsync(ids, ct)</code></td><td><code>Task&lt;int&gt;</code></td></tr>
-          <tr><td><code>CreateIndex / CreateVectorIndex / CreateSpatialIndex</code></td><td><code>void</code></td></tr>
+          <tr><td><code>CreateIndex / CreateVectorIndex / CreateSpatialIndex</code></td><td><code>void</code> — accepts top-level fields or dot-notation nested paths (e.g. <code>"shipping.city"</code>)</td></tr>
           <tr><td><code>DropIndex(name)</code></td><td><code>bool</code></td></tr>
           <tr><td><code>ListIndexes()</code></td><td><code>IReadOnlyList&lt;string&gt;</code></td></tr>
         </tbody>

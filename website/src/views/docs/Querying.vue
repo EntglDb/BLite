@@ -160,11 +160,32 @@ users.EnsureIndex(u => u.Age);
 <span class="comment">// Enum properties can also be indexed (v1.7.0)</span>
 orders.EnsureIndex(o => o.Status);
 <span class="keyword">var</span> shipped = orders.AsQueryable()
-    .Where(o => o.Status == OrderStatus.Shipped)
+    .Where(o => o.Status == <span class="type">OrderStatus</span>.Shipped)
     .AsEnumerable();</code></pre>
 
       <div class="info-box">
         <strong>💡 Tip:</strong> Use <code>.Explain()</code> to see query execution plans and verify index usage. Enum index keys are stored as their underlying integer value (<code>int</code>, <code>byte</code>, <code>long</code>) — ordering and range queries work correctly.
+      </div>
+
+      <h3>Nested Property Indexes <span style="font-size:0.75em;color:#06b6d4;font-weight:600;">NEW in v3.0.0</span></h3>
+      <p>Index on properties inside embedded sub-objects using a standard lambda path. BLite derives the B-Tree key path automatically and skips records where an intermediate property is <code>null</code>.</p>
+      <pre><code><span class="comment">// Configure in OnModelCreating</span>
+modelBuilder.Entity&lt;<span class="type">Customer</span>&gt;()
+    .HasIndex(x => x.Address.City);      <span class="comment">// → path "address.city"</span>
+
+modelBuilder.Entity&lt;<span class="type">Order</span>&gt;()
+    .HasIndex(x => x.Shipping.Address.PostalCode);  <span class="comment">// deeper nesting OK</span>
+
+<span class="comment">// The LINQ engine picks up the index automatically</span>
+<span class="keyword">var</span> customers = db.Customers.AsQueryable()
+    .Where(c => c.Address.City == <span class="string">"Milan"</span>)
+    .ToList();  <span class="comment">// ← B-Tree hit on "address.city"</span>
+
+<span class="keyword">var</span> orders = db.Orders.AsQueryable()
+    .Where(o => o.Shipping.Address.PostalCode == <span class="string">"20100"</span>)
+    .ToList();</code></pre>
+      <div class="info-box">
+        <strong>⚙️ How it works:</strong> BLite walks the lambda path at index-time to extract the leaf value. If any intermediate property is <code>null</code>, the document is silently skipped — no exception is thrown and the document is simply not indexed for that field.
       </div>
     </section>
 

@@ -63,14 +63,14 @@ useHead(() => {
           <p class="tagline">"Sky is Blite, no Clouds today."</p>
         </div>
         <div class="footer-col footer-downloads">
-          <p class="footer-dl-title">⬇ Download BLite Studio v1.11.0</p>
+          <p class="footer-dl-title">⬇ Download BLite Studio v3.0.0</p>
           <div class="footer-dl-links">
-            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.12.0/BLite.Studio-1.11.0-win-x64.msi">🪟 Windows MSI</a>
-            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.12.0/BLite.Studio-1.11.0-win-x64-portable.zip">🪟 Windows Portable</a>
-            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.12.0/blite-studio_1.11.0_amd64.deb">🐧 Linux .deb</a>
-            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.12.0/BLite.Studio-1.11.0-linux-x64.tar.gz">🐧 Linux tar.gz</a>
-            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.12.0/BLite.Studio-1.11.0-osx-arm64.dmg">🍎 macOS Apple Silicon</a>
-            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v1.12.0/BLite.Studio-1.11.0-osx-x64.dmg">🍎 macOS Intel</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.0.0/BLite.Studio-3.0.0-win-x64.msi">🪟 Windows MSI</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.0.0/BLite.Studio-3.0.0-win-x64-portable.zip">🪟 Windows Portable</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.0.0/blite-studio_3.0.0_amd64.deb">🐧 Linux .deb</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.0.0/BLite.Studio-3.0.0-linux-x64.tar.gz">🐧 Linux tar.gz</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.0.0/BLite.Studio-3.0.0-osx-arm64.dmg">🍎 macOS Apple Silicon</a>
+            <a href="https://github.com/EntglDb/BLite/releases/download/studio-v3.0.0/BLite.Studio-3.0.0-osx-x64.dmg">🍎 macOS Intel</a>
           </div>
         </div>
       </div>

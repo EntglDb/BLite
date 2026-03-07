@@ -13,7 +13,7 @@
 
       <p>Or add directly to your <code>.csproj</code>:</p>
       <pre><code>&lt;<span class="keyword">ItemGroup</span>&gt;
-  &lt;<span class="keyword">PackageReference</span> <span class="type">Include</span>=<span class="string">"BLite"</span> <span class="type">Version</span>=<span class="string">"2.0.0"</span> /&gt;
+  &lt;<span class="keyword">PackageReference</span> <span class="type">Include</span>=<span class="string">"BLite"</span> <span class="type">Version</span>=<span class="string">"3.0.0"</span> /&gt;
 &lt;/<span class="keyword">ItemGroup</span>&gt;</code></pre>
     </section>
 
@@ -53,7 +53,7 @@ dotnet build -c Release</code></pre>
       </ul>
 
       <div class="info-box">
-        <strong>✅ Multi-target:</strong> BLite 2.0 ships <code>net10.0</code> and <code>netstandard2.1</code> targets in the same NuGet package — Unity, Xamarin, MAUI, and .NET 5–9 are all supported out of the box.
+        <strong>✅ Multi-target:</strong> BLite 3.0 ships <code>net10.0</code> and <code>netstandard2.1</code> targets in the same NuGet package — Unity, Xamarin, MAUI, and .NET 5–9 are all supported out of the box.
       </div>
     </section>
 

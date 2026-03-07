@@ -168,8 +168,10 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.3.0 – v1.7.0):</strong>
+        <strong>✨ Recent Improvements (v1.3.0 – v3.0.0):</strong>
         <ul>
+          <li>✅ <strong>v3.0.0</strong> — <strong>Nested property indexes</strong>: <code>modelBuilder.Entity&lt;T&gt;().HasIndex(x =&gt; x.Address.City)</code> — index any depth of embedded sub-object via a lambda path. Null intermediates are silently skipped.</li>
+          <li>✅ <strong>v3.0.0</strong> — <strong>Self-referencing schema generation</strong>: the schema generator now detects recursive type cycles and terminates gracefully — no more <code>StackOverflowException</code> for entities that reference themselves (e.g., <code>Manager</code> → <code>Employee</code> → <code>Manager</code>).</li>
           <li>✅ <strong>v1.7.0</strong> — Nested objects that declare a <code>[Key]</code>-decorated <code>Id</code> property but are NOT registered as a collection are now correctly treated as embedded types: their <code>Id</code> is serialised as <code>"id"</code> (not <code>"_id"</code>) and no root-entity base mapper is generated for them</li>
           <li>✅ <strong>v1.7.0</strong> — Enum properties can now be declared as secondary indexes (<code>modelBuilder.Entity&lt;T&gt;().HasIndex(x =&gt; x.Status)</code>) — enum values are stored as their underlying integer type in the B-Tree</li>
           <li>✅ <strong>v1.6.1</strong> — Full enum support in Source Generator: enum properties (<code>int</code>/<code>byte</code>/<code>long</code> underlying types), nullable enums, and collections of enums (<code>List&lt;TEnum&gt;</code>, <code>TEnum[]</code>)</li>
@@ -249,7 +251,7 @@
           <tr>
             <td><strong>Self-Referencing</strong></td>
             <td><span class="badge success">✅</span></td>
-            <td>Entities can reference themselves (e.g., <code>Manager</code> property in <code>Employee</code>)</td>
+            <td>Entities can reference themselves (e.g., <code>Manager</code> property in <code>Employee</code>). Schema generation detects recursive cycles and terminates safely — no <code>StackOverflowException</code> <span style="font-size:0.8em;color:#06b6d4">(v3.0.0)</span></td>
           </tr>
           <tr>
             <td><strong>N-N Relationships</strong></td>
