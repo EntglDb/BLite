@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
 
@@ -239,7 +240,8 @@ internal static class IndexOptimizer
                     {
                         var val = EvaluateExpression<object>(right);
                         val = TryApplyConverter(propertyPath, val, registry);
-                        return (propertyPath, val, nodeType);
+                        if (IsIndexableValue(val))
+                            return (propertyPath, val, nodeType);
                     }
                     catch { }
                 }
@@ -255,7 +257,8 @@ internal static class IndexOptimizer
                     {
                         var val = EvaluateExpression<object>(right);
                         val = TryApplyConverter(propertyPath, val, registry);
-                        return (propertyPath, val, nodeType);
+                        if (IsIndexableValue(val))
+                            return (propertyPath, val, nodeType);
                     }
                     catch { }
                 }
@@ -275,7 +278,8 @@ internal static class IndexOptimizer
                 {
                     var val = EvaluateExpression<object>(equalsCall.Arguments[0]);
                     val = TryApplyConverter(propertyPath, val, registry);
-                    return (propertyPath, val, ExpressionType.Equal);
+                    if (IsIndexableValue(val))
+                        return (propertyPath, val, ExpressionType.Equal);
                 }
                 catch { }
             }
@@ -290,6 +294,25 @@ internal static class IndexOptimizer
         // Use top-level property name (first segment) for registry lookup
         var topProp = propertyPath.Contains('.') ? propertyPath[..propertyPath.IndexOf('.')] : propertyPath;
         return registry.TryConvert(topProp, value, out var pv) ? pv : value;
+    }
+
+    private static readonly HashSet<Type> _knownBsonPrimitives =
+    [
+        typeof(int), typeof(long), typeof(double), typeof(decimal),
+        typeof(bool), typeof(string), typeof(DateTime), typeof(DateTimeOffset),
+        typeof(ObjectId)
+    ];
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="value"/> can be used directly as an index
+    /// key (i.e. it is a BSON-native type). Non-primitive values (e.g. ValueObjects) must be
+    /// converted via <see cref="TryApplyConverter"/> before being accepted as index keys.
+    /// </summary>
+    private static bool IsIndexableValue(object? value)
+    {
+        if (value == null) return true; // null is valid for range bounds
+        var type = Nullable.GetUnderlyingType(value.GetType()) ?? value.GetType();
+        return _knownBsonPrimitives.Contains(type);
     }
 
     /// <summary>
