@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.3.0"></a>
+## [3.3.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.3.0) (2026-03-09)
+
+### Features
+
+* page compaction on delete, private-setter entity tests, TimeSeries in DocumentDbContext ([63213be](https://www.github.com/EntglDb/BLite/commit/63213bec4ad8e47cdf3014d9408b939f8a38352a))
+* **studio:** adds better json view ([9991c67](https://www.github.com/EntglDb/BLite/commit/9991c677f3d3e851e02edb01dbc20fdc9ba85c22))
+
 <a name="3.1.1"></a>
 ## [3.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.1.1) (2026-03-07)
 

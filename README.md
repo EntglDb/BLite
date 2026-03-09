@@ -213,7 +213,7 @@ db.People.Insert(new Person { Id = 1, Name = "Alice" });
 - **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management.
 
 ### � Native TimeSeries
-BLite 1.12 introduces a dedicated `PageType.TimeSeries` — an append-only page format optimised for high-throughput time-ordered data.
+A dedicated `PageType.TimeSeries` — an append-only page format optimised for high-throughput time-ordered data. Introduced natively in **1.12**; the typed `DocumentDbContext` fluent API (`HasTimeSeries`) was added in **3.3.0**.
 
 - **No background threads**: pruning fires transparently on insert (every 1 000 docs or 5 min).
 - **Page-level granularity**: entire expired pages are freed in a single pass — O(freed pages), not O(all documents).
@@ -235,6 +235,31 @@ sensors.Insert(doc);
 
 // Force prune immediately (useful in tests)
 sensors.ForcePrune();
+```
+
+#### Typed API (`DocumentDbContext` — added in 3.3.0)
+
+Configure a typed collection as TimeSeries in `OnModelCreating` using `HasTimeSeries`:
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    modelBuilder.Entity<SensorReading>()
+        .ToCollection("sensor_readings")
+        .HasTimeSeries(r => r.Timestamp, retention: TimeSpan.FromDays(7));
+}
+
+// Insert as normal — routing to TS pages is automatic
+db.SensorReadings.Insert(new SensorReading
+{
+    SensorId  = "sensor-42",
+    Value     = 23.5,
+    Timestamp = DateTime.UtcNow
+});
+db.SaveChanges();
+
+// Force prune (useful in tests / maintenance)
+db.SensorReadings.ForcePrune();
 ```
 
 ### �🔄 Hot Backup
@@ -831,6 +856,8 @@ We are actively building the core. Here is where we stand:
 - ✅ **Projection Push-down**: SELECT (and WHERE+SELECT) lambdas compile to a single-pass raw-BSON reader — `T` is never instantiated. `IBLiteQueryable<T>` preserves the async chain across all LINQ operators.
 - ✅ **BLQL**: MQL-inspired query language for `DynamicCollection` — filter, sort, project and page `BsonDocument` results from JSON strings or via a fluent C# API. Full operator set: comparison, string (`$startsWith`, `$endsWith`, `$contains`), array (`$elemMatch`, `$size`, `$all`), arithmetic (`$mod`), logical, geospatial (`$geoWithin`, `$geoNear`), and vector (`$nearVector`). Security-hardened against injection, ReDoS, and division-by-zero.
 - ✅ **Native TimeSeries**: Dedicated `PageType.TimeSeries` (12) with append-only layout, `LastTimestamp` header field and automatic retention-based pruning. Triggered on insert — no background threads. `SetTimeSeries()`, `ForcePrune()`, `IsTimeSeries`, `GetTimeSeriesConfig()` on `DynamicCollection`. Studio UI: TimeSeries tab, TS badge in sidebar.
+- ✅ **Page Compaction on Delete**: Intra-page space is reclaimed on every delete — live documents are packed toward the top of the page, `FreeSpaceEnd` is updated and the free-space map is refreshed immediately. Deleted bytes are reusable without a VACUUM pass.
+- ✅ **Typed TimeSeries (DocumentDbContext)**: `HasTimeSeries(x => x.Timestamp, retention)` fluent API on `EntityTypeBuilder<T>`. Configure a typed `DocumentDbContext` collection as a TimeSeries source from `OnModelCreating`. `ForcePrune()` available on `DocumentCollection<TId, T>`.
 
 ## 🔮 Future Vision
 

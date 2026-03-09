@@ -2,9 +2,11 @@
   <div class="doc-page">
     <h1>📈 <span class="title-gradient">TimeSeries</span></h1>
     <p class="lead">
-      BLite 1.12 introduces a native <strong>TimeSeries page type</strong> — a dedicated, append-only storage format
+      BLite features a native <strong>TimeSeries page type</strong> — a dedicated, append-only storage format
       optimised for high-throughput time-ordered data with automatic retention-based pruning.
-      No background threads, no daemons: pruning is triggered transparently on insertion.
+      No background threads, no daemons: pruning is triggered transparently on insertion.<br/>
+      The low-level schema-less API was introduced in <strong>v1.12</strong>;
+      the typed <code>DocumentDbContext</code> fluent API (<code>HasTimeSeries</code>) was added in <strong>v3.3.0</strong>.
     </p>
 
     <div class="info-box">
@@ -33,7 +35,46 @@
     </section>
 
     <section>
-      <h2>Enabling TimeSeries on a Collection</h2>
+      <h2>Enabling TimeSeries — Typed API (<code>DocumentDbContext</code>)</h2>
+      <p>
+        Since <strong>v3.3.0</strong>, configure a typed collection as TimeSeries via the fluent <code>HasTimeSeries</code>
+        method in <code>OnModelCreating</code>:
+      </p>
+      <pre><code><span class="keyword">public record</span> <span class="type">SensorReading</span>
+{
+    <span class="keyword">public</span> <span class="type">ObjectId</span>  Id       { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public string</span>  SensorId { <span class="keyword">get</span>; <span class="keyword">set</span>; } = <span class="string">""</span>;
+    <span class="keyword">public double</span>  Value    { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+    <span class="keyword">public</span> <span class="type">DateTime</span> Timestamp { <span class="keyword">get</span>; <span class="keyword">set</span>; }
+}
+
+<span class="keyword">public partial class</span> <span class="type">MyDbContext</span> : <span class="type">DocumentDbContext</span>
+{
+    <span class="keyword">public</span> <span class="type">DocumentCollection</span>&lt;<span class="type">ObjectId</span>, <span class="type">SensorReading</span>&gt; SensorReadings { <span class="keyword">get</span>; <span class="keyword">set</span>; } = <span class="keyword">null</span>!;
+
+    <span class="keyword">protected override void</span> OnModelCreating(<span class="type">ModelBuilder</span> modelBuilder)
+    {
+        modelBuilder.Entity&lt;<span class="type">SensorReading</span>&gt;()
+            .ToCollection(<span class="string">"sensor_readings"</span>)
+            .HasTimeSeries(r => r.Timestamp, retention: <span class="type">TimeSpan</span>.FromDays(<span class="number">7</span>));
+    }
+}
+
+<span class="comment">// Insert as normal — routed to TS pages automatically</span>
+db.SensorReadings.Insert(<span class="keyword">new</span> <span class="type">SensorReading</span>
+{
+    SensorId  = <span class="string">"sensor-42"</span>,
+    Value     = <span class="number">23.5</span>,
+    Timestamp = <span class="type">DateTime</span>.UtcNow
+});
+db.SaveChanges();
+
+<span class="comment">// Force prune immediately (tests / admin)</span>
+db.SensorReadings.ForcePrune();</code></pre>
+    </section>
+
+    <section>
+      <h2>Enabling TimeSeries — Schema-less API (<code>DynamicCollection</code>)</h2>
       <p>Call <code>SetTimeSeries()</code> on any <code>DynamicCollection</code>:</p>
       <pre><code><span class="keyword">using</span> <span class="keyword">var</span> engine = <span class="keyword">new</span> <span class="type">BLiteEngine</span>(<span class="string">"iot.db"</span>);
 <span class="keyword">var</span> sensors = engine.GetOrCreateCollection(<span class="string">"sensors"</span>);
@@ -166,6 +207,18 @@ engine.Commit();</code></pre>
 
     <section>
       <h2>Quick Reference</h2>
+      <h3>Typed API (<code>DocumentDbContext</code>) — v3.3.0+</h3>
+      <table>
+        <thead><tr><th>API</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>.HasTimeSeries(x =&gt; x.Prop, retention)</code></td><td>Configure a typed collection as TimeSeries in <code>OnModelCreating</code>.</td></tr>
+          <tr><td><code>collection.ForcePrune()</code></td><td>Runs the prune pass immediately on a <code>DocumentCollection&lt;TId,T&gt;</code>.</td></tr>
+          <tr><td><code>collection.Insert(entity)</code></td><td>Standard insert — routed to TS pages automatically.</td></tr>
+          <tr><td><code>collection.FindAll()</code> / <code>FindById(id)</code></td><td>Standard reads work transparently on TS collections.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Schema-less API (<code>DynamicCollection</code>) — v1.12+</h3>
       <table>
         <thead><tr><th>API</th><th>Description</th></tr></thead>
         <tbody>
