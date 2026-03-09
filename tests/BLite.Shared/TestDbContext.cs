@@ -5,6 +5,7 @@ using BLite.Core.Metadata;
 using BLite.Core.Indexing;
 using BLite.Shared;
 using BLite.Core.Storage;
+using System;
 
 namespace BLite.Tests;
 
@@ -67,6 +68,12 @@ public partial class TestDbContext : DocumentDbContext
 
     // DDD private backing field Tests
     public DocumentCollection<ObjectId, DddAggregate> DddAggregates { get; set; } = null!;
+
+    // FullyPrivateEntity – private constructor + all private setters
+    public DocumentCollection<ObjectId, FullyPrivateEntity> FullyPrivateEntities { get; set; } = null!;
+
+    // SensorReading – TimeSeries via DocumentDbContext fluent API
+    public DocumentCollection<ObjectId, SensorReading> SensorReadings { get; set; } = null!;
 
     public TestDbContext(string databasePath) : base(databasePath)
     {
@@ -143,6 +150,14 @@ public partial class TestDbContext : DocumentDbContext
 
         // DDD private backing field Tests
         modelBuilder.Entity<DddAggregate>().ToCollection("ddd_aggregates");
+
+        // FullyPrivateEntity
+        modelBuilder.Entity<FullyPrivateEntity>().ToCollection("fully_private_entities");
+
+        // SensorReading TimeSeries
+        modelBuilder.Entity<SensorReading>()
+            .ToCollection("sensor_readings")
+            .HasTimeSeries(r => r.Timestamp, retention: TimeSpan.FromDays(7));
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);

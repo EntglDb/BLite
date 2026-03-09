@@ -22,6 +22,8 @@ public class EntityTypeBuilder<T> where T : class
     public bool ValueGeneratedOnAdd { get; private set; }
     public string? PrimaryKeyName { get; private set; }
     public Dictionary<string, Type> PropertyConverters { get; } = new();
+    public string? TimeSeriesTtlField { get; private set; }
+    public TimeSpan? TimeSeriesRetention { get; private set; }
 
     public EntityTypeBuilder<T> ToCollection(string name)
     {
@@ -51,6 +53,20 @@ public class EntityTypeBuilder<T> where T : class
     {
         PrimaryKeySelector = keySelector;
         PrimaryKeyName = ExpressionAnalyzer.ExtractPropertyPaths(keySelector).FirstOrDefault() ?? "_id";
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the collection as a TimeSeries with automatic TTL-based pruning.
+    /// Documents older than <paramref name="retention"/> are automatically removed.
+    /// </summary>
+    /// <param name="timestampSelector">Expression pointing to the DateTime property to use as the timestamp.</param>
+    /// <param name="retention">How long to retain documents.</param>
+    public EntityTypeBuilder<T> HasTimeSeries(Expression<Func<T, DateTime>> timestampSelector, TimeSpan retention)
+    {
+        TimeSeriesTtlField = ExpressionAnalyzer.ExtractPropertyPaths(timestampSelector)
+            .FirstOrDefault()?.ToLowerInvariant();
+        TimeSeriesRetention = retention;
         return this;
     }
 

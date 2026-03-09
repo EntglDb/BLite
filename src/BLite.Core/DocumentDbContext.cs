@@ -158,6 +158,9 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
             {
                 collection.ApplyIndexBuilder(indexBuilder);
             }
+
+            if (builder.TimeSeriesTtlField != null && builder.TimeSeriesRetention.HasValue)
+                collection.SetTimeSeries(builder.TimeSeriesTtlField, builder.TimeSeriesRetention.Value);
         }
 
         _storage.RegisterMappers(_registeredMappers);

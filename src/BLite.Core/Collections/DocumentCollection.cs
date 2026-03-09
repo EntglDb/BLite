@@ -48,6 +48,8 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
     // Free space tracking: PageId → Free bytes
     private readonly Dictionary<uint, ushort> _freeSpaceMap;
+    private bool _isTimeSeries;
+    private string? _ttlFieldName;
 
     // Current page for inserts (optimization)
     private uint _currentDataPage;
@@ -67,6 +69,43 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     internal void SetConverterRegistry(ValueConverterRegistry registry) =>
         ConverterRegistry = registry ?? ValueConverterRegistry.Empty;
 
+    /// <summary>
+    /// Configures this collection as a TimeSeries with automatic TTL-based pruning.
+    /// Must be called before the first insert. Persists configuration to storage metadata.
+    /// </summary>
+    internal void SetTimeSeries(string ttlFieldName, TimeSpan retention)
+    {
+        var meta = _indexManager.GetMetadata();
+        meta.IsTimeSeries = true;
+        meta.TtlFieldName = ttlFieldName;
+        meta.RetentionPolicyMs = (long)retention.TotalMilliseconds;
+        meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
+        _storage.SaveCollectionMetadata(meta);
+        _isTimeSeries = true;
+        _ttlFieldName = ttlFieldName;
+    }
+
+    /// <summary>
+    /// Forces immediate pruning of expired TimeSeries documents, regardless of automatic thresholds.
+    /// Primarily intended for testing; in production, pruning is triggered automatically on insert.
+    /// </summary>
+    public void ForcePrune()
+    {
+        if (!_isTimeSeries)
+            throw new InvalidOperationException("ForcePrune is only valid on TimeSeries collections.");
+
+        // Read fresh metadata from storage: InsertTimeSeries updates TimeSeriesHeadPageId
+        // in StorageEngine's own metadata store, which is separate from _indexManager._metadata.
+        var meta = _storage.GetCollectionMetadata(_collectionName);
+        if (meta == null || meta.RetentionPolicyMs <= 0) return;
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        _storage.PruneTimeSeries(meta, transaction);
+        meta.InsertedSinceLastPruning = 0;
+        meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
+        _storage.SaveCollectionMetadata(meta);
+    }
+
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
@@ -84,6 +123,14 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
         // Ensure schema is persisted and versioned
         EnsureSchema();
+
+        // Restore TimeSeries flag from persisted metadata
+        var tsMeta = _indexManager.GetMetadata();
+        if (tsMeta.IsTimeSeries)
+        {
+            _isTimeSeries = true;
+            _ttlFieldName = tsMeta.TtlFieldName;
+        }
 
         // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
         // Use persisted root page ID if available
@@ -1462,7 +1509,15 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
         DocumentLocation location;
-        if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
+        if (_isTimeSeries)
+        {
+            // Wrap the already-serialized BSON bytes in a BsonDocument so InsertTimeSeries
+            // can read the timestamp field and manage TimeSeriesPage allocation/pruning.
+            var bsonDoc = new BsonDocument(docData.ToArray(), _storage.GetKeyReverseMap());
+            var loc = _storage.InsertTimeSeries(_collectionName, bsonDoc, transaction);
+            location = new DocumentLocation(loc.PageId, (ushort)loc.SlotIndex);
+        }
+        else if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
         {
             var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size);
             if (pageId == 0) pageId = AllocateNewDataPage();
@@ -1481,6 +1536,62 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
 
         // Notify CDC
         NotifyCdc(OperationType.Insert, id, docData);
+    }
+
+    /// <summary>
+    /// Compacts the data area of a slotted page by reclaiming bytes occupied by deleted slots.
+    /// Live documents are packed contiguously toward the top of the page and each slot's Offset
+    /// field is updated accordingly. Slot indices are never renumbered, so the primary index
+    /// remains valid. <see cref="SlottedPageHeader.FreeSpaceEnd"/> is advanced to reflect the
+    /// reclaimed space.
+    /// </summary>
+    /// <param name="buffer">Full page buffer (exactly <c>PageSize</c> bytes) to compact in-place.</param>
+    /// <returns><c>true</c> if at least one deleted slot was found and space was reclaimed; <c>false</c> if the page was already compact.</returns>
+    private bool CompactPage(Span<byte> buffer)
+    {
+        var header = SlottedPageHeader.ReadFrom(buffer);
+        if (header.SlotCount == 0) return false;
+
+        // Gather live (non-deleted) slots
+        var liveSlots = new List<(ushort index, SlotEntry slot)>(header.SlotCount);
+        for (ushort i = 0; i < header.SlotCount; i++)
+        {
+            var entryOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.Slice(entryOffset, SlotEntry.Size));
+            if ((slot.Flags & SlotFlags.Deleted) == 0)
+                liveSlots.Add((i, slot));
+        }
+
+        if (liveSlots.Count == header.SlotCount)
+            return false; // No deleted slots — nothing to compact
+
+        // Pack live document data from top of page downward using a temp copy
+        // of the data area to avoid read-after-write corruption.
+        var temp = ArrayPool<byte>.Shared.Rent(buffer.Length);
+        try
+        {
+            buffer.CopyTo(temp);
+            ushort newEnd = (ushort)buffer.Length;
+            foreach (var (idx, slot) in liveSlots)
+            {
+                newEnd -= slot.Length;
+                // Copy original bytes from temp into the new (higher) position in buffer
+                temp.AsSpan(slot.Offset, slot.Length).CopyTo(buffer.Slice(newEnd, slot.Length));
+                // Update slot entry to point at the new offset
+                var updatedSlot = slot;
+                updatedSlot.Offset = newEnd;
+                var entryOffset = SlottedPageHeader.Size + (idx * SlotEntry.Size);
+                updatedSlot.WriteTo(buffer.Slice(entryOffset, SlotEntry.Size));
+            }
+
+            header.FreeSpaceEnd = newEnd;
+            header.WriteTo(buffer);
+            return true;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(temp);
+        }
     }
 
     #endregion
@@ -1579,6 +1690,21 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             // Read from StorageEngine with transaction isolation
             _storage.ReadPage(location.PageId, txnId, buffer);
 
+            var pageType = (PageType)buffer[4];
+            if (pageType == PageType.Free || pageType == PageType.Empty)
+                return null;
+
+            if (pageType == PageType.TimeSeries)
+            {
+                int tsOffset = location.SlotIndex;
+                if (tsOffset < TimeSeriesPage.DataOffset || tsOffset + 4 > buffer.Length)
+                    return null;
+                int tsSize = BitConverter.ToInt32(buffer.AsSpan(tsOffset, 4));
+                if (tsSize <= 0 || tsOffset + tsSize > buffer.Length)
+                    return null;
+                return _mapper.Deserialize(new BsonSpanReader(buffer.AsSpan(tsOffset, tsSize), _storage.GetKeyReverseMap()));
+            }
+
             var header = SlottedPageHeader.ReadFrom(buffer);
 
             if (location.SlotIndex >= header.SlotCount)
@@ -1665,6 +1791,21 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
 
             // --- all Span work is sync after the first read ---
+            var pageType = (PageType)buffer[4];
+            if (pageType == PageType.Free || pageType == PageType.Empty)
+                return default;
+
+            if (pageType == PageType.TimeSeries)
+            {
+                int tsOffset = location.SlotIndex;
+                if (tsOffset < TimeSeriesPage.DataOffset || tsOffset + 4 > buffer.Length)
+                    return default;
+                int tsSize = BitConverter.ToInt32(buffer.AsSpan(tsOffset, 4));
+                if (tsSize <= 0 || tsOffset + tsSize > buffer.Length)
+                    return default;
+                return _mapper.Deserialize(new BsonSpanReader(buffer.AsSpan(tsOffset, tsSize), _storage.GetKeyReverseMap()));
+            }
+
             var header = SlottedPageHeader.ReadFrom(buffer);
             if (location.SlotIndex >= header.SlotCount) return default;
 
@@ -2065,7 +2206,15 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
             newSlot.Flags |= SlotFlags.Deleted;
             newSlot.WriteTo(buffer.AsSpan(slotOffset));
 
+            // Compact the page: reclaim the bytes that belonged to the deleted document
+            // and advance FreeSpaceEnd so FindPageWithSpace can see the freed space.
+            CompactPage(buffer.AsSpan(0, _storage.PageSize));
+
             _storage.WritePage(location.PageId, transaction.TransactionId, buffer);
+
+            // Update free space map with post-compaction free bytes
+            var compactedHeader = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+            _freeSpaceMap[location.PageId] = (ushort)compactedHeader.AvailableFreeSpace;
 
             // Remove from primary index
             _primaryIndex.Delete(key, location, transaction.TransactionId);

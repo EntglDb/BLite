@@ -674,4 +674,98 @@ namespace BLite.Shared
         public ContactInfo? MainContact { get; set; }
         public List<ContactInfo> Contacts { get; set; } = new();
     }
+
+    // ========================================
+    // FullyPrivateEntity – private constructor + all private setters
+    // A strict DDD-style aggregate: only a factory can create it; the
+    // source generator must use reflection/expression-trees to hydrate every
+    // property during deserialization.
+    // ========================================
+
+    /// <summary>
+    /// Nested address value-object: private constructor, all private setters.
+    /// </summary>
+    public class PrivateAddress
+    {
+        public string Street   { get; private set; } = string.Empty;
+        public string City     { get; private set; } = string.Empty;
+        public string Country  { get; private set; } = string.Empty;
+        public int    ZipCode  { get; private set; }
+
+        private PrivateAddress() { }
+
+        public static PrivateAddress Create(string street, string city, string country, int zipCode)
+            => new PrivateAddress { Street = street, City = city, Country = country, ZipCode = zipCode };
+    }
+
+    /// <summary>
+    /// Nested tag value-object: private constructor, all private setters.
+    /// </summary>
+    public class PrivateTag
+    {
+        public string Key   { get; private set; } = string.Empty;
+        public string Value { get; private set; } = string.Empty;
+
+        private PrivateTag() { }
+
+        public static PrivateTag Create(string key, string value)
+            => new PrivateTag { Key = key, Value = value };
+    }
+
+    /// <summary>
+    /// Aggregate root with a private constructor and exclusively private setters.
+    /// Contains: scalar base types, a nested object with private setters, a
+    /// collection of nested objects with private setters, and a primitive collection.
+    /// The source generator must handle all of these without any public setter.
+    /// </summary>
+    public class FullyPrivateEntity
+    {
+        public ObjectId  Id         { get; private set; }
+        public string    Name       { get; private set; } = string.Empty;
+        public int       Age        { get; private set; }
+        public bool      IsActive   { get; private set; }
+        public decimal   Score      { get; private set; }
+        public DateTime  CreatedAt  { get; private set; }
+        public Guid      ExternalId { get; private set; }
+
+        // Nested object – itself has private constructor + private setters
+        public PrivateAddress HomeAddress { get; private set; } = null!;
+
+        // Collection of nested objects – each with private setters
+        public List<PrivateTag> Tags  { get; private set; } = new();
+
+        // Primitive collection
+        public List<string> Notes { get; private set; } = new();
+
+        private FullyPrivateEntity() { }
+
+        public static FullyPrivateEntity Create(
+            string name, int age, bool isActive, decimal score,
+            DateTime createdAt, Guid externalId, PrivateAddress homeAddress)
+        {
+            return new FullyPrivateEntity
+            {
+                Id         = ObjectId.NewObjectId(),
+                Name       = name,
+                Age        = age,
+                IsActive   = isActive,
+                Score      = score,
+                CreatedAt  = createdAt,
+                ExternalId = externalId,
+                HomeAddress = homeAddress,
+            };
+        }
+
+        public void AddTag(PrivateTag tag)  => Tags.Add(tag);
+        public void AddNote(string note)    => Notes.Add(note);
+    }
+
+    // ── SensorReading – TimeSeries entity used in DocumentDbContext TimeSeries tests ──
+    public class SensorReading
+    {
+        public ObjectId Id { get; set; }
+        public string SensorId { get; set; } = "";
+        public double Value { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
 }
