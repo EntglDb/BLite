@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Text.Json;
 using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Indexing;
@@ -117,6 +118,66 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     private bool _editorIsError;
 
     public bool EditorIsOk => !EditorIsError && !string.IsNullOrEmpty(EditorMessage);
+
+    // ── Editor view mode (Text vs Tree) ───────────────────────────────────────────
+    [ObservableProperty] private bool _editorShowTree;
+
+    public ObservableCollection<JsonNodeViewModel> JsonTreeRoots { get; } = [];
+
+    partial void OnEditorShowTreeChanged(bool value)
+    {
+        if (value) RebuildJsonTree();
+    }
+
+    partial void OnEditorJsonChanged(string value)
+    {
+        if (EditorShowTree) RebuildJsonTree();
+    }
+
+    private void RebuildJsonTree()
+    {
+        JsonTreeRoots.Clear();
+        if (string.IsNullOrWhiteSpace(EditorJson)) return;
+        try
+        {
+            using var doc = JsonDocument.Parse(EditorJson);
+            JsonTreeRoots.Add(BuildJsonNode(null, doc.RootElement));
+        }
+        catch { /* invalid JSON – skip */ }
+    }
+
+    private static JsonNodeViewModel BuildJsonNode(string? key, JsonElement el)
+    {
+        var node = el.ValueKind switch
+        {
+            JsonValueKind.Object => new JsonNodeViewModel
+                { Key = key, DisplayValue = "{ }", TypeLabel = "object", IsExpanded = true },
+            JsonValueKind.Array  => new JsonNodeViewModel
+                { Key = key, DisplayValue = $"[ {el.GetArrayLength()} ]", TypeLabel = "array", IsExpanded = true },
+            JsonValueKind.String => new JsonNodeViewModel
+                { Key = key, DisplayValue = $"\"{el.GetString()}\"", TypeLabel = "string" },
+            JsonValueKind.Number => new JsonNodeViewModel
+                { Key = key, DisplayValue = el.GetRawText(), TypeLabel = "number" },
+            JsonValueKind.True   => new JsonNodeViewModel
+                { Key = key, DisplayValue = "true",  TypeLabel = "bool" },
+            JsonValueKind.False  => new JsonNodeViewModel
+                { Key = key, DisplayValue = "false", TypeLabel = "bool" },
+            _                    => new JsonNodeViewModel
+                { Key = key, DisplayValue = "null",  TypeLabel = "null" },
+        };
+
+        if (el.ValueKind == JsonValueKind.Object)
+            foreach (var prop in el.EnumerateObject())
+                node.Children.Add(BuildJsonNode(prop.Name, prop.Value));
+        else if (el.ValueKind == JsonValueKind.Array)
+        {
+            var i = 0;
+            foreach (var item in el.EnumerateArray())
+                node.Children.Add(BuildJsonNode($"[{i++}]", item));
+        }
+
+        return node;
+    }
 
     // ── Schema / Vector Source ────────────────────────────────────────────────
     public ObservableCollection<SchemaFieldViewModel> SchemaFields { get; } = [];
@@ -405,10 +466,11 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     [RelayCommand]
     private void CloseEditor()
     {
-        SelectedRow  = null;
-        IsInsertMode = false;
-        EditorJson   = "";
+        SelectedRow   = null;
+        IsInsertMode  = false;
+        EditorJson    = "";
         EditorMessage = "";
+        JsonTreeRoots.Clear();
     }
 
     [RelayCommand]

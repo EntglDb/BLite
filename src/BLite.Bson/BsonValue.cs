@@ -137,7 +137,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             if (_type == BsonType.Array && _refValue is double[] arr && arr.Length == 2)
                 return (arr[0], arr[1]);
             // Documents round-tripped through ReadArray store elements as List<BsonValue>
-            if (_type == BsonType.Array && _refValue is List<BsonValue> list && list.Count == 2)
+            if (_type == BsonType.Array && _refValue is List<BsonValue> list && list.Count == 2 && list[0].IsDouble && list[1].IsDouble)
                 return (list[0].AsDouble, list[1].AsDouble);
             throw new InvalidOperationException($"BsonValue is {_type}, not Coordinates");
         }
@@ -157,7 +157,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
     public bool IsTimestamp => Type == BsonType.Timestamp;
     public bool IsGuid => Type == BsonType.String && _refValue is string s && Guid.TryParse(s, out _);
     public bool IsCoordinates => Type == BsonType.Array && _refValue is double[] arr && arr.Length == 2
-        || Type == BsonType.Array && _refValue is List<BsonValue> list && list.Count == 2;
+        || Type == BsonType.Array && _refValue is List<BsonValue> list && list.Count == 2 && list[0].IsDouble && list[1].IsDouble;
 
 
     #endregion

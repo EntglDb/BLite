@@ -4,6 +4,7 @@
         xmlns:ex="using:BLite.Studio.ViewModels.Explorer"
         xmlns:core="using:BLite.Core"
         xmlns:Bson="using:BLite.Bson"
+        xmlns:converters="using:BLite.Studio.Converters"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="640"
@@ -684,7 +685,16 @@
 
                     <!-- ── Tab: Documents ── -->
                     <TabItem Header="Documents">
-                      <Grid ColumnDefinitions="*,Auto">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" MinWidth="200"/>
+                          <!-- Splitter column: Auto so it collapses to 0 when editor is hidden -->
+                          <ColumnDefinition Width="Auto"/>
+                          <!-- Editor column: * when open, 0px when closed -->
+                          <ColumnDefinition Width="{ReflectionBinding IsEditorOpen,
+                              Converter={x:Static converters:BoolToStarGridLengthConverter.Instance}}"
+                                            MinWidth="0"/>
+                        </Grid.ColumnDefinitions>
 
                         <!-- Table pane -->
                         <DockPanel Grid.Column="0">
@@ -791,17 +801,27 @@
                           </Border>
                         </DockPanel>
 
+                        <!-- Drag-resizable splitter between list and editor -->
+                        <GridSplitter Grid.Column="1"
+                                      Width="5"
+                                      ResizeDirection="Columns"
+                                      IsVisible="{Binding IsEditorOpen}"
+                                      Background="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                      Opacity="0.25"
+                                      HorizontalAlignment="Stretch"
+                                      VerticalAlignment="Stretch"/>
+
                         <!-- ── Editor pane (right) ── -->
-                        <Border Grid.Column="1"
-                                Width="380"
+                        <Border Grid.Column="2"
+                                MinWidth="260"
                                 IsVisible="{Binding IsEditorOpen}"
                                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-                                BorderThickness="1,0,0,0">
+                                BorderThickness="0">
                           <DockPanel>
 
                             <!-- Editor header -->
                             <Grid DockPanel.Dock="Top"
-                                  ColumnDefinitions="*,Auto"
+                                  ColumnDefinitions="*,Auto,Auto"
                                   Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                                   Height="36">
                               <TextBlock Grid.Column="0"
@@ -810,7 +830,15 @@
                                          TextTrimming="CharacterEllipsis"
                                          VerticalAlignment="Center"
                                          Margin="12,0"/>
-                              <Button Grid.Column="1"
+                              <ToggleButton Grid.Column="1"
+                                            Content="&#x1F333; Tree"
+                                            FontSize="10"
+                                            Padding="8,3"
+                                            Margin="4,6"
+                                            Height="24"
+                                            IsChecked="{Binding EditorShowTree}"
+                                            ToolTip.Tip="Toggle navigable JSON tree view"/>
+                              <Button Grid.Column="2"
                                       Content="✕"
                                       Padding="8,0"
                                       Height="36"
@@ -836,14 +864,60 @@
                               </Grid>
                             </Border>
 
-                            <!-- JSON textarea -->
-                            <TextBox AcceptsReturn="True"
-                                     TextWrapping="NoWrap"
-                                     Text="{Binding EditorJson}"
-                                     FontFamily="Monospace"
-                                     FontSize="12"
-                                     BorderThickness="0"
-                                     CornerRadius="0"/>
+                            <!-- JSON text / tree panel -->
+                            <Grid>
+
+                              <!-- Text editor -->
+                              <TextBox AcceptsReturn="True"
+                                       TextWrapping="NoWrap"
+                                       Text="{Binding EditorJson}"
+                                       FontFamily="Monospace"
+                                       FontSize="12"
+                                       BorderThickness="0"
+                                       CornerRadius="0"
+                                       IsVisible="{Binding !EditorShowTree}"/>
+
+                              <!-- Navigable JSON tree -->
+                              <ScrollViewer IsVisible="{Binding EditorShowTree}"
+                                            HorizontalScrollBarVisibility="Auto"
+                                            VerticalScrollBarVisibility="Auto">
+                                <TreeView ItemsSource="{Binding JsonTreeRoots}"
+                                          Margin="4,6"
+                                          BorderThickness="0"
+                                          Background="Transparent">
+                                  <TreeView.Styles>
+                                    <Style Selector="TreeViewItem">
+                                      <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded}"/>
+                                    </Style>
+                                  </TreeView.Styles>
+                                  <TreeView.ItemTemplate>
+                                    <TreeDataTemplate x:DataType="ex:JsonNodeViewModel"
+                                                      ItemsSource="{Binding Children}">
+                                      <StackPanel Orientation="Horizontal" Spacing="3">
+                                        <TextBlock IsVisible="{Binding HasKey}"
+                                                   Text="{Binding Key}"
+                                                   FontFamily="Monospace" FontSize="11"
+                                                   Foreground="#9CDCFE"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock IsVisible="{Binding HasKey}"
+                                                   Text=": "
+                                                   FontFamily="Monospace" FontSize="11"
+                                                   Opacity="0.4"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding DisplayValue}"
+                                                   FontFamily="Monospace" FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   Classes.JsonStr="{Binding IsString}"
+                                                   Classes.JsonNum="{Binding IsNumber}"
+                                                   Classes.JsonBool="{Binding IsBoolOrNull}"
+                                                   Classes.JsonHint="{Binding IsContainer}"/>
+                                      </StackPanel>
+                                    </TreeDataTemplate>
+                                  </TreeView.ItemTemplate>
+                                </TreeView>
+                              </ScrollViewer>
+
+                            </Grid>
                           </DockPanel>
                         </Border>
 
@@ -1541,6 +1615,21 @@
     <Style Selector="Button.DangerBtn">
       <Setter Property="Background" Value="#C0392B"/>
       <Setter Property="Foreground" Value="White"/>
+    </Style>
+
+    <!-- ── JSON tree node colours ─────────────────────────────────────── -->
+    <Style Selector="TextBlock.JsonStr">
+      <Setter Property="Foreground" Value="#CE9178"/>
+    </Style>
+    <Style Selector="TextBlock.JsonNum">
+      <Setter Property="Foreground" Value="#B5CEA8"/>
+    </Style>
+    <Style Selector="TextBlock.JsonBool">
+      <Setter Property="Foreground" Value="#569CD6"/>
+    </Style>
+    <Style Selector="TextBlock.JsonHint">
+      <Setter Property="Opacity" Value="0.45"/>
+      <Setter Property="FontStyle" Value="Italic"/>
     </Style>
   </Window.Styles>
 
