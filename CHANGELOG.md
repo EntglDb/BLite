@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.4.0"></a>
+## [3.4.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.4.0) (2026-03-10)
+
+### Features
+
+* auto id fallback for string and Guid ([58a99ec](https://www.github.com/EntglDb/BLite/commit/58a99ec0c86ec453ff795d6258822a5495c98253))
+
+### Bug Fixes
+
+* corrects index navigation for number based indexes ([685873e](https://www.github.com/EntglDb/BLite/commit/685873e8050d7d0f0db2914142de2391ab553797))
+
 <a name="3.3.0"></a>
 ## [3.3.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.3.0) (2026-03-09)
 
