@@ -1486,6 +1486,21 @@ public class DocumentCollection<TId, T> : IDisposable where T : class
                 id = (TId)(object)Guid.NewGuid();
                 _mapper.SetId(entity, id);
             }
+            else if (typeof(TId) == typeof(int))
+            {
+                id = (TId)(object)(int)_storage.GetNextSequence(_collectionName);
+                _mapper.SetId(entity, id);
+            }
+            else if (typeof(TId) == typeof(long))
+            {
+                id = (TId)(object)_storage.GetNextSequence(_collectionName);
+                _mapper.SetId(entity, id);
+            }
+            else if (typeof(TId) == typeof(string))
+            {
+                id = (TId)(object)Ulid.NewUlid().ToString();
+                _mapper.SetId(entity, id);
+            }
         }
         return id;
     }

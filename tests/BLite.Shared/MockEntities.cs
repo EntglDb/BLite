@@ -58,6 +58,12 @@ namespace BLite.Shared
         public string? Name { get; set; }
     }
 
+    public class LongEntity
+    {
+        public long Id { get; set; }
+        public string? Name { get; set; }
+    }
+
     public class StringEntity
     {
         public required string Id { get; set; }

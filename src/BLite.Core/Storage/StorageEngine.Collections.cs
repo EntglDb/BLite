@@ -85,6 +85,9 @@ public class CollectionMetadata
     public string? TtlFieldName { get; set; }
     public long LastPruningTimestamp { get; set; }
     public int InsertedSinceLastPruning { get; set; }
+
+    // ── Sequence (int/long auto-increment) ──
+    public long SequenceValue { get; set; }
 }
 
 public class IndexMetadata
@@ -198,6 +201,10 @@ public sealed partial class StorageEngine
                         }
                     }
 
+                    // ── Sequence (backward-compatible) ────────
+                    if (reader.BaseStream.Position < reader.BaseStream.Length)
+                        metadata.SequenceValue = reader.ReadInt64();
+
                     return metadata;
                 }
                 catch
@@ -268,6 +275,9 @@ public sealed partial class StorageEngine
                     writer.Write(field.Suffix);
             }
         }
+
+        // ── Sequence serialization ─────────────────────────────────────────────
+        writer.Write(metadata.SequenceValue);
 
         var newData = stream.ToArray();
 

@@ -44,6 +44,15 @@ public abstract class Int32MapperBase<T> : DocumentMapperBase<int, T> where T : 
 }
 
 /// <summary>
+/// Base class for mappers using Int64 as primary key.
+/// </summary>
+public abstract class Int64MapperBase<T> : DocumentMapperBase<long, T> where T : class
+{
+    public override IndexKey ToIndexKey(long id) => IndexKey.Create(id);
+    public override long FromIndexKey(IndexKey key) => key.As<long>();
+}
+
+/// <summary>
 /// Base class for mappers using String as primary key.
 /// </summary>
 public abstract class StringMapperBase<T> : DocumentMapperBase<string, T> where T : class

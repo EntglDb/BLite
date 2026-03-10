@@ -28,6 +28,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, PersonV2> PeopleV2 { get; set; } = null!;
     public DocumentCollection<int, Product> Products { get; set; } = null!;
     public DocumentCollection<int, IntEntity> IntEntities { get; set; } = null!;
+    public DocumentCollection<long, LongEntity> LongEntities { get; set; } = null!;
     public DocumentCollection<string, StringEntity> StringEntities { get; set; } = null!;
     public DocumentCollection<Guid, GuidEntity> GuidEntities { get; set; } = null!;
     public DocumentCollection<string, CustomKeyEntity> CustomKeyEntities { get; set; } = null!;
@@ -90,6 +91,7 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<PersonV2>().ToCollection("peoplev2_collection").HasIndex(p => p.Age);
         modelBuilder.Entity<Product>().ToCollection("products_collection").HasIndex(p => p.Price);
         modelBuilder.Entity<IntEntity>().HasKey(e => e.Id);
+        modelBuilder.Entity<LongEntity>().HasKey(e => e.Id);
         modelBuilder.Entity<StringEntity>().HasKey(e => e.Id);
         modelBuilder.Entity<GuidEntity>().HasKey(e => e.Id);
         modelBuilder.Entity<CustomKeyEntity>().HasKey(e => e.Code);
