@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.4.2"></a>
+## [3.4.2](https://www.github.com/EntglDb/BLite/releases/tag/v3.4.2) (2026-03-10)
+
+### Bug Fixes
+
+* delete collection metadata ([19dac17](https://www.github.com/EntglDb/BLite/commit/19dac17dff255f59c350d0f0625ca52a686b0337))
+
 <a name="3.4.1"></a>
 ## [3.4.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.4.1) (2026-03-10)
 
