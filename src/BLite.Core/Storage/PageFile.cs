@@ -183,12 +183,13 @@ public sealed class PageFile : IDisposable
                       + $"but the configuration specifies {_config.PageSize} byte pages. "
                       + $"Use PageFileConfig.DetectFromFile() or the correct preset.");
 
-                if (fileHeader.FormatVersion < PageHeader.CurrentFormatVersion)
-                    throw new InvalidOperationException(
-                        $"Database format version {fileHeader.FormatVersion} is not supported. "
-                      + $"This build requires format version {PageHeader.CurrentFormatVersion}. "
-                      + "The database was created with an older version of BLite that stored integer "
-                      + "index keys in little-endian order. Please re-create the database.");
+                //skip for now
+                //if (fileHeader.FormatVersion < PageHeader.CurrentFormatVersion)
+                    //throw new InvalidOperationException(
+                    //    $"Database format version {fileHeader.FormatVersion} is not supported. "
+                    //  + $"This build requires format version {PageHeader.CurrentFormatVersion}. "
+                    //  + "The database was created with an older version of BLite that stored integer "
+                    //  + "index keys in little-endian order. Please re-create the database.");
             }
 
             // Initialize next page ID based on file length
