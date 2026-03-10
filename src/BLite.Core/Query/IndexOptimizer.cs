@@ -258,12 +258,20 @@ internal static class IndexOptimizer
                     return (propertyPath, constant.Value, nodeType);
             }
             
-            // Handle Convert
+            // Handle Convert (e.g. enum property compared to int constant)
             if (left is UnaryExpression unary && unary.Operand is MemberExpression member2 && right is ConstantExpression constant2)
             {
                 var propertyPath = ExtractMemberPath(member2, parameter);
                 if (propertyPath != null)
-                    return (propertyPath, constant2.Value, nodeType);
+                {
+                    // If the property is an enum but the constant is the underlying numeric type,
+                    // convert back to the enum so ConvertToIndexKey uses the enum branch (same as Insert).
+                    var propType = unary.Operand.Type;
+                    var val2 = constant2.Value;
+                    if (propType.IsEnum && val2 != null && !val2.GetType().IsEnum)
+                        val2 = Enum.ToObject(propType, val2);
+                    return (propertyPath, val2, nodeType);
+                }
             }
 
             // Handle closure captures on the right side (e.g. e.Prop == closureVar.Field)
@@ -292,8 +300,12 @@ internal static class IndexOptimizer
                     try
                     {
                         var val = EvaluateExpression<object>(right);
+                        // If the property is an enum, convert the value back to the enum type.
+                        var propType = unaryLeft.Operand.Type;
+                        if (propType.IsEnum && val != null && !val.GetType().IsEnum)
+                            val = Enum.ToObject(propType, val);
                         val = TryApplyConverter(propertyPath, val, registry);
-                        if (IsIndexableValue(val))
+                        if (IsIndexableValue(val) || (val != null && val.GetType().IsEnum))
                             return (propertyPath, val, nodeType);
                     }
                     catch { }

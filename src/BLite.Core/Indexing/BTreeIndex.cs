@@ -17,15 +17,18 @@ public sealed class BTreeIndex
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
     private uint _rootPageId;
+    private readonly Action<uint>? _onRootChanged;
     internal const int MaxEntriesPerNode = 100; // Low value to test splitting
 
     public BTreeIndex(StorageEngine storage,
                       IndexOptions options, 
-                      uint rootPageId = 0)
+                      uint rootPageId = 0,
+                      Action<uint>? onRootChanged = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
         _rootPageId = rootPageId;
+        _onRootChanged = onRootChanged;
 
         if (_rootPageId == 0)
         {
@@ -69,6 +72,12 @@ public sealed class BTreeIndex
     }
 
     public uint RootPageId => _rootPageId;
+
+    /// <summary>
+    /// Invokes the optional callback to notify the owner that the root page has changed
+    /// and must be re-persisted in collection metadata.
+    /// </summary>
+    private void NotifyRootChanged() => _onRootChanged?.Invoke(_rootPageId);
 
     /// <summary>
     /// Reads a page using StorageEngine for transaction isolation.
@@ -718,10 +727,8 @@ public sealed class BTreeIndex
         var newRootId = CreateNode(isLeaf: false, transactionId);
         var entries = new List<InternalEntry> { new InternalEntry(key, rightChildId) };
         WriteInternalNode(newRootId, leftChildId, entries, transactionId);
-        _rootPageId = newRootId; // Update in-memory root
-
-        // TODO: Update root in file header/metadata block so it persists? 
-        // For now user passes rootPageId to ctor. BTreeIndex doesn't manage master root pointer persistence yet.
+        _rootPageId = newRootId;
+        NotifyRootChanged(); // Caller must re-persist the new root page ID in collection metadata
     }
 
     private uint CreateNode(bool isLeaf, ulong transactionId)
@@ -826,7 +833,7 @@ public sealed class BTreeIndex
                 PageId = pageId,
                 IsLeaf = true,
                 EntryCount = (ushort)entries.Count,
-                ParentPageId = 0, // Todo: persist parent if needed? Currently rebuilt/cached or assumed?
+                ParentPageId = 0, // Parent pointer is not persisted; traversal is always top-down.
                 NextLeafPageId = nextLeafId,
                 PrevLeafPageId = prevLeafId
             };
@@ -1034,11 +1041,150 @@ public sealed class BTreeIndex
 
     private bool BorrowFromSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, ulong transactionId)
     {
-        // TODO: Implement rotation (borrow from left or right sibling)
-        // Complexity: High. Need to update Parent, Sibling, and Node.
-        // For MVP, we can skip Borrow and go straight to Merge, but that causes more merges.
-        // Let's implement Merge first as it's the fallback.
-        return false;
+        int minEntries = MaxEntriesPerNode / 2;
+        var nodeBuffer    = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        var siblingBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            ReadPage(nodeId, transactionId, nodeBuffer);
+            var nodeHeader = BTreeNodeHeader.ReadFrom(nodeBuffer.AsSpan(32));
+
+            // ── Try borrow from RIGHT sibling ─────────────────────────────────────
+            // childIndex == -1  → current is P0;   right sibling = entries[0]
+            // childIndex >= 0   → current is entries[childIndex]; right = entries[childIndex+1]
+            uint rightSiblingId = 0;
+            int  rightSepIdx    = -1;
+
+            if (childIndex == -1 && parentEntries.Count > 0)
+            {
+                rightSiblingId = parentEntries[0].PageId;
+                rightSepIdx    = 0;
+            }
+            else if (childIndex >= 0 && childIndex < parentEntries.Count - 1)
+            {
+                rightSiblingId = parentEntries[childIndex + 1].PageId;
+                rightSepIdx    = childIndex + 1;
+            }
+
+            if (rightSiblingId != 0)
+            {
+                ReadPage(rightSiblingId, transactionId, siblingBuffer);
+                var rightHeader = BTreeNodeHeader.ReadFrom(siblingBuffer.AsSpan(32));
+
+                if (rightHeader.EntryCount > minEntries)
+                {
+                    if (nodeHeader.IsLeaf)
+                    {
+                        var nodeEntries  = ReadLeafEntries(nodeBuffer,  nodeHeader.EntryCount);
+                        var rightEntries = ReadLeafEntries(siblingBuffer, rightHeader.EntryCount);
+
+                        // Rotate left: move right's first entry to end of current
+                        nodeEntries.Add(rightEntries[0]);
+                        rightEntries.RemoveAt(0);
+
+                        // Parent separator = new first key of right sibling
+                        parentEntries[rightSepIdx] = new InternalEntry(rightEntries[0].Key, rightSiblingId);
+
+                        WriteLeafNode(nodeId,          nodeEntries,  nodeHeader.NextLeafPageId,  nodeHeader.PrevLeafPageId,  transactionId);
+                        WriteLeafNode(rightSiblingId,  rightEntries, rightHeader.NextLeafPageId, rightHeader.PrevLeafPageId, transactionId);
+                    }
+                    else
+                    {
+                        var (nodeP0,  nodeEntries)  = ReadInternalEntries(nodeBuffer,  nodeHeader.EntryCount);
+                        var (rightP0, rightEntries) = ReadInternalEntries(siblingBuffer, rightHeader.EntryCount);
+
+                        // Rotate left for internal node:
+                        // Pull separator key down from parent; right's P0 becomes new last child of current.
+                        var sep = parentEntries[rightSepIdx].Key;
+                        nodeEntries.Add(new InternalEntry(sep, rightP0));
+
+                        // Right sibling's new P0 = its former first entry's PageId
+                        var newRightP0 = rightEntries[0].PageId;
+                        parentEntries[rightSepIdx] = new InternalEntry(rightEntries[0].Key, rightSiblingId);
+                        rightEntries.RemoveAt(0);
+
+                        WriteInternalNode(nodeId,         nodeP0,    nodeEntries,  transactionId);
+                        WriteInternalNode(rightSiblingId, newRightP0, rightEntries, transactionId);
+                    }
+
+                    WriteInternalNode(parentId, p0, parentEntries, transactionId);
+                    return true;
+                }
+            }
+
+            // ── Try borrow from LEFT sibling ──────────────────────────────────────
+            // childIndex == 0   → current is entries[0]; left sibling = P0
+            // childIndex >  0   → current is entries[childIndex]; left = entries[childIndex-1]
+            // (childIndex == -1 → current IS P0, no left sibling)
+            uint leftSiblingId = 0;
+            int  leftSepIdx    = -1;
+
+            if (childIndex == 0)
+            {
+                leftSiblingId = p0;
+                leftSepIdx    = 0;
+            }
+            else if (childIndex > 0)
+            {
+                leftSiblingId = parentEntries[childIndex - 1].PageId;
+                leftSepIdx    = childIndex;
+            }
+
+            if (leftSiblingId != 0)
+            {
+                ReadPage(leftSiblingId, transactionId, siblingBuffer);
+                var leftHeader = BTreeNodeHeader.ReadFrom(siblingBuffer.AsSpan(32));
+
+                if (leftHeader.EntryCount > minEntries)
+                {
+                    if (nodeHeader.IsLeaf)
+                    {
+                        var nodeEntries = ReadLeafEntries(nodeBuffer,   nodeHeader.EntryCount);
+                        var leftEntries = ReadLeafEntries(siblingBuffer, leftHeader.EntryCount);
+
+                        // Rotate right: move left's last entry to front of current
+                        var borrowed = leftEntries[leftEntries.Count - 1];
+                        leftEntries.RemoveAt(leftEntries.Count - 1);
+                        nodeEntries.Insert(0, borrowed);
+
+                        // Parent separator = the borrowed entry (now first key of current)
+                        parentEntries[leftSepIdx] = new InternalEntry(borrowed.Key, nodeId);
+
+                        WriteLeafNode(leftSiblingId, leftEntries, leftHeader.NextLeafPageId, leftHeader.PrevLeafPageId, transactionId);
+                        WriteLeafNode(nodeId,        nodeEntries, nodeHeader.NextLeafPageId, nodeHeader.PrevLeafPageId, transactionId);
+                    }
+                    else
+                    {
+                        var (nodeP0, nodeEntries) = ReadInternalEntries(nodeBuffer,   nodeHeader.EntryCount);
+                        var (leftP0, leftEntries) = ReadInternalEntries(siblingBuffer, leftHeader.EntryCount);
+
+                        // Rotate right for internal node:
+                        // Pull separator key down from parent; old nodeP0 becomes regular first entry of current.
+                        var sep = parentEntries[leftSepIdx].Key;
+                        nodeEntries.Insert(0, new InternalEntry(sep, nodeP0));
+
+                        // Left's last entry key becomes new parent separator; its PageId is new nodeP0
+                        var lastLeft = leftEntries[leftEntries.Count - 1];
+                        parentEntries[leftSepIdx] = new InternalEntry(lastLeft.Key, nodeId);
+                        var newNodeP0 = lastLeft.PageId;
+                        leftEntries.RemoveAt(leftEntries.Count - 1);
+
+                        WriteInternalNode(leftSiblingId, leftP0,    leftEntries, transactionId);
+                        WriteInternalNode(nodeId,        newNodeP0, nodeEntries, transactionId);
+                    }
+
+                    WriteInternalNode(parentId, p0, parentEntries, transactionId);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(nodeBuffer);
+            System.Buffers.ArrayPool<byte>.Shared.Return(siblingBuffer);
+        }
     }
 
     private void MergeWithSibling(uint nodeId, uint parentId, int childIndex, List<InternalEntry> parentEntries, uint p0, List<uint> path, ulong transactionId)
@@ -1104,10 +1250,9 @@ public sealed class BTreeIndex
         }
         else if (parentId == _rootPageId && parentEntries.Count == 0)
         {
-            // Root collapse: Root has 0 entries (only P0).
-            // P0 becomes new root.
-            _rootPageId = p0; // P0 is the merged node (LeftNode)
-            // TODO: Update persistent root pointer if stored
+            // Root collapse: P0 is the sole remaining child and becomes the new root.
+            _rootPageId = p0;
+            NotifyRootChanged(); // Caller must re-persist the new root page ID in collection metadata
         }
     }
 
@@ -1412,6 +1557,41 @@ public sealed class BTreeIndex
     }
 
     #endregion
+
+    /// <summary>
+    /// Returns all physical page IDs owned by this B+Tree.
+    /// Used when dropping an index to free storage space.
+    /// </summary>
+    public IReadOnlyList<uint> CollectAllPages()
+    {
+        var result = new List<uint>();
+        if (_rootPageId != 0)
+            CollectPagesRecursive(_rootPageId, result);
+        return result;
+    }
+
+    private void CollectPagesRecursive(uint pageId, List<uint> result)
+    {
+        if (pageId == 0) return;
+        result.Add(pageId);
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            ReadPage(pageId, 0, pageBuffer);
+            var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+            if (!header.IsLeaf)
+            {
+                var (p0, entries) = ReadInternalEntries(pageBuffer, header.EntryCount);
+                CollectPagesRecursive(p0, result);
+                foreach (var entry in entries)
+                    CollectPagesRecursive(entry.PageId, result);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+    }
 
     private void MergeNodes(uint leftNodeId, uint rightNodeId, IndexKey separatorKey, ulong transactionId)
     {

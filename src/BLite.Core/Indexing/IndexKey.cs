@@ -32,13 +32,18 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
 
     public IndexKey(int value)
     {
-        _data = BitConverter.GetBytes(value);
+        // Big-endian + sign-bit flip: lexicographic byte order == numeric order (including negatives).
+        uint u = (uint)value ^ 0x8000_0000u;
+        _data = [(byte)(u >> 24), (byte)(u >> 16), (byte)(u >> 8), (byte)u];
         _hashCode = ComputeHashCode(_data);
     }
 
     public IndexKey(long value)
     {
-        _data = BitConverter.GetBytes(value);
+        // Big-endian + sign-bit flip: lexicographic byte order == numeric order (including negatives).
+        ulong u = (ulong)value ^ 0x8000_0000_0000_0000UL;
+        _data = [(byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
+                 (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
         _hashCode = ComputeHashCode(_data);
     }
 
@@ -125,8 +130,17 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         if (_data == null) return default!;
 
         if (typeof(T) == typeof(ObjectId)) return (T)(object)new ObjectId(_data);
-        if (typeof(T) == typeof(int)) return (T)(object)BitConverter.ToInt32(_data);
-        if (typeof(T) == typeof(long)) return (T)(object)BitConverter.ToInt64(_data);
+        if (typeof(T) == typeof(int))
+        {
+            uint u = ((uint)_data[0] << 24) | ((uint)_data[1] << 16) | ((uint)_data[2] << 8) | _data[3];
+            return (T)(object)(int)(u ^ 0x8000_0000u);
+        }
+        if (typeof(T) == typeof(long))
+        {
+            ulong u = ((ulong)_data[0] << 56) | ((ulong)_data[1] << 48) | ((ulong)_data[2] << 40) | ((ulong)_data[3] << 32)
+                    | ((ulong)_data[4] << 24) | ((ulong)_data[5] << 16) | ((ulong)_data[6] <<  8) | _data[7];
+            return (T)(object)(long)(u ^ 0x8000_0000_0000_0000UL);
+        }
         if (typeof(T) == typeof(string)) return (T)(object)System.Text.Encoding.UTF8.GetString(_data);
         if (typeof(T) == typeof(Guid)) return (T)(object)new Guid(_data);
         if (typeof(T) == typeof(byte[])) return (T)(object)_data;

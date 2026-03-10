@@ -37,9 +37,11 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         // Initialize indexes from metadata
         foreach (var idxMeta in _metadata.Indexes)
         {
+            var indexName = idxMeta.Name; // capture for closure
             var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type, idxMeta.Dimensions, idxMeta.Metric);
-            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId);
-            _indexes[idxMeta.Name] = index;
+            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId,
+                onRootChanged: _ => { lock (_lock) { SaveMetadata(); } });
+            _indexes[indexName] = index;
         }
     }
 
@@ -82,7 +84,8 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 throw new InvalidOperationException($"Index '{definition.Name}' already exists");
 
             // Create secondary index
-            var secondaryIndex = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
+            var secondaryIndex = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper,
+                onRootChanged: _ => { lock (_lock) { SaveMetadata(); } });
             _indexes[definition.Name] = secondaryIndex;
             
             // Persist metadata
@@ -251,10 +254,10 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         {
             if (_indexes.TryGetValue(name, out var index))
             {
+                // Free all pages owned by this index before removing it
+                index.FreeAllPages(_storage);
                 index.Dispose();
                 _indexes.Remove(name);
-                
-                // TODO: Free pages used by index in PageFile
                 
                 SaveMetadata(); // Save metadata after dropping index
                 return true;

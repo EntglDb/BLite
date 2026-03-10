@@ -100,6 +100,18 @@ public sealed class DynamicCollection : IDisposable
             {
                 if (idxMeta.PropertyPaths.Length == 0) continue;
                 var fieldPath = idxMeta.PropertyPaths[0];
+                var indexName = idxMeta.Name; // capture for closure
+
+                Action<uint> makeRootCallback = newRoot =>
+                {
+                    var m = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
+                    var entry = m.Indexes.FirstOrDefault(i => i.Name == indexName);
+                    if (entry != null && entry.RootPageId != newRoot)
+                    {
+                        entry.RootPageId = newRoot;
+                        _storage.SaveCollectionMetadata(m);
+                    }
+                };
 
                 switch (idxMeta.Type)
                 {
@@ -108,7 +120,7 @@ public sealed class DynamicCollection : IDisposable
                         var opts = idxMeta.IsUnique
                             ? IndexOptions.CreateUnique(idxMeta.PropertyPaths)
                             : IndexOptions.CreateBTree(idxMeta.PropertyPaths);
-                        var btree = new BTreeIndex(_storage, opts, idxMeta.RootPageId);
+                        var btree = new BTreeIndex(_storage, opts, idxMeta.RootPageId, makeRootCallback);
                         _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(btree, fieldPath, opts);
                         break;
                     }
@@ -136,7 +148,16 @@ public sealed class DynamicCollection : IDisposable
         }
 
         var indexOptions = IndexOptions.CreateBTree("_id");
-        _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId);
+        _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId,
+            onRootChanged: newRoot =>
+            {
+                var meta = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
+                if (meta.PrimaryRootPageId != newRoot)
+                {
+                    meta.PrimaryRootPageId = newRoot;
+                    _storage.SaveCollectionMetadata(meta);
+                }
+            });
 
         // Persist root page if newly allocated
         if (metadata.PrimaryRootPageId != _primaryIndex.RootPageId)

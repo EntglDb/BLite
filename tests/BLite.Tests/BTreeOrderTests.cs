@@ -196,8 +196,6 @@ public class BTreeOrderTests : IDisposable
         var (index, txnId) = CreateIndex();
 
         // Insert 200 items in random-ish order (interleaved high/low).
-        // All values 1-200 fit in a single byte (< 256), so little-endian byte
-        // comparison is equivalent to numeric comparison.
         var values = Enumerable.Range(1, 200)
             .OrderBy(x => (x * 37) % 200) // deterministic shuffle
             .ToList();
@@ -223,7 +221,7 @@ public class BTreeOrderTests : IDisposable
     {
         var (index, txnId) = CreateIndex();
 
-        // Values 1-150 all fit in a single byte so little-endian ordering == numeric ordering.
+        // Values 1-150.
         var values = Enumerable.Range(1, 150)
             .OrderByDescending(x => x) // descending → forces splits with reversed input
             .ToList();
@@ -239,5 +237,64 @@ public class BTreeOrderTests : IDisposable
             Assert.True(found, $"Key {v} not found");
             Assert.Equal((uint)v, loc.PageId);
         }
+    }
+
+    // ── Values > 255 (regression for little-endian bug) ─────────────────────
+
+    [Fact]
+    public void Range_IntKeysAbove255_ReturnsSortedOrder()
+    {
+        // This is the exact regression test for the little-endian bug:
+        // previously 256 < 1 because byte[0] of 256 (0x00) < byte[0] of 1 (0x01).
+        var (index, txnId) = CreateIndex();
+        var values = new[] { 1, 255, 256, 257, 1000, 65535, 65536, 100_000 };
+        foreach (var v in values)
+            index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
+        _storage.CommitTransaction(txnId);
+
+        var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
+                        .Select(e => e.Key.As<int>())
+                        .ToList();
+
+        Assert.Equal(values.OrderBy(x => x).ToList(), keys);
+    }
+
+    [Fact]
+    public void Range_LargeIntRange_ForcingSplits_ReturnsSortedAndComplete()
+    {
+        // Insert 400 items spanning well beyond 255 in shuffled order.
+        var (index, txnId) = CreateIndex();
+        var values = Enumerable.Range(100, 400) // 100..499
+            .OrderBy(x => (x * 37) % 400)
+            .ToList();
+
+        foreach (var v in values)
+            index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
+        _storage.CommitTransaction(txnId);
+
+        var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
+                        .Select(e => e.Key.As<int>())
+                        .ToList();
+
+        Assert.Equal(400, keys.Count);
+        for (int i = 0; i < keys.Count - 1; i++)
+            Assert.True(keys[i] < keys[i + 1], $"Out of order at index {i}: {keys[i]} > {keys[i + 1]}");
+        Assert.Equal(Enumerable.Range(100, 400).ToList(), keys);
+    }
+
+    [Fact]
+    public void Range_NegativeInts_ReturnsSortedOrder()
+    {
+        var (index, txnId) = CreateIndex();
+        var values = new[] { -1000, -255, -1, 0, 1, 255, 1000 };
+        foreach (var v in values)
+            index.Insert(IndexKey.Create(v), new DocumentLocation((uint)(v + 1001), 0), txnId);
+        _storage.CommitTransaction(txnId);
+
+        var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
+                        .Select(e => e.Key.As<int>())
+                        .ToList();
+
+        Assert.Equal(values.OrderBy(x => x).ToList(), keys);
     }
 }

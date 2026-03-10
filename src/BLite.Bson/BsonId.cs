@@ -165,12 +165,26 @@ public readonly struct BsonId : IEquatable<BsonId>, IComparable<BsonId>
         return _type switch
         {
             BsonIdType.ObjectId => _objectId.ToByteArray(),
-            BsonIdType.Int32 => BitConverter.GetBytes((int)_intValue),
-            BsonIdType.Int64 => BitConverter.GetBytes(_intValue),
+            BsonIdType.Int32  => IntToBigEndianSignFlip((int)_intValue),
+            BsonIdType.Int64  => LongToBigEndianSignFlip(_intValue),
             BsonIdType.String => Encoding.UTF8.GetBytes(_stringValue!),
             BsonIdType.Guid => _guidValue.ToByteArray(),
             _ => throw new InvalidOperationException("Cannot convert empty BsonId to bytes")
         };
+    }
+
+    // Big-endian + sign-bit flip so that lexicographic byte order == numeric order.
+    private static byte[] IntToBigEndianSignFlip(int value)
+    {
+        uint u = (uint)value ^ 0x8000_0000u;
+        return [(byte)(u >> 24), (byte)(u >> 16), (byte)(u >> 8), (byte)u];
+    }
+
+    private static byte[] LongToBigEndianSignFlip(long value)
+    {
+        ulong u = (ulong)value ^ 0x8000_0000_0000_0000UL;
+        return [(byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
+                (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
     }
 
     /// <summary>
@@ -182,12 +196,25 @@ public readonly struct BsonId : IEquatable<BsonId>, IComparable<BsonId>
         return type switch
         {
             BsonIdType.ObjectId => new BsonId(new ObjectId(data)),
-            BsonIdType.Int32 => new BsonId(BitConverter.ToInt32(data)),
-            BsonIdType.Int64 => new BsonId(BitConverter.ToInt64(data)),
-            BsonIdType.String => new BsonId(Encoding.UTF8.GetString(data)),
-            BsonIdType.Guid => new BsonId(new Guid(data)),
+            BsonIdType.Int32    => new BsonId(BigEndianSignFlipToInt(data)),
+            BsonIdType.Int64    => new BsonId(BigEndianSignFlipToLong(data)),
+            BsonIdType.String   => new BsonId(Encoding.UTF8.GetString(data)),
+            BsonIdType.Guid     => new BsonId(new Guid(data)),
             _ => throw new InvalidOperationException($"Cannot create BsonId of type {type} from bytes")
         };
+    }
+
+    private static int BigEndianSignFlipToInt(ReadOnlySpan<byte> data)
+    {
+        uint u = ((uint)data[0] << 24) | ((uint)data[1] << 16) | ((uint)data[2] << 8) | data[3];
+        return (int)(u ^ 0x8000_0000u);
+    }
+
+    private static long BigEndianSignFlipToLong(ReadOnlySpan<byte> data)
+    {
+        ulong u = ((ulong)data[0] << 56) | ((ulong)data[1] << 48) | ((ulong)data[2] << 40) | ((ulong)data[3] << 32)
+                | ((ulong)data[4] << 24) | ((ulong)data[5] << 16) | ((ulong)data[6] <<  8) | data[7];
+        return (long)(u ^ 0x8000_0000_0000_0000UL);
     }
 
     #endregion

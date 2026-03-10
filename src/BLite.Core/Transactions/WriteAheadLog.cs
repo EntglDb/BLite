@@ -358,6 +358,27 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
+    /// <summary>
+    /// Asynchronously truncates the WAL file (removes all content).
+    /// Should only be called after successful checkpoint.
+    /// </summary>
+    public async Task TruncateAsync(CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            if (_walStream != null)
+            {
+                _walStream.SetLength(0);
+                _walStream.Position = 0;
+                await _walStream.FlushAsync(ct);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
 
     /// <summary>
     /// Reads all WAL records (for recovery)

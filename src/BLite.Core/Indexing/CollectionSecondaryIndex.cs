@@ -24,6 +24,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     private readonly RTreeIndex? _spatialIndex;
     private readonly IDocumentMapper<TId, T> _mapper;
     private bool _disposed;
+    private long _documentCount;
 
     /// <summary>
     /// Gets the index definition
@@ -41,7 +42,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         CollectionIndexDefinition<T> definition,
         StorageEngine storage,
         IDocumentMapper<TId, T> mapper,
-        uint rootPageId = 0)
+        uint rootPageId = 0,
+        Action<uint>? onRootChanged = null)
     {
         _definition = definition ?? throw new ArgumentNullException(nameof(definition));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
@@ -62,7 +64,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         }
         else
         {
-            _btreeIndex = new BTreeIndex(storage, indexOptions, rootPageId);
+            _btreeIndex = new BTreeIndex(storage, indexOptions, rootPageId, onRootChanged);
             _vectorIndex = null;
             _spatialIndex = null;
         }
@@ -114,6 +116,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
             var compositeKey = CreateCompositeKey(userKey, _mapper.ToIndexKey(documentId));
             _btreeIndex.Insert(compositeKey, location, transaction?.TransactionId);
         }
+
+        System.Threading.Interlocked.Increment(ref _documentCount);
     }
 
     /// <summary>
@@ -180,6 +184,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         // Create composite key and delete
         var compositeKey = CreateCompositeKey(userKey, _mapper.ToIndexKey(documentId));
         _btreeIndex?.Delete(compositeKey, location, transaction?.TransactionId);
+
+        System.Threading.Interlocked.Decrement(ref _documentCount);
     }
 
     /// <summary>
@@ -304,6 +310,10 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
     /// </summary>
     public CollectionIndexInfo GetInfo()
     {
+        // Use CompareExchange as an atomic read (works on both net5+ and netstandard2.1)
+        var count = System.Threading.Interlocked.CompareExchange(ref _documentCount, 0L, 0L);
+        // Rough size estimate: key length prefix (4) + avg key bytes (20) + DocumentLocation (6) per entry
+        var estimatedSize = count * (4 + 20 + DocumentLocation.SerializedSize);
         return new CollectionIndexInfo
         {
             Name = _definition.Name,
@@ -311,8 +321,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
             IsUnique = _definition.IsUnique,
             Type = _definition.Type,
             IsPrimary = _definition.IsPrimary,
-            EstimatedDocumentCount = 0, // TODO: Track or calculate document count
-            EstimatedSizeBytes = 0      // TODO: Calculate index size
+            EstimatedDocumentCount = count,
+            EstimatedSizeBytes = estimatedSize
         };
     }
 
@@ -388,9 +398,12 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
             // Enum values are boxed as the enum type (not the underlying int).
             // Convert to long to handle all enum underlying types (byte, short, int, long) consistently.
             _ when value.GetType().IsEnum => new IndexKey(Convert.ToInt64(value)),
-            
-            // For compound keys or complex types, use ToString and serialize
-            // TODO: Better compound key serialization
+
+            // Guid: common identity type, stored as 16 raw bytes
+            Guid guid => new IndexKey(guid.ToByteArray()),
+
+            // For truly unknown / compound types fall back to their UTF-8 string representation.
+            // This produces consistent equality semantics; range ordering may not be meaningful.
             _ => new IndexKey(value.ToString() ?? string.Empty)
         };
     }
@@ -405,5 +418,20 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         
         _disposed = true;
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Frees all physical pages owned by this index via the storage engine.
+    /// Called from <see cref="CollectionIndexManager{TId,T}.DropIndex"/> to reclaim disk space.
+    /// </summary>
+    internal void FreeAllPages(StorageEngine storage)
+    {
+        if (_btreeIndex != null)
+            foreach (var pageId in _btreeIndex.CollectAllPages())
+                storage.FreePage(pageId);
+        else if (_vectorIndex != null)
+            foreach (var pageId in _vectorIndex.CollectAllPages())
+                storage.FreePage(pageId);
+        // RTreeIndex page freeing: not yet implemented (no CollectAllPages on RTree).
     }
 }

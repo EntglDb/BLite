@@ -104,9 +104,7 @@ public sealed partial class StorageEngine
             _walIndex.Clear();
             
             // 4. Truncate WAL (all changes now in PageFile)
-            // WAL truncation involves file resize and flush
-            // TODO: Add TruncateAsync to WAL? For now Truncate is sync.
-            _wal.Truncate();
+            await _wal.TruncateAsync(ct);
         }
         finally
         {

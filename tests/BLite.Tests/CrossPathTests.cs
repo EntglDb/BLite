@@ -491,9 +491,8 @@ public class CrossPathTests : IDisposable
         // Must have exactly 1 entry
         Assert.Equal(1, entries.Count);
 
-        // 3. Verify the key matches
-        var expected = new IndexKey(BitConverter.GetBytes(personId));
-        Assert.Equal(expected, entries[0].Key);
+        // 3. Verify the key decodes back to the original person ID
+        Assert.Equal(personId, entries[0].Key.As<int>());
     }
 
     [Fact]

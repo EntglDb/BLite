@@ -182,6 +182,13 @@ public sealed class PageFile : IDisposable
                         $"Page size mismatch: file was created with {actualPageSize} byte pages, "
                       + $"but the configuration specifies {_config.PageSize} byte pages. "
                       + $"Use PageFileConfig.DetectFromFile() or the correct preset.");
+
+                if (fileHeader.FormatVersion < PageHeader.CurrentFormatVersion)
+                    throw new InvalidOperationException(
+                        $"Database format version {fileHeader.FormatVersion} is not supported. "
+                      + $"This build requires format version {PageHeader.CurrentFormatVersion}. "
+                      + "The database was created with an older version of BLite that stored integer "
+                      + "index keys in little-endian order. Please re-create the database.");
             }
 
             // Initialize next page ID based on file length
@@ -224,7 +231,8 @@ public sealed class PageFile : IDisposable
             FreeBytes = (ushort)(_config.PageSize - 32),
             NextPageId = 0, // No free pages initially
             TransactionId = 0,
-            Checksum = 0
+            Checksum = 0,
+            FormatVersion = PageHeader.CurrentFormatVersion
         };
 
         Span<byte> buffer = stackalloc byte[_config.PageSize];

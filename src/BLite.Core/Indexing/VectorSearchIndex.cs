@@ -22,11 +22,28 @@ public sealed class VectorSearchIndex
     private uint _rootPageId;
     private readonly Random _random = new(42);
 
+    // Cached HNSW entry point (highest-level node in the graph)
+    private uint _entryPageId;
+    private int _entryNodeIndex;
+    private int _entryMaxLevel;
+
     public VectorSearchIndex(StorageEngine storage, IndexOptions options, uint rootPageId = 0)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
         _rootPageId = rootPageId;
+
+        if (_rootPageId != 0)
+        {
+            // Restore entry point from root page header
+            var buffer = RentPageBuffer();
+            try
+            {
+                _storage.ReadPage(_rootPageId, null, buffer);
+                (_entryPageId, _entryNodeIndex, _entryMaxLevel) = VectorPage.GetEntryPoint(buffer);
+            }
+            finally { ReturnPageBuffer(buffer); }
+        }
     }
 
     public uint RootPageId => _rootPageId;
@@ -48,8 +65,13 @@ public sealed class VectorSearchIndex
             {
                 _storage.ReadPage(_rootPageId, transaction?.TransactionId, pageBuffer);
                 VectorPage.WriteNode(pageBuffer, 0, docLocation, targetLevel, vector, _options.Dimensions);
-                VectorPage.IncrementNodeCount(pageBuffer); // Helper needs to be added or handled
-                
+                VectorPage.IncrementNodeCount(pageBuffer);
+                // Persist entry point: first node is always the initial entry point
+                VectorPage.SetEntryPoint(pageBuffer, _rootPageId, 0, targetLevel);
+                _entryPageId = _rootPageId;
+                _entryNodeIndex = 0;
+                _entryMaxLevel = targetLevel;
+
                 if (transaction != null)
                     _storage.WritePage(_rootPageId, transaction.TransactionId, pageBuffer);
                 else
@@ -165,8 +187,22 @@ public sealed class VectorSearchIndex
 
     private void UpdateEntryPoint(NodeReference newEntry, ITransaction? transaction)
     {
-        // Store in index header or collection metadata
-        // For now, it's a simplification.
+        _entryPageId = newEntry.PageId;
+        _entryNodeIndex = newEntry.NodeIndex;
+        _entryMaxLevel = newEntry.MaxLevel;
+
+        // Persist entry point into root page header so it survives restart
+        var buffer = RentPageBuffer();
+        try
+        {
+            _storage.ReadPage(_rootPageId, transaction?.TransactionId, buffer);
+            VectorPage.SetEntryPoint(buffer, newEntry.PageId, newEntry.NodeIndex, newEntry.MaxLevel);
+            if (transaction != null)
+                _storage.WritePage(_rootPageId, transaction.TransactionId, buffer);
+            else
+                _storage.WritePageImmediate(_rootPageId, buffer);
+        }
+        finally { ReturnPageBuffer(buffer); }
     }
 
     private NodeReference GreedySearch(NodeReference entryPoint, float[] query, int level, ITransaction? transaction)
@@ -240,8 +276,9 @@ public sealed class VectorSearchIndex
 
     private NodeReference GetEntryPoint()
     {
-        // For now, assume a fixed location or track it in page 0 of index
-        // TODO: Real implementation
+        if (_entryPageId != 0)
+            return new NodeReference { PageId = _entryPageId, NodeIndex = _entryNodeIndex, MaxLevel = _entryMaxLevel };
+        // Fallback for an index opened before entry-point tracking was available
         return new NodeReference { PageId = _rootPageId, NodeIndex = 0, MaxLevel = 0 };
     }
 
@@ -346,6 +383,32 @@ public sealed class VectorSearchIndex
 
     private byte[] RentPageBuffer() => System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
     private void ReturnPageBuffer(byte[] buffer) => System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+
+    /// <summary>
+    /// Returns all physical page IDs owned by this vector index.
+    /// Used when dropping an index to free storage.
+    /// </summary>
+    public IReadOnlyList<uint> CollectAllPages()
+    {
+        if (_rootPageId == 0) return Array.Empty<uint>();
+        // Multi-page vector graphs store all pages starting from _rootPageId;
+        // follow NextPageId chain to collect the full set.
+        var pages = new List<uint>();
+        var buffer = RentPageBuffer();
+        try
+        {
+            var current = _rootPageId;
+            while (current != 0)
+            {
+                pages.Add(current);
+                _storage.ReadPage(current, null, buffer);
+                var header = PageHeader.ReadFrom(buffer);
+                current = header.NextPageId;
+            }
+        }
+        finally { ReturnPageBuffer(buffer); }
+        return pages;
+    }
 }
 
 public record struct VectorSearchResult(DocumentLocation Location, float Distance);

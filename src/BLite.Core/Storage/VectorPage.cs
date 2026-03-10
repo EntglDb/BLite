@@ -15,13 +15,19 @@ public struct VectorPage
     // [MaxM (4)]
     // [NodeSize (4)]
     // [NodeCount (4)]
+    // [EntryPointPageId (4)]   ← HNSW entry-point tracking
+    // [EntryPointNodeIndex (4)]
+    // [EntryPointMaxLevel (4)]
     // [Nodes Data (Contiguous)...]
 
     private const int DimensionsOffset = 32;
     private const int MaxMOffset = 36;
     private const int NodeSizeOffset = 40;
     private const int NodeCountOffset = 44;
-    private const int DataOffset = 48;
+    private const int EntryPointPageIdOffset = 48;
+    private const int EntryPointNodeIndexOffset = 52;
+    private const int EntryPointMaxLevelOffset = 56;
+    private const int DataOffset = 60;
 
     public static void IncrementNodeCount(Span<byte> page)
     {
@@ -52,6 +58,22 @@ public struct VectorPage
         int nodeSize = 6 + 1 + (dimensions * 4) + (maxM * (2 + 15) * 6); 
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(page.Slice(NodeSizeOffset), nodeSize);
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(page.Slice(NodeCountOffset), 0);
+        // Zero the entry-point fields (no entry point yet)
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(page.Slice(EntryPointPageIdOffset), 0u);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(page.Slice(EntryPointNodeIndexOffset), 0);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(page.Slice(EntryPointMaxLevelOffset), 0);
+    }
+
+    public static (uint PageId, int NodeIndex, int MaxLevel) GetEntryPoint(ReadOnlySpan<byte> page) => (
+        System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(page.Slice(EntryPointPageIdOffset, 4)),
+        System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(page.Slice(EntryPointNodeIndexOffset, 4)),
+        System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(page.Slice(EntryPointMaxLevelOffset, 4)));
+
+    public static void SetEntryPoint(Span<byte> page, uint pageId, int nodeIndex, int maxLevel)
+    {
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(page.Slice(EntryPointPageIdOffset), pageId);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(page.Slice(EntryPointNodeIndexOffset), nodeIndex);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(page.Slice(EntryPointMaxLevelOffset), maxLevel);
     }
 
     public static int GetNodeCount(ReadOnlySpan<byte> page) =>

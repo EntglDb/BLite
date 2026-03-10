@@ -102,9 +102,9 @@ public sealed partial class StorageEngine
             _wal.Flush(); // Ensure WAL is persisted
             return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // TODO: Log error?
+            System.Diagnostics.Debug.WriteLine($"[BLite] PrepareTransaction({transactionId}) failed: {ex}");
             return false;
         }
     }

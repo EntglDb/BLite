@@ -42,8 +42,16 @@ public struct PageHeader
     [FieldOffset(27)]
     public uint KvRootPageId;
 
+    /// <summary>
+    /// Binary format version (only meaningful for page 0 — the file header).
+    /// 0 = legacy format (IndexKey int/long stored as little-endian — invalid/unsupported).
+    /// 1 = current format (IndexKey int/long stored as big-endian with sign-bit flip).
+    /// </summary>
     [FieldOffset(31)]
-    private byte _reserved9;
+    public byte FormatVersion;
+
+    /// <summary>Current on-disk format version written to every new database.</summary>
+    public const byte CurrentFormatVersion = 1;
 
     /// <summary>
     /// Writes the header to a span
