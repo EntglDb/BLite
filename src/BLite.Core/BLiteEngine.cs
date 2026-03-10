@@ -133,6 +133,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         if (_collections.TryRemove(name, out var collection))
         {
             collection.Dispose();
+            _storage.DeleteCollectionMetadata(name);
             return true;
         }
         return false;

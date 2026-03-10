@@ -19,7 +19,8 @@ public sealed record DynamicIndexDescriptor(
     IndexType Type,
     string FieldPath,
     int Dimensions,
-    VectorMetric Metric)
+    VectorMetric Metric,
+    bool IsUnique = false)
 {
     public bool IsVector => Type == IndexType.Vector;
     public bool IsSpatial => Type == IndexType.Spatial;
@@ -1203,7 +1204,8 @@ public sealed class DynamicCollection : IDisposable
                 kvp.Key, type,
                 kvp.Value.FieldPath,
                 kvp.Value.Options.Dimensions,
-                kvp.Value.Options.Metric);
+                kvp.Value.Options.Metric,
+                kvp.Value.Options.Unique);
         }).ToList();
     }
 

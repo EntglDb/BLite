@@ -421,6 +421,51 @@ public sealed partial class StorageEngine
         WritePageImmediate(targetPageId, targetBuf);
     }
 
+    /// <summary>
+    /// Marks the collection's metadata slot as deleted so that it no longer
+    /// appears in <see cref="GetAllCollectionsMetadata"/> or
+    /// <see cref="GetCollectionMetadata"/>.
+    /// </summary>
+    public void DeleteCollectionMetadata(string name)
+    {
+        var buffer = new byte[PageSize];
+        uint pageId = 1;
+
+        while (pageId != 0)
+        {
+            ReadPage(pageId, null, buffer);
+            var header = SlottedPageHeader.ReadFrom(buffer);
+            if (header.PageType != PageType.Collection)
+                break;
+
+            for (ushort i = 0; i < header.SlotCount; i++)
+            {
+                var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+                var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+
+                if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
+
+                try
+                {
+                    using var ms = new MemoryStream(buffer, slot.Offset, slot.Length, false);
+                    using var reader = new BinaryReader(ms);
+
+                    var collName = reader.ReadString();
+                    if (!string.Equals(collName, name, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    slot.Flags |= SlotFlags.Deleted;
+                    slot.WriteTo(buffer.AsSpan(slotOffset));
+                    WritePageImmediate(pageId, buffer);
+                    return;
+                }
+                catch { }
+            }
+
+            pageId = header.NextOverflowPage;
+        }
+    }
+
     public IReadOnlyList<CollectionMetadata> GetAllCollectionsMetadata()
     {
         var result = new List<CollectionMetadata>();
