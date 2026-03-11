@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.CDC;
 using BLite.Core.Indexing;
 using BLite.Core.Query;
 using System;
@@ -67,38 +68,40 @@ public interface IDocumentCollection<TId, T> where T : class
 
     Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default);
 
-    // ── Index management (local engine only; remote throws NotSupportedException) ──
+    // ── Index management ──────────────────────────────────────────────────────
+    // Local engine: fully supported.
+    // Remote (BLite.Client): CreateIndex/Drop/List supported; Scan/ForcePrune throw NotSupportedException.
 
-    CollectionSecondaryIndex<TId, T> CreateIndex<TKey>(
+    ICollectionIndex<TId, T> CreateIndex<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false);
 
-    Task<CollectionSecondaryIndex<TId, T>> CreateIndexAsync<TKey>(
+    Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false,
         CancellationToken ct = default);
 
-    CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(
+    ICollectionIndex<TId, T> CreateVectorIndex<TKey>(
         Expression<Func<T, TKey>> keySelector,
         int dimensions,
         VectorMetric metric = VectorMetric.Cosine,
         string? name = null);
 
-    Task<CollectionSecondaryIndex<TId, T>> CreateVectorIndexAsync<TKey>(
+    Task<ICollectionIndex<TId, T>> CreateVectorIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector,
         int dimensions,
         VectorMetric metric = VectorMetric.Cosine,
         string? name = null,
         CancellationToken ct = default);
 
-    CollectionSecondaryIndex<TId, T> EnsureIndex<TKey>(
+    ICollectionIndex<TId, T> EnsureIndex<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false);
 
-    Task<CollectionSecondaryIndex<TId, T>> EnsureIndexAsync<TKey>(
+    Task<ICollectionIndex<TId, T>> EnsureIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false,
@@ -110,7 +113,7 @@ public interface IDocumentCollection<TId, T> where T : class
 
     IEnumerable<CollectionIndexInfo> GetIndexes();
 
-    CollectionSecondaryIndex<TId, T>? GetIndex(string name);
+    ICollectionIndex<TId, T>? GetIndex(string name);
 
     IEnumerable<T> QueryIndex(string indexName, object? minKey, object? maxKey, bool ascending = true);
 
@@ -143,6 +146,10 @@ public interface IDocumentCollection<TId, T> where T : class
     // ── TimeSeries (local engine only; remote throws NotSupportedException) ───
 
     void ForcePrune();
+
+    // ── Change Data Capture (local engine only; remote throws NotSupportedException) ───
+
+    IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload = false);
 }
 
 /// <summary>

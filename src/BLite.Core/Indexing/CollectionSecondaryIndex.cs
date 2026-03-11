@@ -4,8 +4,11 @@ using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using BLite.Core.Indexing.Internal;
 using System;
-using System.Linq;
 using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace BLite.Core.Indexing;
 
@@ -16,7 +19,7 @@ namespace BLite.Core.Indexing;
 /// </summary>
 /// <typeparam name="TId">Primary key type</typeparam>
 /// <typeparam name="T">Document type</typeparam>
-public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : class
+public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionIndex<TId, T> where T : class
 {
     private readonly CollectionIndexDefinition<T> _definition;
     private readonly BTreeIndex? _btreeIndex;
@@ -408,14 +411,83 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable where T : cla
         };
     }
 
+    // ── ICollectionIndex metadata pass-throughs ─────────────────────────────
+
+    public string Name => _definition.Name;
+    public string[] PropertyPaths => _definition.PropertyPaths;
+    IndexType ICollectionIndex<TId, T>.Type => _definition.Type;
+    public bool IsUnique => _definition.IsUnique;
+    public int Dimensions => _definition.Dimensions;
+    public VectorMetric Metric => _definition.Metric;
+
+    // ── Document reader (injected by DocumentCollection) ─────────────────────
+    // Needed to resolve DocumentLocation → T inside Query / QueryAsync.
+
+    private Func<DocumentLocation, T?>? _docReader;
+    private Func<DocumentLocation, CancellationToken, ValueTask<T?>>? _asyncDocReader;
+
+    /// <summary>
+    /// Injects the document resolver. Called by <c>DocumentCollection</c> before
+    /// returning the index to the caller. Not set for indexes held internally.
+    /// </summary>
+    internal void SetDocumentReader(
+        Func<DocumentLocation, T?> sync,
+        Func<DocumentLocation, CancellationToken, ValueTask<T?>> async)
+    {
+        _docReader = sync;
+        _asyncDocReader = async;
+    }
+
+    // ── ICollectionIndex query methods ────────────────────────────────────────
+
+    /// <inheritdoc cref="ICollectionIndex{TId,T}.Query"/>
+    public IEnumerable<T> Query(object? minKey = null, object? maxKey = null, bool ascending = true)
+    {
+        if (_docReader is null)
+            throw new InvalidOperationException(
+                "Document reader not available. Use collection.QueryIndex() instead, " +
+                "or obtain this index via collection.GetIndex() / CreateIndex().");
+
+        var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
+        foreach (var loc in Range(minKey, maxKey, direction))
+        {
+            var doc = _docReader(loc);
+            if (doc is not null) yield return doc;
+        }
+    }
+
+    /// <inheritdoc cref="ICollectionIndex{TId,T}.QueryAsync"/>
+    public async IAsyncEnumerable<T> QueryAsync(
+        object? minKey = null,
+        object? maxKey = null,
+        bool ascending = true,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (_asyncDocReader is null)
+            throw new InvalidOperationException(
+                "Document reader not available. Use collection.QueryIndexAsync() instead, " +
+                "or obtain this index via collection.GetIndex() / CreateIndex().");
+
+        var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
+        foreach (var loc in Range(minKey, maxKey, direction))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await _asyncDocReader(loc, ct).ConfigureAwait(false);
+            if (doc is not null) yield return doc;
+        }
+    }
+
+    // Explicit interface implementation so the public method retains the ITransaction overload.
+    IEnumerable<VectorSearchResult> ICollectionIndex<TId, T>.VectorSearch(float[] query, int k, int efSearch)
+        => VectorSearch(query, k, efSearch, null);
+
+    // ── IDisposable ───────────────────────────────────────────────────────────
+
     public void Dispose()
     {
         if (_disposed)
             return;
-        
-        // BTreeIndex doesn't currently implement IDisposable
-        // Future: may need to flush buffers, close resources
-        
+
         _disposed = true;
         GC.SuppressFinalize(this);
     }

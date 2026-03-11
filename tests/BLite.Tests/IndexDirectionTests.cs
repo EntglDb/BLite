@@ -26,7 +26,7 @@ public class IndexDirectionTests : IDisposable
     public void Range_Forward_ReturnsOrderedResults()
     {
         var collection = _db.People;
-        var index = collection.EnsureIndex(p => p.Age, "idx_age");
+        var index = (CollectionSecondaryIndex<int, Person>)collection.EnsureIndex(p => p.Age, "idx_age");
 
         var people = Enumerable.Range(1, 100).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
         collection.InsertBulk(people);
@@ -44,7 +44,7 @@ public class IndexDirectionTests : IDisposable
     public void Range_Backward_ReturnsReverseOrderedResults()
     {
         var collection = _db.People;
-        var index = collection.EnsureIndex(p => p.Age, "idx_age");
+        var index = (CollectionSecondaryIndex<int, Person>)collection.EnsureIndex(p => p.Age, "idx_age");
 
         var people = Enumerable.Range(1, 100).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
         collection.InsertBulk(people);
@@ -62,7 +62,7 @@ public class IndexDirectionTests : IDisposable
     public void Range_Backward_WithMultiplePages_ReturnsReverseOrderedResults()
     {
         var collection = _db.People;
-        var index = collection.EnsureIndex(p => p.Age, "idx_age_large");
+        var index = (CollectionSecondaryIndex<int, Person>)collection.EnsureIndex(p => p.Age, "idx_age_large");
 
         // Insert enough to force splits (default page size is smallish, 4096, so 1000 items should split)
         // Entry size approx 10 bytes key + 6 bytes loc + overhead

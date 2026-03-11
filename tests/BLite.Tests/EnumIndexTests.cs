@@ -1,3 +1,5 @@
+using BLite.Bson;
+using BLite.Core.Indexing;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -65,7 +67,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void Seek_By_Enum_Finds_Inserted_Document()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_seek");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_seek");
 
         _db.EnumEntities.Insert(MakeEntity(UserRole.Guest, "guest-doc"));
         var adminId = _db.EnumEntities.Insert(MakeEntity(UserRole.Admin, "admin-doc"));
@@ -79,7 +81,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void Seek_By_Enum_Returns_Null_For_Missing_Value()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_seek_miss");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_seek_miss");
 
         _db.EnumEntities.Insert(MakeEntity(UserRole.Guest, "guest-doc"));
         _db.SaveChanges();
@@ -109,7 +111,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void Range_On_Enum_Index_Uses_Numeric_Ordering()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_range");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_range");
 
         _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "guest"));     // 0
         _db.EnumEntities.Insert(MakeEntity(UserRole.User,      "user"));      // 1
@@ -126,7 +128,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void Range_Single_Value_Returns_Exactly_One_Doc()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_range_single");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_range_single");
 
         _db.EnumEntities.Insert(MakeEntity(UserRole.Guest, "g1"));
         _db.EnumEntities.Insert(MakeEntity(UserRole.User,  "u1"));
@@ -145,7 +147,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void CreateIndex_On_Byte_Enum_And_Seek_Works()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Priority, "idx_priority");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Priority, "idx_priority");
 
         _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Low,      Label = "low" });
         _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.High,     Label = "high" });
@@ -159,7 +161,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void Range_On_Byte_Enum_Uses_Numeric_Ordering()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Priority, "idx_priority_range");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Priority, "idx_priority_range");
 
         // Priority: Low=0, Normal=1, High=2, Critical=3
         _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Low,      Label = "a" });
@@ -180,7 +182,7 @@ public class EnumIndexTests : IDisposable
     [Fact]
     public void CreateIndex_On_Long_Enum_And_Range_Works()
     {
-        var idx = _db.EnumEntities.EnsureIndex(e => e.LastAction, "idx_last_action");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.LastAction, "idx_last_action");
 
         // AuditAction: None=0, Created=1, Updated=2, Deleted=3, Archived=100
         _db.EnumEntities.Insert(new EnumEntity { LastAction = AuditAction.None,     Label = "n" });

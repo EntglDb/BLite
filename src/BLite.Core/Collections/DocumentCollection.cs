@@ -199,7 +199,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// // Custom name
     /// collection.CreateIndex(p => p.LastName, name: "idx_lastname");
     /// </example>
-    public CollectionSecondaryIndex<TId, T> CreateIndex<TKey>(
+    public ICollectionIndex<TId, T> CreateIndex<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false)
@@ -216,14 +216,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             txn.Commit();
 
-            return index;
+            return BindReaderAndReturn(index);
         }
     }
 
     /// <summary>
     /// Asynchronously creates a secondary index on the specified property.
     /// </summary>
-    public async Task<CollectionSecondaryIndex<TId, T>> CreateIndexAsync<TKey>(
+    public async Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false,
@@ -241,14 +241,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             txn.Commit();
 
-            return index;
+            return BindReaderAndReturn(index);
         }
     }
 
     /// <summary>
     /// Creates a vector (HNSW) index for similarity search.
     /// </summary>
-    public CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(
+    public ICollectionIndex<TId, T> CreateVectorIndex<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         int dimensions,
         VectorMetric metric = VectorMetric.Cosine,
@@ -261,14 +261,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var index = _indexManager.CreateVectorIndex(keySelector, dimensions, metric, name);
             RebuildIndex(index);
             txn.Commit();
-            return index;
+            return BindReaderAndReturn(index);
         }
     }
 
     /// <summary>
     /// Asynchronously creates a vector (HNSW) index for similarity search.
     /// </summary>
-    public async Task<CollectionSecondaryIndex<TId, T>> CreateVectorIndexAsync<TKey>(
+    public async Task<ICollectionIndex<TId, T>> CreateVectorIndexAsync<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         int dimensions,
         VectorMetric metric = VectorMetric.Cosine,
@@ -282,7 +282,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var index = _indexManager.CreateVectorIndex(keySelector, dimensions, metric, name);
             await RebuildIndexAsync(index, ct);
             txn.Commit();
-            return index;
+            return BindReaderAndReturn(index);
         }
     }
 
@@ -291,7 +291,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// If the index already exists, it is returned without modification (idempotent).
     /// If it doesn't exist, it is created and populated.
     /// </summary>
-    public CollectionSecondaryIndex<TId, T> EnsureIndex<TKey>(
+    public ICollectionIndex<TId, T> EnsureIndex<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false)
@@ -317,7 +317,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// If the index already exists, it is returned without modification (idempotent).
     /// If it doesn't exist, it is created and populated.
     /// </summary>
-    public async Task<CollectionSecondaryIndex<TId, T>> EnsureIndexAsync<TKey>(
+    public async Task<ICollectionIndex<TId, T>> EnsureIndexAsync<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false,
@@ -822,9 +822,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// Gets a specific secondary index by name for advanced querying.
     /// Returns null if the index doesn't exist.
     /// </summary>
-    public CollectionSecondaryIndex<TId, T>? GetIndex(string name)
+    public ICollectionIndex<TId, T>? GetIndex(string name)
     {
-        return _indexManager.GetIndex(name);
+        var idx = _indexManager.GetIndex(name);
+        return idx is null ? null : BindReaderAndReturn(idx);
+    }
+
+    private ICollectionIndex<TId, T> BindReaderAndReturn(CollectionSecondaryIndex<TId, T> index)
+    {
+        index.SetDocumentReader(
+            sync: loc => FindByLocation(loc),
+            async: (loc, ct) => new ValueTask<T?>(FindByLocation(loc)));
+        return index;
     }
 
     /// <summary>
@@ -833,7 +842,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public IEnumerable<T> QueryIndex(string indexName, object? minKey, object? maxKey, bool ascending = true)
     {
-        var index = GetIndex(indexName);
+        var index = _indexManager.GetIndex(indexName);
         if (index == null) throw new ArgumentException($"Index {indexName} not found");
 
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
@@ -863,7 +872,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         bool ascending = true,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var index = GetIndex(indexName);
+        var index = _indexManager.GetIndex(indexName);
         if (index == null) throw new ArgumentException($"Index {indexName} not found");
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
