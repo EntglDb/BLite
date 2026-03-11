@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.6.1"></a>
+## [3.6.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.1) (2026-03-11)
+
+### Bug Fixes
+
+* corrects duplicates index inserts ([8b99e9c](https://www.github.com/EntglDb/BLite/commit/8b99e9c5c79a77565695219e528a981eeedf6610))
+
 <a name="3.6.0"></a>
 ## [3.6.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.0) (2026-03-11)
 
