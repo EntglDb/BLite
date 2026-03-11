@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.5.0"></a>
+## [3.5.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.5.0) (2026-03-11)
+
+### Features
+
+* introduce IDocumentCollection<TId,T> abstraction ([fa68e0a](https://www.github.com/EntglDb/BLite/commit/fa68e0a0f54e8da1fc3cf99cb8d1a85daae690ff))
+
 <a name="3.4.2"></a>
 ## [3.4.2](https://www.github.com/EntglDb/BLite/releases/tag/v3.4.2) (2026-03-10)
 
