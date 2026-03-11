@@ -49,13 +49,21 @@ public interface IDocumentCollection<TId, T> where T : class
 
     // ── Update ────────────────────────────────────────────────────────────────
 
+    bool Update(T entity);
+
     Task<bool> UpdateAsync(T entity, CancellationToken ct = default);
+
+    int UpdateBulk(IEnumerable<T> entities);
 
     Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
 
     // ── Delete ────────────────────────────────────────────────────────────────
 
+    bool Delete(TId id);
+
     Task<bool> DeleteAsync(TId id, CancellationToken ct = default);
+
+    int DeleteBulk(IEnumerable<TId> ids);
 
     Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default);
 
