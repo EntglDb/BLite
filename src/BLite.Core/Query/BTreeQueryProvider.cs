@@ -151,6 +151,13 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         if (model.HasComplexOperators)
             return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
 
+        // When OrderBy is chained after Select, the key-selector parameter type is the
+        // projected type (e.g. DateTimeOffset), not T.  The direct pipeline builds a
+        // Func<T, object> from that lambda, which throws ArgumentException at runtime.
+        // Fall back to EnumerableRewriter which rewrites the full expression tree correctly.
+        if (model.OrderByClause != null && model.OrderByClause.Parameters[0].Type != typeof(T))
+            return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
+
         // 3. Direct pipeline — no expression-tree rewrite, no EnumerableRewriter, no Compile().
         return ExecutePipeline<TResult>(model, sourceData, whereAlreadyApplied);
     }

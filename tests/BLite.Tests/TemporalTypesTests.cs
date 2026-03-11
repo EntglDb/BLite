@@ -222,5 +222,95 @@ namespace BLite.Tests
             Assert.Equal(DateOnly.MinValue, retrieved.BirthDate);
             Assert.Equal(TimeOnly.MinValue, retrieved.OpeningTime);
         }
+
+        /// <summary>
+        /// Regression test: Select projecting to DateTimeOffset followed by OrderBy used to throw
+        /// "ParameterExpression of type 'DateTimeOffset' cannot be used for delegate parameter of type 'T'"
+        /// because the OrderByClause key-selector had a DateTimeOffset parameter instead of T.
+        /// </summary>
+        [Fact]
+        public void Select_Then_OrderBy_DateTimeOffset_DoesNotThrow()
+        {
+            // Arrange
+            var base_ = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+            _db.TemporalEntities.Insert(new TemporalEntity
+            {
+                Id = ObjectId.NewObjectId(),
+                Name = "C",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = base_.AddDays(2),
+                Duration = TimeSpan.Zero,
+                BirthDate = DateOnly.MinValue,
+                OpeningTime = TimeOnly.MinValue
+            });
+            _db.TemporalEntities.Insert(new TemporalEntity
+            {
+                Id = ObjectId.NewObjectId(),
+                Name = "A",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = base_,
+                Duration = TimeSpan.Zero,
+                BirthDate = DateOnly.MinValue,
+                OpeningTime = TimeOnly.MinValue
+            });
+            _db.TemporalEntities.Insert(new TemporalEntity
+            {
+                Id = ObjectId.NewObjectId(),
+                Name = "B",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = base_.AddDays(1),
+                Duration = TimeSpan.Zero,
+                BirthDate = DateOnly.MinValue,
+                OpeningTime = TimeOnly.MinValue
+            });
+
+            // Act — this chain triggered the ArgumentException before the fix
+            var dates = _db.TemporalEntities.AsQueryable()
+                .Select(e => e.UpdatedAt)
+                .OrderBy(d => d)
+                .ToList();
+
+            // Assert
+            Assert.Equal(3, dates.Count);
+            Assert.True(dates[0] < dates[1] && dates[1] < dates[2]);
+            Assert.Equal(base_, dates[0]);
+            Assert.Equal(base_.AddDays(1), dates[1]);
+            Assert.Equal(base_.AddDays(2), dates[2]);
+        }
+
+        [Fact]
+        public void Where_Then_Select_Then_OrderByDescending_DateTimeOffset_DoesNotThrow()
+        {
+            // Arrange
+            var base_ = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+            for (int i = 0; i < 4; i++)
+            {
+                _db.TemporalEntities.Insert(new TemporalEntity
+                {
+                    Id = ObjectId.NewObjectId(),
+                    Name = i % 2 == 0 ? "even" : "odd",
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = base_.AddDays(i),
+                    Duration = TimeSpan.Zero,
+                    BirthDate = DateOnly.MinValue,
+                    OpeningTime = TimeOnly.MinValue
+                });
+            }
+
+            // Act
+            var dates = _db.TemporalEntities.AsQueryable()
+                .Where(e => e.Name == "even")
+                .Select(e => e.UpdatedAt)
+                .OrderByDescending(d => d)
+                .ToList();
+
+            // Assert — only even-indexed items (day 0 and day 2), descending
+            Assert.Equal(2, dates.Count);
+            Assert.True(dates[0] > dates[1]);
+            Assert.Equal(base_.AddDays(2), dates[0]);
+            Assert.Equal(base_, dates[1]);
+        }
     }
 }

@@ -173,7 +173,16 @@ public readonly struct BLiteDiagnostic
                         if (!string.IsNullOrEmpty(entity.CollectionPropertyName))
                         {
                             var mapperName = $"global::{mapperNamespace}.{CodeGenerator.GetMapperName(entity.FullTypeName)}";
-                            sb.AppendLine($"            this.{entity.CollectionPropertyName} = CreateCollection(new {mapperName}());");
+                            if (entity.CollectionPropertyIsInterface)
+                            {
+                                // Property is typed as IDocumentCollection<TId,T> — direct assignment
+                                sb.AppendLine($"            this.{entity.CollectionPropertyName} = CreateCollection(new {mapperName}());");
+                            }
+                            else
+                            {
+                                // Property is typed as DocumentCollection<TId,T> — needs downcast
+                                sb.AppendLine($"            this.{entity.CollectionPropertyName} = (global::BLite.Core.Collections.DocumentCollection<{entity.CollectionIdTypeFullName}, global::{entity.FullTypeName}>)(object)CreateCollection(new {mapperName}());");
+                            }
                         }
                     }
                     
@@ -187,7 +196,7 @@ public readonly struct BLiteDiagnostic
 
                     if (collectionsWithProperties.Any())
                     {
-                        sb.AppendLine($"        public override global::BLite.Core.Collections.DocumentCollection<TId, T> Set<TId, T>()");
+                        sb.AppendLine($"        public override global::BLite.Core.Collections.IDocumentCollection<TId, T> Set<TId, T>()");
                         sb.AppendLine($"        {{");
 
                         foreach (var entity in collectionsWithProperties)
@@ -195,7 +204,7 @@ public readonly struct BLiteDiagnostic
                             var entityTypeStr = $"global::{entity.FullTypeName}";
                             var idTypeStr = entity.CollectionIdTypeFullName;
                             sb.AppendLine($"            if (typeof(TId) == typeof({idTypeStr}) && typeof(T) == typeof({entityTypeStr}))");
-                            sb.AppendLine($"                return (global::BLite.Core.Collections.DocumentCollection<TId, T>)(object)this.{entity.CollectionPropertyName};");
+                            sb.AppendLine($"                return (global::BLite.Core.Collections.IDocumentCollection<TId, T>)(object)this.{entity.CollectionPropertyName}!;");
                         }
 
                         if (dbContext.HasBaseDbContext)
@@ -507,24 +516,26 @@ public readonly struct BLiteDiagnostic
                 }
             }
 
-            // Analyze properties to find DocumentCollection<TId, TEntity>
+            // Analyze properties to find DocumentCollection<TId, TEntity> or IDocumentCollection<TId, TEntity>
             var properties = classSymbol.GetMembers().OfType<IPropertySymbol>();
             foreach (var prop in properties)
             {
-                if (prop.Type is INamedTypeSymbol namedType && 
-                    namedType.OriginalDefinition.Name == "DocumentCollection")
+                if (prop.Type is INamedTypeSymbol namedType &&
+                    (namedType.OriginalDefinition.Name == "DocumentCollection" ||
+                     namedType.OriginalDefinition.Name == "IDocumentCollection"))
                 {
                     // Expecting 2 type arguments: TId, TEntity
                     if (namedType.TypeArguments.Length == 2)
                     {
                         var entityType = namedType.TypeArguments[1];
                         var entityInfo = info.Entities.FirstOrDefault(e => e.FullTypeName == entityType.ToDisplayString());
-                        
+
                         // If found, update
                         if (entityInfo != null)
                         {
                             entityInfo.CollectionPropertyName = prop.Name;
                             entityInfo.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                            entityInfo.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
                         }
                     }
                 }

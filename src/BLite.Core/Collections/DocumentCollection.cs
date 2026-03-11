@@ -21,7 +21,7 @@ using System.Threading;
 
 namespace BLite.Core.Collections;
 
-public class DocumentCollection<T> : DocumentCollection<ObjectId, T> where T : class
+public class DocumentCollection<T> : DocumentCollection<ObjectId, T>, IDocumentCollection<T> where T : class
 {
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<T> mapper, string? collectionName = null)
         : base(storage, transactionHolder, mapper, collectionName)
@@ -37,7 +37,7 @@ public class DocumentCollection<T> : DocumentCollection<ObjectId, T> where T : c
 /// </summary>
 /// <typeparam name="TId">Type of the primary key</typeparam>
 /// <typeparam name="T">Type of the entity</typeparam>
-public class DocumentCollection<TId, T> : IDisposable where T : class
+public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposable where T : class
 {
     private readonly ITransactionHolder _transactionHolder;
     private readonly StorageEngine _storage;

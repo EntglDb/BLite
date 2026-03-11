@@ -11,6 +11,13 @@ namespace BLite.SourceGenerators.Models
         public string CollectionName { get; set; } = "";
         public string? CollectionPropertyName { get; set; }
         public string? CollectionIdTypeFullName { get; set; }
+
+        /// <summary>
+        /// True when the DbContext property is typed as <c>IDocumentCollection&lt;TId,T&gt;</c>
+        /// (interface) rather than the concrete <c>DocumentCollection&lt;TId,T&gt;</c>.
+        /// Controls whether a downcast is emitted in the generated <c>InitializeCollections</c>.
+        /// </summary>
+        public bool CollectionPropertyIsInterface { get; set; }
         
         public PropertyInfo? IdProperty => Properties.FirstOrDefault(p => p.IsKey);
         public bool AutoId { get; set; }
