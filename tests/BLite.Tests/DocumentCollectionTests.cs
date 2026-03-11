@@ -36,6 +36,21 @@ public class DocumentCollectionTests : IDisposable
     }
 
     [Fact]
+    public void Insert_With_Duplicate_Id_Throws()
+    {
+        var id = ObjectId.NewObjectId();
+
+        _db.Users.Insert(new User { Id = id, Name = "Alice", Age = 30 });
+        _db.SaveChanges();
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            _db.Users.Insert(new User { Id = id, Name = "Bob", Age = 31 }));
+
+        Assert.Contains("Duplicate key violation", ex.Message);
+        Assert.Equal(1, _db.Users.Count());
+    }
+
+    [Fact]
     public void FindById_Returns_Null_When_Not_Found()
     {
         // Act

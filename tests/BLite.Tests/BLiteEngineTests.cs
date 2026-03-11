@@ -91,6 +91,25 @@ public class BLiteEngineTests : IDisposable
         Assert.Equal(30, age);
     }
 
+    [Fact]
+    public void Insert_With_Duplicate_Id_Throws()
+    {
+        var col = _engine.GetOrCreateCollection("users", BsonIdType.Int32);
+
+        col.Insert(col.CreateDocument(["_id", "name"], b => b
+            .AddId((BsonId)1)
+            .AddString("name", "Alice")));
+        _engine.Commit();
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            col.Insert(col.CreateDocument(["_id", "name"], b => b
+                .AddId((BsonId)1)
+                .AddString("name", "Bob"))));
+
+        Assert.Contains("Duplicate key violation", ex.Message);
+        Assert.Equal(1, col.Count());
+    }
+
     #endregion
 
     #region Insert & FindById (Int32)

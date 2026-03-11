@@ -149,7 +149,7 @@ public sealed class DynamicCollection : IDisposable
             _storage.SaveCollectionMetadata(metadata);
         }
 
-        var indexOptions = IndexOptions.CreateBTree("_id");
+        var indexOptions = IndexOptions.CreateUnique("_id");
         _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId,
             onRootChanged: newRoot =>
             {

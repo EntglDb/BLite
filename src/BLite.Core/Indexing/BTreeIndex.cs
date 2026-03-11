@@ -102,6 +102,15 @@ public sealed class BTreeIndex
     public void Insert(IndexKey key, DocumentLocation location, ulong? transactionId = null)
     {
         var txnId = transactionId ?? 0;
+
+        if (_options.Unique && TryFind(key, out var existingLocation, txnId))
+        {
+            if (!existingLocation.Equals(location))
+                throw new InvalidOperationException("Duplicate key violation for unique index");
+
+            return;
+        }
+
         var entry = new IndexEntry(key, location);
         var path = new List<uint>();
 
