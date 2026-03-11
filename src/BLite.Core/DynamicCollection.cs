@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.CDC;
 using BLite.Core.Indexing;
 using BLite.Core.Indexing.Internal;
 using BLite.Core.Storage;
@@ -313,6 +314,7 @@ public sealed class DynamicCollection : IDisposable
         foreach (var (_, idx) in _secondaryIndexes)
             IndexInsert(idx, document, location, transaction);
 
+        NotifyCdc(OperationType.Insert, id, document.RawData);
         return id;
     }
 
@@ -682,6 +684,7 @@ public sealed class DynamicCollection : IDisposable
                 IndexInsert(idx, newDocument, newLocation, transaction);
             }
 
+            NotifyCdc(OperationType.Update, id, newDocument.RawData);
             return true;
         }
         catch
@@ -739,6 +742,7 @@ public sealed class DynamicCollection : IDisposable
                 IndexInsert(idx, newDocument, newLocation, transaction);
             }
 
+            NotifyCdc(OperationType.Update, id, newDocument.RawData);
             return true;
         }
         catch
@@ -796,6 +800,7 @@ public sealed class DynamicCollection : IDisposable
                     IndexInsert(idx, newDoc, newLocation, transaction);
                 }
 
+                NotifyCdc(OperationType.Update, id, newDoc.RawData);
                 count++;
             }
             return count;
@@ -856,6 +861,7 @@ public sealed class DynamicCollection : IDisposable
                     IndexInsert(idx, newDoc, newLocation, transaction);
                 }
 
+                NotifyCdc(OperationType.Update, id, newDoc.RawData);
                 count++;
             }
             return count;
@@ -904,6 +910,7 @@ public sealed class DynamicCollection : IDisposable
             // Mark slot as deleted
             DeleteSlot(location, transaction);
 
+            NotifyCdc(OperationType.Delete, id);
             return true;
         }
         catch
@@ -940,6 +947,7 @@ public sealed class DynamicCollection : IDisposable
             }
 
             DeleteSlot(location, transaction);
+            NotifyCdc(OperationType.Delete, id);
             return true;
         }
         catch
@@ -982,6 +990,7 @@ public sealed class DynamicCollection : IDisposable
                 }
 
                 DeleteSlot(location, transaction);
+                NotifyCdc(OperationType.Delete, id);
                 count++;
             }
             return count;
@@ -1027,6 +1036,7 @@ public sealed class DynamicCollection : IDisposable
                 }
 
                 DeleteSlot(location, transaction);
+                NotifyCdc(OperationType.Delete, id);
                 count++;
             }
             return count;
@@ -1644,6 +1654,46 @@ public sealed class DynamicCollection : IDisposable
     };
 
     #endregion
+
+    // ── Change Data Capture ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Subscribes to a live stream of changes on this collection.
+    /// Calling this method initializes CDC for the underlying storage engine.
+    /// </summary>
+    /// <param name="capturePayload">
+    /// When <c>true</c>, each event includes the full BSON payload of the changed document.
+    /// When <c>false</c>, only metadata (ID, operation type, timestamps) is included.
+    /// </param>
+    public IObservable<BsonChangeEvent> Watch(bool capturePayload = false) =>
+        new DynamicChangeStreamObservable(
+            _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap());
+
+    private void NotifyCdc(OperationType type, BsonId id, ReadOnlySpan<byte> docData = default)
+    {
+        if (_storage.Cdc == null) return;
+        if (!_storage.Cdc.HasAnyWatchers(_collectionName)) return;
+
+        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+
+        ReadOnlyMemory<byte>? payload = null;
+        if (!docData.IsEmpty && _storage.Cdc.HasPayloadWatchers(_collectionName))
+            payload = docData.ToArray();
+
+        if (transaction is Transaction t)
+        {
+            t.AddChange(new InternalChangeEvent
+            {
+                Timestamp = DateTime.UtcNow.Ticks,
+                TransactionId = transaction.TransactionId,
+                CollectionName = _collectionName,
+                Type = type,
+                IdType = _idType,
+                IdBytes = id.ToBytes(),
+                PayloadBytes = payload
+            });
+        }
+    }
 
     public void Dispose()
     {

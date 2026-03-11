@@ -56,4 +56,8 @@ public interface ICollectionIndex<TId, T> where T : class
     /// Valid only when <see cref="Type"/> is <see cref="IndexType.Vector"/>.
     /// </summary>
     IEnumerable<VectorSearchResult> VectorSearch(float[] query, int k, int efSearch = 100);
+
+    /// <inheritdoc cref="VectorSearch"/>
+    IAsyncEnumerable<T> VectorSearchAsync(
+        float[] query, int k, int efSearch = 100, CancellationToken ct = default);
 }

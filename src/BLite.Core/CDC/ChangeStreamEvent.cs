@@ -22,6 +22,23 @@ public readonly struct ChangeStreamEvent<TId, T> where T : class
 }
 
 /// <summary>
+/// Schema-less change event emitted by <see cref="DynamicCollection.Watch"/>.
+/// Carries raw BSON bytes — no compile-time entity type required.
+/// </summary>
+public readonly struct BsonChangeEvent
+{
+    public long Timestamp { get; init; }
+    public ulong TransactionId { get; init; }
+    public string CollectionName { get; init; }
+    public OperationType Type { get; init; }
+    public BsonIdType IdType { get; init; }
+    public ReadOnlyMemory<byte> IdBytes { get; init; }
+
+    /// <summary>Raw BSON of the changed document. Null when <c>capturePayload</c> was false.</summary>
+    public BsonDocument? Payload { get; init; }
+}
+
+/// <summary>
 /// Low-level event structure used internally to transport changes before deserialization.
 /// </summary>
 internal readonly struct InternalChangeEvent

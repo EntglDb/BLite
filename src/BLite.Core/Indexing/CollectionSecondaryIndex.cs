@@ -481,6 +481,23 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     IEnumerable<VectorSearchResult> ICollectionIndex<TId, T>.VectorSearch(float[] query, int k, int efSearch)
         => VectorSearch(query, k, efSearch, null);
 
+    public async IAsyncEnumerable<T> VectorSearchAsync(
+        float[] query, int k, int efSearch = 100,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (_asyncDocReader is null)
+            throw new InvalidOperationException(
+                "Document reader not available. Use collection.VectorSearchAsync() instead, " +
+                "or obtain this index via collection.CreateVectorIndex() / EnsureIndex().");
+
+        foreach (var result in VectorSearch(query, k, efSearch, null))
+        {
+            ct.ThrowIfCancellationRequested();
+            var doc = await _asyncDocReader(result.Location, ct).ConfigureAwait(false);
+            if (doc is not null) yield return doc;
+        }
+    }
+
     // ── IDisposable ───────────────────────────────────────────────────────────
 
     public void Dispose()
