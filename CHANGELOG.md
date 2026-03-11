@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.6.0"></a>
+## [3.6.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.0) (2026-03-11)
+
+### Features
+
+* adds watch to dynamic collections ([d22857f](https://www.github.com/EntglDb/BLite/commit/d22857f0d5f31818362aa469ed20a8f0e4557336))
+
 <a name="3.5.2"></a>
 ## [3.5.2](https://www.github.com/EntglDb/BLite/releases/tag/v3.5.2) (2026-03-11)
 
