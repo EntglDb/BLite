@@ -2,7 +2,7 @@
 
 ## What is C-BSON?
 
-**C-BSON** (Compressed BSON) is BLite's optimized wire format that maintains full BSON type compatibility while achieving significant space savings through **field name compression**. This innovation reduces document size by 30-60% for typical schemas, improving both storage efficiency and I/O performance.
+**C-BSON** (Compressed BSON) is BLite's optimized wire format that preserves BSON type codes and core document framing while achieving significant space savings through **field name compression**. This innovation reduces document size by 30-60% for typical schemas, improving both storage efficiency and I/O performance.
 
 ### The Problem with Standard BSON
 
@@ -53,14 +53,14 @@ C-BSON:         [type][field_id: ushort][value]
 
 ```
 ┌────────────────────────────────────────────────┐
-│  [4 bytes] Document Size (int32 little-endian)│
+│  [4 bytes] Document Size (int32 little-endian) │
 ├────────────────────────────────────────────────┤
-│  [Elements...]                                  │
-│    ┌──────────────────────────────────────┐   │
-│    │ [1 byte]  Type Code                  │   │
-│    │ [2 bytes] Field ID (ushort)          │   │
-│    │ [N bytes] Value (type-dependent)     │   │
-│    └──────────────────────────────────────┘   │
+│  [Elements...]                                 │
+│    ┌──────────────────────────────────────┐    │
+│    │ [1 byte]  Type Code                  │    │
+│    │ [2 bytes] Field ID (ushort)          │    │
+│    │ [N bytes] Value (type-dependent)     │    │
+│    └──────────────────────────────────────┘    │
 │  [Repeat for each field]                       │
 ├────────────────────────────────────────────────┤
 │  [1 byte] End of Document (0x00)               │
@@ -85,7 +85,7 @@ C-BSON:         [type][field_id: ushort][value]
 
 ### Type Codes
 
-C-BSON uses **standard BSON type codes** for full compatibility:
+C-BSON uses **standard BSON type codes** for broad compatibility:
 
 | Code | Type        | Description                          |
 |:-----|:------------|:-------------------------------------|
@@ -99,7 +99,7 @@ C-BSON uses **standard BSON type codes** for full compatibility:
 | 0x09 | DateTime    | UTC milliseconds (int64)            |
 | 0x10 | Int32       | 32-bit signed integer               |
 | 0x12 | Int64       | 64-bit signed integer               |
-| 0x13 | Decimal128  | 128-bit decimal (IEEE 754-2008)     |
+| 0x13 | Decimal128  | 128-bit decimal payload (BLite decimal-bits roundtrip) |
 
 ---
 
@@ -147,20 +147,21 @@ public class User
 
 ### Schema Storage
 
-Schemas are stored in the **Page 1 (Collection Metadata)** and loaded into memory on database open:
+Schema roots are stored in **Collection Metadata** (Page 1), while schema documents are serialized in **PageType.Schema** page chains and loaded on database open:
 
 ```
-┌─────────────────────────────────────────┐
-│ [Schema Hash (long)]                    │
-│ [Schema Version (int)]                  │
-│ [Field Count (ushort)]                  │
-├─────────────────────────────────────────┤
-│ For each field:                         │
-│   [Field ID (ushort)]                   │
-│   [Field Name Length (byte)]            │
-│   [Field Name UTF-8 bytes]              │
-│   [BSON Type Code (byte)]               │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│ Collection metadata                      │
+│   [SchemaRootPageId (uint)]              │
+├──────────────────────────────────────────┤
+│ Schema pages (PageType.Schema)           │
+│   [PageHeader (32)]                      │
+│   [Serialized BsonSchema document bytes] │
+│   [NextPageId -> continuation]           │
+├──────────────────────────────────────────┤
+│ Reader reconstructs:                     │
+│   [field-name <-> ushort-id dictionaries]│
+└──────────────────────────────────────────┘
 ```
 
 ---
@@ -291,7 +292,7 @@ public class Address
 
 ### Arrays
 
-Arrays use numeric indices as field names, still compressed to 2-byte IDs:
+Arrays use positional keys encoded as raw `ushort` indices (not dictionary lookups):
 
 ```csharp
 public class User
@@ -299,16 +300,16 @@ public class User
     public string[] Tags { get; set; }
 }
 
-// Schema includes numeric keys:
-// "0" → 5, "1" → 6, "2" → 7, ...
+// Array positions are encoded directly:
+// 0, 1, 2, ... as little-endian ushort
 ```
 
 **Wire format:**
 ```
 [0x04: Array]["tags": 2]
   [array_size: 4 bytes]
-  [0x02: String]["0": 5]["design"]
-  [0x02: String]["1": 6]["dotnet"]
+  [0x02: String][index: 0]["design"]
+  [0x02: String][index: 1]["dotnet"]
   [0x00: End]
 ```
 
@@ -325,8 +326,8 @@ public (double Lat, double Lon) Location { get; set; }
 ```
 [0x04: Array]["location": field_id]
   [array_size: 4 bytes]
-  [0x01: Double]["0": coord_0_id][8 bytes: latitude]
-  [0x01: Double]["1": coord_1_id][8 bytes: longitude]
+  [0x01: Double][index: 0][8 bytes: latitude]
+  [0x01: Double][index: 1][8 bytes: longitude]
   [0x00: End]
 ```
 
@@ -503,11 +504,15 @@ long schemaHash = schema.GetHash(); // Hash of all field names and types
 
 ### BSON Type Compatibility
 
-C-BSON is **type-compatible** with standard BSON:
+C-BSON is **largely type-compatible** with standard BSON:
 - ✅ Same type codes (0x01-0x13)
 - ✅ Same value encoding (little-endian, IEEE 754, UTF-8)
 - ✅ Same document structure (size prefix + elements + 0x00 terminator)
 - ❌ **Different element header format** (field ID vs. field name)
+- ⚠️ `Decimal128` currently preserves .NET `decimal` via 16-byte decimal bits for BLite roundtrip fidelity, not strict IEEE 754-2008 decimal128 interchange
+
+Reader behavior note:
+- If a field ID is missing from the reverse dictionary, the reader currently falls back to the numeric ID string instead of throwing.
 
 ### Migration from Standard BSON
 
@@ -664,7 +669,7 @@ C-BSON achieves **significant storage and performance improvements** while maint
 
 - **30-60% smaller documents** via key compression
 - **Zero-allocation** I/O with `Span<byte>`
-- **Full BSON type compatibility**
+- **Broad BSON compatibility with documented BLite-specific details**
 - **Schema-based** for type safety and evolution
 
 This format is the foundation of BLite's high-performance embedded database engine, enabling millions of documents to fit in memory and cache while minimizing disk I/O.

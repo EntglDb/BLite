@@ -1,22 +1,22 @@
 # RFC-BLite: High-Performance Embedded Document Database for .NET
 
-**Status:** Draft  
-**Version:** 0.1.0  
-**Date:** February 2026  
+**Status:** Draft (living document)  
+**Version:** 0.2.0  
+**Date:** March 2026  
 **Authors:** BLite Development Team
 
 ---
 
 ## Abstract
 
-This document specifies **BLite**, a high-performance embedded document-oriented database engine for .NET 10. BLite is designed from the ground up for **zero-allocation performance**, leveraging modern .NET features including `Span<T>`, Memory-Mapped Files, and Source Generators. The database implements a custom **C-BSON** (Compressed BSON) format that achieves 30-60% storage reduction compared to standard BSON while maintaining full type compatibility.
+This document specifies **BLite**, a high-performance embedded document-oriented database engine for .NET. BLite is designed from the ground up for **zero-allocation performance**, leveraging modern .NET features including `Span<T>`, Memory-Mapped Files, and Source Generators. The database implements a custom **C-BSON** (Compressed BSON) format that achieves 30-60% storage reduction compared to standard BSON while preserving BSON type codes and core wire framing.
 
 Key innovations include:
 - **Zero-allocation I/O** via `Span<byte>` and `stackalloc`
 - **C-BSON format** with field name compression (2-byte IDs vs. variable-length strings)
 - **Page-based storage** with memory-mapped file I/O
-- **Multiple index types:** B+Tree, R-Tree (geospatial), and HNSW (vector similarity)
-- **ACID transactions** with Write-Ahead Logging and Snapshot Isolation
+- **Multiple index types:** B+Tree, R-Tree (geospatial), and vector similarity indexing
+- **ACID transactions** with Write-Ahead Logging and configurable isolation levels (default: ReadCommitted)
 - **Compile-time code generation** for zero-reflection serialization
 
 ---
@@ -63,22 +63,22 @@ This RFC specifies:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    BLite Architecture                    │
+│                    BLite Architecture                   │
 ├─────────────────────────────────────────────────────────┤
-│  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐ │
-│  │ LINQ Provider  │  │ Source Gen    │  │ Collections │ │
-│  │  (Queryable)   │  │  (Mappers)    │  │  (DbContext)│ │
-│  └───────┬───────┘  └───────┬───────┘  └──────┬──────┘ │
-│          │                   │                  │        │
-│  ┌───────▼─────────────────────────────────────▼──────┐ │
+│  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐  │
+│  │ LINQ Provider │  │ Source Gen    │  │ Collections │  │
+│  │  (Queryable)  │  │  (Mappers)    │  │  (DbContext)│  │
+│  └───────┬───────┘  └───────┬───────┘  └──────┬──────┘  │
+│          │                  │                 │         │
+│  ┌───────▼──────────────────▼─────────────────▼───────┐ │
 │  │          Index Layer (B-Tree, R-Tree, HNSW)        │ │
 │  └───────┬─────────────────────────────────────┬──────┘ │
-│          │                                      │        │
-│  ┌───────▼──────────────────────────────────────▼─────┐ │
+│          │                                     │        │
+│  ┌───────▼─────────────────────────────────────▼──────┐ │
 │  │         Storage Engine (Pages, Transactions)       │ │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │ │
-│  │  │   PageFile   │  │     WAL      │  │ FreeList │ │ │
-│  │  └──────────────┘  └──────────────┘  └──────────┘ │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  │ │
+│  │  │   PageFile   │  │     WAL      │  │ FreeList │  │ │
+│  │  └──────────────┘  └──────────────┘  └──────────┘  │ │
 │  └────────────────────────────────────────────────────┘ │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │       C-BSON (Span-based Reader/Writer)            │ │
@@ -94,7 +94,7 @@ This RFC specifies:
 The storage layer manages page-based I/O using memory-mapped files:
 
 - **PageFile:** Fixed-size pages (8KB, 16KB, or 32KB)
-- **Page Types:** Header, Data, Index, Vector, Spatial, Dictionary, Schema, Overflow, Free
+- **Page Types:** Header, Data, Index, Vector, Spatial, Dictionary, Schema, Overflow, Free, TimeSeries, KeyValue
 - **Free List:** Linked list of reusable pages
 
 ### 2.2 C-BSON Layer
@@ -113,7 +113,7 @@ Three specialized index types:
 
 - **B+Tree:** General-purpose sorted index (range queries, equality)
 - **R-Tree:** Geospatial index (proximity, bounding box queries)
-- **HNSW:** Vector similarity search (k-NN, ANN)
+- **Vector index:** HNSW-inspired graph search (persisted, evolving implementation)
 
 ### 2.4 Query Layer
 
@@ -129,7 +129,7 @@ ACID guarantees via:
 
 - **Atomicity:** All-or-nothing commits
 - **Consistency:** Schema validation
-- **Isolation:** Snapshot isolation (MVCC-like)
+- **Isolation:** Configurable transaction isolation (default `ReadCommitted`)
 - **Durability:** Write-Ahead Logging (WAL)
 
 ---
@@ -160,13 +160,15 @@ BLite supports 3 predefined page sizes:
 │    [Page Size (4)]                                      │
 │    [First Free Page ID (4)] ← Free list head            │
 │    [Dictionary Root Page ID (4)]                        │
+│    [KV Root Page ID (4)]                                │
+│    [Format Version (1)]                                 │
 │    [Reserved (remaining)]                               │
 ├─────────────────────────────────────────────────────────┤
 │  Page 1: Collection Metadata                            │
 │    [SlottedPageHeader (24)]                             │
 │    [Collection Schemas...]                              │
 ├─────────────────────────────────────────────────────────┤
-│  Page 2+: Data, Index, Vector, Spatial, Dictionary...  │
+│  Page 2+: Data, Index, Vector, Spatial, Dictionary...   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -184,7 +186,8 @@ Offset  Size  Field               Description
 11      8     TransactionId       Last modifying transaction
 19      4     Checksum            CRC32 of page data
 23      4     DictionaryRootPageId (Page 0 only)
-27      5     Reserved            Future use
+27      4     KvRootPageId        (Page 0 only)
+31      1     FormatVersion       (Page 0 only)
 ```
 
 **Total:** 32 bytes
@@ -201,6 +204,8 @@ public struct PageHeader
     [FieldOffset(11)] public ulong TransactionId;
     [FieldOffset(19)] public uint Checksum;
     [FieldOffset(23)] public uint DictionaryRootPageId;
+    [FieldOffset(27)] public uint KvRootPageId;
+    [FieldOffset(31)] public byte FormatVersion;
 }
 ```
 
@@ -220,6 +225,8 @@ public struct PageHeader
 | 9     | Vector      | HNSW index node                          |
 | 10    | Free        | Reusable page (linked via NextPageId)    |
 | 11    | Spatial     | R-Tree node                              |
+| 12    | TimeSeries  | Append-only time series data page         |
+| 13    | KeyValue    | Raw byte value key-value storage page     |
 
 ### 3.4 Slotted Page Structure
 
@@ -236,11 +243,11 @@ Data pages use a **slotted page** design for variable-size documents:
 │    │ Slot 0: [Offset, Length, Flags]  │ (8 bytes)       │
 │    │ Slot 1: [Offset, Length, Flags]  │                 │
 │    │ Slot 2: [Offset, Length, Flags]  │                 │
-│    │ ...                               │                 │
+│    │ ...                              │                 │
 │    └──────────────────────────────────┘                 │
-│                 ↓                                        │
-│      [Free Space]                                        │
-│                 ↑                                        │
+│                 ↓                                       │
+│      [Free Space]                                       │
+│                 ↑                                       │
 │  [Data Area (grows up)]                                 │
 │    ┌──────────────────────────────────┐                 │
 │    │ ... Document N C-BSON bytes ...  │                 │
@@ -489,6 +496,8 @@ Query: Find points within box (minLat, minLon, maxLat, maxLon)
 
 ### 5.3 HNSW Index (Vector Similarity)
 
+> **Implementation status:** The persisted vector index is available and production-usable for core scenarios, but parts of the node allocation strategy are still being hardened. Treat this section as target architecture plus current behavior.
+
 #### 5.3.1 Node Structure
 
 HNSW nodes use **Vector pages (PageType = 9)**:
@@ -552,11 +561,11 @@ Query: Find k nearest neighbors to query vector
 
 ### 6.1 Transaction Model
 
-BLite implements **Snapshot Isolation** (SI):
+BLite uses **configurable transaction isolation** with `ReadCommitted` as default:
 
-- **Read transactions:** See consistent snapshot as of transaction start
-- **Write transactions:** Accumulate changes in-memory, commit atomically
-- **Conflict detection:** Last-write-wins (optimistic concurrency)
+- **Default behavior:** read committed visibility with WAL-backed durability
+- **Configurable levels:** `ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, `Serializable`
+- **Write transactions:** Accumulate page changes in WAL cache, commit atomically through WAL
 
 ### 6.2 Write-Ahead Log (WAL)
 
@@ -569,23 +578,23 @@ BLite implements a **full WAL** for durability and crash recovery:
 │  WAL Entry Format                                       │
 ├─────────────────────────────────────────────────────────┤
 │  [Record Type: 1 byte]                                  │
-│    0x01 = Begin                                          │
-│    0x02 = Write                                          │
-│    0x03 = Commit                                         │
-│    0x04 = Abort                                          │
-│    0x05 = Checkpoint                                     │
+│    0x01 = Begin                                         │
+│    0x02 = Write                                         │
+│    0x03 = Commit                                        │
+│    0x04 = Abort                                         │
+│    0x05 = Checkpoint                                    │
 ├─────────────────────────────────────────────────────────┤
 │  For Begin/Commit/Abort:                                │
-│    [Transaction ID: 8 bytes]                             │
-│    [Timestamp: 8 bytes (Unix ms)]                        │
-│    Total: 17 bytes                                       │
+│    [Transaction ID: 8 bytes]                            │
+│    [Timestamp: 8 bytes (Unix ms)]                       │
+│    Total: 17 bytes                                      │
 ├─────────────────────────────────────────────────────────┤
-│  For Write:                                              │
-│    [Transaction ID: 8 bytes]                             │
-│    [PageId: 4 bytes]                                     │
-│    [After Image Length: 4 bytes]                         │
-│    [After Image: variable bytes]                         │
-│    Total: 17 + AfterImage.Length                         │
+│  For Write:                                             │
+│    [Transaction ID: 8 bytes]                            │
+│    [PageId: 4 bytes]                                    │
+│    [After Image Length: 4 bytes]                        │
+│    [After Image: variable bytes]                        │
+│    Total: 17 + AfterImage.Length                        │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -654,7 +663,7 @@ wal.Flush();             // Sync truncation
 
 - **Atomicity:** WAL ensures all-or-nothing commits
 - **Consistency:** Schema validation before commit
-- **Isolation:** Snapshot isolation (MVCC-like)
+- **Isolation:** Configurable transaction isolation (default `ReadCommitted`)
 - **Durability:** WAL flush on commit
 
 ---
@@ -808,10 +817,10 @@ Supported attributes:
 
 ### 9.2 Concurrent Access
 
-**Multi-Threading:** ✅ **Fully Supported**
-- **Thread-safe writes:** Multiple threads can write concurrently within the same process
-- **Internal synchronization:** `SemaphoreSlim` for critical sections, `ConcurrentDictionary` for shared state
-- **WAL coordination:** Commit lock ensures serializable WAL writes
+**Multi-Threading:** ✅ **Supported with engine-level coordination**
+- **Thread-safe internals:** `SemaphoreSlim` and concurrent collections protect shared state
+- **WAL coordination:** Commit lock serializes durable commit path
+- **Single active engine transaction model:** an engine instance exposes one current active transaction at a time
 - **Page cache:** Thread-safe access to memory-mapped pages
 
 **Multi-Process:** ❌ **Not Supported**
@@ -869,15 +878,13 @@ finally { ArrayPool<byte>.Shared.Return(buffer); }
 
 ## 11. Implementation Notes
 
-### 11.1 .NET 10 Requirements
+### 11.1 Target Frameworks
 
-BLite targets **.NET 10** to leverage:
+BLite core packages currently multi-target **net10.0** and **netstandard2.1**:
 - `Span<T>` and `ref struct` for zero-copy I/O
 - Source Generators (Roslyn)
 - `MemoryMarshal` for efficient struct serialization
 - Improved JIT optimizations
-
-**Future:** Evaluate `.NET Standard 2.1` for broader compatibility.
 
 ### 11.2 Platform Considerations
 
@@ -932,9 +939,9 @@ Offset:  0                                              16383
          │ [Slot 1: Offset=16256, Len=64, Flags=0]        │
          │ [Slot 2: Offset=16192, Len=64, Flags=0]        │
       56 │ ← FreeSpaceStart                               │
-         │                                                 │
-         │ ~~~~~~~~~~~~~~~~ Free Space ~~~~~~~~~~~~~~~~~~~ │
-         │                                                 │
+         │                                                │
+         │ ~~~~~~~~~~~~~~~~ Free Space ~~~~~~~~~~~~~~~~~~~│
+         │                                                │
   16192  │ ← FreeSpaceEnd                                 │
          │ [Document 2 data: 64 bytes]                    │
          │ [Document 1 data: 64 bytes]                    │
@@ -949,10 +956,10 @@ Internal Node:
 ┌──────────────────────────────────────────────────────┐
 │ [PageHeader 32] [BTreeNodeHeader 20]                 │
 ├──────────────────────────────────────────────────────┤
-│ Key1 | ChildPtr1                                      │
-│ Key2 | ChildPtr2                                      │
-│ Key3 | ChildPtr3                                      │
-│ ...                                                   │
+│ Key1 | ChildPtr1                                     │
+│ Key2 | ChildPtr2                                     │
+│ Key3 | ChildPtr3                                     │
+│ ...                                                  │
 └──────────────────────────────────────────────────────┘
 
 Leaf Node:
@@ -962,7 +969,7 @@ Leaf Node:
 │ Key1 | DocumentLocation1                             │
 │ Key2 | DocumentLocation2                             │
 │ Key3 | DocumentLocation3                             │
-│ ...                                                   │
+│ ...                                                  │
 │ NextLeafPageId → [next leaf]                         │
 └──────────────────────────────────────────────────────┘
 ```
