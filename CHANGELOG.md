@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.5.2"></a>
+## [3.5.2](https://www.github.com/EntglDb/BLite/releases/tag/v3.5.2) (2026-03-11)
+
+### Bug Fixes
+
+* adds abstractions for indexes ([59874a7](https://www.github.com/EntglDb/BLite/commit/59874a76ffdd039bd966ac247281da2cce428110))
+
 <a name="3.5.1"></a>
 ## [3.5.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.5.1) (2026-03-11)
 
