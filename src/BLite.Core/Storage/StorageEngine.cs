@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Threading.Channels;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -27,14 +28,23 @@ public sealed partial class StorageEngine : IDisposable
     // Lazily populated on first read after commit
     private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
     
-    // Global lock for commit/checkpoint synchronization
+    // Global lock for commit/checkpoint synchronization.
+    // Held only by the group commit writer (and sync commit / checkpoint paths).
     private readonly SemaphoreSlim _commitLock = new(1, 1);
-    
+
+    // Group commit writer infrastructure.
+    private readonly Channel<PendingCommit> _commitChannel;
+    private readonly CancellationTokenSource _writerCts = new();
+    private readonly Task _writerTask;
+
     // Transaction Management
     private readonly ConcurrentDictionary<ulong, Transaction> _activeTransactions;
-    private ulong _nextTransactionId;
+    // Stored as long so Interlocked.Increment works on all target frameworks.
+    private long _nextTransactionId;
 
     private const long MaxWalSize = 4 * 1024 * 1024; // 4MB
+
+    private volatile bool _disposed;
 
     public StorageEngine(string databasePath, PageFileConfig config)
     {
@@ -50,7 +60,16 @@ public sealed partial class StorageEngine : IDisposable
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
-        _nextTransactionId = 1;
+        _nextTransactionId = 0; // Interlocked.Increment pre-increments, so first txnId == 1.
+
+        // Start the group commit writer.
+        _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+        _writerTask = Task.Run(() => GroupCommitWriterAsync(_writerCts.Token));
         
         // Recover from WAL if exists (crash recovery or resume after close)
         // This replays any committed transactions not yet checkpointed
@@ -95,7 +114,16 @@ public sealed partial class StorageEngine : IDisposable
     /// </summary>
     public void Dispose()
     {
-        // 1. Rollback any active transactions
+        if (_disposed) return;
+        _disposed = true;
+
+        // 1. Stop accepting new commits and let the group commit writer drain.
+        _commitChannel?.Writer.TryComplete();
+        _writerCts?.Cancel();
+        try { _writerTask?.Wait(TimeSpan.FromSeconds(5)); } catch { /* best-effort */ }
+        _writerCts?.Dispose();
+
+        // 2. Rollback any active transactions.
         if (_activeTransactions != null)
         {
             foreach (var txn in _activeTransactions.Values)
@@ -109,7 +137,7 @@ public sealed partial class StorageEngine : IDisposable
             _activeTransactions.Clear();
         }
 
-        // 2. Close WAL and PageFile
+        // 3. Close WAL and PageFile.
         _wal?.Dispose();
         _pageFile?.Dispose();
         _commitLock?.Dispose();

@@ -8,34 +8,18 @@ public sealed partial class StorageEngine
 
     public Transaction BeginTransaction(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
     {
-        _commitLock.Wait();
-        try
-        {
-            var txnId = _nextTransactionId++;
-            var transaction = new Transaction(txnId, this, isolationLevel);
-            _activeTransactions[txnId] = transaction;
-            return transaction;
-        }
-        finally
-        {
-            _commitLock.Release();
-        }
+        var txnId = (ulong)Interlocked.Increment(ref _nextTransactionId);
+        var transaction = new Transaction(txnId, this, isolationLevel);
+        _activeTransactions[txnId] = transaction;
+        return transaction;
     }
 
-    public async Task<Transaction> BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted, CancellationToken ct = default)
+    public Task<Transaction> BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted, CancellationToken ct = default)
     {
-        await _commitLock.WaitAsync(ct);
-        try
-        {
-            var txnId = _nextTransactionId++;
-            var transaction = new Transaction(txnId, this, isolationLevel);
-            _activeTransactions[txnId] = transaction;
-            return transaction;
-        }
-        finally
-        {
-            _commitLock.Release();
-        }
+        var txnId = (ulong)Interlocked.Increment(ref _nextTransactionId);
+        var transaction = new Transaction(txnId, this, isolationLevel);
+        _activeTransactions[txnId] = transaction;
+        return Task.FromResult(transaction);
     }
 
     public void CommitTransaction(Transaction transaction)
@@ -189,49 +173,13 @@ public sealed partial class StorageEngine
 
     public async Task CommitTransactionAsync(ulong transactionId, CancellationToken ct = default)
     {
-        await _commitLock.WaitAsync(ct);
-        try
-        {
-            // Get ALL pages from WAL cache (includes both data and index pages)
-            if (!_walCache.TryGetValue(transactionId, out var pages))
-            {
-                // No writes for this transaction, just write commit record
-                await _wal.WriteCommitRecordAsync(transactionId, ct);
-                await _wal.FlushAsync(ct);
-                return;
-            }
-            
-            // 1. Write all changes to WAL (from cache, not writeSet!)
-            await _wal.WriteBeginRecordAsync(transactionId, ct);
-            
-            foreach (var (pageId, data) in pages)
-            {
-                await _wal.WriteDataRecordAsync(transactionId, pageId, data, ct);
-            }
-            
-            // 2. Write commit record and flush
-            await _wal.WriteCommitRecordAsync(transactionId, ct);
-            await _wal.FlushAsync(ct); // Durability: ensure WAL is on disk
-            
-            // 3. Move pages from cache to WAL index (for reads)
-            _walCache.TryRemove(transactionId, out _);
-            foreach (var kvp in pages)
-            {
-                _walIndex[kvp.Key] = kvp.Value;
-            }
-
-            // Auto-checkpoint if WAL grows too large
-            if (_wal.GetCurrentSize() > MaxWalSize)
-            {
-                // Checkpoint might be sync or async. For now sync inside the lock is "safe" but blocking.
-                // Ideally this should be async too.
-                CheckpointInternal(); 
-            }
-        }
-        finally
-        {
-            _commitLock.Release();
-        }
+        // Group commit path: post to the background writer and await its TCS.
+        // The writer batches this commit with any other pending ones, issues one
+        // WAL flush for the entire batch, then signals all waiters.
+        _walCache.TryGetValue(transactionId, out var pages);
+        var pending = new PendingCommit(transactionId, pages);
+        await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
+        await pending.Completion.Task.ConfigureAwait(false);
     }
     
     /// <summary>

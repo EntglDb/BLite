@@ -18,8 +18,9 @@ class Program
             return;
         }
 
-        // Always write artifacts next to the .csproj, not in the bin/ output directory
-        var projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        // Always write artifacts at the repository root, not in the bin/ output directory.
+        // BaseDirectory = tests/BLite.Benchmark/bin/Release/net10.0/ → 5 levels up = repo root.
+        var projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var artifactsPath = Path.Combine(projectDir, "BenchmarkDotNet.Artifacts");
 
         var config = DefaultConfig.Instance
