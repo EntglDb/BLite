@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.5.1"></a>
+## [3.5.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.5.1) (2026-03-11)
+
+### Bug Fixes
+
+* add missing sync Update, UpdateBulk, Delete, DeleteBulk to IDocumentCollection ([d719b6d](https://www.github.com/EntglDb/BLite/commit/d719b6dcc21b25e03048fe9df96c122f99e17368))
+
 <a name="3.5.0"></a>
 ## [3.5.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.5.0) (2026-03-11)
 
