@@ -168,8 +168,12 @@
 }</code></pre>
 
       <div class="info-box success">
-        <strong>✨ Recent Improvements (v1.3.0 – v3.3.0):</strong>
+        <strong>✨ Recent Improvements (v1.3.0 – v3.6.2):</strong>
         <ul>
+          <li>✅ <strong>v3.6.2</strong> — <strong>HNSW vector search correctness</strong>: full correctness pass on the HNSW implementation &mdash; fixes <code>AllocateNode</code> overflow, neighbor link integrity, <code>SelectNeighbors</code> heuristic, random level distribution (<code>mL = 1/ln(M)</code>), and index persistence across close/reopen. 12 new edge-case tests added.</li>
+          <li>✅ <strong>v3.6.0</strong> — <strong>CDC Watch on <code>DynamicCollection</code></strong>: <code>DynamicCollection.Watch()</code> now supported &mdash; real-time change streams available on the schema-less API, not just on typed <code>DocumentCollection&lt;TId, T&gt;</code>.</li>
+          <li>✅ <strong>v3.5.0</strong> — <strong><code>IDocumentCollection&lt;TId, T&gt;</code> abstraction</strong>: typed collections implement a clean interface covering CRUD, LINQ, async, and bulk operations. Sync <code>Update</code>, <code>UpdateBulk</code>, <code>Delete</code>, and <code>DeleteBulk</code> are part of the interface (v3.5.1). Simplifies DI and mocking.</li>
+          <li>✅ <strong>v3.4.0</strong> — <strong>Auto ID fallback for <code>string</code> and <code>Guid</code></strong>: primary keys of type <code>string</code> (CUID-style) and <code>Guid</code> (<code>Guid.NewGuid()</code>) are auto-generated on insert &mdash; no manual ID assignment required. Fixed index navigation for number-based indexes.</li>
           <li>✅ <strong>v3.3.0</strong> — <strong>Fully-private entity support verified</strong>: entities with a private constructor, all-private setters, and nested value-objects with private setters (<code>FullyPrivateEntity</code>, <code>PrivateAddress</code>, <code>PrivateTag</code>) are round-tripped correctly via Expression-Tree compiled setters and <code>RuntimeHelpers.GetUninitializedObject</code>.</li>
           <li>✅ <strong>v3.1.1</strong> — <strong>DDD private backing-field collections</strong>: generator correctly reads and writes private backing fields (e.g., <code>_items</code> backing a <code>IReadOnlyList&lt;T&gt;</code> property) for DDD aggregate root patterns.</li>
           <li>✅ <strong>v3.0.0</strong> — <strong>Nested property indexes</strong>: <code>modelBuilder.Entity&lt;T&gt;().HasIndex(x =&gt; x.Address.City)</code> — index any depth of embedded sub-object via a lambda path. Null intermediates are silently skipped.</li>

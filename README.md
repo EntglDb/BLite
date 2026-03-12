@@ -126,6 +126,8 @@ var results = db.Items.AsQueryable()
     .ToList();
 ```
 
+> **v3.6.2 HNSW correctness**: the HNSW implementation received a full correctness pass — `AllocateNode` overflow, neighbor link integrity (`LinkPageChain`), `SelectNeighbors` heuristic (keep closest, not farthest), random level distribution (`mL = 1/ln(M)`), and persistence across database close/reopen are all fixed.
+
 #### 🛠️ Vector Source Configuration (RAG Optimization)
 For sophisticated RAG (Retrieval-Augmented Generation) scenarios, BLite allows you to define a **Vector Source Configuration** directly on the collection metadata. This configuration specifies which BSON fields should be used to build the input text for your embedding model.
 
@@ -202,6 +204,10 @@ using var subscription = db.People.Watch(capturePayload: true)
 
 // Perform operations - events fire after commit
 db.People.Insert(new Person { Id = 1, Name = "Alice" });
+
+// v3.6.0 — DynamicCollection.Watch() is also supported
+using var dynSub = engine.GetOrCreateCollection("orders").Watch()
+    .Subscribe(e => Console.WriteLine($"{e.Type}: {e.DocumentId}"));
 ```
 
 ### 🛡️ Transactions & ACID
@@ -379,7 +385,23 @@ BLite supports standard .NET Data Annotations for mapping and validation:
 > [!IMPORTANT]
 > Validation attributes (`[Required]`, `[Range]`, etc.) throw a `System.ComponentModel.DataAnnotations.ValidationException` during serialization if rules are violated.
 
-### 🗝️ Embedded Key-Value Store
+### � `IDocumentCollection<TId, T>` Abstraction *(v3.5.0)*
+Typed collections implement the `IDocumentCollection<TId, T>` interface — a clean contract covering full CRUD, bulk operations, LINQ, and async methods. This makes constructor injection and unit-test mocking straightforward without binding to the concrete `DocumentCollection` class.
+
+```csharp
+// Inject or mock via the interface
+public class OrderService
+{
+    private readonly IDocumentCollection<ObjectId, Order> _orders;
+
+    public OrderService(IDocumentCollection<ObjectId, Order> orders) 
+        => _orders = orders;
+
+    public void Place(Order o) { _orders.Insert(o); }
+}
+```
+
+### �🗝️ Embedded Key-Value Store
 BLite 3.2.0 ships a persistent key-value store **co-located in the same database file** — no extra process, no extra file. Access it via `IBLiteKvStore` on any `BLiteEngine` or `DocumentDbContext`.
 
 - **Raw bytes**: values are `byte[]` / `ReadOnlySpan<byte>` — serialize however you like.
@@ -858,6 +880,10 @@ We are actively building the core. Here is where we stand:
 - ✅ **Native TimeSeries**: Dedicated `PageType.TimeSeries` (12) with append-only layout, `LastTimestamp` header field and automatic retention-based pruning. Triggered on insert — no background threads. `SetTimeSeries()`, `ForcePrune()`, `IsTimeSeries`, `GetTimeSeriesConfig()` on `DynamicCollection`. Studio UI: TimeSeries tab, TS badge in sidebar.
 - ✅ **Page Compaction on Delete**: Intra-page space is reclaimed on every delete — live documents are packed toward the top of the page, `FreeSpaceEnd` is updated and the free-space map is refreshed immediately. Deleted bytes are reusable without a VACUUM pass.
 - ✅ **Typed TimeSeries (DocumentDbContext)**: `HasTimeSeries(x => x.Timestamp, retention)` fluent API on `EntityTypeBuilder<T>`. Configure a typed `DocumentDbContext` collection as a TimeSeries source from `OnModelCreating`. `ForcePrune()` available on `DocumentCollection<TId, T>`.
+- ✅ **Auto ID Fallback for `string` and `Guid` (v3.4.0)**: primary keys of type `string` are auto-generated as CUID-style strings and `Guid` keys use `Guid.NewGuid()` — no manual ID assignment required on insert. Fixed index navigation for number-based indexes.
+- ✅ **`IDocumentCollection<TId, T>` Abstraction (v3.5.0)**: typed collections implement `IDocumentCollection<TId, T>` — a clean interface covering CRUD, LINQ, async, and bulk operations (`Update`, `UpdateBulk`, `Delete`, `DeleteBulk`). Enables constructor injection and mocking without coupling to the concrete `DocumentCollection` class.
+- ✅ **CDC Watch on `DynamicCollection` (v3.6.0)**: `DynamicCollection.Watch()` adds real-time change streams to the schema-less API — previously only available on typed `DocumentCollection<TId, T>`.
+- ✅ **HNSW Vector Search Correctness (v3.6.2)**: full correctness pass — fixes `AllocateNode` overflow, neighbor link integrity, `SelectNeighbors` heuristic, random level distribution (`mL = 1/ln(M)`), and index persistence across close/reopen. 12 dedicated edge-case tests added.
 
 ## 🔮 Future Vision
 
