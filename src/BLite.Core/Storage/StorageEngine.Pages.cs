@@ -51,14 +51,22 @@ public sealed partial class StorageEngine
     {
         if (transactionId == 0)
             throw new InvalidOperationException("Cannot write without a transaction (transactionId=0 is reserved)");
-        
+
         // Get or create transaction-local cache
-        var txnPages = _walCache.GetOrAdd(transactionId, 
+        var txnPages = _walCache.GetOrAdd(transactionId,
             _ => new System.Collections.Concurrent.ConcurrentDictionary<uint, byte[]>());
-        
-        // Store defensive copy
-        var copy = data.ToArray();
-        txnPages[pageId] = copy;
+
+        // If this page was already written in this transaction, copy new data into the
+        // existing buffer instead of allocating a fresh one.  Pages are always exactly
+        // PageSize bytes, so the buffer can always be reused without resizing.
+        if (txnPages.TryGetValue(pageId, out var existing))
+        {
+            data.CopyTo(existing);
+        }
+        else
+        {
+            txnPages[pageId] = data.ToArray();
+        }
     }
 
     /// <summary>
