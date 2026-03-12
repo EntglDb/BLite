@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.6.2"></a>
+## [3.6.2](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.2) (2026-03-12)
+
+### Bug Fixes
+
+* HNSW vector search correctness + edge-case tests ([fca8fc5](https://www.github.com/EntglDb/BLite/commit/fca8fc521e26a2f8947233a682205fde3f46e7e9))
+
 <a name="3.6.1"></a>
 ## [3.6.1](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.1) (2026-03-11)
 
