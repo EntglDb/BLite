@@ -537,6 +537,49 @@ public readonly struct BLiteDiagnostic
                             entityInfo.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                             entityInfo.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
                         }
+                        else if (entityType is INamedTypeSymbol namedEntityType)
+                        {
+                            // Auto-discover: entity not registered via OnModelCreating — infer from property type.
+                            // This allows DbContext subclasses to omit OnModelCreating for basic usage.
+                            var fullTypeName = SyntaxHelper.GetFullName(namedEntityType);
+                            var existing = info.Entities.FirstOrDefault(e => e.FullTypeName == fullTypeName);
+                            if (existing == null)
+                            {
+                                EntityInfo discoveredEntity;
+                                try
+                                {
+                                    discoveredEntity = EntityAnalyzer.Analyze(namedEntityType, semanticModel);
+                                }
+                                catch (System.Exception ex)
+                                {
+                                    info.Diagnostics.Add(new BLiteDiagnostic(
+                                        "BLITE001",
+                                        $"[{info.ClassName}] Exception analyzing entity '{namedEntityType.Name}' (auto-discovered from property '{prop.Name}'): {ex.Message}",
+                                        isError: true));
+                                    continue;
+                                }
+
+                                if (discoveredEntity.IdProperty == null)
+                                {
+                                    info.Diagnostics.Add(new BLiteDiagnostic(
+                                        "BLITE001",
+                                        $"[{info.ClassName}] Entity '{namedEntityType.Name}' (auto-discovered from property '{prop.Name}') has no primary key property. " +
+                                        $"Add [Key] attribute or ensure a property named 'Id' exists.",
+                                        isError: true));
+                                }
+
+                                discoveredEntity.CollectionPropertyName = prop.Name;
+                                discoveredEntity.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                                discoveredEntity.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                                info.Entities.Add(discoveredEntity);
+                            }
+                            else
+                            {
+                                existing.CollectionPropertyName = prop.Name;
+                                existing.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                                existing.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                            }
+                        }
                     }
                 }
             }
