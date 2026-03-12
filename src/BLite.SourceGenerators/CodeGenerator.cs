@@ -606,7 +606,8 @@ namespace BLite.SourceGenerators
                       if (readMethod != null)
                       {
                           var cast = (prop.CollectionItemType == "float" || prop.CollectionItemType == "Single") ? "(float)" : "";
-                          sb.AppendLine($"                            var item = {cast}reader.{readMethod}();");
+                          var readArgs = IsCoercedReadMethod(readMethod) ? "(itemType)" : "()";
+                          sb.AppendLine($"                            var item = {cast}reader.{readMethod}{readArgs};");
                           sb.AppendLine($"                            {localVar}.Add(item);");
                       }
                       else
@@ -620,7 +621,8 @@ namespace BLite.SourceGenerators
              {
                  var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
                  var readMethod = GetPrimitiveReadMethod(providerProp);
-                 sb.AppendLine($"                        {localVar} = _idConverter.ConvertFromProvider(reader.{readMethod}());");
+                 var providerReadArgs = IsCoercedReadMethod(readMethod) ? $"({bsonTypeVar})" : "()";
+                 sb.AppendLine($"                        {localVar} = _idConverter.ConvertFromProvider(reader.{readMethod}{providerReadArgs});");
              }
              else if (prop.IsNestedObject)
              {
@@ -672,12 +674,14 @@ namespace BLite.SourceGenerators
                         sb.AppendLine($"                        }}");
                         sb.AppendLine($"                        else");
                         sb.AppendLine($"                        {{");
-                        sb.AppendLine($"                            {localVar} = {cast}reader.{readMethod}();");
+                        var nullableReadArgs = IsCoercedReadMethod(readMethod) ? $"({bsonTypeVar})" : "()";
+                        sb.AppendLine($"                            {localVar} = {cast}reader.{readMethod}{nullableReadArgs};");
                         sb.AppendLine($"                        }}");
                     }
                     else
                     {
-                        sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}();");
+                        var readArgs = IsCoercedReadMethod(readMethod) ? $"({bsonTypeVar})" : "()";
+                        sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}{readArgs};");
                     }
                  }
                  else
@@ -858,12 +862,12 @@ namespace BLite.SourceGenerators
 
             var cleanType = typeName.TrimEnd('?').Trim();
 
-            if (cleanType.EndsWith("Int32") || cleanType == "int") return "ReadInt32";
-            if (cleanType.EndsWith("Int64") || cleanType == "long") return "ReadInt64";
+            if (cleanType.EndsWith("Int32") || cleanType == "int") return "ReadInt32Coerced";
+            if (cleanType.EndsWith("Int64") || cleanType == "long") return "ReadInt64Coerced";
             if (cleanType.EndsWith("String") || cleanType == "string") return "ReadString";
             if (cleanType.EndsWith("Boolean") || cleanType == "bool") return "ReadBoolean";
-            if (cleanType.EndsWith("Single") || cleanType == "float") return "ReadDouble";
-            if (cleanType.EndsWith("Double") || cleanType == "double") return "ReadDouble";
+            if (cleanType.EndsWith("Single") || cleanType == "float") return "ReadDoubleCoerced";
+            if (cleanType.EndsWith("Double") || cleanType == "double") return "ReadDoubleCoerced";
             if (cleanType.EndsWith("Decimal") || cleanType == "decimal") return "ReadDecimal128";
             if (cleanType.EndsWith("DateTime") && !cleanType.EndsWith("DateTimeOffset")) return "ReadDateTime";
             if (cleanType.EndsWith("DateTimeOffset")) return "ReadDateTimeOffset";
@@ -875,6 +879,9 @@ namespace BLite.SourceGenerators
 
             return null;
         }
+
+        private static bool IsCoercedReadMethod(string? readMethod)
+            => readMethod is "ReadInt32Coerced" or "ReadInt64Coerced" or "ReadDoubleCoerced";
 
         private static bool IsValueType(string typeName)
         {

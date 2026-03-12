@@ -135,6 +135,38 @@ public ref struct BsonSpanReader
     }
 
     /// <summary>
+    /// Reads a numeric field as double, coercing BSON Int32 or Int64 to double.
+    /// Use this in generated mappers so that whole-number values stored as Int32 by
+    /// schema-less tools (e.g. Studio) can be read into a double-typed C# property.
+    /// </summary>
+    public double ReadDoubleCoerced(BsonType bsonType) => bsonType switch
+    {
+        BsonType.Int32 => ReadInt32(),
+        BsonType.Int64 => ReadInt64(),
+        _ => ReadDouble()
+    };
+
+    /// <summary>
+    /// Reads a numeric field as int, coercing BSON Int64 or Double to int.
+    /// </summary>
+    public int ReadInt32Coerced(BsonType bsonType) => bsonType switch
+    {
+        BsonType.Int64  => (int)ReadInt64(),
+        BsonType.Double => (int)ReadDouble(),
+        _ => ReadInt32()
+    };
+
+    /// <summary>
+    /// Reads a numeric field as long, coercing BSON Int32 or Double to long.
+    /// </summary>
+    public long ReadInt64Coerced(BsonType bsonType) => bsonType switch
+    {
+        BsonType.Int32  => ReadInt32(),
+        BsonType.Double => (long)ReadDouble(),
+        _ => ReadInt64()
+    };
+
+    /// <summary>
     /// Reads spatial coordinates from a BSON array [X, Y].
     /// Returns a (double, double) tuple.
     /// </summary>

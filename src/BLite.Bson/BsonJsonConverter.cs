@@ -167,8 +167,17 @@ public static class BsonJsonConverter
 
     private static BsonValue JsonNumberToBsonValue(JsonElement el)
     {
-        if (el.TryGetInt32(out var i32))  return BsonValue.FromInt32(i32);
-        if (el.TryGetInt64(out var i64))  return BsonValue.FromInt64(i64);
+        // If the raw JSON token contains a decimal point or exponent, it must be a floating-point
+        // value — store as Double/Decimal without trying Int32/Int64 first, preserving the type.
+        var raw = el.GetRawText();
+        var looksLikeFloat = raw.IndexOf('.') >= 0 || raw.IndexOf('e') >= 0 || raw.IndexOf('E') >= 0;
+
+        if (!looksLikeFloat)
+        {
+            if (el.TryGetInt32(out var i32)) return BsonValue.FromInt32(i32);
+            if (el.TryGetInt64(out var i64)) return BsonValue.FromInt64(i64);
+        }
+
         if (el.TryGetDouble(out var dbl)) return BsonValue.FromDouble(dbl);
         if (el.TryGetDecimal(out var dec)) return BsonValue.FromDecimal(dec);
         return BsonValue.Null;
@@ -247,7 +256,29 @@ public static class BsonJsonConverter
         if (val.IsBoolean)     { w.WriteBooleanValue(val.AsBoolean);                        return; }
         if (val.IsInt32)       { w.WriteNumberValue(val.AsInt32);                           return; }
         if (val.IsInt64)       { w.WriteNumberValue(val.AsInt64);                           return; }
-        if (val.IsDouble)      { w.WriteNumberValue(val.AsDouble);                          return; }
+        if (val.IsDouble)
+        {
+            var d = val.AsDouble;
+#if NET6_0_OR_GREATER
+            // Write whole-number doubles with a decimal point ("600.0" not "600") so that
+            // JSON parsers see them as floating-point and round-trip them back as BSON Double
+            // rather than Int32. Non-finite values fall back to WriteNumberValue.
+            if (double.IsFinite(d))
+            {
+                var s = d.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+                if (s.IndexOf('.') < 0 && s.IndexOf('E') < 0 && s.IndexOf('e') < 0)
+                    s += ".0";
+                w.WriteRawValue(s);
+            }
+            else
+            {
+                w.WriteNumberValue(d);
+            }
+#else
+            w.WriteNumberValue(d);
+#endif
+            return;
+        }
         if (val.IsDecimal)     { w.WriteNumberValue(val.AsDecimal);                         return; }
         if (val.IsString)      { w.WriteStringValue(val.AsString);                          return; }
         if (val.IsDateTime)    { w.WriteStringValue(val.AsDateTime.ToString("O"));          return; }
