@@ -10,28 +10,44 @@ namespace BLite.Core.Indexing;
 /// </summary>
 public sealed class VectorSearchIndex
 {
-    private struct NodeReference
+    private struct NodeReference : IEquatable<NodeReference>
     {
         public uint PageId;
         public int NodeIndex;
         public int MaxLevel;
+
+        // Equality considers only the physical identity (page + slot).
+        // MaxLevel is metadata and must not affect HashSet lookups.
+        public bool Equals(NodeReference other) => PageId == other.PageId && NodeIndex == other.NodeIndex;
+        public override bool Equals(object? obj) => obj is NodeReference n && Equals(n);
+        public override int GetHashCode() => HashCode.Combine(PageId, NodeIndex);
     }
 
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
     private uint _rootPageId;
-    private readonly Random _random = new(42);
+    private readonly Action<uint>? _onRootChanged;
+    // Thread-safe random source compatible with netstandard2.1.
+    // Random.Shared was introduced in .NET 6; use ThreadLocal<Random> as a
+    // back-compat equivalent that is equally thread-safe and unbiased.
+#if NET6_0_OR_GREATER
+    private static readonly Random _random = Random.Shared;
+#else
+    private static readonly ThreadLocal<Random> _randomLocal = new(() => new Random());
+    private static Random _random => _randomLocal.Value!;
+#endif
 
     // Cached HNSW entry point (highest-level node in the graph)
     private uint _entryPageId;
     private int _entryNodeIndex;
     private int _entryMaxLevel;
 
-    public VectorSearchIndex(StorageEngine storage, IndexOptions options, uint rootPageId = 0)
+    public VectorSearchIndex(StorageEngine storage, IndexOptions options, uint rootPageId = 0, Action<uint>? onRootChanged = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
         _rootPageId = rootPageId;
+        _onRootChanged = onRootChanged;
 
         if (_rootPageId != 0)
         {
@@ -60,6 +76,7 @@ public sealed class VectorSearchIndex
         if (_rootPageId == 0)
         {
             _rootPageId = CreateNewPage(transaction);
+            _onRootChanged?.Invoke(_rootPageId);
             var pageBuffer = RentPageBuffer();
             try
             {
@@ -117,11 +134,30 @@ public sealed class VectorSearchIndex
         }
     }
 
-    private IEnumerable<NodeReference> SelectNeighbors(IEnumerable<NodeReference> candidates, float[] query, int m, int level, ITransaction? transaction)
+    // HNSW Algorithm 4 (Malkov & Yashunin, 2018): keeps candidates only when they are
+    // closer to the query than to every already-selected neighbour.
+    // This preserves "bridge" nodes between clusters, improving cross-cluster recall.
+    private List<NodeReference> SelectNeighbors(IEnumerable<NodeReference> candidates, float[] query, int m, int level, ITransaction? transaction)
     {
-        // Simple heuristic: just take top M nearest.
-        // HNSW Paper suggests more complex heuristic to maintain connectivity diversity.
-        return candidates.Take(m);
+        var result = new List<NodeReference>(m);
+        foreach (var e in candidates)
+        {
+            float distEQ = VectorMath.Distance(query, LoadVector(e, transaction), _options.Metric);
+            bool dominated = false;
+            foreach (var r in result)
+            {
+                float distER = VectorMath.Distance(LoadVector(e, transaction), LoadVector(r, transaction), _options.Metric);
+                if (distER < distEQ)
+                {
+                    dominated = true;
+                    break;
+                }
+            }
+            if (!dominated)
+                result.Add(e);
+            if (result.Count >= m) break;
+        }
+        return result;
     }
 
     private void AddBidirectionalLink(NodeReference node1, NodeReference node2, int level, ITransaction? transaction)
@@ -137,52 +173,113 @@ public sealed class VectorSearchIndex
         {
             _storage.ReadPage(from.PageId, transaction?.TransactionId, buffer);
             var links = VectorPage.GetLinksSpan(buffer, from.NodeIndex, level, _options.Dimensions, _options.M);
-            
-            // Find first empty slot (PageId == 0)
+
+            int worstSlot = -1;
+            float worstDist = float.NegativeInfinity;
+            var fromVec = LoadVector(from, transaction);
+            var toVec   = LoadVector(to,   transaction);
+            float newDist = VectorMath.Distance(fromVec, toVec, _options.Metric);
+
             for (int i = 0; i < links.Length; i += 6)
             {
                 var existing = DocumentLocation.ReadFrom(links.Slice(i, 6));
                 if (existing.PageId == 0)
                 {
+                    // Empty slot — just write and return.
                     new DocumentLocation(to.PageId, (ushort)to.NodeIndex).WriteTo(links.Slice(i, 6));
-                    
-                    if (transaction != null)
-                        _storage.WritePage(from.PageId, transaction.TransactionId, buffer);
-                    else
-                        _storage.WritePageImmediate(from.PageId, buffer);
+                    WritePage(from.PageId, transaction, buffer);
                     return;
                 }
+
+                // Track the worst existing link for potential replacement.
+                var existRef = new NodeReference { PageId = existing.PageId, NodeIndex = existing.SlotIndex };
+                float d = VectorMath.Distance(fromVec, LoadVector(existRef, transaction), _options.Metric);
+                if (d > worstDist) { worstDist = d; worstSlot = i; }
             }
-            // If full, we should technically prune or redistribute links as per HNSW paper.
-            // For now, we assume M is large enough or we skip (limited connectivity).
+
+            // All slots full: replace worst neighbour only if `to` is closer (neighbour shrinking).
+            if (worstSlot >= 0 && newDist < worstDist)
+            {
+                new DocumentLocation(to.PageId, (ushort)to.NodeIndex).WriteTo(links.Slice(worstSlot, 6));
+                WritePage(from.PageId, transaction, buffer);
+            }
         }
         finally { ReturnPageBuffer(buffer); }
     }
 
+    // Helper: choose the right write API based on whether a transaction is active.
+    private void WritePage(uint pageId, ITransaction? transaction, byte[] buffer)
+    {
+        if (transaction != null)
+            _storage.WritePage(pageId, transaction.TransactionId, buffer);
+        else
+            _storage.WritePageImmediate(pageId, buffer);
+    }
+
     private NodeReference AllocateNode(float[] vector, DocumentLocation docLoc, int level, ITransaction? transaction)
     {
-        // Find a page with space or create new
-        // For simplicity, we search for a page with available slots or append to a new one.
-        // Implementation omitted for brevity but required for full persistence.
-        uint pageId = _rootPageId; // Placeholder: need allocation strategy
-        int index = 0; 
-        
+        // Walk the _rootPageId → NextPageId chain looking for a page that still has
+        // capacity.  If none exists, allocate a new page and link it to the tail.
         var buffer = RentPageBuffer();
         try
         {
-             _storage.ReadPage(pageId, transaction?.TransactionId, buffer);
-             index = VectorPage.GetNodeCount(buffer);
-             VectorPage.WriteNode(buffer, index, docLoc, level, vector, _options.Dimensions);
-             VectorPage.IncrementNodeCount(buffer);
-             
-             if (transaction != null)
-                _storage.WritePage(pageId, transaction.TransactionId, buffer);
-             else
-                _storage.WritePageImmediate(pageId, buffer);
+            uint pageId = _rootPageId;
+            uint prevPageId = 0;
+
+            while (true)
+            {
+                _storage.ReadPage(pageId, transaction?.TransactionId, buffer);
+                int nodeCount = VectorPage.GetNodeCount(buffer);
+                int maxNodes  = VectorPage.GetMaxNodes(buffer);
+
+                if (nodeCount < maxNodes)
+                {
+                    // This page has room — write the node here.
+                    VectorPage.WriteNode(buffer, nodeCount, docLoc, level, vector, _options.Dimensions);
+                    VectorPage.IncrementNodeCount(buffer);
+                    WritePage(pageId, transaction, buffer);
+                    return new NodeReference { PageId = pageId, NodeIndex = nodeCount, MaxLevel = level };
+                }
+
+                // Follow the chain.
+                var header = PageHeader.ReadFrom(buffer);
+                if (header.NextPageId != 0)
+                {
+                    prevPageId = pageId;
+                    pageId = header.NextPageId;
+                }
+                else
+                {
+                    // No more pages in chain — allocate a new one and link it.
+                    uint newPageId = CreateNewPage(transaction);
+                    LinkPageChain(pageId, newPageId, transaction);
+
+                    // Write node into fresh page.
+                    _storage.ReadPage(newPageId, transaction?.TransactionId, buffer);
+                    VectorPage.WriteNode(buffer, 0, docLoc, level, vector, _options.Dimensions);
+                    VectorPage.IncrementNodeCount(buffer);
+                    WritePage(newPageId, transaction, buffer);
+                    return new NodeReference { PageId = newPageId, NodeIndex = 0, MaxLevel = level };
+                }
+            }
         }
         finally { ReturnPageBuffer(buffer); }
-        
-        return new NodeReference { PageId = pageId, NodeIndex = index, MaxLevel = level };
+    }
+
+    // Sets header.NextPageId on `fromPageId` so that CollectAllPages() can follow
+    // the full page chain and subsequent AllocateNode() calls find all pages.
+    private void LinkPageChain(uint fromPageId, uint toPageId, ITransaction? transaction)
+    {
+        var buffer = RentPageBuffer();
+        try
+        {
+            _storage.ReadPage(fromPageId, transaction?.TransactionId, buffer);
+            var header = PageHeader.ReadFrom(buffer);
+            header.NextPageId = toPageId;
+            header.WriteTo(buffer);
+            WritePage(fromPageId, transaction, buffer);
+        }
+        finally { ReturnPageBuffer(buffer); }
     }
 
     private void UpdateEntryPoint(NodeReference newEntry, ITransaction? transaction)
@@ -311,15 +408,24 @@ public sealed class VectorSearchIndex
         // 2. Comprehensive search on level 0
         var nearest = SearchLayer(currentPoint, query, Math.Max(efSearch, k), 0, transaction);
         
-        // 3. Return top-k results
+        // 3. Return top-k results.
+        // SearchLayer already computed distances; we retrieve location + vector together
+        // in a single page read to avoid the double-LoadVector that the old code did.
         int count = 0;
         foreach (var node in nearest)
         {
             if (count++ >= k) break;
-            
-            float dist = VectorMath.Distance(query, LoadVector(node, transaction), _options.Metric);
-            var loc = LoadDocumentLocation(node, transaction);
-            yield return new VectorSearchResult(loc, dist);
+
+            var buffer = RentPageBuffer();
+            try
+            {
+                _storage.ReadPage(node.PageId, transaction?.TransactionId, buffer);
+                float[] vec = new float[_options.Dimensions];
+                VectorPage.ReadNodeData(buffer, node.NodeIndex, out var loc, out _, vec);
+                float dist = VectorMath.Distance(query, vec, _options.Metric);
+                yield return new VectorSearchResult(loc, dist);
+            }
+            finally { ReturnPageBuffer(buffer); }
         }
     }
 
@@ -329,8 +435,8 @@ public sealed class VectorSearchIndex
         try
         {
             _storage.ReadPage(node.PageId, transaction?.TransactionId, buffer);
-            VectorPage.ReadNodeData(buffer, node.NodeIndex, out var loc, out _, new float[0]); // Vector not needed here
-            return loc;
+            // Use the zero-allocation overload: skip the vector bytes entirely.
+            return VectorPage.ReadLocation(buffer, node.NodeIndex);
         }
         finally { ReturnPageBuffer(buffer); }
     }
@@ -358,14 +464,11 @@ public sealed class VectorSearchIndex
 
     private int GetRandomLevel()
     {
-        // Probability p = 1/M for each level
-        double p = 1.0 / _options.M;
-        int level = 0;
-        while (_random.NextDouble() < p && level < 15)
-        {
-            level++;
-        }
-        return level;
+        // HNSW paper (Malkov & Yashunin 2018): recommended multiplier is 1/ln(M).
+        // For M=16 this gives mL≈0.36, producing a better-connected multi-layer graph
+        // than the original 1/M (≈0.063) which was too steep.
+        double mL = 1.0 / Math.Log(_options.M);
+        return Math.Min((int)Math.Floor(-Math.Log(_random.NextDouble()) * mL), 15);
     }
 
     private uint CreateNewPage(ITransaction? transaction)
@@ -375,7 +478,9 @@ public sealed class VectorSearchIndex
         try
         {
             VectorPage.Initialize(buffer, pageId, _options.Dimensions, _options.M);
-            _storage.WritePageImmediate(pageId, buffer);
+            // Use the transaction's WAL cache when available so that a rollback
+            // doesn't leave orphaned pages on disk.
+            WritePage(pageId, transaction, buffer);
             return pageId;
         }
         finally { ReturnPageBuffer(buffer); }

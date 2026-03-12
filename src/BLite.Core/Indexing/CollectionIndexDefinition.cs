@@ -95,6 +95,9 @@ public sealed class CollectionIndexDefinition<T> where T : class
     /// </summary>
     public IndexOptions ToIndexOptions()
     {
+        if (Type == IndexType.Vector)
+            return IndexOptions.CreateVector(Dimensions, Metric, fields: PropertyPaths);
+
         return new IndexOptions
         {
             Type = Type,

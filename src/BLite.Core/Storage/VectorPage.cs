@@ -122,6 +122,17 @@ public struct VectorPage
         vectorSource.CopyTo(vector);
     }
 
+    /// <summary>
+    /// Reads only the document location for a node, skipping the vector bytes entirely.
+    /// Use this instead of ReadNodeData when the vector is not needed.
+    /// </summary>
+    public static DocumentLocation ReadLocation(ReadOnlySpan<byte> page, int nodeIndex)
+    {
+        int nodeSize = GetNodeSize(page);
+        int offset = DataOffset + (nodeIndex * nodeSize);
+        return DocumentLocation.ReadFrom(page.Slice(offset, 6));
+    }
+
     public static Span<byte> GetLinksSpan(Span<byte> page, int nodeIndex, int level, int dimensions, int maxM)
     {
         int nodeSize = GetNodeSize(page);

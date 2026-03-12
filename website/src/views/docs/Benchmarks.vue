@@ -6,13 +6,13 @@
     <div class="info-box">
       <div class="info-header">📊 Benchmark Environment</div>
       <ul>
-        <li><strong>OS:</strong> Windows 11 (10.0.22631.6495 / 23H2)</li>
+        <li><strong>OS:</strong> Windows 11 (10.0.22631.6649 / 23H2)</li>
         <li><strong>CPU:</strong> Intel Core i7-13800H — 14 physical cores, 20 logical @ 2.50GHz</li>
-        <li><strong>Runtime:</strong> .NET 10.0.2 (X64 RyuJIT x86-64-v3)</li>
+        <li><strong>Runtime:</strong> .NET 10.0.4 (X64 RyuJIT x86-64-v3)</li>
         <li><strong>BenchmarkDotNet:</strong> v0.15.8</li>
-        <li><strong>Last Run:</strong> February 21, 2026</li>
+        <li><strong>Last Run:</strong> March 12, 2026</li>
       </ul>
-      <p style="margin-top:12px"><strong>Engines:</strong> BLite (source-generated mappers) · LiteDB 5.0.21 (<code>Connection=direct</code>) · SQLite Microsoft.Data.Sqlite 10.0.2 + Dapper 2.1.66 (JSON blobs)</p>
+      <p style="margin-top:12px"><strong>Engines:</strong> BLite (source-generated mappers) · LiteDB 5.0.21 (<code>Connection=direct</code>) · SQLite Microsoft.Data.Sqlite 10.0.4 + Dapper 2.1.66 (JSON blobs)</p>
     </div>
 
     <section>
@@ -38,19 +38,19 @@
       <h2>Summary</h2>
       <div class="highlights">
         <div class="highlight">
-          <div class="highlight-value">5.6x</div>
+          <div class="highlight-value">4.7x</div>
           <div class="highlight-label">vs LiteDB Single Insert</div>
         </div>
         <div class="highlight">
-          <div class="highlight-value">33x</div>
+          <div class="highlight-value">31x</div>
           <div class="highlight-label">vs SQLite Single Insert</div>
         </div>
         <div class="highlight">
-          <div class="highlight-value">2.6x</div>
+          <div class="highlight-value">5.8x</div>
           <div class="highlight-label">vs LiteDB FindById</div>
         </div>
         <div class="highlight">
-          <div class="highlight-value">3.5x</div>
+          <div class="highlight-value">3.3x</div>
           <div class="highlight-label">vs LiteDB Scan</div>
         </div>
       </div>
@@ -63,25 +63,29 @@
       <table>
         <thead><tr><th>Engine</th><th>Mean</th><th>Allocated</th><th>Ratio</th></tr></thead>
         <tbody>
-          <tr class="winner"><td><strong>BLite</strong></td><td><code>134.7 μs</code></td><td>114.53 KB</td><td><span class="badge-good">baseline</span></td></tr>
-          <tr><td>LiteDB</td><td><code>704.3 μs</code></td><td>57.82 KB</td><td><span class="badge-slow">5.57x slower</span></td></tr>
-          <tr><td>SQLite+JSON</td><td><code>4,209.1 μs</code></td><td>11.02 KB</td><td><span class="badge-slow">33.27x slower</span></td></tr>
+          <tr class="winner"><td><strong>BLite</strong></td><td><code>115.6 μs</code></td><td>134.43 KB</td><td><span class="badge-good">baseline</span></td></tr>
+          <tr><td>LiteDB</td><td><code>541.5 μs</code></td><td>56.09 KB</td><td><span class="badge-slow">4.72x slower</span></td></tr>
+          <tr><td>SQLite+JSON</td><td><code>3,608.8 μs</code></td><td>10.02 KB</td><td><span class="badge-slow">31.46x slower</span></td></tr>
         </tbody>
       </table>
 
       <h3>Batch Insert (1000 Documents, 1 Transaction)</h3>
       <table>
-        <thead><tr><th>Engine</th><th>Mean</th><th>Allocated</th><th>Ratio</th></tr></thead>
+        <thead><tr><th>Engine</th><th>Mean</th><th>Allocated</th><th>Gen0</th><th>Ratio</th></tr></thead>
         <tbody>
-          <tr class="winner"><td><strong>BLite</strong></td><td><code>8,797 μs</code></td><td>52,930 KB</td><td><span class="badge-good">baseline</span></td></tr>
-          <tr><td>LiteDB</td><td><code>27,376 μs</code></td><td>33,000 KB</td><td><span class="badge-slow">3.15x slower</span></td></tr>
-          <tr><td>SQLite+JSON</td><td><code>25,128 μs</code></td><td>6,295 KB</td><td><span class="badge-slow">2.89x slower</span></td></tr>
+          <tr class="winner"><td><strong>BLite</strong></td><td><code>9,113 μs</code></td><td><strong>31,242 KB</strong></td><td>2000</td><td><span class="badge-good">baseline</span></td></tr>
+          <tr><td>LiteDB</td><td><code>16,117 μs</code></td><td>33,491 KB</td><td>2000</td><td><span class="badge-slow">1.77x slower</span></td></tr>
+          <tr><td>SQLite+JSON</td><td><code>16,196 μs</code></td><td>6,294 KB</td><td>0</td><td><span class="badge-slow">1.78x slower</span></td></tr>
         </tbody>
       </table>
 
       <div class="warning-box">
         <div class="warning-header">⚠️ Note on SQLite allocations</div>
         <p>SQLite reports minimal managed allocations because work is delegated to its native C library. Unmanaged memory is not captured by BenchmarkDotNet. BLite allocations are fully measured (100% managed code).</p>
+      </div>
+      <div class="info-box">
+        <div class="info-header">📊 BLite batch allocation history</div>
+        <p>Batch-1000 allocated <strong>64,160 KB</strong> before the WAL page buffer reuse optimisation (March 2026), which reduced it to <strong>31,242 KB (-51%)</strong>. Each page is now written in-place when it already exists in the WAL cache for the current transaction, eliminating the previous <code>data.ToArray()</code> per write.</p>
       </div>
     </section>
 
@@ -93,9 +97,9 @@
       <table>
         <thead><tr><th>Engine</th><th>Mean</th><th>Allocated</th><th>Ratio</th></tr></thead>
         <tbody>
-          <tr class="winner"><td><strong>BLite</strong></td><td><code>6.368 μs</code></td><td>6.60 KB</td><td><span class="badge-good">baseline</span></td></tr>
-          <tr><td>LiteDB</td><td><code>16.466 μs</code></td><td>44.44 KB</td><td><span class="badge-slow">2.59x slower</span></td></tr>
-          <tr><td>SQLite+JSON</td><td><code>62.807 μs</code></td><td>9.34 KB</td><td><span class="badge-slow">9.87x slower</span></td></tr>
+          <tr class="winner"><td><strong>BLite</strong></td><td><code>3.005 μs</code></td><td>6.46 KB</td><td><span class="badge-good">baseline</span></td></tr>
+          <tr><td>LiteDB</td><td><code>17.327 μs</code></td><td>45.65 KB</td><td><span class="badge-slow">5.77x slower</span></td></tr>
+          <tr><td>SQLite+JSON</td><td><code>28.425 μs</code></td><td>9.33 KB</td><td><span class="badge-slow">9.46x slower</span></td></tr>
         </tbody>
       </table>
 
@@ -103,9 +107,9 @@
       <table>
         <thead><tr><th>Engine</th><th>Mean</th><th>Allocated</th><th>Ratio</th></tr></thead>
         <tbody>
-          <tr class="winner"><td><strong>BLite</strong></td><td><code>3,433 μs</code></td><td>5,090 KB</td><td><span class="badge-good">baseline</span></td></tr>
-          <tr><td>LiteDB</td><td><code>11,953 μs</code></td><td>17,295 KB</td><td><span class="badge-slow">3.51x slower</span></td></tr>
-          <tr><td>SQLite+JSON</td><td><code>9,677 μs</code></td><td>7,803 KB</td><td><span class="badge-slow">2.84x slower</span></td></tr>
+          <tr class="winner"><td><strong>BLite</strong></td><td><code>2,115 μs</code></td><td>5,090 KB</td><td><span class="badge-good">baseline</span></td></tr>
+          <tr><td>LiteDB</td><td><code>7,001 μs</code></td><td>17,295 KB</td><td><span class="badge-slow">3.31x slower</span></td></tr>
+          <tr><td>SQLite+JSON</td><td><code>6,156 μs</code></td><td>7,803 KB</td><td><span class="badge-slow">2.91x slower</span></td></tr>
         </tbody>
       </table>
     </section>
@@ -140,9 +144,10 @@
       <ul>
         <li>✅ <strong>C-BSON Format</strong> — Field name compression (2-byte IDs vs full string keys)</li>
         <li>✅ <strong>Zero-Copy I/O</strong> — Direct <code>Span&lt;byte&gt;</code> operations throughout the pipeline</li>
-        <li>✅ <strong>Memory Pooling</strong> — <code>ArrayPool</code> for buffer reuse</li>
+        <li>✅ <strong>Memory Pooling</strong> — <code>ArrayPool</code> for buffer reuse; WAL cache pages updated in-place on repeated writes</li>
         <li>✅ <strong>Stack Allocation</strong> — <code>stackalloc</code> for temporary buffers</li>
         <li>✅ <strong>Source Generators</strong> — Compile-time serialization, no reflection at runtime</li>
+        <li>✅ <strong>Group Commit</strong> — Background writer batches concurrent commits into one <code>fsync</code>, amortising disk write cost</li>
         <li>✅ <strong>vs LiteDB</strong> — LiteDB uses reflection-based BSON and a B+ tree requiring page splits; BLite's generated mappers and append-only WAL eliminate per-document reflection overhead</li>
       </ul>
     </section>
@@ -150,13 +155,14 @@
     <section>
       <h2>Running Benchmarks</h2>
       <pre><code><span class="comment"># Full BenchmarkDotNet run (all engines, all categories)</span>
-dotnet run -c Release --project src/BLite.Benchmark
+dotnet run -c Release --project tests/BLite.Benchmark
 
-<span class="comment"># Quick manual run (~10s, no BDN overhead)</span>
-dotnet run -c Release --project src/BLite.Benchmark -- manual
+<span class="comment"># Filter to a specific category</span>
+dotnet run -c Release --project tests/BLite.Benchmark -- --filter "*Insert*"
+dotnet run -c Release --project tests/BLite.Benchmark -- --filter "*Read*"
 
 <span class="comment"># Results:</span>
-<span class="comment"># src/BLite.Benchmark/BenchmarkDotNet.Artifacts/results/</span></code></pre>
+<span class="comment"># BenchmarkDotNet.Artifacts/results/</span></code></pre>
     </section>
 
     <div class="info-box">

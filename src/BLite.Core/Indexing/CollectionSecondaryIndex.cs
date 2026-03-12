@@ -55,7 +55,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         
         if (indexOptions.Type == IndexType.Vector)
         {
-            _vectorIndex = new VectorSearchIndex(storage, indexOptions, rootPageId);
+            _vectorIndex = new VectorSearchIndex(storage, indexOptions, rootPageId, onRootChanged);
             _btreeIndex = null;
             _spatialIndex = null;
         }

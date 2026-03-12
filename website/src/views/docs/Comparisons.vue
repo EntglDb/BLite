@@ -148,6 +148,77 @@
     </section>
 
     <section>
+      <h2>Performance at a Glance</h2>
+      <p>Measured on a realistic e-commerce <code>CustomerOrder</code> document (~1–2 KB). Environment: Windows 11, i7-13800H, .NET 10.0.4, BDN v0.15.8 — March 12, 2026.</p>
+
+      <h3>Insert</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Operation</th><th class="highlight-col">BLite</th><th>LiteDB 5.0.21</th><th>SQLite+JSON</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Single Insert (latency)</td>
+              <td class="highlight-col"><strong>115.6 μs</strong></td>
+              <td>541.5 μs <span class="badge-bad">4.7x slower</span></td>
+              <td>3,608.8 μs <span class="badge-bad">31.5x slower</span></td>
+            </tr>
+            <tr>
+              <td>Batch 1000 (latency)</td>
+              <td class="highlight-col"><strong>9,113 μs</strong></td>
+              <td>16,117 μs <span class="badge-bad">1.77x slower</span></td>
+              <td>16,196 μs <span class="badge-bad">1.78x slower</span></td>
+            </tr>
+            <tr>
+              <td>Batch 1000 (allocated)</td>
+              <td class="highlight-col"><strong>31,242 KB</strong></td>
+              <td>33,491 KB</td>
+              <td>6,294 KB †</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Read</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Operation</th><th class="highlight-col">BLite</th><th>LiteDB 5.0.21</th><th>SQLite+JSON</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>FindById (latency)</td>
+              <td class="highlight-col"><strong>3.005 μs</strong></td>
+              <td>17.327 μs <span class="badge-bad">5.8x slower</span></td>
+              <td>28.425 μs <span class="badge-bad">9.5x slower</span></td>
+            </tr>
+            <tr>
+              <td>FindById (allocated)</td>
+              <td class="highlight-col"><strong>6.46 KB</strong></td>
+              <td>45.65 KB</td>
+              <td>9.33 KB</td>
+            </tr>
+            <tr>
+              <td>Scan 1000 docs (latency)</td>
+              <td class="highlight-col"><strong>2,115 μs</strong></td>
+              <td>7,001 μs <span class="badge-bad">3.3x slower</span></td>
+              <td>6,156 μs <span class="badge-bad">2.9x slower</span></td>
+            </tr>
+            <tr>
+              <td>Scan 1000 docs (allocated)</td>
+              <td class="highlight-col"><strong>5,090 KB</strong></td>
+              <td>17,295 KB <span class="badge-bad">3.4x more</span></td>
+              <td>7,803 KB</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="font-size:0.85rem; color: var(--text-muted);">† SQLite reports minimal managed allocations — native C library memory is excluded from BenchmarkDotNet measurement. BLite is 100% managed; all allocations are captured. Full details: <router-link to="/docs/benchmarks">Benchmarks page</router-link>.</p>
+    </section>
+
+    <section>
       <h2>What Makes BLite Unique</h2>
       <div class="highlights">
         <div class="highlight">
