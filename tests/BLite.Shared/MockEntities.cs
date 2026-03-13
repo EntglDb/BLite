@@ -371,6 +371,18 @@ namespace BLite.Shared
         public DateTime CreatedAt { get; init; }
     }
 
+    /// <summary>
+    /// Entity with an init-only Id setter and nullable value-type properties.
+    /// Reproduces the bug where nullable properties were deserialized as 0 instead of null.
+    /// </summary>
+    public class EntityWithInitIdAndNullables
+    {
+        public ObjectId Id { get; init; }
+        public string Name { get; set; } = "";
+        public int? Age { get; set; }
+        public decimal? Weight { get; set; }
+    }
+
     // ========================================
     // Circular Reference Test Entities
     // ========================================

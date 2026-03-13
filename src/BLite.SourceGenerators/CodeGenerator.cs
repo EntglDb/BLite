@@ -491,12 +491,20 @@ namespace BLite.SourceGenerators
                     else if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
                     {
                         // Use Expression Tree setter (for private or init-only setters)
-                        sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue} ?? default!);");
+                        // For nullable properties, preserve null rather than coercing to default(T)
+                        if (prop.IsNullable)
+                            sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue});");
+                        else
+                            sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue} ?? default!);");
                     }
                     else
                     {
                         // Direct property assignment
-                        sb.AppendLine($"            entity.{prop.Name} = {propValue} ?? default!;");
+                        // For nullable properties, preserve null rather than coercing to default(T)
+                        if (prop.IsNullable)
+                            sb.AppendLine($"            entity.{prop.Name} = {propValue};");
+                        else
+                            sb.AppendLine($"            entity.{prop.Name} = {propValue} ?? default!;");
                     }
                 }
                 sb.AppendLine();

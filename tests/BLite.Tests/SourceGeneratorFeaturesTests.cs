@@ -523,6 +523,30 @@ public class SourceGeneratorFeaturesTests : IDisposable
         Assert.Contains(results, e => e.Name == "Gamma");
     }
 
+    [Fact]
+    public void EntityWithInitIdAndNullables_NullProperties_RoundTrip()
+    {
+        // Regression test: entities with an init-only Id and nullable value-type properties
+        // must deserialize null as null, not as the default value (0).
+        var withNulls = new EntityWithInitIdAndNullables { Id = ObjectId.NewObjectId(), Name = "Alice" };
+        var withValues = new EntityWithInitIdAndNullables { Id = ObjectId.NewObjectId(), Name = "Bob", Age = 30, Weight = 70.5m };
+
+        var idAlice = _db.InitIdNullableEntities.Insert(withNulls);
+        var idBob = _db.InitIdNullableEntities.Insert(withValues);
+        _db.SaveChanges();
+
+        var alice = _db.InitIdNullableEntities.FindById(idAlice);
+        var bob = _db.InitIdNullableEntities.FindById(idBob);
+
+        Assert.NotNull(alice);
+        Assert.Null(alice.Age);
+        Assert.Null(alice.Weight);
+
+        Assert.NotNull(bob);
+        Assert.Equal(30, bob.Age);
+        Assert.Equal(70.5m, bob.Weight);
+    }
+
     #endregion
 
     #region DDD Private Backing Field Tests
