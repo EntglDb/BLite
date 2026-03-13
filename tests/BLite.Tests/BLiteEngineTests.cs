@@ -339,6 +339,68 @@ public class BLiteEngineTests : IDisposable
         Assert.Equal(0, count);
     }
 
+    /// <summary>
+    /// Replicates the exact server-side transaction flow used by BLite.Server's TransactionManager:
+    ///   1. BeginTransactionAsync (explicit begin, like TransactionManager.BeginAsync)
+    ///   2. DynamicCollection.InsertAsync (like DynamicServiceImpl.Insert with a transaction_id)
+    ///   3. engine.Rollback (like RollbackCoreAsync)
+    ///   4. FindByIdAsync must return null
+    /// </summary>
+    [Fact]
+    public async Task Rollback_Async_ServerPattern_Discards_Insert()
+    {
+        var col = _engine.GetOrCreateCollection("txn_server_pattern");
+
+        // Step 1: explicit begin (mirrors TransactionManager.BeginAsync)
+        await _engine.BeginTransactionAsync();
+
+        // Step 2: insert via DynamicCollection.InsertAsync (mirrors session.Engine.GetOrCreateCollection.InsertAsync)
+        var doc = col.CreateDocument(["name", "committed"], b => b
+            .AddString("name", "TxnGhost")
+            .AddBoolean("committed", false));
+        var id = await col.InsertAsync(doc);
+
+        // Sanity: document should be visible within the transaction
+        var duringTxn = await col.FindByIdAsync(id);
+        Assert.NotNull(duringTxn);
+
+        // Step 3: rollback (mirrors RollbackCoreAsync → engine.Rollback())
+        _engine.Rollback();
+
+        // Step 4: document must not be visible after rollback
+        var afterRollback = await col.FindByIdAsync(id);
+        Assert.Null(afterRollback);
+
+        // Also verify via Count
+        Assert.Equal(0, col.Count());
+    }
+
+    /// <summary>
+    /// Verifies that a committed transaction remains visible after a subsequent rollback on a different transaction.
+    /// </summary>
+    [Fact]
+    public async Task Rollback_Async_Does_Not_Affect_Committed_Data()
+    {
+        var col = _engine.GetOrCreateCollection("txn_committed_vs_rolled");
+
+        // Commit one document
+        await _engine.BeginTransactionAsync();
+        var docA = col.CreateDocument(["name"], b => b.AddString("name", "Committed"));
+        var idA  = await col.InsertAsync(docA);
+        await _engine.CommitAsync();
+
+        // Rollback a second document
+        await _engine.BeginTransactionAsync();
+        var docB = col.CreateDocument(["name"], b => b.AddString("name", "WillRollback"));
+        await col.InsertAsync(docB);
+        _engine.Rollback();
+
+        // Only the committed document must be visible
+        var found = await col.FindByIdAsync(idA);
+        Assert.NotNull(found);
+        Assert.Equal(1, col.Count());
+    }
+
     #endregion
 
     #region Convenience CRUD (BLiteEngine shortcuts)
