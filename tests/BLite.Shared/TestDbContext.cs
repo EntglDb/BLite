@@ -43,6 +43,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, EntityWithAdvancedCollections> AdvancedCollectionEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithPrivateSetters> PrivateSetterEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithInitSetters> InitSetterEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithInitIdAndNullables> InitIdNullableEntities { get; set; } = null!;
     
     // Circular Reference Tests
     public DocumentCollection<ObjectId, Employee> Employees { get; set; } = null!;
@@ -120,6 +121,7 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<EntityWithAdvancedCollections>().ToCollection("advanced_collection_entities");
         modelBuilder.Entity<EntityWithPrivateSetters>().ToCollection("private_setter_entities");
         modelBuilder.Entity<EntityWithInitSetters>().ToCollection("init_setter_entities");
+        modelBuilder.Entity<EntityWithInitIdAndNullables>().ToCollection("init_id_nullable_entities");
         
         // Circular Reference Tests
         modelBuilder.Entity<Employee>().ToCollection("employees");
