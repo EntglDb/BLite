@@ -1,0 +1,85 @@
+name: Bug Report
+description: Report a bug in BLite, BLite.Core, or BLite.Bson
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill in as much detail as possible.
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Which NuGet package version are you using? (e.g. `1.2.3`)
+      placeholder: "e.g. 1.2.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Affected package
+      description: Which package does the bug affect?
+      options:
+        - BLite (client SDK)
+        - BLite.Core (storage engine)
+        - BLite.Bson (BSON library)
+        - Multiple / unsure
+    validations:
+      required: true
+
+  - type: input
+    id: dotnet
+    attributes:
+      label: .NET version
+      description: Output of `dotnet --version`
+      placeholder: "e.g. 10.0.100"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Provide the **smallest possible** self-contained code snippet that reproduces the issue.
+        Wrap code in triple backticks with the language tag (e.g. ```csharp ... ```).
+      placeholder: |
+        ```csharp
+        // paste your minimal repro here
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include any exception message and stack trace.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Any other information that might help (OS, architecture, database file size, etc.)
+    validations:
+      required: false

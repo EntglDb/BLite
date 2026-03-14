@@ -1,0 +1,148 @@
+name: Issue Pre-check
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  precheck:
+    # Only run on real issues, not PRs converted to issues
+    if: github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate and label issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body  = context.payload.issue.body ?? '';
+            const labels = [];
+            const problems = [];
+
+            // ── Helpers ────────────────────────────────────────────────────────
+
+            /** Extract the content of a ### Section from the issue body. */
+            function section(heading) {
+              const re = new RegExp(
+                `###\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n([\\s\\S]*?)(?=\\n###|$)`,
+                'i'
+              );
+              const m = body.match(re);
+              return m ? m[1].trim() : '';
+            }
+
+            const PLACEHOLDER_RE = [
+              /^e\.g\./i,
+              /\/\/\s*paste your minimal repro here/i,
+              /paste your minimal repro here/i,
+            ];
+            function isPlaceholder(text) {
+              return PLACEHOLDER_RE.some(re => re.test(text));
+            }
+
+            // ── Only validate bug reports (they have a "Minimal reproduction" section) ──
+            const isBugReport = body.includes('### Minimal reproduction');
+            if (!isBugReport) {
+              // Feature requests get a simple triage label and a thank-you
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: context.issue.number,
+                labels: ['triage'],
+              });
+              return;
+            }
+
+            // ── Field checks ───────────────────────────────────────────────────
+
+            const version = section('Package version');
+            if (!version || isPlaceholder(version)) {
+              problems.push('**Package version** — missing or still contains the placeholder (e.g. `1.2.3`).');
+            }
+
+            const dotnet = section('.NET version');
+            if (!dotnet || isPlaceholder(dotnet)) {
+              problems.push('**\\.NET version** — missing or still contains the placeholder.');
+            }
+
+            const description = section('Description');
+            if (!description || description.length < 15) {
+              problems.push('**Description** — too short or missing.');
+            }
+
+            const repro = section('Minimal reproduction');
+            if (!repro || repro.length < 30 || isPlaceholder(repro)) {
+              problems.push('**Minimal reproduction** — missing or appears to be just the placeholder comment. Please provide a small, self-contained code snippet.');
+            }
+
+            const expected = section('Expected behavior');
+            if (!expected || expected.length < 10) {
+              problems.push('**Expected behavior** — missing or too short.');
+            }
+
+            const actual = section('Actual behavior');
+            if (!actual || actual.length < 10) {
+              problems.push('**Actual behavior** — missing or too short.');
+            }
+
+            // ── Auto-label by Affected package ─────────────────────────────────
+            const pkg = section('Affected package').toLowerCase();
+            if      (pkg.includes('core'))    labels.push('package/core');
+            else if (pkg.includes('bson'))    labels.push('package/bson');
+            else if (pkg.includes('client'))  labels.push('package/client');
+
+            // ── Status label ───────────────────────────────────────────────────
+            labels.push(problems.length > 0 ? 'incomplete' : 'triage');
+
+            // ── Create labels (best-effort, ignore if they already exist) ──────
+            const labelDefs = {
+              'incomplete':    { color: 'e11d48', description: 'Issue is missing required information' },
+              'triage':        { color: '0ea5e9', description: 'Needs triage by a maintainer' },
+              'package/core':  { color: '7c3aed', description: 'Affects BLite.Core' },
+              'package/bson':  { color: '7c3aed', description: 'Affects BLite.Bson' },
+              'package/client':{ color: '7c3aed', description: 'Affects BLite client SDK' },
+            };
+            for (const label of labels) {
+              if (labelDefs[label]) {
+                try {
+                  await github.rest.issues.createLabel({
+                    ...context.repo,
+                    name: label,
+                    ...labelDefs[label],
+                  });
+                } catch (_) { /* already exists */ }
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: context.issue.number,
+              labels,
+            });
+
+            // ── Comment ────────────────────────────────────────────────────────
+            if (problems.length > 0) {
+              const list = problems.map(p => `- ${p}`).join('\n');
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body: [
+                  ':wave: Thanks for opening this issue!',
+                  '',
+                  'It looks like some required information is missing or incomplete:',
+                  '',
+                  list,
+                  '',
+                  'Please **edit the issue** and fill in all the missing sections.',
+                  'We will start the investigation once the issue is complete.',
+                ].join('\n'),
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body: ':wave: Thanks for the well-formed bug report! It has been added to the triage queue.',
+              });
+            }
