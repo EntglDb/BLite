@@ -303,7 +303,10 @@ public sealed class BsonDocumentBuilder
 
     public BsonDocumentBuilder AddString(string name, string value)
     {
-        EnsureCapacity(256);
+        // 3 = element header (type byte + 2-byte key id)
+        // 4 = int32 string length prefix
+        // 1 = null terminator
+        EnsureCapacity(3 + 4 + System.Text.Encoding.UTF8.GetByteCount(value) + 1);
         var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
         writer.WriteString(name, value);
         _position += writer.Position;
