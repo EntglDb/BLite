@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.6.6"></a>
+## [3.6.6](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.6) (2026-03-15)
+
+### Bug Fixes
+
+* AddString EnsureCapacity uses actual UTF-8 byte count ([b5c55be](https://www.github.com/EntglDb/BLite/commit/b5c55bea0120ea77b65087a53b24326dbd8890e4))
+
 <a name="3.6.5"></a>
 ## [3.6.5](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.5) (2026-03-14)
 
