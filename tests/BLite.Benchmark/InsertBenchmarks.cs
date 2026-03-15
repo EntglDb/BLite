@@ -3,6 +3,7 @@ using BenchmarkDotNet.Configs;
 using BLite.Bson;
 using BLite.Shared;
 using BLite.Tests;
+using Couchbase.Lite;
 using Dapper;
 using LiteDB;
 using Microsoft.Data.Sqlite;
@@ -24,9 +25,12 @@ public class InsertBenchmarks
     private string _sqlitePath = "";
     private string _sqliteConnString = "";
     private string _litePath = "";
+    private string _cblDir = "";
 
-    private TestDbContext?  _ctx    = null;
-    private LiteDatabase?  _liteDb = null;
+    private TestDbContext?          _ctx    = null;
+    private LiteDatabase?           _liteDb = null;
+    private Database?               _cblDb  = null;
+    private Couchbase.Lite.Collection? _cblCol = null;
 
     private CustomerOrder[]  _batchData   = Array.Empty<CustomerOrder>();
     private CustomerOrder?   _singleOrder = null;
@@ -40,6 +44,9 @@ public class InsertBenchmarks
         _sqlitePath        = Path.Combine(temp, $"bench_sqlite_{id}.db");
         _sqliteConnString  = $"Data Source={_sqlitePath}";
         _litePath          = Path.Combine(temp, $"bench_lite_{id}.db");
+        _cblDir            = Path.Combine(temp, $"bench_cbl_{id}");
+
+        Couchbase.Lite.Logging.LogSinks.Console = null;
 
         _singleOrder = BenchmarkDataFactory.CreateOrder(0);
         _batchData   = Enumerable.Range(0, BatchSize)
@@ -60,6 +67,11 @@ public class InsertBenchmarks
 
         if (File.Exists(_litePath)) File.Delete(_litePath);
         _liteDb = new LiteDatabase($"Filename={_litePath};Connection=direct");
+
+        if (Directory.Exists(_cblDir)) Directory.Delete(_cblDir, true);
+        Directory.CreateDirectory(_cblDir);
+        _cblDb  = new Database("bench", new DatabaseConfiguration { Directory = _cblDir });
+        _cblCol = _cblDb.GetDefaultCollection();
     }
 
     [IterationCleanup]
@@ -69,11 +81,18 @@ public class InsertBenchmarks
         {
             _ctx?.Dispose();
             _liteDb?.Dispose();
+            _cblCol = null!;
+            _cblDb?.Dispose();
             SqliteConnection.ClearAllPools();
-            System.Threading.Thread.Sleep(50);
+            System.Threading.Thread.Sleep(200);
             if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
             if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
             if (File.Exists(_litePath))   File.Delete(_litePath);
+            for (int i = 0; i < 5 && Directory.Exists(_cblDir); i++)
+            {
+                try   { Directory.Delete(_cblDir, true); }
+                catch { System.Threading.Thread.Sleep(100 * (i + 1)); }
+            }
         }
         catch (Exception ex) { Console.WriteLine($"Cleanup warning: {ex.Message}"); }
     }
@@ -119,5 +138,31 @@ public class InsertBenchmarks
             conn.Execute("INSERT INTO Orders (Id, Data) VALUES (@Id, @Data)",
                 new { o.Id, Data = System.Text.Json.JsonSerializer.Serialize(o) }, transaction: txn);
         txn.Commit();
+    }
+
+    // ──── CouchbaseLite ─────────────────────────────────────────────
+
+    [Benchmark(Description = "CouchbaseLite – Single Insert")]
+    [BenchmarkCategory("Insert_Single")]
+    public void CBL_Insert_Single()
+    {
+        var doc = new MutableDocument(_singleOrder!.Id);
+        doc.SetJSON(System.Text.Json.JsonSerializer.Serialize(_singleOrder));
+        _cblCol!.Save(doc);
+    }
+
+    [Benchmark(Description = "CouchbaseLite – Batch Insert (1000)")]
+    [BenchmarkCategory("Insert_Batch")]
+    public void CBL_Insert_Batch()
+    {
+        _cblDb!.InBatch(() =>
+        {
+            foreach (var o in _batchData)
+            {
+                var doc = new MutableDocument(o.Id);
+                doc.SetJSON(System.Text.Json.JsonSerializer.Serialize(o));
+                _cblCol!.Save(doc);
+            }
+        });
     }
 }

@@ -18,7 +18,7 @@ public class ManualBenchmark
     public static void Run()
     {
         _log.Clear();
-        Log("=== MANUAL BENCHMARK: BLite vs LiteDB vs SQLite+JSON ===");
+        Log("=== MANUAL BENCHMARK: BLite vs LiteDB vs SQLite+JSON vs CouchbaseLite ===");
         Log($"Date: {DateTime.Now}");
         Log("Document: CustomerOrder (nested objects + collections)\n");
 
@@ -39,9 +39,13 @@ public class ManualBenchmark
 
         var b3 = new InsertBenchmarks(); b3.Setup(); b3.IterationSetup();
         var sqliteBatch = Measure(b3.Sqlite_Insert_Batch);
-        Log($"   SQLite+JSON:  {sqliteBatch} ms\n");
+        Log($"   SQLite+JSON:  {sqliteBatch} ms");
 
-        b1.Cleanup(); b2.Cleanup(); b3.Cleanup();
+        var b4 = new InsertBenchmarks(); b4.Setup(); b4.IterationSetup();
+        var cblBatch = Measure(b4.CBL_Insert_Batch);
+        Log($"   CouchbaseLite:{cblBatch} ms\n");
+
+        b1.Cleanup(); b2.Cleanup(); b3.Cleanup(); b4.Cleanup();
 
         // ── Single Insert ───────────────────────────────────────────
         Log("2. Single Insert");
@@ -56,9 +60,13 @@ public class ManualBenchmark
 
         var s3 = new InsertBenchmarks(); s3.Setup(); s3.IterationSetup();
         var sqliteSingle = Measure(s3.Sqlite_Insert_Single);
-        Log($"   SQLite+JSON:  {sqliteSingle} ms\n");
+        Log($"   SQLite+JSON:  {sqliteSingle} ms");
 
-        s1.Cleanup(); s2.Cleanup(); s3.Cleanup();
+        var s4 = new InsertBenchmarks(); s4.Setup(); s4.IterationSetup();
+        var cblSingle = Measure(s4.CBL_Insert_Single);
+        Log($"   CouchbaseLite:{cblSingle} ms\n");
+
+        s1.Cleanup(); s2.Cleanup(); s3.Cleanup(); s4.Cleanup();
 
         // ── FindById (1000 ops) ─────────────────────────────────────
         Log("3. FindById Performance (1000 operations over 1000 documents)");
@@ -78,7 +86,12 @@ public class ManualBenchmark
         sw.Restart();
         for (int i = 0; i < 1000; i++) r.Sqlite_FindById();
         var sqliteRead = sw.ElapsedMilliseconds;
-        Log($"   SQLite+JSON:  {sqliteRead} ms  ({sqliteRead / 1000.0:F3} ms/op)\n");
+        Log($"   SQLite+JSON:  {sqliteRead} ms  ({sqliteRead / 1000.0:F3} ms/op)");
+
+        sw.Restart();
+        for (int i = 0; i < 1000; i++) r.CBL_FindById();
+        var cblRead = sw.ElapsedMilliseconds;
+        Log($"   CouchbaseLite:{cblRead} ms  ({cblRead / 1000.0:F3} ms/op)\n");
 
         // ── Scan by Status (100 ops) ────────────────────────────────
         Log("4. Scan by Status = \"shipped\" (~250 results, 100 operations)");
@@ -96,7 +109,12 @@ public class ManualBenchmark
         sw.Restart();
         for (int i = 0; i < 100; i++) r.Sqlite_Scan();
         var sqliteScan = sw.ElapsedMilliseconds;
-        Log($"   SQLite+JSON:  {sqliteScan} ms  ({sqliteScan / 100.0:F1} ms/op)\n");
+        Log($"   SQLite+JSON:  {sqliteScan} ms  ({sqliteScan / 100.0:F1} ms/op)");
+
+        sw.Restart();
+        for (int i = 0; i < 100; i++) r.CBL_Scan();
+        var cblScan = sw.ElapsedMilliseconds;
+        Log($"   CouchbaseLite:{cblScan} ms  ({cblScan / 100.0:F1} ms/op)\n");
 
         r.Cleanup();
 
@@ -104,12 +122,12 @@ public class ManualBenchmark
         Log("============================================================================");
         Log("RESULTS SUMMARY");
         Log("============================================================================");
-        Log($"  {"Operation",-30} {"BLite",10} {"LiteDB",10} {"SQLite+JSON",14}");
-        Log($"  {new string('-', 68)}");
-        Log($"  {"Batch Insert 1000",-30} {bliteBatch,8} ms {liteBatch,8} ms {sqliteBatch,12} ms");
-        Log($"  {"Single Insert",-30} {bliteSingle,8} ms {liteSingle,8} ms {sqliteSingle,12} ms");
-        Log($"  {"FindById (avg, 1000x)",-30} {bliteRead / 1000.0,9:F3} {liteRead / 1000.0,9:F3} {sqliteRead / 1000.0,12:F3} ms");
-        Log($"  {"Scan Status (avg, 100x)",-30} {bliteScan / 100.0,9:F1} {liteScan / 100.0,9:F1} {sqliteScan / 100.0,12:F1} ms");
+        Log($"  {"Operation",-30} {"BLite",10} {"LiteDB",10} {"SQLite+JSON",14} {"CouchbaseLite",15}");
+        Log($"  {new string('-', 83)}");
+        Log($"  {"Batch Insert 1000",-30} {bliteBatch,8} ms {liteBatch,8} ms {sqliteBatch,12} ms {cblBatch,13} ms");
+        Log($"  {"Single Insert",-30} {bliteSingle,8} ms {liteSingle,8} ms {sqliteSingle,12} ms {cblSingle,13} ms");
+        Log($"  {"FindById (avg, 1000x)",-30} {bliteRead / 1000.0,9:F3} {liteRead / 1000.0,9:F3} {sqliteRead / 1000.0,12:F3} {cblRead / 1000.0,13:F3} ms");
+        Log($"  {"Scan Status (avg, 100x)",-30} {bliteScan / 100.0,9:F1} {liteScan / 100.0,9:F1} {sqliteScan / 100.0,12:F1} {cblScan / 100.0,13:F1} ms");
         Log("============================================================================");
 
         var artifactsDir = Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts", "results");

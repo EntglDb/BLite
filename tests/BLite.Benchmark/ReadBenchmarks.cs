@@ -2,6 +2,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BLite.Shared;
 using BLite.Tests;
+using Couchbase.Lite;
 using Dapper;
 using LiteDB;
 using Microsoft.Data.Sqlite;
@@ -25,9 +26,12 @@ public class ReadBenchmarks
     private string _sqlitePath = null!;
     private string _sqliteConnString = null!;
     private string _litePath = null!;
+    private string _cblDir = null!;
 
     private TestDbContext _ctx    = null!;
     private LiteDatabase  _liteDb = null!;
+    private Database      _cblDb  = null!;
+    private Couchbase.Lite.Collection _cblCol = null!;
 
     private string _targetId = null!;
 
@@ -40,9 +44,13 @@ public class ReadBenchmarks
         _sqlitePath       = Path.Combine(temp, $"bench_read_sqlite_{id}.db");
         _sqliteConnString = $"Data Source={_sqlitePath}";
         _litePath         = Path.Combine(temp, $"bench_read_lite_{id}.db");
+        _cblDir           = Path.Combine(temp, $"bench_read_cbl_{id}");
+
+        Couchbase.Lite.Logging.LogSinks.Console = null;
 
         foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath })
             if (File.Exists(p)) File.Delete(p);
+        if (Directory.Exists(_cblDir)) Directory.Delete(_cblDir, true);
 
         var orders = Enumerable.Range(0, DocCount)
                                .Select(BenchmarkDataFactory.CreateOrder)
@@ -67,6 +75,20 @@ public class ReadBenchmarks
         var col = _liteDb.GetCollection<CustomerOrder>("orders");
         col.InsertBulk(orders);
 
+        // 4. CouchbaseLite
+        Directory.CreateDirectory(_cblDir);
+        _cblDb  = new Database("bench", new DatabaseConfiguration { Directory = _cblDir });
+        _cblCol = _cblDb.GetDefaultCollection();
+        _cblDb.InBatch(() =>
+        {
+            foreach (var o in orders)
+            {
+                var doc = new MutableDocument(o.Id);
+                doc.SetJSON(System.Text.Json.JsonSerializer.Serialize(o));
+                _cblCol.Save(doc);
+            }
+        });
+
         // Middle document as lookup target
         _targetId = orders[DocCount / 2].Id;
     }
@@ -76,9 +98,17 @@ public class ReadBenchmarks
     {
         _ctx?.Dispose();
         _liteDb?.Dispose();
+        _cblCol = null!;
+        _cblDb?.Dispose();
         SqliteConnection.ClearAllPools();
+        System.Threading.Thread.Sleep(200);
         foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath })
             if (File.Exists(p)) File.Delete(p);
+        for (int i = 0; i < 5 && Directory.Exists(_cblDir); i++)
+        {
+            try   { Directory.Delete(_cblDir, true); }
+            catch { System.Threading.Thread.Sleep(100 * (i + 1)); }
+        }
     }
 
     // ──── FindById (primary key lookup) ──────────────────────────────
@@ -126,5 +156,28 @@ public class ReadBenchmarks
                    .Select(json => System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(json)!)
                    .Where(o => o.Status == ScanStatus)
                    .ToList();
+    }
+
+    // ──── CouchbaseLite ─────────────────────────────────────────────
+
+    [Benchmark(Description = "CouchbaseLite – FindById")]
+    [BenchmarkCategory("FindById")]
+    public CustomerOrder? CBL_FindById()
+    {
+        var doc = _cblCol.GetDocument(_targetId);
+        return doc is null ? null : System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(doc.ToJSON()!);
+    }
+
+    [Benchmark(Description = "CouchbaseLite – Scan by Status")]
+    [BenchmarkCategory("Scan")]
+    public List<CustomerOrder> CBL_Scan()
+    {
+        using var query  = _cblDb.CreateQuery(
+            $"SELECT * FROM _ WHERE Status = '{ScanStatus}'");
+        using var result = query.Execute();
+        return result.AllResults()
+                     .Select(r => System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(
+                                      r.GetDictionary(0)!.ToJSON()!)!)
+                     .ToList();
     }
 }
