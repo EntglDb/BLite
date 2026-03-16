@@ -237,6 +237,13 @@ public readonly struct BLiteDiagnostic
             {
                 if (entity == null) return;
 
+                // Emit diagnostics collected during analysis
+                foreach (var diag in entity.Diagnostics)
+                {
+                    var descriptor = diag.IsError ? DiagError : DiagWarning;
+                    spc.ReportDiagnostic(Diagnostic.Create(descriptor, Location.None, diag.Message));
+                }
+
                 var mapperNamespace = string.IsNullOrEmpty(entity.Namespace)
                     ? "Mappers"
                     : $"{entity.Namespace}.Mappers";
@@ -416,7 +423,7 @@ public readonly struct BLiteDiagnostic
                         EntityInfo entityInfo;
                         try
                         {
-                            entityInfo = EntityAnalyzer.Analyze(entityType, semanticModel);
+                            entityInfo = EntityAnalyzer.Analyze(entityType, semanticModel, info.Diagnostics);
                         }
                         catch (System.Exception ex)
                         {
@@ -548,7 +555,7 @@ public readonly struct BLiteDiagnostic
                                 EntityInfo discoveredEntity;
                                 try
                                 {
-                                    discoveredEntity = EntityAnalyzer.Analyze(namedEntityType, semanticModel);
+                                    discoveredEntity = EntityAnalyzer.Analyze(namedEntityType, semanticModel, info.Diagnostics);
                                 }
                                 catch (System.Exception ex)
                                 {
@@ -604,7 +611,9 @@ public readonly struct BLiteDiagnostic
             var attr = AttributeHelper.GetAttribute(classSymbol, "DocumentMapper");
             if (attr == null) return null;
 
-            var entity = EntityAnalyzer.Analyze(classSymbol, semanticModel);
+            var directDiagnostics = new System.Collections.Generic.List<BLiteDiagnostic>();
+            var entity = EntityAnalyzer.Analyze(classSymbol, semanticModel, directDiagnostics);
+            entity.Diagnostics.AddRange(directDiagnostics);
 
             // Override collection name from attribute constructor argument if provided
             if (attr.ConstructorArguments.Length > 0 &&

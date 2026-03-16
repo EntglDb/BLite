@@ -9,7 +9,7 @@ namespace BLite.SourceGenerators
 {
     public static class EntityAnalyzer
     {
-        public static EntityInfo Analyze(INamedTypeSymbol entityType, SemanticModel semanticModel)
+        public static EntityInfo Analyze(INamedTypeSymbol entityType, SemanticModel semanticModel, List<BLiteDiagnostic>? diagnostics = null)
         {
             var entityInfo = new EntityInfo
             {
@@ -49,7 +49,7 @@ namespace BLite.SourceGenerators
             // Analyze nested types recursively
             // We use a dictionary for nested types to ensure uniqueness by name
             var analyzedTypes = new HashSet<string>();
-            AnalyzeNestedTypesRecursive(entityInfo.Properties, entityInfo.NestedTypes, semanticModel, analyzedTypes, 1, 3);
+            AnalyzeNestedTypesRecursive(entityInfo.Properties, entityInfo.NestedTypes, semanticModel, analyzedTypes, 1, 20, diagnostics);
             
             // Determine ID property
             // entityInfo.IdProperty is computed from Properties.FirstOrDefault(p => p.IsKey)
@@ -224,7 +224,8 @@ namespace BLite.SourceGenerators
             SemanticModel semanticModel,
             HashSet<string> analyzedTypes,
             int currentDepth,
-            int maxDepth)
+            int maxDepth,
+            List<BLiteDiagnostic>? diagnostics = null)
         {
              if (currentDepth > maxDepth) return;
 
@@ -257,7 +258,15 @@ namespace BLite.SourceGenerators
                      // For now, let's assume GetTypeByMetadataName works for fully qualified names.
                  }
 
-                 if (nestedTypeSymbol == null) continue;
+                 if (nestedTypeSymbol == null)
+                 {
+                     diagnostics?.Add(new BLiteDiagnostic(
+                         "BLITE001",
+                         $"BLite mapper generator: could not resolve nested type '{fullTypeName}' (referenced at depth {currentDepth}). " +
+                         $"Ensure the assembly containing this type is referenced. No mapper will be generated for it.",
+                         isError: true));
+                     continue;
+                 }
 
                  analyzedTypes.Add(fullTypeName);
 
@@ -281,7 +290,7 @@ namespace BLite.SourceGenerators
                  targetNestedTypes[fullTypeName] = nestedInfo;
 
                  // Recurse
-                 AnalyzeNestedTypesRecursive(nestedInfo.Properties, nestedInfo.NestedTypes, semanticModel, analyzedTypes, currentDepth + 1, maxDepth);
+                 AnalyzeNestedTypesRecursive(nestedInfo.Properties, nestedInfo.NestedTypes, semanticModel, analyzedTypes, currentDepth + 1, maxDepth, diagnostics);
              }
         }
     }

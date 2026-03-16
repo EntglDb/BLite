@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using BLite.SourceGenerators;
 
 namespace BLite.SourceGenerators.Models
 {
@@ -34,6 +35,7 @@ namespace BLite.SourceGenerators.Models
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();
         public HashSet<string> IgnoredProperties { get; } = new HashSet<string>();
+        public List<BLiteDiagnostic> Diagnostics { get; } = new List<BLiteDiagnostic>();
     }
 
     public class PropertyInfo
