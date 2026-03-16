@@ -1,4 +1,3 @@
-using BLite.Bson;
 using System.IO;
 using ModuleA = BLite.Shared.ModuleA;
 using ModuleB = BLite.Shared.ModuleB;

@@ -243,6 +243,13 @@ public readonly struct BLiteDiagnostic
             {
                 if (entity == null) return;
 
+                // Emit diagnostics collected during analysis
+                foreach (var diag in entity.Diagnostics)
+                {
+                    var descriptor = diag.IsError ? DiagError : DiagWarning;
+                    spc.ReportDiagnostic(Diagnostic.Create(descriptor, Location.None, diag.Message));
+                }
+
                 var mapperNamespace = string.IsNullOrEmpty(entity.Namespace)
                     ? "Mappers"
                     : $"{entity.Namespace}.Mappers";
@@ -338,11 +345,11 @@ public readonly struct BLiteDiagnostic
         
         private static bool IsPotentialDbContext(SyntaxNode node)
         {
-            if (node.SyntaxTree.FilePath.EndsWith(".g.cs")) return false;
+            if (node.SyntaxTree.FilePath.EndsWith(BLiteConventions.GeneratedFileSuffix)) return false;
 
             return node is ClassDeclarationSyntax classDecl &&
                    classDecl.BaseList != null && 
-                   classDecl.Identifier.Text.EndsWith("Context");
+                   classDecl.Identifier.Text.EndsWith(BLiteConventions.DbContextClassSuffix);
         }
         
         private static DbContextInfo? GetDbContextInfo(GeneratorSyntaxContext context)
@@ -353,14 +360,14 @@ public readonly struct BLiteDiagnostic
             var classSymbol = semanticModel.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
             if (classSymbol == null) return null;
             
-            if (!SyntaxHelper.InheritsFrom(classSymbol, "DocumentDbContext"))
+            if (!SyntaxHelper.InheritsFrom(classSymbol, BLiteConventions.DocumentDbContextBaseName))
                 return null;
             
             // Check if this context inherits from another DbContext (not DocumentDbContext directly)
             var baseType = classSymbol.BaseType;
             bool hasBaseDbContext = baseType != null && 
-                                    baseType.Name != "DocumentDbContext" && 
-                                    SyntaxHelper.InheritsFrom(baseType, "DocumentDbContext");
+                                    baseType.Name != BLiteConventions.DocumentDbContextBaseName && 
+                                    SyntaxHelper.InheritsFrom(baseType, BLiteConventions.DocumentDbContextBaseName);
             
             var info = new DbContextInfo
             {
@@ -384,11 +391,11 @@ public readonly struct BLiteDiagnostic
             // Analyze OnModelCreating to find entities
             var onModelCreating = classDecl.Members
                 .OfType<MethodDeclarationSyntax>()
-                .FirstOrDefault(m => m.Identifier.Text == "OnModelCreating");
+                .FirstOrDefault(m => m.Identifier.Text == BLiteConventions.OnModelCreatingMethodName);
                 
             if (onModelCreating != null)
             {
-                var entityCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "Entity");
+                var entityCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, BLiteConventions.EntityMethodName);
                 foreach (var call in entityCalls)
                 {
                     // Resolve directly from the type argument syntax node via semantic model.
@@ -422,7 +429,7 @@ public readonly struct BLiteDiagnostic
                         EntityInfo entityInfo;
                         try
                         {
-                            entityInfo = EntityAnalyzer.Analyze(entityType, semanticModel);
+                            entityInfo = EntityAnalyzer.Analyze(entityType, semanticModel, info.Diagnostics);
                         }
                         catch (System.Exception ex)
                         {
@@ -464,14 +471,14 @@ public readonly struct BLiteDiagnostic
                 var toCollectionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "ToCollection");
                 foreach (var call in toCollectionCalls)
                 {
-                    // Extract the collection name string argument
+                    // Extract the collection name string argument — accept literals and compile-time constants.
                     if (call.ArgumentList.Arguments.Count == 0) continue;
                     var nameArgExpr = call.ArgumentList.Arguments[0].Expression;
                     string? collectionName = null;
-                    if (nameArgExpr is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal &&
-                        literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+                    var constantValue = semanticModel.GetConstantValue(nameArgExpr);
+                    if (constantValue.HasValue && constantValue.Value is string constStr)
                     {
-                        collectionName = literal.Token.ValueText;
+                        collectionName = constStr;
                     }
                     if (string.IsNullOrEmpty(collectionName)) continue;
 
@@ -502,32 +509,12 @@ public readonly struct BLiteDiagnostic
                 }
             }
 
-            // Detect duplicate CollectionNames within the same DbContext — two entities with the same
-            // CollectionName (from the default class-name-based derivation or an explicit [Table] attribute)
-            // would silently share the same database collection, causing data corruption at runtime.
-            // Emit a build-time error so users can disambiguate via [Table("name")] or
-            // OnModelCreating: modelBuilder.Entity<T>().ToCollection("unique_name").
-            var collectionNameGroups = info.Entities
-                .GroupBy(e => e.CollectionName)
-                .Where(g => g.Count() > 1);
-            foreach (var group in collectionNameGroups)
-            {
-                var typeNames = string.Join(", ", group.Select(e => e.FullTypeName));
-                info.Diagnostics.Add(new BLiteDiagnostic(
-                    "BLITE003",
-                    $"[{info.ClassName}] Multiple entity types map to the same collection name '{group.Key}': {typeNames}. " +
-                    "Duplicate collection names cause data corruption at runtime. " +
-                    "Assign a unique name using the [Table(\"name\")] attribute on the entity class, " +
-                    "or call .ToCollection(\"unique_name\") in OnModelCreating.",
-                    isError: true));
-            }
-
             // Analyze OnModelCreating for HasConversion
             // Pattern: modelBuilder.Entity<T>().Property(x => x.PropertyName).HasConversion<TConverter>()
             // This works for any property, including primary keys (Id)
             if (onModelCreating != null)
             {
-                var conversionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "HasConversion");
+                var conversionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, BLiteConventions.HasConversionMethodName);
                 foreach (var call in conversionCalls)
                 {
                     var converterName = SyntaxHelper.GetGenericTypeArgument(call);
@@ -536,14 +523,14 @@ public readonly struct BLiteDiagnostic
                     // Trace back: .Property(x => x.PropertyName).HasConversion<T>()
                     if (call.Expression is MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax propertyCall } &&
                         propertyCall.Expression is MemberAccessExpressionSyntax { Name: IdentifierNameSyntax { Identifier: { Text: var propertyMethod } } } &&
-                        propertyMethod == "Property")
+                        propertyMethod == BLiteConventions.PropertyMethodName)
                     {
                         var propertyName = SyntaxHelper.GetPropertyName(propertyCall.ArgumentList.Arguments.FirstOrDefault()?.Expression);
                         if (propertyName == null) continue;
 
                         // Trace further back: Entity<T>().Property(...)
                         if (propertyCall.Expression is MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax entityCall } &&
-                            entityCall.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: "Entity" } } })
+                            entityCall.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var entityMethodText } } } && entityMethodText == BLiteConventions.EntityMethodName)
                         {
                             var entityTypeName = SyntaxHelper.GetGenericTypeArgument(entityCall);
                             if (entityTypeName != null)
@@ -572,7 +559,7 @@ public readonly struct BLiteDiagnostic
                                             var converterBaseType = converterType.BaseType;
                                             while (converterBaseType != null)
                                             {
-                                                if (converterBaseType.Name == "ValueConverter" && converterBaseType.TypeArguments.Length == 2)
+                                                if (converterBaseType.Name == BLiteConventions.ValueConverterBaseName && converterBaseType.TypeArguments.Length == BLiteConventions.DocumentCollectionTypeArgCount)
                                                 {
                                                     prop.ProviderTypeName = converterBaseType.TypeArguments[1].Name;
                                                     break;
@@ -593,11 +580,11 @@ public readonly struct BLiteDiagnostic
             foreach (var prop in properties)
             {
                 if (prop.Type is INamedTypeSymbol namedType &&
-                    (namedType.OriginalDefinition.Name == "DocumentCollection" ||
-                     namedType.OriginalDefinition.Name == "IDocumentCollection"))
+                    (namedType.OriginalDefinition.Name == BLiteConventions.DocumentCollectionTypeName ||
+                     namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName))
                 {
                     // Expecting 2 type arguments: TId, TEntity
-                    if (namedType.TypeArguments.Length == 2)
+                    if (namedType.TypeArguments.Length == BLiteConventions.DocumentCollectionTypeArgCount)
                     {
                         var entityType = namedType.TypeArguments[1];
                         var entityInfo = info.Entities.FirstOrDefault(e => e.FullTypeName == entityType.ToDisplayString());
@@ -607,7 +594,7 @@ public readonly struct BLiteDiagnostic
                         {
                             entityInfo.CollectionPropertyName = prop.Name;
                             entityInfo.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                            entityInfo.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                            entityInfo.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName;
                         }
                         else if (entityType is INamedTypeSymbol namedEntityType)
                         {
@@ -620,7 +607,7 @@ public readonly struct BLiteDiagnostic
                                 EntityInfo discoveredEntity;
                                 try
                                 {
-                                    discoveredEntity = EntityAnalyzer.Analyze(namedEntityType, semanticModel);
+                                    discoveredEntity = EntityAnalyzer.Analyze(namedEntityType, semanticModel, info.Diagnostics);
                                 }
                                 catch (System.Exception ex)
                                 {
@@ -642,26 +629,45 @@ public readonly struct BLiteDiagnostic
 
                                 discoveredEntity.CollectionPropertyName = prop.Name;
                                 discoveredEntity.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                                discoveredEntity.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                                discoveredEntity.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName;
                                 info.Entities.Add(discoveredEntity);
                             }
                             else
                             {
                                 existing.CollectionPropertyName = prop.Name;
                                 existing.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                                existing.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                                existing.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName;
                             }
                         }
                     }
                 }
             }
-            
+
+            // Detect duplicate CollectionNames within the same DbContext — performed AFTER property-based
+            // auto-discovery so that all root entities (including those inferred from DocumentCollection
+            // properties) are included in the check.
+            // Collection names are compared case-insensitively to match the core engine's behaviour.
+            var collectionNameGroups = info.Entities
+                .GroupBy(e => e.CollectionName, System.StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1);
+            foreach (var group in collectionNameGroups)
+            {
+                var typeNames = string.Join(", ", group.Select(e => e.FullTypeName));
+                info.Diagnostics.Add(new BLiteDiagnostic(
+                    "BLITE003",
+                    $"[{info.ClassName}] Multiple entity types map to the same collection name '{group.Key}': {typeNames}. " +
+                    "Duplicate collection names cause data corruption at runtime. " +
+                    "Assign a unique name using the [Table(\"name\")] attribute on the entity class, " +
+                    "or call .ToCollection(\"unique_name\") in OnModelCreating.",
+                    isError: true));
+            }
+
             return info;
         }
 
         private static bool IsPotentialDirectMapper(SyntaxNode node)
         {
-            if (node.SyntaxTree.FilePath.EndsWith(".g.cs")) return false;
+            if (node.SyntaxTree.FilePath.EndsWith(BLiteConventions.GeneratedFileSuffix)) return false;
             return node is ClassDeclarationSyntax classDecl && classDecl.AttributeLists.Count > 0;
         }
 
@@ -673,10 +679,12 @@ public readonly struct BLiteDiagnostic
             var classSymbol = semanticModel.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
             if (classSymbol == null) return null;
 
-            var attr = AttributeHelper.GetAttribute(classSymbol, "DocumentMapper");
+            var attr = AttributeHelper.GetAttribute(classSymbol, BLiteConventions.DocumentMapperAttributeName);
             if (attr == null) return null;
 
-            var entity = EntityAnalyzer.Analyze(classSymbol, semanticModel);
+            var directDiagnostics = new System.Collections.Generic.List<BLiteDiagnostic>();
+            var entity = EntityAnalyzer.Analyze(classSymbol, semanticModel, directDiagnostics);
+            entity.Diagnostics.AddRange(directDiagnostics);
 
             // Override collection name from attribute constructor argument if provided
             if (attr.ConstructorArguments.Length > 0 &&

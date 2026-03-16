@@ -1,4 +1,3 @@
-using BLite.Bson;
 using System.Collections.Generic;
 
 // Two separate namespaces each containing a class named "Widget" and "Tag"
