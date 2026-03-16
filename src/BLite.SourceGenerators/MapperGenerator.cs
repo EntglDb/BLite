@@ -42,6 +42,10 @@ public readonly struct BLiteDiagnostic
             "BLITE002", "BLite Generator Warning", "{0}",
             "BLite.SourceGenerators", DiagnosticSeverity.Warning, isEnabledByDefault: true);
 
+        private static readonly DiagnosticDescriptor DiagDuplicateCollection = new DiagnosticDescriptor(
+            "BLITE003", "BLite Duplicate Collection Name", "{0}",
+            "BLite.SourceGenerators", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
             // Find all classes that inherit from DocumentDbContext
@@ -61,7 +65,9 @@ public readonly struct BLiteDiagnostic
                 // ── Emit collected diagnostics ─────────────────────────────────
                 foreach (var diag in dbContext.Diagnostics)
                 {
-                    var descriptor = diag.IsError ? DiagError : DiagWarning;
+                    var descriptor = diag.Id == "BLITE003" ? DiagDuplicateCollection
+                                   : diag.IsError ? DiagError
+                                   : DiagWarning;
                     spc.ReportDiagnostic(Diagnostic.Create(descriptor, Location.None, diag.Message));
                 }
 
@@ -448,6 +454,72 @@ public readonly struct BLiteDiagnostic
                         info.Entities.Add(entityInfo);
                     }
                 }
+            }
+
+            // Analyze OnModelCreating for ToCollection
+            // Pattern: modelBuilder.Entity<T>().ToCollection("collectionName")
+            // This updates the CollectionName on the entity info so the generated mapper uses the correct name.
+            if (onModelCreating != null)
+            {
+                var toCollectionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "ToCollection");
+                foreach (var call in toCollectionCalls)
+                {
+                    // Extract the collection name string argument
+                    if (call.ArgumentList.Arguments.Count == 0) continue;
+                    var nameArgExpr = call.ArgumentList.Arguments[0].Expression;
+                    string? collectionName = null;
+                    if (nameArgExpr is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal &&
+                        literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+                    {
+                        collectionName = literal.Token.ValueText;
+                    }
+                    if (string.IsNullOrEmpty(collectionName)) continue;
+
+                    // Walk up the fluent chain to find Entity<T>()
+                    if (call.Expression is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax toCollectionMember)
+                    {
+                        var entityCall = SyntaxHelper.FindEntityCallInChain(toCollectionMember.Expression);
+                        if (entityCall == null) continue;
+
+                        // Resolve the entity type via semantic model
+                        INamedTypeSymbol? entityType = null;
+                        if (entityCall.Expression is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax entityMemberAccess &&
+                            entityMemberAccess.Name is Microsoft.CodeAnalysis.CSharp.Syntax.GenericNameSyntax entityGenericName &&
+                            entityGenericName.TypeArgumentList.Arguments.Count > 0)
+                        {
+                            var typeArgSyntax = entityGenericName.TypeArgumentList.Arguments[0];
+                            entityType = semanticModel.GetSymbolInfo(typeArgSyntax).Symbol as INamedTypeSymbol;
+                        }
+                        if (entityType == null) continue;
+
+                        var fullTypeName = SyntaxHelper.GetFullName(entityType);
+                        var entity = info.Entities.FirstOrDefault(e => e.FullTypeName == fullTypeName);
+                        if (entity != null)
+                        {
+                            entity.CollectionName = collectionName;
+                        }
+                    }
+                }
+            }
+
+            // Detect duplicate CollectionNames within the same DbContext — two entities with the same
+            // CollectionName (from the default class-name-based derivation or an explicit [Table] attribute)
+            // would silently share the same database collection, causing data corruption at runtime.
+            // Emit a build-time error so users can disambiguate via [Table("name")] or
+            // OnModelCreating: modelBuilder.Entity<T>().ToCollection("unique_name").
+            var collectionNameGroups = info.Entities
+                .GroupBy(e => e.CollectionName)
+                .Where(g => g.Count() > 1);
+            foreach (var group in collectionNameGroups)
+            {
+                var typeNames = string.Join(", ", group.Select(e => e.FullTypeName));
+                info.Diagnostics.Add(new BLiteDiagnostic(
+                    "BLITE003",
+                    $"[{info.ClassName}] Multiple entity types map to the same collection name '{group.Key}': {typeNames}. " +
+                    "Duplicate collection names cause data corruption at runtime. " +
+                    "Assign a unique name using the [Table(\"name\")] attribute on the entity class, " +
+                    "or call .ToCollection(\"unique_name\") in OnModelCreating.",
+                    isError: true));
             }
 
             // Analyze OnModelCreating for HasConversion

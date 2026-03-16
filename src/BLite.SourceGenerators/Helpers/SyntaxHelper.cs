@@ -46,6 +46,30 @@ namespace BLite.SourceGenerators.Helpers
             return null;
         }
 
+        /// <summary>
+        /// Walks up a fluent method-chain expression to locate the innermost <c>Entity&lt;T&gt;()</c>
+        /// call, e.g. for <c>modelBuilder.Entity&lt;T&gt;().ToCollection("x").HasKey(…)</c>
+        /// the method returns the <c>Entity&lt;T&gt;()</c> invocation node.
+        /// Returns <c>null</c> if no such call is found in the chain.
+        /// </summary>
+        public static InvocationExpressionSyntax? FindEntityCallInChain(ExpressionSyntax expr)
+        {
+            if (expr is InvocationExpressionSyntax invocation)
+            {
+                if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                    memberAccess.Name is GenericNameSyntax { Identifier: { Text: "Entity" } })
+                {
+                    return invocation;
+                }
+                // Recurse into the receiver expression of the current invocation
+                if (invocation.Expression is MemberAccessExpressionSyntax chainMemberAccess)
+                {
+                    return FindEntityCallInChain(chainMemberAccess.Expression);
+                }
+            }
+            return null;
+        }
+
         public static string? GetPropertyName(ExpressionSyntax? expression)
         {
             if (expression == null) return null;

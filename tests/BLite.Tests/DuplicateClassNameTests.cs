@@ -2,6 +2,8 @@ using BLite.Bson;
 using System.IO;
 using ModuleA = BLite.Shared.ModuleA;
 using ModuleB = BLite.Shared.ModuleB;
+using Module_A = BLite.Shared.Module_A;
+using Module = BLite.Shared.Module;
 
 namespace BLite.Tests;
 
@@ -122,5 +124,31 @@ public class DuplicateClassNameTests : IDisposable
         Assert.Equal("large", resultA.Label.Value);
         Assert.Equal("category-1", resultB.Category.Name);
         Assert.Equal(10, resultB.Category.Priority);
+    }
+
+    /// <summary>
+    /// Verifies the GetMapperName collision-resistance fix: types whose names differ only by
+    /// where underscores vs dots appear must map to distinct mapper class names.
+    /// Before the fix: "Module_A.Gadget" and "Module.A_Gadget" both produced "Module_A_GadgetMapper".
+    /// After the fix:  "Module_A.Gadget" → "Module__A_GadgetMapper"
+    ///                 "Module.A_Gadget" → "Module_A__GadgetMapper"
+    /// </summary>
+    [Fact]
+    public void Underscore_In_TypeName_Does_Not_Cause_Mapper_Name_Collision()
+    {
+        var gadget1 = new Module_A.Gadget { Id = 1, Model = "Gadget-1" };
+        var gadget2 = new Module.A_Gadget { Id = 1, Variant = "Variant-1" };
+
+        _db.Module_AGadgets.Insert(gadget1);
+        _db.ModuleAGadgets.Insert(gadget2);
+        _db.SaveChanges();
+
+        var result1 = _db.Module_AGadgets.FindById(1);
+        var result2 = _db.ModuleAGadgets.FindById(1);
+
+        Assert.NotNull(result1);
+        Assert.NotNull(result2);
+        Assert.Equal("Gadget-1", result1.Model);
+        Assert.Equal("Variant-1", result2.Variant);
     }
 }
