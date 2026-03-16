@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.6.7"></a>
+## [3.6.7](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.7) (2026-03-16)
+
+### Bug Fixes
+
+* **sourcegen:** increase nested type traversal depth to 20 and emit BLITE001 errors instead of silent skips ([fea19e4](https://www.github.com/EntglDb/BLite/commit/fea19e434748bf5fef95f81410f25b036ab64cf2))
+
 <a name="3.6.6"></a>
 ## [3.6.6](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.6) (2026-03-15)
 
