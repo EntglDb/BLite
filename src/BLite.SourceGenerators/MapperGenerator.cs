@@ -503,7 +503,7 @@ public readonly struct BLiteDiagnostic
                         var entity = info.Entities.FirstOrDefault(e => e.FullTypeName == fullTypeName);
                         if (entity != null)
                         {
-                            entity.CollectionName = collectionName;
+                            entity.CollectionName = collectionName!;
                         }
                     }
                 }
