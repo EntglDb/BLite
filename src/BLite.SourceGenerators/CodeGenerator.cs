@@ -161,18 +161,18 @@ namespace BLite.SourceGenerators
                     {
                         var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
                         var idWriteMethod = GetPrimitiveWriteMethod(providerProp, allowKey: true);
-                        sb.AppendLine($"            writer.{idWriteMethod}(\"_id\", _idConverter.ConvertToProvider(entity.{prop.Name}));");
+                        sb.AppendLine($"            writer.{idWriteMethod}(\"{BLiteConventions.BsonIdFieldName}\", _idConverter.ConvertToProvider(entity.{prop.Name}));");
                     }
                     else
                     {
                         var idWriteMethod = GetPrimitiveWriteMethod(prop, allowKey: true);
                         if (idWriteMethod != null)
                         {
-                            sb.AppendLine($"            writer.{idWriteMethod}(\"_id\", entity.{prop.Name});");
+                            sb.AppendLine($"            writer.{idWriteMethod}(\"{BLiteConventions.BsonIdFieldName}\", entity.{prop.Name});");
                         }
                         else
                         {
-                            sb.AppendLine($"#warning Unsupported Id type for '{prop.Name}': {prop.TypeName}. Serialization of '_id' will fail.");
+                            sb.AppendLine($"#warning Unsupported Id type for '{prop.Name}': {prop.TypeName}. Serialization of '{BLiteConventions.BsonIdFieldName}' will fail.");
                             sb.AppendLine($"            // Unsupported Id type: {prop.TypeName}");
                         }
                     }
@@ -401,7 +401,7 @@ namespace BLite.SourceGenerators
             
             // Read document size and track boundaries
             sb.AppendLine($"            var docSize = reader.ReadDocumentSize();");
-            sb.AppendLine($"            var docEndPos = reader.Position + docSize - 4; // -4 because size includes itself");
+            sb.AppendLine($"            var docEndPos = reader.Position + docSize - {BLiteConventions.BsonDocumentSizeOverhead}; // -{BLiteConventions.BsonDocumentSizeOverhead} because size includes itself");
             sb.AppendLine();
             sb.AppendLine($"            while (reader.Position < docEndPos)");
             sb.AppendLine($"            {{");
@@ -415,7 +415,7 @@ namespace BLite.SourceGenerators
             foreach (var prop in entity.Properties)
             {
                 // Root entities use "_id" for the key field; nested type mappers use the BsonFieldName (e.g. "id").
-                var caseName = (prop.IsKey && !entity.IsNestedTypeMapper) ? "_id" : prop.BsonFieldName;
+                var caseName = (prop.IsKey && !entity.IsNestedTypeMapper) ? BLiteConventions.BsonIdFieldName : prop.BsonFieldName;
                 sb.AppendLine($"                    case \"{caseName}\":");
                 
                 // Read Logic -> assign to local var
@@ -587,7 +587,7 @@ namespace BLite.SourceGenerators
                  }
                  sb.AppendLine($"                        // Read Array {prop.Name}");
                  sb.AppendLine($"                        var {arrVar}ArrSize = reader.ReadDocumentSize();");
-                 sb.AppendLine($"                        var {arrVar}ArrEndPos = reader.Position + {arrVar}ArrSize - 4;");
+                 sb.AppendLine($"                        var {arrVar}ArrEndPos = reader.Position + {arrVar}ArrSize - {BLiteConventions.BsonDocumentSizeOverhead};");
                  sb.AppendLine($"                        while (reader.Position < {arrVar}ArrEndPos)");
                  sb.AppendLine($"                        {{");
                  sb.AppendLine($"                            var itemType = reader.ReadBsonType();");
@@ -701,11 +701,11 @@ namespace BLite.SourceGenerators
 
         public static string GetMapperName(string fullTypeName)
         {
-             if (string.IsNullOrEmpty(fullTypeName)) return "UnknownMapper";
+             if (string.IsNullOrEmpty(fullTypeName)) return "Unknown" + BLiteConventions.MapperClassSuffix;
              // Remove global:: prefix
              var cleanName = fullTypeName.Replace("global::", "");
              // Replace dots, plus (nested classes), and colons (global::) with underscores
-             return cleanName.Replace(".", "_").Replace("+", "_").Replace(":", "_") + "Mapper";
+             return cleanName.Replace(".", "_").Replace("+", "_").Replace(":", "_") + BLiteConventions.MapperClassSuffix;
         }
 
         private static void GenerateIdAccessors(StringBuilder sb, EntityInfo entity)
@@ -1008,7 +1008,7 @@ namespace BLite.SourceGenerators
         private static string ToArrayWriteMethod(string writeMethod)
         {
             // "WriteString" -> "WriteArrayString", "WriteInt32" -> "WriteArrayInt32", etc.
-            return "WriteArray" + writeMethod.Substring(5);
+            return BLiteConventions.WriteMethodPrefix + "Array" + writeMethod.Substring(BLiteConventions.WriteMethodPrefixLength);
         }
 
         /// <summary>

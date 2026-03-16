@@ -8,6 +8,8 @@ namespace BLite.SourceGenerators.Helpers
 {
     public static class SyntaxHelper
     {
+        // Note: baseTypeName is intentionally kept as a parameter (not hardcoded) so the
+        // method remains general-purpose. Callers should pass BLiteConventions.DocumentDbContextBaseName.
         public static bool InheritsFrom(INamedTypeSymbol symbol, string baseTypeName)
         {
             var current = symbol.BaseType;
@@ -225,7 +227,7 @@ namespace BLite.SourceGenerators.Helpers
         /// </summary>
         public static IFieldSymbol? FindConventionalBackingField(IPropertySymbol property)
         {
-            var conventionalName = "_" + char.ToLower(property.Name[0]) + property.Name.Substring(1);
+            var conventionalName = BLiteConventions.BackingFieldPrefix + char.ToLower(property.Name[0]) + property.Name.Substring(1);
             return property.ContainingType.GetMembers()
                 .OfType<IFieldSymbol>()
                 .FirstOrDefault(f => f.Name == conventionalName &&

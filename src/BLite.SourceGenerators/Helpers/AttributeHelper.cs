@@ -8,15 +8,15 @@ namespace BLite.SourceGenerators.Helpers
     {
         public static bool ShouldIgnore(IPropertySymbol property)
         {
-            return HasAttribute(property, "BsonIgnore") || 
-                   HasAttribute(property, "JsonIgnore") ||
-                   HasAttribute(property, "NotMapped");
+            return HasAttribute(property, BLiteConventions.BsonIgnoreAttribute) || 
+                   HasAttribute(property, BLiteConventions.JsonIgnoreAttribute) ||
+                   HasAttribute(property, BLiteConventions.NotMappedAttribute);
         }
 
         public static bool IsKey(IPropertySymbol property)
         {
-            return HasAttribute(property, "Key") || 
-                   HasAttribute(property, "BsonId");
+            return HasAttribute(property, BLiteConventions.KeyAttribute) || 
+                   HasAttribute(property, BLiteConventions.BsonIdAttribute);
         }
         
         public static string? GetAttributeStringValue(ISymbol symbol, string attributeName)

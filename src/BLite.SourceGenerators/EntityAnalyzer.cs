@@ -16,14 +16,14 @@ namespace BLite.SourceGenerators
                 Name = entityType.Name,
                 Namespace = entityType.ContainingNamespace.ToDisplayString(),
                 FullTypeName = SyntaxHelper.GetFullName(entityType),
-                CollectionName = entityType.Name.ToLowerInvariant() + "s"
+                CollectionName = entityType.Name.ToLowerInvariant() + BLiteConventions.DefaultCollectionNameSuffix
             };
 
-            var tableAttr = AttributeHelper.GetAttribute(entityType, "Table");
+            var tableAttr = AttributeHelper.GetAttribute(entityType, BLiteConventions.TableAttribute);
             if (tableAttr != null)
             {
                 var tableName = tableAttr.ConstructorArguments.Length > 0 ? tableAttr.ConstructorArguments[0].Value?.ToString() : null;
-                var schema = AttributeHelper.GetNamedArgumentValue(tableAttr, "Schema");
+                var schema = AttributeHelper.GetNamedArgumentValue(tableAttr, BLiteConventions.SchemaNamedArg);
                 
                 var collectionName = !string.IsNullOrEmpty(tableName) ? tableName! : entityInfo.Name;
                 if (!string.IsNullOrEmpty(schema))
@@ -49,7 +49,7 @@ namespace BLite.SourceGenerators
             // Analyze nested types recursively
             // We use a dictionary for nested types to ensure uniqueness by name
             var analyzedTypes = new HashSet<string>();
-            AnalyzeNestedTypesRecursive(entityInfo.Properties, entityInfo.NestedTypes, semanticModel, analyzedTypes, 1, 20, diagnostics);
+            AnalyzeNestedTypesRecursive(entityInfo.Properties, entityInfo.NestedTypes, semanticModel, analyzedTypes, 1, BLiteConventions.DefaultMaxNestedTypeDepth, diagnostics);
             
             // Determine ID property
             // entityInfo.IdProperty is computed from Properties.FirstOrDefault(p => p.IsKey)
@@ -57,7 +57,7 @@ namespace BLite.SourceGenerators
             if (entityInfo.IdProperty == null)
             {
                 // Fallback to convention: property named "Id"
-                var idProp = entityInfo.Properties.FirstOrDefault(p => p.Name == "Id");
+                var idProp = entityInfo.Properties.FirstOrDefault(p => p.Name == BLiteConventions.DefaultIdPropertyName);
                 if (idProp != null)
                 {
                     idProp.IsKey = true;
@@ -68,7 +68,7 @@ namespace BLite.SourceGenerators
             if (entityInfo.IdProperty != null)
             {
                 var idType = entityInfo.IdProperty.TypeName.TrimEnd('?');
-                if (idType == "int" || idType == "Int32" || idType == "long" || idType == "Int64")
+                if (idType == BLiteConventions.AutoIdTypeInt || idType == BLiteConventions.AutoIdTypeInt32 || idType == BLiteConventions.AutoIdTypeLong || idType == BLiteConventions.AutoIdTypeInt64)
                 {
                     entityInfo.AutoId = true;
                 }
@@ -111,9 +111,9 @@ namespace BLite.SourceGenerators
                         // Fall through: backing field found, include this property
                     }
 
-                var columnAttr = AttributeHelper.GetAttribute(prop, "Column");
-                var bsonFieldName = AttributeHelper.GetAttributeStringValue(prop, "BsonProperty") ?? 
-                                    AttributeHelper.GetAttributeStringValue(prop, "JsonPropertyName");
+                var columnAttr = AttributeHelper.GetAttribute(prop, BLiteConventions.ColumnAttribute);
+                var bsonFieldName = AttributeHelper.GetAttributeStringValue(prop, BLiteConventions.BsonPropertyAttribute) ?? 
+                                    AttributeHelper.GetAttributeStringValue(prop, BLiteConventions.JsonPropertyNameAttribute);
 
                 if (bsonFieldName == null && columnAttr != null)
                 {
@@ -125,10 +125,10 @@ namespace BLite.SourceGenerators
                         Name = prop.Name,
                         TypeName = SyntaxHelper.GetTypeName(prop.Type),
                         BsonFieldName = bsonFieldName ?? prop.Name.ToLowerInvariant(),
-                        ColumnTypeName = columnAttr != null ? AttributeHelper.GetNamedArgumentValue(columnAttr, "TypeName") : null,
+                        ColumnTypeName = columnAttr != null ? AttributeHelper.GetNamedArgumentValue(columnAttr, BLiteConventions.TypeNameNamedArg) : null,
                         IsNullable = SyntaxHelper.IsNullableType(prop.Type),
                         IsKey = AttributeHelper.IsKey(prop),
-                        IsRequired = AttributeHelper.HasAttribute(prop, "Required"),
+                        IsRequired = AttributeHelper.HasAttribute(prop, BLiteConventions.RequiredAttribute),
                         
                         HasPublicSetter = prop.SetMethod?.DeclaredAccessibility == Accessibility.Public,
                         HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
@@ -138,27 +138,27 @@ namespace BLite.SourceGenerators
                         BackingFieldName = conventionalBackingField != null
                             ? conventionalBackingField.Name
                             : (prop.SetMethod?.DeclaredAccessibility != Accessibility.Public)
-                                ? $"<{prop.Name}>k__BackingField"
+                                ? $"<{prop.Name}{BLiteConventions.CompilerBackingFieldSuffix}"
                                 : null
                     };
 
                 // MaxLength / MinLength
-                propInfo.MaxLength = AttributeHelper.GetAttributeIntValue(prop, "MaxLength");
-                propInfo.MinLength = AttributeHelper.GetAttributeIntValue(prop, "MinLength");
+                propInfo.MaxLength = AttributeHelper.GetAttributeIntValue(prop, BLiteConventions.MaxLengthAttribute);
+                propInfo.MinLength = AttributeHelper.GetAttributeIntValue(prop, BLiteConventions.MinLengthAttribute);
                 
-                var stringLengthAttr = AttributeHelper.GetAttribute(prop, "StringLength");
+                var stringLengthAttr = AttributeHelper.GetAttribute(prop, BLiteConventions.StringLengthAttribute);
                 if (stringLengthAttr != null)
                 {
                     if (stringLengthAttr.ConstructorArguments.Length > 0 && stringLengthAttr.ConstructorArguments[0].Value is int max)
                         propInfo.MaxLength = max;
                     
-                    var minLenStr = AttributeHelper.GetNamedArgumentValue(stringLengthAttr, "MinimumLength");
+                    var minLenStr = AttributeHelper.GetNamedArgumentValue(stringLengthAttr, BLiteConventions.MinimumLengthNamedArg);
                     if (int.TryParse(minLenStr, out var min))
                         propInfo.MinLength = min;
                 }
 
                 // Range
-                var rangeAttr = AttributeHelper.GetAttribute(prop, "Range");
+                var rangeAttr = AttributeHelper.GetAttribute(prop, BLiteConventions.RangeAttribute);
                 if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
                 {
                     if (rangeAttr.ConstructorArguments[0].Value is double dmin) propInfo.RangeMin = dmin;

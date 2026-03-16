@@ -339,11 +339,11 @@ public readonly struct BLiteDiagnostic
         
         private static bool IsPotentialDbContext(SyntaxNode node)
         {
-            if (node.SyntaxTree.FilePath.EndsWith(".g.cs")) return false;
+            if (node.SyntaxTree.FilePath.EndsWith(BLiteConventions.GeneratedFileSuffix)) return false;
 
             return node is ClassDeclarationSyntax classDecl &&
                    classDecl.BaseList != null && 
-                   classDecl.Identifier.Text.EndsWith("Context");
+                   classDecl.Identifier.Text.EndsWith(BLiteConventions.DbContextClassSuffix);
         }
         
         private static DbContextInfo? GetDbContextInfo(GeneratorSyntaxContext context)
@@ -354,14 +354,14 @@ public readonly struct BLiteDiagnostic
             var classSymbol = semanticModel.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
             if (classSymbol == null) return null;
             
-            if (!SyntaxHelper.InheritsFrom(classSymbol, "DocumentDbContext"))
+            if (!SyntaxHelper.InheritsFrom(classSymbol, BLiteConventions.DocumentDbContextBaseName))
                 return null;
             
             // Check if this context inherits from another DbContext (not DocumentDbContext directly)
             var baseType = classSymbol.BaseType;
             bool hasBaseDbContext = baseType != null && 
-                                    baseType.Name != "DocumentDbContext" && 
-                                    SyntaxHelper.InheritsFrom(baseType, "DocumentDbContext");
+                                    baseType.Name != BLiteConventions.DocumentDbContextBaseName && 
+                                    SyntaxHelper.InheritsFrom(baseType, BLiteConventions.DocumentDbContextBaseName);
             
             var info = new DbContextInfo
             {
@@ -385,11 +385,11 @@ public readonly struct BLiteDiagnostic
             // Analyze OnModelCreating to find entities
             var onModelCreating = classDecl.Members
                 .OfType<MethodDeclarationSyntax>()
-                .FirstOrDefault(m => m.Identifier.Text == "OnModelCreating");
+                .FirstOrDefault(m => m.Identifier.Text == BLiteConventions.OnModelCreatingMethodName);
                 
             if (onModelCreating != null)
             {
-                var entityCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "Entity");
+                var entityCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, BLiteConventions.EntityMethodName);
                 foreach (var call in entityCalls)
                 {
                     // Resolve directly from the type argument syntax node via semantic model.
@@ -462,7 +462,7 @@ public readonly struct BLiteDiagnostic
             // This works for any property, including primary keys (Id)
             if (onModelCreating != null)
             {
-                var conversionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, "HasConversion");
+                var conversionCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, BLiteConventions.HasConversionMethodName);
                 foreach (var call in conversionCalls)
                 {
                     var converterName = SyntaxHelper.GetGenericTypeArgument(call);
@@ -471,14 +471,14 @@ public readonly struct BLiteDiagnostic
                     // Trace back: .Property(x => x.PropertyName).HasConversion<T>()
                     if (call.Expression is MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax propertyCall } &&
                         propertyCall.Expression is MemberAccessExpressionSyntax { Name: IdentifierNameSyntax { Identifier: { Text: var propertyMethod } } } &&
-                        propertyMethod == "Property")
+                        propertyMethod == BLiteConventions.PropertyMethodName)
                     {
                         var propertyName = SyntaxHelper.GetPropertyName(propertyCall.ArgumentList.Arguments.FirstOrDefault()?.Expression);
                         if (propertyName == null) continue;
 
                         // Trace further back: Entity<T>().Property(...)
                         if (propertyCall.Expression is MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax entityCall } &&
-                            entityCall.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: "Entity" } } })
+                            entityCall.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var entityMethodText } } } && entityMethodText == BLiteConventions.EntityMethodName)
                         {
                             var entityTypeName = SyntaxHelper.GetGenericTypeArgument(entityCall);
                             if (entityTypeName != null)
@@ -507,7 +507,7 @@ public readonly struct BLiteDiagnostic
                                             var converterBaseType = converterType.BaseType;
                                             while (converterBaseType != null)
                                             {
-                                                if (converterBaseType.Name == "ValueConverter" && converterBaseType.TypeArguments.Length == 2)
+                                                if (converterBaseType.Name == BLiteConventions.ValueConverterBaseName && converterBaseType.TypeArguments.Length == BLiteConventions.DocumentCollectionTypeArgCount)
                                                 {
                                                     prop.ProviderTypeName = converterBaseType.TypeArguments[1].Name;
                                                     break;
@@ -528,11 +528,11 @@ public readonly struct BLiteDiagnostic
             foreach (var prop in properties)
             {
                 if (prop.Type is INamedTypeSymbol namedType &&
-                    (namedType.OriginalDefinition.Name == "DocumentCollection" ||
-                     namedType.OriginalDefinition.Name == "IDocumentCollection"))
+                    (namedType.OriginalDefinition.Name == BLiteConventions.DocumentCollectionTypeName ||
+                     namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName))
                 {
                     // Expecting 2 type arguments: TId, TEntity
-                    if (namedType.TypeArguments.Length == 2)
+                    if (namedType.TypeArguments.Length == BLiteConventions.DocumentCollectionTypeArgCount)
                     {
                         var entityType = namedType.TypeArguments[1];
                         var entityInfo = info.Entities.FirstOrDefault(e => e.FullTypeName == entityType.ToDisplayString());
@@ -542,7 +542,7 @@ public readonly struct BLiteDiagnostic
                         {
                             entityInfo.CollectionPropertyName = prop.Name;
                             entityInfo.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                            entityInfo.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                            entityInfo.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName;
                         }
                         else if (entityType is INamedTypeSymbol namedEntityType)
                         {
@@ -577,14 +577,14 @@ public readonly struct BLiteDiagnostic
 
                                 discoveredEntity.CollectionPropertyName = prop.Name;
                                 discoveredEntity.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                                discoveredEntity.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                                discoveredEntity.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName;
                                 info.Entities.Add(discoveredEntity);
                             }
                             else
                             {
                                 existing.CollectionPropertyName = prop.Name;
                                 existing.CollectionIdTypeFullName = namedType.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                                existing.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == "IDocumentCollection";
+                                existing.CollectionPropertyIsInterface = namedType.OriginalDefinition.Name == BLiteConventions.IDocumentCollectionTypeName;
                             }
                         }
                     }
@@ -596,7 +596,7 @@ public readonly struct BLiteDiagnostic
 
         private static bool IsPotentialDirectMapper(SyntaxNode node)
         {
-            if (node.SyntaxTree.FilePath.EndsWith(".g.cs")) return false;
+            if (node.SyntaxTree.FilePath.EndsWith(BLiteConventions.GeneratedFileSuffix)) return false;
             return node is ClassDeclarationSyntax classDecl && classDecl.AttributeLists.Count > 0;
         }
 
@@ -608,7 +608,7 @@ public readonly struct BLiteDiagnostic
             var classSymbol = semanticModel.GetDeclaredSymbol(classDecl) as INamedTypeSymbol;
             if (classSymbol == null) return null;
 
-            var attr = AttributeHelper.GetAttribute(classSymbol, "DocumentMapper");
+            var attr = AttributeHelper.GetAttribute(classSymbol, BLiteConventions.DocumentMapperAttributeName);
             if (attr == null) return null;
 
             var directDiagnostics = new System.Collections.Generic.List<BLiteDiagnostic>();
