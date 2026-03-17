@@ -15,18 +15,30 @@ internal class EnumerableRewriter : ExpressionVisitor
 
     // ── Instance ──────────────────────────────────────────────────────────────────
     private readonly IQueryable _source;
-    private readonly object _target;
+    private readonly Expression _replacement;
 
+    /// <summary>Standard constructor — the target IEnumerable is embedded as a constant.</summary>
     public EnumerableRewriter(IQueryable source, object target)
     {
         _source = source;
-        _target = target;
+        _replacement = Expression.Constant(target);
+    }
+
+    /// <summary>
+    /// Parameterised constructor: the target is a <see cref="ParameterExpression"/> that
+    /// will be declared as a parameter on the outer lambda, enabling the compiled delegate
+    /// to be cached and reused across calls with different source data.
+    /// </summary>
+    public EnumerableRewriter(IQueryable source, ParameterExpression targetParam)
+    {
+        _source = source;
+        _replacement = targetParam;
     }
 
     protected override Expression VisitConstant(ConstantExpression node)
     {
         if (node.Value == _source)
-            return Expression.Constant(_target);
+            return _replacement;
         return base.VisitConstant(node);
     }
 

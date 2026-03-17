@@ -542,6 +542,36 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     }
 
     /// <summary>
+    /// Scans all documents returning only two flat fields per document as a
+    /// <c>(TKey, TValue)</c> pair, without deserialising the full entity
+    /// <typeparamref name="T"/>.
+    /// </summary>
+    /// <remarks>
+    /// When both selectors access a single flat, scalar property
+    /// (supported by <see cref="BsonProjectionCompiler"/>) a single-pass BSON
+    /// projector is compiled and the two fields are read in one sweep.
+    /// Falls back to full deserialization + LINQ projection otherwise.
+    /// </remarks>
+    public IEnumerable<(TKey Key, TValue Value)> ScanPairs<TKey, TValue>(
+        Expression<Func<T, TKey>> keySelector,
+        Expression<Func<T, TValue>> valueSelector)
+    {
+        if (keySelector is null) throw new ArgumentNullException(nameof(keySelector));
+        if (valueSelector is null) throw new ArgumentNullException(nameof(valueSelector));
+
+        var projector = BsonProjectionCompiler.TryCompilePair<T, TKey, TValue>(
+            keySelector, valueSelector);
+
+        if (projector is not null)
+            return Scan(projector).Select(t => (t.Item1, t.Item2));
+
+        // Fallback: full deserialization.
+        var keyFunc = keySelector.Compile();
+        var valFunc = valueSelector.Compile();
+        return FindAll().Select(item => (keyFunc(item), valFunc(item)));
+    }
+
+    /// <summary>
     /// Asynchronously scans the entire collection applying a <paramref name="projector"/> directly
     /// to raw BSON bytes. Only the fields accessed by the projector are read.
     /// </summary>
@@ -2672,3 +2702,4 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         GC.SuppressFinalize(this);
     }
 }
+

@@ -175,6 +175,46 @@ internal static class BsonProjectionCompiler
         return [.. result];
     }
 
+    // ─── Pair projector ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Tries to compile a single-pass BSON projector that reads two flat fields and returns
+    /// them as a <see cref="ValueTuple{TKey,TValue}"/>.
+    /// Returns <c>null</c> when either field is not a supported scalar or the body is too
+    /// complex — the caller should fall back to full deserialization.
+    /// </summary>
+    public static BsonReaderProjector<(TKey, TValue)>? TryCompilePair<T, TKey, TValue>(
+        Expression<Func<T, TKey>> keySelector,
+        Expression<Func<T, TValue>> valueSelector)
+    {
+        var param = keySelector.Parameters[0];
+
+        // Unify the parameter: replace valueSelector's param with keySelector's.
+        Expression valBody = valueSelector.Parameters[0] == param
+            ? valueSelector.Body
+            : new ParameterReplacer(valueSelector.Parameters[0], param).Visit(valueSelector.Body);
+
+        // Build: param => new ValueTuple<TKey, TValue>(param.KeyProp, param.ValProp)
+        var ctor = typeof(ValueTuple<TKey, TValue>)
+            .GetConstructor([typeof(TKey), typeof(TValue)]);
+        if (ctor is null) return null;
+
+        var combined = Expression.Lambda<Func<T, (TKey, TValue)>>(
+            Expression.New(ctor, keySelector.Body, valBody), param);
+
+        return TryCompile<T, (TKey, TValue)>(combined);
+    }
+
+    // ─── ParameterReplacer ───────────────────────────────────────────────────────
+
+    /// <summary>Replaces one <see cref="ParameterExpression"/> with another inside an expression tree.</summary>
+    internal sealed class ParameterReplacer(ParameterExpression from, ParameterExpression to)
+        : ExpressionVisitor
+    {
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == from ? to : base.VisitParameter(node);
+    }
+
     private static Expression EnsureType(Expression expr, Type targetType)
         => expr.Type == targetType ? expr : Expression.Convert(expr, targetType);
 

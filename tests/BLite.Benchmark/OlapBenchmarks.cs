@@ -237,11 +237,13 @@ public class OlapBenchmarks
     [Benchmark(Baseline = true, Description = "BLite – GroupBy Status")]
     [BenchmarkCategory("GroupBy")]
     public List<GroupRow> BLite_GroupBy()
-        // GroupBy push-down is not yet implemented; use direct FindAll() to avoid
-        // expression-compilation overhead inside ExecuteViaEnumerableRewriter.
-        => _ctx.CustomerOrders.FindAll()
-               .GroupBy(o => o.Status)
-               .Select(g => new GroupRow(g.Key, g.Count(), g.Sum(o => o.Total)))
+        // Single-pass BSON two-field scan: only Status (string) and Total (decimal)
+        // are read per document — no full CustomerOrder instantiation.
+        // GroupBy/Count/Sum then run on small (string, decimal) value tuples in memory.
+        => _ctx.CustomerOrders
+               .ScanPairs(o => o.Status, o => o.Total)
+               .GroupBy(p => p.Key)
+               .Select(g => new GroupRow(g.Key, g.Count(), g.Sum(p => p.Value)))
                .ToList();
 
     [Benchmark(Description = "LiteDB – GroupBy Status")]

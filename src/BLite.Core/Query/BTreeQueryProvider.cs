@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -464,6 +465,11 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
     /// so we only need to rewrite the remaining <c>Queryable.*</c> calls to
     /// <c>Enumerable.*</c> equivalents before compiling and executing.
     /// </summary>
+    /// <remarks>
+    /// The compiled <c>Func&lt;IEnumerable&lt;T&gt;, TResult&gt;</c> is cached per expression shape
+    /// (keyed by <c>TResult.FullName + expression.ToString()</c>), so the expensive
+    /// <see cref="Expression.Compile"/> call is paid only once per unique query shape.
+    /// </remarks>
     private TResult ExecuteViaEnumerableRewriter<TResult>(Expression expression, IEnumerable<T> sourceData)
     {
         var rootFinder = new RootFinder();
@@ -472,14 +478,23 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         if (root == null)
             throw new InvalidOperationException("Could not find root IQueryable in expression.");
 
-        var rewriter = new EnumerableRewriter(root, sourceData);
-        var rewritten = rewriter.Visit(expression);
+        var cacheKey = typeof(TResult).FullName + "\x00" + expression.ToString();
 
-        if (rewritten.Type != typeof(TResult))
-            rewritten = Expression.Convert(rewritten, typeof(TResult));
+        var cachedDelegate = s_enumRewriterCache.GetOrAdd(cacheKey, _ =>
+        {
+            var sourceParam = Expression.Parameter(typeof(IEnumerable<T>), "_src");
+            var rewriter = new EnumerableRewriter(root, sourceParam);
+            var rewritten = rewriter.Visit(expression);
+            if (rewritten.Type != typeof(TResult))
+                rewritten = Expression.Convert(rewritten, typeof(TResult));
+            return Expression.Lambda<Func<IEnumerable<T>, TResult>>(rewritten, sourceParam).Compile();
+        });
 
-        return Expression.Lambda<Func<TResult>>(rewritten).Compile()();
+        return ((Func<IEnumerable<T>, TResult>)cachedDelegate)(sourceData);
     }
+
+    /// <summary>Cache of compiled EnumerableRewriter delegates keyed by expression shape.</summary>
+    private static readonly ConcurrentDictionary<string, Delegate> s_enumRewriterCache = new();
 
     private sealed class RootFinder : ExpressionVisitor
     {
