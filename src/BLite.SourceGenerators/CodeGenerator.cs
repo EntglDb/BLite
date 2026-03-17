@@ -704,7 +704,10 @@ namespace BLite.SourceGenerators
              if (string.IsNullOrEmpty(fullTypeName)) return "Unknown" + BLiteConventions.MapperClassSuffix;
              // Remove global:: prefix
              var cleanName = fullTypeName.Replace("global::", "");
-             // Replace dots, plus (nested classes), and colons (global::) with underscores
+             // Escape any existing underscores first to prevent collisions between different
+             // type name patterns (e.g. "NS.Foo_Bar" vs "NS.Foo.Bar" must produce different names).
+             cleanName = cleanName.Replace("_", "__");
+             // Replace namespace separators (dots), nested class markers (+), and colons with single underscore
              return cleanName.Replace(".", "_").Replace("+", "_").Replace(":", "_") + BLiteConventions.MapperClassSuffix;
         }
 

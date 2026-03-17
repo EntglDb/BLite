@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.6.9"></a>
+## [3.6.9](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.9) (2026-03-16)
+
+### Bug Fixes
+
+* **sourcegen:** fix mapper name collisions when entity types share a simple class name across different namespaces — underscore characters in namespace/type names are now escaped before separator replacement, making the `GetMapperName` transform bijective ([ee67c33](https://www.github.com/EntglDb/BLite/commit/ee67c33))
+* **sourcegen:** parse `.ToCollection("name")` from `OnModelCreating` fluent chains (including `const string` and other compile-time constants) so duplicate-named entities in different namespaces use distinct database collections ([ee67c33](https://www.github.com/EntglDb/BLite/commit/ee67c33))
+* **sourcegen:** emit BLITE003 build-time error when two or more entity types in the same `DocumentDbContext` resolve to the same collection name (case-insensitive), preventing silent data corruption at runtime ([ee67c33](https://www.github.com/EntglDb/BLite/commit/ee67c33))
+
 <a name="3.6.8"></a>
 ## [3.6.8](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.8) (2026-03-16)
 
