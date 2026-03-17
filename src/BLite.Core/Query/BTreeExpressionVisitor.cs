@@ -30,9 +30,16 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
                 case "Skip":
                     VisitSkip(node);
                     break;
+                case "Sum":
+                case "Average":
+                    VisitAggregate(node);
+                    break;
+                case "Count":
+                case "LongCount":
+                    VisitCount(node);
+                    break;
                 default:
-                    // GroupBy, Join, Sum, Average, Min, Max with selectors, etc.
-                    // These cannot be handled by the direct pipeline.
+                    // GroupBy, Join, Min, Max, etc. — operators the direct pipeline cannot model.
                     _model.HasComplexOperators = true;
                     break;
             }
@@ -94,5 +101,50 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
         var countExpression = (ConstantExpression)node.Arguments[1];
         if (countExpression.Value != null)
             _model.Skip = (int)countExpression.Value;
+    }
+
+    /// <summary>
+    /// Handles <c>Sum(selector)</c> and <c>Average(selector)</c> as push-down aggregates.
+    /// When a single-field selector is detected we store it for BSON-level evaluation;
+    /// otherwise we fall back to the EnumerableRewriter path.
+    /// </summary>
+    private void VisitAggregate(MethodCallExpression node)
+    {
+        Visit(node.Arguments[0]); // recurse into source
+        if (node.Arguments.Count >= 2 && node.Arguments[1] is UnaryExpression quote)
+        {
+            // Sum<T, TResult>(source, Expression<Func<T, TResult>> selector)
+            _model.AggregateOp = node.Method.Name;
+            _model.AggregateSelector = (LambdaExpression)quote.Operand;
+            // Always mark complex so that Sum/Average WITH a WHERE clause falls back to
+            // EnumerableRewriter. The Execute fast path fires before this check when
+            // WhereClause == null, so the no-WHERE optimisation is still active.
+            _model.HasComplexOperators = true;
+        }
+        else
+        {
+            // Sum() / Average() with no selector — fall back to enumerator rewriter.
+            _model.HasComplexOperators = true;
+        }
+    }
+
+    /// <summary>
+    /// Handles <c>Count()</c> / <c>LongCount()</c> as a push-down scalar.
+    /// When there is no predicate, the provider can use the primary BTree key count instead
+    /// of materialising all documents.
+    /// </summary>
+    private void VisitCount(MethodCallExpression node)
+    {
+        Visit(node.Arguments[0]); // recurse into source
+        if (node.Arguments.Count == 1)
+        {
+            // Count() with no predicate — fast O(log n) + k BTree scan.
+            _model.IsCountOnly = true;
+        }
+        else
+        {
+            // Count(predicate) — treat as a complex operator.
+            _model.HasComplexOperators = true;
+        }
     }
 }

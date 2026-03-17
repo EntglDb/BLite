@@ -5,6 +5,7 @@ using BLite.Shared;
 using BLite.Tests;
 using Couchbase.Lite;
 using Dapper;
+using DuckDB.NET.Data;
 using LiteDB;
 using Microsoft.Data.Sqlite;
 using System.IO;
@@ -26,6 +27,7 @@ public class InsertBenchmarks
     private string _sqliteConnString = "";
     private string _litePath = "";
     private string _cblDir = "";
+    private string _duckPath = "";
 
     private TestDbContext?          _ctx    = null;
     private LiteDatabase?           _liteDb = null;
@@ -52,6 +54,7 @@ public class InsertBenchmarks
         _batchData   = Enumerable.Range(0, BatchSize)
                                  .Select(BenchmarkDataFactory.CreateOrder)
                                  .ToArray();
+        _duckPath = Path.Combine(temp, $"bench_duck_{id}.db");
     }
 
     [IterationSetup]
@@ -72,6 +75,11 @@ public class InsertBenchmarks
         Directory.CreateDirectory(_cblDir);
         _cblDb  = new Database("bench", new DatabaseConfiguration { Directory = _cblDir });
         _cblCol = _cblDb.GetDefaultCollection();
+
+        if (File.Exists(_duckPath)) File.Delete(_duckPath);
+        using var duck = new DuckDBConnection($"Data Source={_duckPath}");
+        duck.Open();
+        duck.Execute("CREATE TABLE Orders (Id VARCHAR PRIMARY KEY, Data VARCHAR NOT NULL)");
     }
 
     [IterationCleanup]
@@ -88,6 +96,7 @@ public class InsertBenchmarks
             if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
             if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
             if (File.Exists(_litePath))   File.Delete(_litePath);
+            if (File.Exists(_duckPath))   File.Delete(_duckPath);
             for (int i = 0; i < 5 && Directory.Exists(_cblDir); i++)
             {
                 try   { Directory.Delete(_cblDir, true); }
@@ -164,5 +173,30 @@ public class InsertBenchmarks
                 _cblCol!.Save(doc);
             }
         });
+    }
+
+    // ──── DuckDB ─────────────────────────────────────────────────────
+
+    [Benchmark(Description = "DuckDB – Single Insert")]
+    [BenchmarkCategory("Insert_Single")]
+    public void DuckDB_Insert_Single()
+    {
+        using var conn = new DuckDBConnection($"Data Source={_duckPath}");
+        conn.Open();
+        conn.Execute("INSERT INTO Orders (Id, Data) VALUES ($Id, $Data)",
+            new { _singleOrder!.Id, Data = System.Text.Json.JsonSerializer.Serialize(_singleOrder) });
+    }
+
+    [Benchmark(Description = "DuckDB – Batch Insert (1000, 1 Txn)")]
+    [BenchmarkCategory("Insert_Batch")]
+    public void DuckDB_Insert_Batch()
+    {
+        using var conn = new DuckDBConnection($"Data Source={_duckPath}");
+        conn.Open();
+        using var txn = conn.BeginTransaction();
+        foreach (var o in _batchData)
+            conn.Execute("INSERT INTO Orders (Id, Data) VALUES ($Id, $Data)",
+                new { o.Id, Data = System.Text.Json.JsonSerializer.Serialize(o) }, transaction: txn);
+        txn.Commit();
     }
 }

@@ -98,6 +98,27 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         visitor.Visit(expression);
         var model = visitor.GetModel();
 
+        // ── Fast path: Count() / LongCount() terminal with no WHERE ─────────────
+        // Uses the primary BTree key scan (O(n) key reads, zero document reads).
+        if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators)
+        {
+            var count = _collection.Count();
+            if (typeof(TResult) == typeof(int))  return (TResult)(object)count;
+            if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)count;
+        }
+
+        // ── Fast path: Sum / Average via BSON field-projection scan ──────────────
+        // Reads only the target field from raw BSON — T is never fully instantiated.
+        // HasComplexOperators is intentionally NOT checked here: VisitAggregate always sets
+        // it so that Sum/Average WITH a WHERE falls through to EnumerableRewriter, but we
+        // still want the fast path to fire when there is no WHERE clause.
+        if (model.AggregateOp is not null && model.AggregateSelector is not null
+            && model.WhereClause == null)
+        {
+            if (TryBsonAggregate<TResult>(model.AggregateOp, model.AggregateSelector, out var aggResult))
+                return aggResult;
+        }
+
         // ── Push-down SELECT (+ optional WHERE) ───────────────────────────────
         // Single-pass BSON projection: no T instantiation, no EnumerableRewriter.
         // Only applicable when there is no post-scan ordering or paging.
@@ -140,6 +161,23 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         }
         else
         {
+            // ── Fast path: OrderBy(indexedField).Take(N) via secondary BTree ────
+            // Reads N entries directly from the index in the requested direction,
+            // skipping the O(n log n) in-memory sort over all documents.
+            if (model.OrderByClause != null && model.Take.HasValue && !model.Skip.HasValue)
+            {
+                var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
+                if (orderOpt is not null)
+                {
+                    bool ascending = !model.OrderDescending;
+                    var topN = _collection.QueryIndex(orderOpt.IndexName, null, null, ascending)
+                                          .Take(model.Take.Value);
+                    if (model.SelectClause != null)
+                        return ProjectEnumerable<TResult>(topN, model.SelectClause);
+                    return TerminalReturn<TResult>(topN);
+                }
+            }
+
             sourceData = _collection.FindAll();
         }
 
@@ -259,6 +297,118 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             $"BLite query pipeline: unsupported terminal result type '{typeof(TResult)}'.");
     }
     
+    // ─── BSON-level aggregate push-down ──────────────────────────────────────
+
+    /// <summary>
+    /// Attempts to compute Sum or Average entirely by scanning raw BSON bytes,
+    /// without deserialising the full entity <typeparamref name="T"/>.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> and a populated <paramref name="result"/> on success;
+    /// <c>false</c> to signal the caller should fall through to the standard path.
+    /// </returns>
+    private bool TryBsonAggregate<TResult>(
+        string aggregateOp,
+        LambdaExpression selector,
+        out TResult result)
+    {
+        result = default!;
+        var fieldType = selector.ReturnType;
+
+        // Only numeric types are supported; others fall through to EnumerableRewriter.
+        if (fieldType != typeof(decimal) && fieldType != typeof(double) &&
+            fieldType != typeof(float)   && fieldType != typeof(int)    &&
+            fieldType != typeof(long))
+            return false;
+
+        // Compile a BSON projector for the target field (result is cached per fieldType).
+        object? projector;
+        try
+        {
+            var compileMethod = s_compiledSelectMethods.GetOrAdd(
+                fieldType, t => s_tryCompileMethod.MakeGenericMethod(typeof(T), t));
+            projector = compileMethod.Invoke(null, [selector, null]);
+        }
+        catch { return false; }
+
+        if (projector is null) return false; // field shape too complex for BSON push-down
+
+        // Execute the BSON scan — yields only non-null field values.
+        System.Collections.IEnumerable? values;
+        try
+        {
+            var scanMethod = s_compiledScanMethods.GetOrAdd(
+                fieldType, t => s_scanProjectorMethod.MakeGenericMethod(t));
+            values = scanMethod.Invoke(_collection, [projector]) as System.Collections.IEnumerable;
+        }
+        catch { return false; }
+
+        if (values is null) return false;
+
+        try { return AggregateValues<TResult>(aggregateOp, values, fieldType, out result); }
+        catch { return false; }
+    }
+
+    private static bool AggregateValues<TResult>(
+        string op,
+        System.Collections.IEnumerable values,
+        Type fieldType,
+        out TResult result)
+    {
+        result = default!;
+
+        if (fieldType == typeof(decimal))
+        {
+            var typed = (IEnumerable<decimal>)values;
+            decimal agg = op == "Sum" ? typed.Sum() : typed.DefaultIfEmpty().Average();
+            if (typeof(TResult) == typeof(decimal)) { result = (TResult)(object)agg; return true; }
+        }
+        else if (fieldType == typeof(double))
+        {
+            var typed = (IEnumerable<double>)values;
+            double agg = op == "Sum" ? typed.Sum() : typed.DefaultIfEmpty().Average();
+            if (typeof(TResult) == typeof(double)) { result = (TResult)(object)agg; return true; }
+        }
+        else if (fieldType == typeof(float))
+        {
+            var typed = (IEnumerable<float>)values;
+            float agg = op == "Sum" ? typed.Sum() : typed.DefaultIfEmpty().Average();
+            if (typeof(TResult) == typeof(float)) { result = (TResult)(object)agg; return true; }
+        }
+        else if (fieldType == typeof(int))
+        {
+            var typed = (IEnumerable<int>)values;
+            if (op == "Sum")
+            {
+                long sum = 0;
+                foreach (var v in typed) sum += v;
+                if (typeof(TResult) == typeof(long))   { result = (TResult)(object)sum;        return true; }
+                if (typeof(TResult) == typeof(int))    { result = (TResult)(object)(int)sum;   return true; }
+            }
+            else
+            {
+                double avg = typed.DefaultIfEmpty().Average();
+                if (typeof(TResult) == typeof(double)) { result = (TResult)(object)avg; return true; }
+            }
+        }
+        else if (fieldType == typeof(long))
+        {
+            var typed = (IEnumerable<long>)values;
+            if (op == "Sum")
+            {
+                long sum = 0;
+                foreach (var v in typed) sum += v;
+                if (typeof(TResult) == typeof(long)) { result = (TResult)(object)sum; return true; }
+            }
+            else
+            {
+                double avg = typed.DefaultIfEmpty().Select(x => (double)x).Average();
+                if (typeof(TResult) == typeof(double)) { result = (TResult)(object)avg; return true; }
+            }
+        }
+        return false;
+    }
+
     // ─── Push-down SELECT helper ──────────────────────────────────────────────
 
     /// <summary>

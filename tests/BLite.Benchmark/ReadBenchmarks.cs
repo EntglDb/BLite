@@ -4,6 +4,7 @@ using BLite.Shared;
 using BLite.Tests;
 using Couchbase.Lite;
 using Dapper;
+using DuckDB.NET.Data;
 using LiteDB;
 using Microsoft.Data.Sqlite;
 using System.IO;
@@ -27,6 +28,7 @@ public class ReadBenchmarks
     private string _sqliteConnString = null!;
     private string _litePath = null!;
     private string _cblDir = null!;
+    private string _duckPath = null!;
 
     private TestDbContext _ctx    = null!;
     private LiteDatabase  _liteDb = null!;
@@ -45,10 +47,11 @@ public class ReadBenchmarks
         _sqliteConnString = $"Data Source={_sqlitePath}";
         _litePath         = Path.Combine(temp, $"bench_read_lite_{id}.db");
         _cblDir           = Path.Combine(temp, $"bench_read_cbl_{id}");
+        _duckPath         = Path.Combine(temp, $"bench_read_duck_{id}.db");
 
         Couchbase.Lite.Logging.LogSinks.Console = null;
 
-        foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath })
+        foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath, _duckPath })
             if (File.Exists(p)) File.Delete(p);
         if (Directory.Exists(_cblDir)) Directory.Delete(_cblDir, true);
 
@@ -89,6 +92,16 @@ public class ReadBenchmarks
             }
         });
 
+        // 5. DuckDB
+        using var duck = new DuckDBConnection($"Data Source={_duckPath}");
+        duck.Open();
+        duck.Execute("CREATE TABLE Orders (Id VARCHAR PRIMARY KEY, Data VARCHAR NOT NULL)");
+        using var duckTxn = duck.BeginTransaction();
+        foreach (var o in orders)
+            duck.Execute("INSERT INTO Orders (Id, Data) VALUES ($Id, $Data)",
+                new { o.Id, Data = System.Text.Json.JsonSerializer.Serialize(o) }, transaction: duckTxn);
+        duckTxn.Commit();
+
         // Middle document as lookup target
         _targetId = orders[DocCount / 2].Id;
     }
@@ -102,7 +115,7 @@ public class ReadBenchmarks
         _cblDb?.Dispose();
         SqliteConnection.ClearAllPools();
         System.Threading.Thread.Sleep(200);
-        foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath })
+        foreach (var p in new[] { _docDbPath, _sqlitePath, _litePath, _duckPath })
             if (File.Exists(p)) File.Delete(p);
         for (int i = 0; i < 5 && Directory.Exists(_cblDir); i++)
         {
@@ -179,5 +192,33 @@ public class ReadBenchmarks
                      .Select(r => System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(
                                       r.GetDictionary(0)!.ToJSON()!)!)
                      .ToList();
+    }
+
+    // ──── DuckDB ─────────────────────────────────────────────────────
+
+    [Benchmark(Description = "DuckDB – FindById")]
+    [BenchmarkCategory("FindById")]
+    public CustomerOrder DuckDB_FindById()
+    {
+        using var conn = new DuckDBConnection($"Data Source={_duckPath}");
+        conn.Open();
+        var json = conn.QueryFirstOrDefault<string>(
+            "SELECT Data FROM Orders WHERE Id = $Id", new { Id = _targetId });
+        return json is null ? throw new InvalidOperationException()
+                           : System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(json)!;
+    }
+
+    [Benchmark(Description = "DuckDB – Scan by Status")]
+    [BenchmarkCategory("Scan")]
+    public List<CustomerOrder> DuckDB_Scan()
+    {
+        using var conn = new DuckDBConnection($"Data Source={_duckPath}");
+        conn.Open();
+        // json_extract_string uses DuckDB's native JSON functions for the filter
+        return conn.Query<string>(
+                "SELECT Data FROM Orders WHERE json_extract_string(Data, '$.Status') = $Status",
+                new { Status = ScanStatus })
+                   .Select(json => System.Text.Json.JsonSerializer.Deserialize<CustomerOrder>(json)!)
+                   .ToList();
     }
 }

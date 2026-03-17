@@ -24,6 +24,13 @@ internal static class IndexOptimizer
         public (double Latitude, double Longitude) SpatialMin { get; set; }
         public (double Latitude, double Longitude) SpatialMax { get; set; }
         public SpatialQueryType SpatialType { get; set; }
+
+        /// <summary>
+        /// True when this result was produced by <see cref="TryOptimizeOrderBy"/> rather than
+        /// <see cref="TryOptimize{T}"/>.  The caller should skip WHERE filtering and use the
+        /// index scan as the ordered data source, applying Take(N) directly.
+        /// </summary>
+        public bool IsOrderByOptimization { get; set; }
     }
 
     public enum SpatialQueryType { Near, Within }
@@ -33,6 +40,48 @@ internal static class IndexOptimizer
         if (model.WhereClause == null) return null;
 
         return OptimizeExpression(model.WhereClause.Body, model.WhereClause.Parameters[0], indexes, registry);
+    }
+
+    /// <summary>
+    /// Attempts to satisfy an <c>OrderBy[Descending](field).Take(N)</c> query entirely from a
+    /// secondary BTree index, avoiding a full <c>FindAll()</c> + in-memory sort.
+    /// <para>
+    /// Prerequisites: no WHERE clause, a simple single-field OrderBy on an indexed field, and
+    /// a Take(N) limit.  The caller is expected to use the returned index in forward or backward
+    /// order and stop after <paramref name="model"/>.Take items.
+    /// </para>
+    /// </summary>
+    public static OptimizationResult? TryOptimizeOrderBy(QueryModel model, IEnumerable<CollectionIndexInfo> indexes)
+    {
+        // Only applicable when there is no WHERE, no Skip, and a Take limit.
+        if (model.WhereClause != null) return null;
+        if (model.OrderByClause == null) return null;
+        if (!model.Take.HasValue) return null;
+        if (model.Skip.HasValue) return null;
+
+        var body = model.OrderByClause.Body;
+        var param = model.OrderByClause.Parameters[0];
+
+        // The OrderBy key selector must be a simple property access on the entity parameter.
+        string? propName = body switch
+        {
+            MemberExpression me when me.Expression == param => me.Member.Name,
+            // Handle Convert(property) — e.g. enum fields
+            UnaryExpression { NodeType: ExpressionType.Convert } ue
+                when ue.Operand is MemberExpression me2 && me2.Expression == param => me2.Member.Name,
+            _ => null
+        };
+
+        if (propName is null) return null;
+
+        var index = indexes.FirstOrDefault(i => Matches(i, propName) && i.Type == IndexType.BTree);
+        if (index is null) return null;
+
+        return new OptimizationResult
+        {
+            IndexName = index.Name,
+            IsOrderByOptimization = true
+        };
     }
 
     private static OptimizationResult? OptimizeExpression(Expression expression, ParameterExpression parameter, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)

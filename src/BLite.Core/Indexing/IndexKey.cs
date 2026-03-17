@@ -47,6 +47,19 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         _hashCode = ComputeHashCode(_data);
     }
 
+    public IndexKey(double value)
+    {
+        // Sort-preserving IEEE 754 encoding:
+        // Positive: flip sign bit only  → 1xxx…  (positive doubles sort after all negatives)
+        // Negative: flip all bits        → sort from least-negative first
+        // Result: lexicographic byte order == IEEE 754 numeric order for all finite and ±Inf.
+        var bits = BitConverter.DoubleToInt64Bits(value);
+        ulong u = bits < 0 ? ~(ulong)bits : (ulong)bits | 0x8000_0000_0000_0000UL;
+        _data = [(byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
+                 (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
+        _hashCode = ComputeHashCode(_data);
+    }
+
     public IndexKey(string value)
     {
         _data = System.Text.Encoding.UTF8.GetBytes(value);
@@ -118,6 +131,7 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         if (typeof(T) == typeof(ObjectId)) return new IndexKey((ObjectId)(object)value);
         if (typeof(T) == typeof(int)) return new IndexKey((int)(object)value);
         if (typeof(T) == typeof(long)) return new IndexKey((long)(object)value);
+        if (typeof(T) == typeof(double)) return new IndexKey((double)(object)value);
         if (typeof(T) == typeof(string)) return new IndexKey((string)(object)value);
         if (typeof(T) == typeof(Guid)) return new IndexKey((Guid)(object)value);
         if (typeof(T) == typeof(byte[])) return new IndexKey((byte[])(object)value);
@@ -140,6 +154,16 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
             ulong u = ((ulong)_data[0] << 56) | ((ulong)_data[1] << 48) | ((ulong)_data[2] << 40) | ((ulong)_data[3] << 32)
                     | ((ulong)_data[4] << 24) | ((ulong)_data[5] << 16) | ((ulong)_data[6] <<  8) | _data[7];
             return (T)(object)(long)(u ^ 0x8000_0000_0000_0000UL);
+        }
+        if (typeof(T) == typeof(double))
+        {
+            ulong u = ((ulong)_data[0] << 56) | ((ulong)_data[1] << 48) | ((ulong)_data[2] << 40) | ((ulong)_data[3] << 32)
+                    | ((ulong)_data[4] << 24) | ((ulong)_data[5] << 16) | ((ulong)_data[6] <<  8) | _data[7];
+            // Reverse encoding: if MSB was set (positive double), clear it; else flip all bits (negative double)
+            long bits = u >= 0x8000_0000_0000_0000UL
+                ? (long)(u ^ 0x8000_0000_0000_0000UL)
+                : (long)~u;
+            return (T)(object)BitConverter.Int64BitsToDouble(bits);
         }
         if (typeof(T) == typeof(string)) return (T)(object)System.Text.Encoding.UTF8.GetString(_data);
         if (typeof(T) == typeof(Guid)) return (T)(object)new Guid(_data);

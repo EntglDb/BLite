@@ -17,4 +17,21 @@ internal class QueryModel
     /// The provider will fall back to <see cref="EnumerableRewriter"/> for these queries.
     /// </summary>
     public bool HasComplexOperators { get; set; }
+
+    // ── Aggregate push-down ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Aggregate operator name ("Sum" or "Average") when detected as a terminal push-down candidate.
+    /// Null means no aggregate push-down; in that case <see cref="HasComplexOperators"/> is set.
+    /// </summary>
+    public string? AggregateOp { get; set; }
+
+    /// <summary>Selector lambda for the aggregate field, e.g. <c>o =&gt; o.Total</c>.</summary>
+    public LambdaExpression? AggregateSelector { get; set; }
+
+    /// <summary>
+    /// True when the terminal operator is <c>Count()</c> or <c>LongCount()</c> with no predicate.
+    /// Enables an O(n) primary-BTree key scan instead of full document deserialisation.
+    /// </summary>
+    public bool IsCountOnly { get; set; }
 }
