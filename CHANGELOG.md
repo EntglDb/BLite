@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.7.0"></a>
+## [3.7.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.7.0) (2026-03-17)
+
+### Features
+
+* optimizing OLAP queries ([f83e0d5](https://www.github.com/EntglDb/BLite/commit/f83e0d561eb875248bcb55c97c10f2ec4839a659))
+* optmized group by OLAP queries ([98c49ef](https://www.github.com/EntglDb/BLite/commit/98c49ef9716d55c9cb52663e42677f45dedb32b9))
+
 <a name="3.6.9"></a>
 ## [3.6.9](https://www.github.com/EntglDb/BLite/releases/tag/v3.6.9) (2026-03-16)
 
