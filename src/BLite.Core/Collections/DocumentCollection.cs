@@ -1025,7 +1025,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
 
-        var pageId = _storage.AllocatePage();
+        var pageId = _storage.AllocateCollectionPage(_collectionName);
 
         // Initialize slotted page header
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1175,7 +1175,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     private uint AllocateOverflowPage(ReadOnlySpan<byte> data, uint nextOverflowPageId, ITransaction transaction)
     {
-        var pageId = _storage.AllocatePage();
+        var pageId = _storage.AllocateCollectionPage(_collectionName);
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try

@@ -33,7 +33,7 @@ public sealed class BTreeIndex
         if (_rootPageId == 0)
         {
             // Allocate new root page (cannot use page 0 which is file header)
-            _rootPageId = _storage.AllocatePage();
+            _rootPageId = _storage.AllocateIndexPage();
 
             // Initialize as empty leaf
             var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -742,7 +742,7 @@ public sealed class BTreeIndex
 
     private uint CreateNode(bool isLeaf, ulong transactionId)
     {
-        var pageId = _storage.AllocatePage();
+        var pageId = _storage.AllocateIndexPage();
         var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {

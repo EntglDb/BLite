@@ -17,6 +17,29 @@ public readonly struct PageFileConfig
     public MemoryMappedFileAccess Access { get; init; }
 
     /// <summary>
+    /// Optional explicit path for the WAL file.
+    /// If null, the WAL is placed next to the data file with the same name and .wal extension (default behavior).
+    /// Set this to place the WAL on a separate disk or directory for better I/O performance.
+    /// </summary>
+    public string? WalPath { get; init; }
+
+    /// <summary>
+    /// Optional explicit path for the index file (.idx).
+    /// If null, all pages (data + index) are stored in the same file (default embedded behavior).
+    /// Set this to place index pages on a separate file for parallel I/O with data pages.
+    /// </summary>
+    public string? IndexFilePath { get; init; }
+
+    /// <summary>
+    /// Optional directory where per-collection data files are stored.
+    /// If null, all collections share the main data file (default embedded behavior).
+    /// If set, each collection gets its own {CollectionName}.db file in this directory,
+    /// enabling independent I/O, per-collection backup, and instant space reclaim on drop.
+    /// The main data file still stores metadata (page 0, page 1, dictionary, KV store).
+    /// </summary>
+    public string? CollectionDataDirectory { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()
@@ -44,6 +67,20 @@ public readonly struct PageFileConfig
         PageSize = 32768,              // 32KB pages
         GrowthBlockSize = 2 * 1024 * 1024, // grow by 2MB at a time
         Access = MemoryMappedFileAccess.ReadWrite
+    };
+
+    /// <summary>
+    /// Server-optimized configuration: separate WAL, index, and per-collection files.
+    /// Designed for BLite.Server where each connection serves multiple clients.
+    /// </summary>
+    public static PageFileConfig Server(string dataDirectory) => new()
+    {
+        PageSize = 16384,
+        GrowthBlockSize = 4 * 1024 * 1024,  // 4MB growth block for server workloads
+        Access = MemoryMappedFileAccess.ReadWrite,
+        WalPath = Path.Combine(dataDirectory, "wal", "blite.wal"),
+        IndexFilePath = Path.Combine(dataDirectory, "blite.idx"),
+        CollectionDataDirectory = Path.Combine(dataDirectory, "collections")
     };
 
     /// <summary>

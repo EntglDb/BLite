@@ -38,6 +38,12 @@ public sealed partial class StorageEngine
     public void FlushPageFile()
     {
         _pageFile.Flush();
+        _indexFile?.Flush();
+        if (_collectionFiles != null)
+        {
+            foreach (var pf in _collectionFiles.Values)
+                pf.Flush();
+        }
     }
     
     /// <summary>
@@ -66,19 +72,27 @@ public sealed partial class StorageEngine
         if (_walIndex.IsEmpty)
             return;
 
-        // 1. Write all committed pages from index to PageFile
+        // 1. Write all committed pages from index to the correct PageFile
         foreach (var kvp in _walIndex)
         {
-            _pageFile.WritePage(kvp.Key, kvp.Value);
+            GetPageFile(kvp.Key).WritePage(kvp.Key, kvp.Value);
         }
         
-        // 2. Flush PageFile to ensure durability
+        // 2. Flush PageFile(s) to ensure durability
         _pageFile.Flush();
+        _indexFile?.Flush();
         
-        // 3. Clear in-memory WAL index (now persisted)
+        // 3. Flush collection files
+        if (_collectionFiles != null)
+        {
+            foreach (var pf in _collectionFiles.Values)
+                pf.Flush();
+        }
+        
+        // 4. Clear in-memory WAL index (now persisted)
         _walIndex.Clear();
         
-        // 4. Truncate WAL (all changes now in PageFile)
+        // 5. Truncate WAL (all changes now in PageFile)
         _wal.Truncate();
     }
 
@@ -90,20 +104,28 @@ public sealed partial class StorageEngine
             if (_walIndex.IsEmpty)
                 return;
 
-            // 1. Write all committed pages from index to PageFile
+            // 1. Write all committed pages from index to the correct PageFile
             // PageFile writes are sync (MMF), but that's fine as per plan (ValueTask strategy for MMF)
             foreach (var kvp in _walIndex)
             {
-                _pageFile.WritePage(kvp.Key, kvp.Value);
+                GetPageFile(kvp.Key).WritePage(kvp.Key, kvp.Value);
             }
             
-            // 2. Flush PageFile to ensure durability
+            // 2. Flush PageFile(s) to ensure durability
             _pageFile.Flush();
+            _indexFile?.Flush();
             
-            // 3. Clear in-memory WAL index (now persisted)
+            // 3. Flush collection files
+            if (_collectionFiles != null)
+            {
+                foreach (var pf in _collectionFiles.Values)
+                    pf.Flush();
+            }
+            
+            // 4. Clear in-memory WAL index (now persisted)
             _walIndex.Clear();
             
-            // 4. Truncate WAL (all changes now in PageFile)
+            // 5. Truncate WAL (all changes now in PageFile)
             await _wal.TruncateAsync(ct);
         }
         finally
@@ -185,7 +207,7 @@ public sealed partial class StorageEngine
                 }
             }
             
-            // 2. Apply committed transactions to PageFile
+            // 2. Apply committed transactions to the correct PageFile
             foreach (var txnId in committedTxns)
             {
                 if (!txnWrites.ContainsKey(txnId))
@@ -193,12 +215,19 @@ public sealed partial class StorageEngine
                     
                 foreach (var (pageId, data) in txnWrites[txnId])
                 {
-                    _pageFile.WritePage(pageId, data);
+                    var targetFile = GetRecoveryPageFile(pageId, data);
+                    targetFile.WritePage(pageId, data);
                 }
             }
             
-            // 3. Flush PageFile to ensure durability
+            // 3. Flush all PageFiles to ensure durability
             _pageFile.Flush();
+            _indexFile?.Flush();
+            if (_collectionFiles != null)
+            {
+                foreach (var pf in _collectionFiles.Values)
+                    pf.Flush();
+            }
             
             // 4. Clear in-memory WAL index (redundant since we just recovered)
             _walIndex.Clear();
@@ -211,4 +240,27 @@ public sealed partial class StorageEngine
             _commitLock.Release();
         }
     }
+
+    /// <summary>
+    /// Determines the target <see cref="PageFile"/> for a WAL record during recovery,
+    /// based on the page type stored in the after-image.
+    /// Index page types (Index, Vector, Spatial) are routed to <see cref="_indexFile"/> when configured.
+    /// </summary>
+    private PageFile GetRecoveryPageFile(uint pageId, byte[] pageData)
+    {
+        if (_indexFile != null && pageData.Length >= 5)
+        {
+            var pageType = (PageType)pageData[4]; // PageType is at byte offset 4 in PageHeader
+            if (IsIndexPageType(pageType))
+            {
+                _indexPageIds.TryAdd(pageId, 0);
+                return _indexFile;
+            }
+        }
+        return _pageFile;
+    }
+
+    /// <summary>Returns true if the page type belongs to an index file.</summary>
+    private static bool IsIndexPageType(PageType pageType)
+        => pageType is PageType.Index or PageType.Vector or PageType.Spatial;
 }
