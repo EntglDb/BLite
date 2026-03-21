@@ -147,6 +147,13 @@ public sealed partial class StorageEngine
     /// WAL is not copied because, after the checkpoint, it contains only housekeeping
     /// data and the destination DB is consistent on its own.
     /// </para>
+    /// <para>
+    /// <strong>Multi-file mode limitation:</strong> when <see cref="PageFileConfig.IndexFilePath"/>
+    /// or <see cref="PageFileConfig.CollectionDataDirectory"/> are configured, this method backs up
+    /// only the <em>main</em> data file. Index pages and per-collection data pages reside in their
+    /// own files and are not included in this backup. A consistent multi-file backup must copy all
+    /// associated files while the commit lock is held; this is outside the scope of the current API.
+    /// </para>
     /// </summary>
     /// <param name="destinationDbPath">
     /// Full path of the target .db file. Parent directory is created if missing.

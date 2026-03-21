@@ -277,4 +277,147 @@ public class MultiFileStorageTests : IDisposable
         Assert.Contains(".idx", cfg.IndexFilePath);
         Assert.Contains("collections", cfg.CollectionDataDirectory);
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Async paths — CommitTransactionAsync, ReadPageAsync, CheckpointAsync
+    // ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CommitTransactionAsync_WithCustomWalPath_WritesWalToCorrectLocation()
+    {
+        var dbPath = Path.Combine(_tempDir, "async_wal.db");
+        var customWalPath = Path.Combine(_tempDir, "async_wal_dir", "test.wal");
+        Directory.CreateDirectory(Path.GetDirectoryName(customWalPath)!);
+
+        var config = PageFileConfig.Default with { WalPath = customWalPath };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        var txn = engine.BeginTransaction();
+        var pageId = engine.AllocatePage();
+        var data = new byte[engine.PageSize];
+        engine.WritePage(pageId, txn.TransactionId, data);
+        await engine.CommitTransactionAsync(txn);
+
+        Assert.True(File.Exists(customWalPath), "WAL should exist at the custom path after async commit");
+        Assert.False(File.Exists(Path.ChangeExtension(dbPath, ".wal")),
+            "Default WAL path should NOT exist when custom WalPath is configured");
+    }
+
+    [Fact]
+    public async Task ReadPageAsync_WithSeparateIndexFile_ReadsFromCorrectFile()
+    {
+        var dbPath = Path.Combine(_tempDir, "async_idx.db");
+        var idxPath = Path.Combine(_tempDir, "async_idx.idx");
+        var config = PageFileConfig.Default with { IndexFilePath = idxPath };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        // Write an index page via a transaction, commit async
+        var indexPageId = engine.AllocateIndexPage();
+        var writeData = new byte[engine.PageSize];
+        writeData[4] = (byte)PageType.Index;
+
+        var txn = engine.BeginTransaction();
+        engine.WritePage(indexPageId, txn.TransactionId, writeData);
+        await engine.CommitTransactionAsync(txn);
+
+        // Force checkpoint so the page lands in the physical index file
+        await engine.CheckpointAsync();
+
+        // Read back asynchronously through the routing layer
+        var readBuffer = new byte[engine.PageSize];
+        await engine.ReadPageAsync(indexPageId, null, readBuffer.AsMemory());
+        Assert.Equal((byte)PageType.Index, readBuffer[4]);
+    }
+
+    [Fact]
+    public async Task ReadPageAsync_WithCollectionFile_ReadsFromCorrectFile()
+    {
+        var dbPath = Path.Combine(_tempDir, "async_coll.db");
+        var collDir = Path.Combine(_tempDir, "async_collections");
+        var config = PageFileConfig.Default with { CollectionDataDirectory = collDir };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        var pageId = engine.AllocateCollectionPage("invoices");
+        var writeData = new byte[engine.PageSize];
+        writeData[4] = (byte)PageType.Data;
+        writeData[5] = 0xAB; // sentinel value
+
+        var txn = engine.BeginTransaction();
+        engine.WritePage(pageId, txn.TransactionId, writeData);
+        await engine.CommitTransactionAsync(txn);
+
+        // Force checkpoint so the page lands in the physical collection file
+        await engine.CheckpointAsync();
+
+        // Read back asynchronously
+        var readBuffer = new byte[engine.PageSize];
+        await engine.ReadPageAsync(pageId, null, readBuffer.AsMemory());
+        Assert.Equal((byte)PageType.Data, readBuffer[4]);
+        Assert.Equal(0xAB, readBuffer[5]);
+    }
+
+    [Fact]
+    public async Task CheckpointAsync_WithSeparateIndexFile_FlushesBothFiles()
+    {
+        var dbPath = Path.Combine(_tempDir, "async_ckpt.db");
+        var idxPath = Path.Combine(_tempDir, "async_ckpt.idx");
+        var config = PageFileConfig.Default with { IndexFilePath = idxPath };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        // Write one data page and one index page in the same transaction
+        var txn = engine.BeginTransaction();
+
+        var dataPageId = engine.AllocatePage();
+        var dataBytes = new byte[engine.PageSize];
+        dataBytes[4] = (byte)PageType.Data;
+        engine.WritePage(dataPageId, txn.TransactionId, dataBytes);
+
+        var idxPageId = engine.AllocateIndexPage();
+        var idxBytes = new byte[engine.PageSize];
+        idxBytes[4] = (byte)PageType.Index;
+        engine.WritePage(idxPageId, txn.TransactionId, idxBytes);
+
+        await engine.CommitTransactionAsync(txn);
+        await engine.CheckpointAsync();
+
+        // After checkpoint, both files should contain the flushed pages
+        Assert.True(new FileInfo(dbPath).Length > 0, "Main file should have content after checkpoint");
+        Assert.True(new FileInfo(idxPath).Length > 0, "Index file should have content after checkpoint");
+
+        // Async reads after checkpoint must still route correctly
+        var readData = new byte[engine.PageSize];
+        var readIdx = new byte[engine.PageSize];
+        await engine.ReadPageAsync(dataPageId, null, readData.AsMemory());
+        await engine.ReadPageAsync(idxPageId, null, readIdx.AsMemory());
+
+        Assert.Equal((byte)PageType.Data, readData[4]);
+        Assert.Equal((byte)PageType.Index, readIdx[4]);
+    }
+
+    [Fact]
+    public async Task CheckpointAsync_WithCollectionFiles_FlushesBothMainAndCollectionFiles()
+    {
+        var dbPath = Path.Combine(_tempDir, "async_collckpt.db");
+        var collDir = Path.Combine(_tempDir, "async_collckpt_dir");
+        var config = PageFileConfig.Default with { CollectionDataDirectory = collDir };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        var txn = engine.BeginTransaction();
+        var pageId = engine.AllocateCollectionPage("shipments");
+        var data = new byte[engine.PageSize];
+        data[4] = (byte)PageType.Data;
+        engine.WritePage(pageId, txn.TransactionId, data);
+        await engine.CommitTransactionAsync(txn);
+
+        await engine.CheckpointAsync();
+
+        var shipPath = Path.Combine(collDir, "shipments.db");
+        Assert.True(File.Exists(shipPath), "shipments.db should exist after checkpoint");
+        Assert.True(new FileInfo(shipPath).Length > 0, "shipments.db should contain flushed pages");
+    }
 }
