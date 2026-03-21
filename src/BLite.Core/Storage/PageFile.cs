@@ -408,7 +408,8 @@ public sealed class PageFile : IDisposable
     /// <summary>
     /// Reads a page by ID into the provided buffer (asynchronous).
     /// On .NET 6+: uses <see cref="RandomAccess.ReadAsync"/> for true lock-free OS-level async I/O (IOCP on Windows).
-    /// On .NET Standard 2.1: uses seek + <see cref="Stream.ReadAsync(Memory{byte},CancellationToken)"/> under a lock.
+    /// On .NET Standard 2.1: performs a synchronous read under the shared <see cref="_rwLock"/> read lock
+    /// so it is correctly excluded by concurrent write-lock resize operations (<see cref="EnsureCapacityCore"/>).
     /// WAL/in-memory paths should be handled by the caller before invoking this method.
     /// </summary>
     /// <param name="pageId">The page to read.</param>
@@ -429,17 +430,20 @@ public sealed class PageFile : IDisposable
 #if NET6_0_OR_GREATER
         var bytesRead = await RandomAccess.ReadAsync(_fileStream.SafeFileHandle, slice, offset, cancellationToken).ConfigureAwait(false);
 #else
-        // netstandard2.1: FileStream.Seek + ReadAsync — not lock-free, serialize under _asyncLock.
-        await _asyncLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // netstandard2.1: FileStream.Seek+Read shares the same stream position as
+        // EnsureCapacityCore's SetLength. Use a synchronous read under the shared
+        // _rwLock read lock so it is excluded by any concurrent write-lock resize path.
+        cancellationToken.ThrowIfCancellationRequested();
         int bytesRead;
+        _rwLock.EnterReadLock();
         try
         {
             _fileStream.Seek(offset, SeekOrigin.Begin);
-            bytesRead = await _fileStream.ReadAsync(slice, cancellationToken).ConfigureAwait(false);
+            bytesRead = _fileStream.Read(slice.Span);
         }
         finally
         {
-            _asyncLock.Release();
+            _rwLock.ExitReadLock();
         }
 #endif
 
