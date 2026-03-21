@@ -21,6 +21,18 @@ internal sealed class BLiteKvStore : IBLiteKvStore
     /// <inheritdoc/>
     public byte[]? Get(string key) => _storage.KvGet(key);
 
+    /// <summary>
+    /// Retrieves both the value and the raw expiry timestamp (UTC ticks) for
+    /// <paramref name="key"/>. Returns <c>(null, 0)</c> if the key is absent or has
+    /// expired. An <c>ExpiryTicks</c> value of <c>0</c> means the entry has no expiry.
+    /// </summary>
+    /// <remarks>
+    /// This method is <c>internal</c> and intended for engine-level operations such as
+    /// cross-layout migration, where preserving the original expiry is necessary.
+    /// </remarks>
+    internal (byte[]? Value, long ExpiryTicks) GetWithExpiry(string key)
+        => _storage.KvGetWithExpiry(key);
+
     /// <inheritdoc/>
     public void Set(string key, ReadOnlySpan<byte> value, TimeSpan? ttl = null)
     {

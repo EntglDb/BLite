@@ -78,21 +78,28 @@ public readonly struct PageFileConfig
     /// Sub-file paths are derived from the database filename so that multiple databases
     /// in the same parent directory do not share WAL or index files.
     /// </param>
-    public static PageFileConfig Server(string databasePath) => new()
+    /// <param name="baseConfig">
+    /// Optional base configuration that controls page size, growth block, and memory-map access.
+    /// When <c>null</c>, <see cref="Default"/> (16 KB pages) is used.
+    /// Use <see cref="Small"/> or <see cref="Large"/> to override the page size while keeping
+    /// the server-layout paths.
+    /// </param>
+    public static PageFileConfig Server(string databasePath, PageFileConfig? baseConfig = null)
     {
-        PageSize = 16384,
-        GrowthBlockSize = 4 * 1024 * 1024,  // 4MB growth block for server workloads
-        Access = MemoryMappedFileAccess.ReadWrite,
-        WalPath = Path.Combine(
-            Path.GetDirectoryName(databasePath) ?? ".",
-            "wal",
-            Path.GetFileNameWithoutExtension(databasePath) + ".wal"),
-        IndexFilePath = Path.ChangeExtension(databasePath, ".idx"),
-        CollectionDataDirectory = Path.Combine(
-            Path.GetDirectoryName(databasePath) ?? ".",
-            "collections",
-            Path.GetFileNameWithoutExtension(databasePath))
-    };
+        var @base = baseConfig ?? Default;
+        return @base with
+        {
+            WalPath = Path.Combine(
+                Path.GetDirectoryName(databasePath) ?? ".",
+                "wal",
+                Path.GetFileNameWithoutExtension(databasePath) + ".wal"),
+            IndexFilePath = Path.ChangeExtension(databasePath, ".idx"),
+            CollectionDataDirectory = Path.Combine(
+                Path.GetDirectoryName(databasePath) ?? ".",
+                "collections",
+                Path.GetFileNameWithoutExtension(databasePath))
+        };
+    }
 
     /// <summary>
     /// Detects the page size from an existing database file by reading the page-0 header.

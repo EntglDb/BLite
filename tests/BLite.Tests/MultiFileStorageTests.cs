@@ -269,8 +269,8 @@ public class MultiFileStorageTests : IDisposable
         var dbPath = Path.Combine(dataDir, "mydb.db");
         var cfg = PageFileConfig.Server(dbPath);
 
-        Assert.Equal(16384, cfg.PageSize);
-        Assert.Equal(4 * 1024 * 1024, cfg.GrowthBlockSize);
+        Assert.Equal(PageFileConfig.Default.PageSize,        cfg.PageSize);
+        Assert.Equal(PageFileConfig.Default.GrowthBlockSize, cfg.GrowthBlockSize);
         Assert.NotNull(cfg.WalPath);
         Assert.NotNull(cfg.IndexFilePath);
         Assert.NotNull(cfg.CollectionDataDirectory);
