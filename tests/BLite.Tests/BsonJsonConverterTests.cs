@@ -220,4 +220,181 @@ public class BsonJsonConverterTests
         Assert.True(views.IsInt64 || views.IsInt32,
             $"views should be Int64 or Int32. IsDouble={views.IsDouble}");
     }
+
+    // -- FromJson: null, boolean, string --------------------------------------
+
+    [Fact]
+    public void FromJson_Null_StoresAsNull()
+    {
+        var doc = Parse("""{"value": null}""");
+        Assert.True(doc.GetValue("value").IsNull);
+    }
+
+    [Fact]
+    public void FromJson_True_StoresAsBooleanTrue()
+    {
+        var doc = Parse("""{"value": true}""");
+        var v = doc.GetValue("value");
+        Assert.True(v.IsBoolean);
+        Assert.True(v.AsBoolean);
+    }
+
+    [Fact]
+    public void FromJson_False_StoresAsBooleanFalse()
+    {
+        var doc = Parse("""{"value": false}""");
+        var v = doc.GetValue("value");
+        Assert.True(v.IsBoolean);
+        Assert.False(v.AsBoolean);
+    }
+
+    [Fact]
+    public void FromJson_String_StoresAsString()
+    {
+        var doc = Parse("""{"value": "hello"}""");
+        var v = doc.GetValue("value");
+        Assert.True(v.IsString);
+        Assert.Equal("hello", v.AsString);
+    }
+
+    [Fact]
+    public void FromJson_EmptyString_StoresAsString()
+    {
+        var doc = Parse("""{"value": ""}""");
+        var v = doc.GetValue("value");
+        Assert.True(v.IsString);
+        Assert.Equal("", v.AsString);
+    }
+
+    // -- FromJson: arrays -----------------------------------------------------
+
+    [Fact]
+    public void FromJson_ArrayOfInts_StoresAsBsonArray()
+    {
+        var doc = Parse("""{"price": [1, 2, 3]}""");
+        var v = doc.GetValue("price");
+        Assert.True(v.IsArray);
+        var arr = v.AsArray;
+        Assert.Equal(3, arr.Count);
+        Assert.Equal(1, arr[0].AsInt32);
+        Assert.Equal(2, arr[1].AsInt32);
+        Assert.Equal(3, arr[2].AsInt32);
+    }
+
+    [Fact]
+    public void FromJson_EmptyArray_StoresAsEmptyBsonArray()
+    {
+        var doc = Parse("""{"price": []}""");
+        var v = doc.GetValue("price");
+        Assert.True(v.IsArray);
+        Assert.Empty(v.AsArray);
+    }
+
+    // -- FromJson: throws on non-object root ----------------------------------
+
+    [Fact]
+    public void FromJson_ArrayRoot_ThrowsJsonException()
+    {
+        Assert.Throws<System.Text.Json.JsonException>(() => Parse("""[1, 2, 3]"""));
+    }
+
+    [Fact]
+    public void FromJson_NumberRoot_ThrowsJsonException()
+    {
+        Assert.Throws<System.Text.Json.JsonException>(() => Parse("42"));
+    }
+
+    // -- ToJson: scalar BSON types --------------------------------------------
+
+    [Fact]
+    public void ToJson_Null_OutputsJsonNull()
+    {
+        var doc = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.Null));
+        var json = BsonJsonConverter.ToJson(doc);
+        using var parsed = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Null, parsed.RootElement.GetProperty("value").ValueKind);
+    }
+
+    [Fact]
+    public void ToJson_BoolTrue_OutputsTrue()
+    {
+        var doc = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.FromBoolean(true)));
+        var json = BsonJsonConverter.ToJson(doc);
+        using var parsed = JsonDocument.Parse(json);
+        Assert.True(parsed.RootElement.GetProperty("value").GetBoolean());
+    }
+
+    [Fact]
+    public void ToJson_BoolFalse_OutputsFalse()
+    {
+        var doc = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.FromBoolean(false)));
+        var json = BsonJsonConverter.ToJson(doc);
+        using var parsed = JsonDocument.Parse(json);
+        Assert.False(parsed.RootElement.GetProperty("value").GetBoolean());
+    }
+
+    [Fact]
+    public void ToJson_String_OutputsQuotedString()
+    {
+        var doc = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.FromString("hello")));
+        var json = BsonJsonConverter.ToJson(doc);
+        using var parsed = JsonDocument.Parse(json);
+        Assert.Equal("hello", parsed.RootElement.GetProperty("value").GetString());
+    }
+
+    // -- ToJson round-trip: string, bool, null --------------------------------
+
+    [Fact]
+    public void RoundTrip_BoolTrue_RemainsBool()
+    {
+        var original = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.FromBoolean(true)));
+        var json = BsonJsonConverter.ToJson(original);
+        var restored = Parse(json);
+        var v = restored.GetValue("value");
+        Assert.True(v.IsBoolean);
+        Assert.True(v.AsBoolean);
+    }
+
+    [Fact]
+    public void RoundTrip_String_RemainsString()
+    {
+        var original = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.FromString("test")));
+        var json = BsonJsonConverter.ToJson(original);
+        var restored = Parse(json);
+        var v = restored.GetValue("value");
+        Assert.True(v.IsString);
+        Assert.Equal("test", v.AsString);
+    }
+
+    [Fact]
+    public void RoundTrip_Null_RemainsNull()
+    {
+        var original = BsonDocument.Create(_keyMap, _reverseKeyMap,
+            b => b.Add("value", BsonValue.Null));
+        var json = BsonJsonConverter.ToJson(original);
+        var restored = Parse(json);
+        Assert.True(restored.GetValue("value").IsNull);
+    }
+
+    // -- ToJson(BsonValue) overload -------------------------------------------
+
+    [Fact]
+    public void ToJsonValue_Int32_ReturnsNumberString()
+    {
+        var json = BsonJsonConverter.ToJson(BsonValue.FromInt32(99));
+        Assert.Equal("99", json.Trim());
+    }
+
+    [Fact]
+    public void ToJsonValue_String_ReturnsQuotedString()
+    {
+        var json = BsonJsonConverter.ToJson(BsonValue.FromString("hi"));
+        Assert.Equal("\"hi\"", json.Trim());
+    }
 }

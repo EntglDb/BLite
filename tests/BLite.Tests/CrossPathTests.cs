@@ -489,7 +489,7 @@ public class CrossPathTests : IDisposable
         var entries = btree.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txn.TransactionId).ToList();
 
         // Must have exactly 1 entry
-        Assert.Equal(1, entries.Count);
+        Assert.Single(entries);
 
         // 3. Verify the key decodes back to the original person ID
         Assert.Equal(personId, entries[0].Key.As<int>());

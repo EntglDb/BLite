@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="5cfb9014-a6c7-4061-b175-512b9d6e9271" name="FABLUA@FABLUA-NB 2026-03-21 16:54:22" runUser="ZG\FABLUA" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-03-21T16:54:22.9056132+01:00" queuing="2026-03-21T16:54:22.9056137+01:00" start="2026-03-21T16:54:21.6501252+01:00" finish="2026-03-21T16:54:22.9156294+01:00" />
+  <TestSettings name="default" id="0a560598-1fa1-4e39-8320-2859d91a4d0b">
+    <Deployment runDeploymentRoot="FABLUA_FABLUA-NB_2026-03-21_16_54_22" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="a5dc15c9-ca21-459a-a20f-6c04b570341c" testId="0eb27524-1c15-0ef3-d560-5a2715004fb6" testName="BLite.Tests.VectorSearchTests.Test_VectorSearch_Results_OrderedByDistance_NearestFirst" computerName="FABLUA-NB" duration="00:00:00.2582069" startTime="2026-03-21T16:54:22.4786012+01:00" endTime="2026-03-21T16:54:22.7469537+01:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a5dc15c9-ca21-459a-a20f-6c04b570341c" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="BLite.Tests.VectorSearchTests.Test_VectorSearch_Results_OrderedByDistance_NearestFirst" storage="c:\github\blite\tests\blite.tests\bin\debug\net10.0\blite.tests.dll" id="0eb27524-1c15-0ef3-d560-5a2715004fb6">
+      <Execution id="a5dc15c9-ca21-459a-a20f-6c04b570341c" />
+      <TestMethod codeBase="C:\github\BLite\tests\BLite.Tests\bin\Debug\net10.0\BLite.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="BLite.Tests.VectorSearchTests" name="Test_VectorSearch_Results_OrderedByDistance_NearestFirst" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="0eb27524-1c15-0ef3-d560-5a2715004fb6" executionId="a5dc15c9-ca21-459a-a20f-6c04b570341c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Risultati non in elenco" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="Tutti i risultati caricati" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="1" executed="1" passed="1" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.4)&#xD;
+[xUnit.net 00:00:00.10]   Discovering: BLite.Tests&#xD;
+[xUnit.net 00:00:00.22]   Discovered:  BLite.Tests&#xD;
+[xUnit.net 00:00:00.24]   Starting:    BLite.Tests&#xD;
+[xUnit.net 00:00:00.55]   Finished:    BLite.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

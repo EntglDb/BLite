@@ -57,7 +57,7 @@ public class DbContextTests : IDisposable
     [Fact]
     public void DbContext_Dispose_ReleasesResources()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"test_dbcontext_reopen.db");
+        _dbPath = Path.Combine(Path.GetTempPath(), $"test_dbcontext_reopen_{Guid.NewGuid()}.db");
         var totalUsers = 0;
         // First context - insert and dispose (auto-checkpoint)
         using (var db = new TestDbContext(_dbPath))

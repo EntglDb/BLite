@@ -71,7 +71,7 @@ internal class EnumerableRewriter : ExpressionVisitor
             {
                 if (candidate.GetGenericArguments().Length != typeArgs.Length) continue;
                 if (candidate.GetParameters().Length != args.Length) continue;
-                MethodInfo closed;
+                MethodInfo closed = null!;
                 try { closed = candidate.MakeGenericMethod(typeArgs); }
                 catch { continue; }
                 try { return Expression.Call(closed, args); }

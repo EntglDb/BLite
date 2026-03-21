@@ -5,13 +5,13 @@ namespace BLite.Tests;
 
 public class IndexDirectionTests : IDisposable
 {
-    private readonly string _dbPath = "index_direction_tests.db";
+    private readonly string _dbPath;
 
     private readonly TestDbContext _db;
 
     public IndexDirectionTests()
     {
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+        _dbPath = Path.Combine(Path.GetTempPath(), $"idx_dir_{Guid.NewGuid()}.db");
         _db = new TestDbContext(_dbPath);
         // _db.Database.EnsureCreated(); // Not needed/doesn't exist? StorageEngine handles creation.
     }

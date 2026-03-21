@@ -287,7 +287,7 @@ public sealed class DynamicCollection : IDisposable
 
         // Write raw BSON to storage
         var docData = document.RawData;
-        DocumentLocation location;
+        DocumentLocation location = default;
 
         if (_isTimeSeries)
         {
@@ -659,7 +659,7 @@ public sealed class DynamicCollection : IDisposable
 
             // Insert updated document
             var docData = newDocument.RawData;
-            DocumentLocation newLocation;
+            DocumentLocation newLocation = default;
 
             if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
             {
@@ -720,7 +720,7 @@ public sealed class DynamicCollection : IDisposable
                 newDocument = PrependId(newDocument, id);
 
             var docData = newDocument.RawData;
-            DocumentLocation newLocation;
+            DocumentLocation newLocation = default;
             if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
             {
                 var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);

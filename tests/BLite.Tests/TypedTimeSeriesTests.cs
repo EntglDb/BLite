@@ -122,7 +122,7 @@ public class TypedTimeSeriesTests : IDisposable
         _db.SensorReadings.ForcePrune();
 
         // Stale index entries pointing to freed pages are silently skipped (v1 known behaviour).
-        Assert.Equal(0, _db.SensorReadings.FindAll().Count());
+        Assert.Empty(_db.SensorReadings.FindAll());
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class TypedTimeSeriesTests : IDisposable
         _db.SensorReadings.ForcePrune();
 
         // The page holds a recent document, so it must not be freed.
-        Assert.Equal(1, _db.SensorReadings.FindAll().Count());
+        Assert.Single(_db.SensorReadings.FindAll());
     }
 
     // ─── Persistence across restart ──────────────────────────────────────────

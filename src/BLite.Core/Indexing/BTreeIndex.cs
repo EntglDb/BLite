@@ -439,7 +439,7 @@ public sealed class BTreeIndex
         do
         {
             var current = cursor.Current;
-            string val;
+            string val = string.Empty;
             try { val = current.Key.As<string>(); } 
             catch { break; } 
 
@@ -492,7 +492,7 @@ public sealed class BTreeIndex
 
         do 
         {
-            IndexEntry current;
+            IndexEntry current = default;
             try { current = cursor.Current; } catch { break; } // Safe break if cursor invalid
             
             if (!string.IsNullOrEmpty(prefix))
@@ -1513,7 +1513,7 @@ public sealed class BTreeIndex
         var startKey = IndexKey.Create(prefix);
         await foreach (var entry in RangeAsync(startKey, IndexKey.MaxKey, IndexDirection.Forward, transactionId, ct).ConfigureAwait(false))
         {
-            string val;
+            string val = string.Empty;
             try { val = entry.Key.As<string>(); } catch { yield break; }
             if (!val.StartsWith(prefix, StringComparison.Ordinal)) yield break;
             yield return entry;
@@ -1554,7 +1554,7 @@ public sealed class BTreeIndex
 
         await foreach (var entry in RangeAsync(startKey, IndexKey.MaxKey, IndexDirection.Forward, transactionId, ct).ConfigureAwait(false))
         {
-            string val;
+            string val = string.Empty;
             try { val = entry.Key.As<string>(); } catch { yield break; }
 
             if (!string.IsNullOrEmpty(prefix) && !val.StartsWith(prefix, StringComparison.Ordinal))

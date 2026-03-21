@@ -174,7 +174,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         else
         {
             // Latest persisted is same as current structure
-            CurrentSchemaVersion = new SchemaVersion(latestPersisted.Version ?? persistedSchemas.Count, latestPersisted.GetHash());
+            int resolvedVersion = latestPersisted.Version ?? persistedSchemas.Count;
+            CurrentSchemaVersion = new SchemaVersion(resolvedVersion, latestPersisted.GetHash());
         }
     }
 
