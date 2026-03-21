@@ -73,14 +73,25 @@ public readonly struct PageFileConfig
     /// Server-optimized configuration: separate WAL, index, and per-collection files.
     /// Designed for BLite.Server where each connection serves multiple clients.
     /// </summary>
-    public static PageFileConfig Server(string dataDirectory) => new()
+    /// <param name="databasePath">
+    /// Full path to the .db file (e.g. <c>/data/blite/mydb.db</c>).
+    /// Sub-file paths are derived from the database filename so that multiple databases
+    /// in the same parent directory do not share WAL or index files.
+    /// </param>
+    public static PageFileConfig Server(string databasePath) => new()
     {
         PageSize = 16384,
         GrowthBlockSize = 4 * 1024 * 1024,  // 4MB growth block for server workloads
         Access = MemoryMappedFileAccess.ReadWrite,
-        WalPath = Path.Combine(dataDirectory, "wal", "blite.wal"),
-        IndexFilePath = Path.Combine(dataDirectory, "blite.idx"),
-        CollectionDataDirectory = Path.Combine(dataDirectory, "collections")
+        WalPath = Path.Combine(
+            Path.GetDirectoryName(databasePath)!,
+            "wal",
+            Path.GetFileNameWithoutExtension(databasePath) + ".wal"),
+        IndexFilePath = Path.ChangeExtension(databasePath, ".idx"),
+        CollectionDataDirectory = Path.Combine(
+            Path.GetDirectoryName(databasePath)!,
+            "collections",
+            Path.GetFileNameWithoutExtension(databasePath))
     };
 
     /// <summary>

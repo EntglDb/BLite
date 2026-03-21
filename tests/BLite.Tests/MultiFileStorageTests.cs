@@ -265,7 +265,9 @@ public class MultiFileStorageTests : IDisposable
     public void PageFileConfig_Server_ReturnsCorrectPaths()
     {
         var dataDir = Path.Combine(_tempDir, "serverdata");
-        var cfg = PageFileConfig.Server(dataDir);
+        Directory.CreateDirectory(dataDir);
+        var dbPath = Path.Combine(dataDir, "mydb.db");
+        var cfg = PageFileConfig.Server(dbPath);
 
         Assert.Equal(16384, cfg.PageSize);
         Assert.Equal(4 * 1024 * 1024, cfg.GrowthBlockSize);
@@ -274,8 +276,10 @@ public class MultiFileStorageTests : IDisposable
         Assert.NotNull(cfg.CollectionDataDirectory);
 
         Assert.Contains("wal", cfg.WalPath);
-        Assert.Contains(".idx", cfg.IndexFilePath);
+        Assert.Contains("mydb.wal", cfg.WalPath);
+        Assert.Contains("mydb.idx", cfg.IndexFilePath);
         Assert.Contains("collections", cfg.CollectionDataDirectory);
+        Assert.Contains("mydb", cfg.CollectionDataDirectory);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -419,5 +423,112 @@ public class MultiFileStorageTests : IDisposable
         var shipPath = Path.Combine(collDir, "shipments.db");
         Assert.True(File.Exists(shipPath), "shipments.db should exist after checkpoint");
         Assert.True(new FileInfo(shipPath).Length > 0, "shipments.db should contain flushed pages");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // pageId collision prevention
+    // ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void MultiFileRouting_PageIdsDoNotCollideAcrossFiles()
+    {
+        var dbPath = Path.Combine(_tempDir, "collision.db");
+        var idxPath = Path.Combine(_tempDir, "collision.idx");
+        var collDir = Path.Combine(_tempDir, "collision_coll");
+        var config = PageFileConfig.Default with
+        {
+            IndexFilePath = idxPath,
+            CollectionDataDirectory = collDir
+        };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        var dataPageId   = engine.AllocatePage();
+        var indexPageId  = engine.AllocateIndexPage();
+        var collPageId   = engine.AllocateCollectionPage("orders");
+
+        // All three IDs must be distinct
+        Assert.True(dataPageId  != indexPageId,  "data and index pageIds must not collide");
+        Assert.True(dataPageId  != collPageId,   "data and collection pageIds must not collide");
+        Assert.True(indexPageId != collPageId,   "index and collection pageIds must not collide");
+
+        // Write distinct sentinel bytes to each page
+        var dataBuf = new byte[engine.PageSize];
+        dataBuf[8] = 0xAA;
+        engine.WritePageImmediate(dataPageId, dataBuf);
+
+        var idxBuf = new byte[engine.PageSize];
+        idxBuf[8] = 0xBB;
+        engine.WritePageImmediate(indexPageId, idxBuf);
+
+        var collBuf = new byte[engine.PageSize];
+        collBuf[8] = 0xCC;
+        engine.WritePageImmediate(collPageId, collBuf);
+
+        engine.FlushPageFile();
+
+        // Read back — each must return its own sentinel
+        var r1 = new byte[engine.PageSize];
+        engine.ReadPage(dataPageId, null, r1);
+        Assert.Equal(0xAA, r1[8]);
+
+        var r2 = new byte[engine.PageSize];
+        engine.ReadPage(indexPageId, null, r2);
+        Assert.Equal(0xBB, r2[8]);
+
+        var r3 = new byte[engine.PageSize];
+        engine.ReadPage(collPageId, null, r3);
+        Assert.Equal(0xCC, r3[8]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Routing persistence — pages readable after engine restart
+    // ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void MultiFileRouting_IndexAndCollectionPagesReadableAfterRestart()
+    {
+        var dbPath  = Path.Combine(_tempDir, "restart.db");
+        var idxPath = Path.Combine(_tempDir, "restart.idx");
+        var collDir = Path.Combine(_tempDir, "restart_coll");
+        var config  = PageFileConfig.Default with
+        {
+            IndexFilePath = idxPath,
+            CollectionDataDirectory = collDir
+        };
+
+        uint indexPageId, collPageId;
+
+        // First engine lifetime — allocate + write
+        using (var engine = new StorageEngine(dbPath, config))
+        {
+            indexPageId = engine.AllocateIndexPage();
+            var idxData = new byte[engine.PageSize];
+            idxData[4] = (byte)PageType.Index;
+            idxData[8] = 0xBB;
+            engine.WritePageImmediate(indexPageId, idxData);
+
+            collPageId = engine.AllocateCollectionPage("users");
+            var collData = new byte[engine.PageSize];
+            collData[4] = (byte)PageType.Data;
+            collData[8] = 0xCC;
+            engine.WritePageImmediate(collPageId, collData);
+
+            engine.FlushPageFile();
+        }
+
+        // Second engine lifetime — routing must work without in-memory maps
+        using (var engine = new StorageEngine(dbPath, config))
+        {
+            var idxRead = new byte[engine.PageSize];
+            engine.ReadPage(indexPageId, null, idxRead);
+            Assert.Equal((byte)PageType.Index, idxRead[4]);
+            Assert.Equal(0xBB, idxRead[8]);
+
+            var collRead = new byte[engine.PageSize];
+            engine.ReadPage(collPageId, null, collRead);
+            Assert.Equal((byte)PageType.Data, collRead[4]);
+            Assert.Equal(0xCC, collRead[8]);
+        }
     }
 }

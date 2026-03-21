@@ -29,15 +29,17 @@ public sealed partial class StorageEngine : IDisposable
     // Lazily populated on first read after commit
     private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
     
-    // Tracks which pageIds belong to _indexFile (only populated when _indexFile != null)
-    private readonly ConcurrentDictionary<uint, byte> _indexPageIds;
-
     // Collection-per-file: collectionName → PageFile dedicated
     // Null if CollectionDataDirectory not configured (embedded mode, single file)
     private readonly ConcurrentDictionary<string, PageFile>? _collectionFiles;
 
-    // pageId → collectionName (only populated in multi-file mode)
-    private readonly ConcurrentDictionary<uint, string>? _collectionPageMap;
+    // Collection slot registry — only populated in multi-file mode
+    // Maps collection name → slot index (0-63) and slot → name
+    private readonly ConcurrentDictionary<string, int>? _collectionNameToSlot;
+    private readonly Dictionary<int, string>? _collectionSlotToName;
+    private int _nextSlotIndex;
+    private readonly string? _slotsFilePath;
+    private readonly object _collectionSlotLock = new();
 
     // Stored config for use by multi-file helpers
     private readonly PageFileConfig _config;
@@ -67,6 +69,11 @@ public sealed partial class StorageEngine : IDisposable
         // Use WalPath if specified, otherwise derive from databasePath (default behavior unchanged)
         var walPath = config.WalPath ?? Path.ChangeExtension(databasePath, ".wal");
 
+        // Ensure WAL parent directory exists
+        var walDirectory = Path.GetDirectoryName(walPath);
+        if (!string.IsNullOrWhiteSpace(walDirectory))
+            Directory.CreateDirectory(walDirectory);
+
         // Initialize storage infrastructure
         _pageFile = new PageFile(databasePath, config);
         _pageFile.Open();
@@ -74,6 +81,9 @@ public sealed partial class StorageEngine : IDisposable
         // Phase 3: open separate index file if configured
         if (config.IndexFilePath != null)
         {
+            var idxDirectory = Path.GetDirectoryName(config.IndexFilePath);
+            if (!string.IsNullOrWhiteSpace(idxDirectory))
+                Directory.CreateDirectory(idxDirectory);
             _indexFile = new PageFile(config.IndexFilePath, AsStandaloneConfig(config));
             _indexFile.Open();
         }
@@ -83,13 +93,15 @@ public sealed partial class StorageEngine : IDisposable
         {
             Directory.CreateDirectory(config.CollectionDataDirectory);
             _collectionFiles = new ConcurrentDictionary<string, PageFile>(StringComparer.OrdinalIgnoreCase);
-            _collectionPageMap = new ConcurrentDictionary<uint, string>();
+            _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            _collectionSlotToName = new Dictionary<int, string>();
+            _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
+            LoadCollectionSlots();
         }
 
         _wal = new WriteAheadLog(walPath);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
-        _indexPageIds = new ConcurrentDictionary<uint, byte>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
         _nextTransactionId = 0; // Interlocked.Increment pre-increments, so first txnId == 1.
 

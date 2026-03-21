@@ -75,7 +75,7 @@ public sealed partial class StorageEngine
         // 1. Write all committed pages from index to the correct PageFile
         foreach (var kvp in _walIndex)
         {
-            GetPageFile(kvp.Key).WritePage(kvp.Key, kvp.Value);
+            GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
         }
         
         // 2. Flush PageFile(s) to ensure durability
@@ -108,7 +108,7 @@ public sealed partial class StorageEngine
             // PageFile writes are sync (MMF), but that's fine as per plan (ValueTask strategy for MMF)
             foreach (var kvp in _walIndex)
             {
-                GetPageFile(kvp.Key).WritePage(kvp.Key, kvp.Value);
+                GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
             }
             
             // 2. Flush PageFile(s) to ensure durability
@@ -222,8 +222,8 @@ public sealed partial class StorageEngine
                     
                 foreach (var (pageId, data) in txnWrites[txnId])
                 {
-                    var targetFile = GetRecoveryPageFile(pageId, data);
-                    targetFile.WritePage(pageId, data);
+                    var targetFile = GetPageFile(pageId, out var physId);
+                    targetFile.WritePage(physId, data);
                 }
             }
             
@@ -247,27 +247,4 @@ public sealed partial class StorageEngine
             _commitLock.Release();
         }
     }
-
-    /// <summary>
-    /// Determines the target <see cref="PageFile"/> for a WAL record during recovery,
-    /// based on the page type stored in the after-image.
-    /// Index page types (Index, Vector, Spatial) are routed to <see cref="_indexFile"/> when configured.
-    /// </summary>
-    private PageFile GetRecoveryPageFile(uint pageId, byte[] pageData)
-    {
-        if (_indexFile != null && pageData.Length >= 5)
-        {
-            var pageType = (PageType)pageData[4]; // PageType is at byte offset 4 in PageHeader
-            if (IsIndexPageType(pageType))
-            {
-                _indexPageIds.TryAdd(pageId, 0);
-                return _indexFile;
-            }
-        }
-        return _pageFile;
-    }
-
-    /// <summary>Returns true if the page type belongs to an index file.</summary>
-    private static bool IsIndexPageType(PageType pageType)
-        => pageType is PageType.Index or PageType.Vector or PageType.Spatial;
 }
