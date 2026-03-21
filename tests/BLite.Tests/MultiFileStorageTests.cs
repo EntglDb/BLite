@@ -531,4 +531,265 @@ public class MultiFileStorageTests : IDisposable
             Assert.Equal(0xCC, collRead[8]);
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Concurrent read / write safety (locking correctness)
+    // These tests exercise the ReaderWriterLockSlim paths added to
+    // PageFile to prevent ObjectDisposedException when a concurrent
+    // WritePage triggers a file-resize while ReadPage is active.
+    // ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ConcurrentReadWrite_MainFile_NoCrash()
+    {
+        // Allocate enough pages to force at least one file growth event, then
+        // hammer concurrent reads and writes to verify the shared read-lock path
+        // and the exclusive write-lock resize path do not race on _mappedFile.
+        var dbPath = Path.Combine(_tempDir, "concur_main.db");
+        using var engine = new StorageEngine(dbPath, PageFileConfig.Small);
+
+        const int pageCount  = 40;
+        const int readerCount = 20;
+
+        var pageIds = new uint[pageCount];
+        for (int i = 0; i < pageCount; i++)
+            pageIds[i] = engine.AllocatePage();
+
+        // Seed distinct sentinel bytes
+        for (int i = 0; i < pageCount; i++)
+        {
+            var data = new byte[engine.PageSize];
+            data[0] = (byte)(i + 1);
+            engine.WritePageImmediate(pageIds[i], data);
+        }
+        engine.FlushPageFile();
+
+        var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        // Readers and writers run concurrently
+        var tasks = new List<Task>();
+
+        // Concurrent readers
+        for (int r = 0; r < readerCount; r++)
+        {
+            var idx = r % pageCount;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    var buf = new byte[engine.PageSize];
+                    engine.ReadPage(pageIds[idx], null, buf);
+                    // Sentinel must equal the page index + 1
+                    Assert.Equal((byte)(idx + 1), buf[0]);
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        // Concurrent transactional writers: commit to WAL then force a checkpoint so
+        // the write propagates to PageFile.WritePage(), exercising the ReaderWriterLockSlim-protected write path.
+        for (int w = 0; w < 10; w++)
+        {
+            var idx = w % pageCount;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    var txn = engine.BeginTransaction();
+                    var data = new byte[engine.PageSize];
+                    data[0] = (byte)(idx + 1);
+                    engine.WritePage(pageIds[idx], txn.TransactionId, data);
+                    engine.CommitTransaction(txn);
+                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        await Task.WhenAll(tasks);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task ConcurrentReadWrite_IndexFile_NoCrash()
+    {
+        var dbPath  = Path.Combine(_tempDir, "concur_idx.db");
+        var idxPath = Path.Combine(_tempDir, "concur_idx.idx");
+        var config  = PageFileConfig.Small with { IndexFilePath = idxPath };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        const int pageCount = 20;
+        var pageIds = new uint[pageCount];
+        for (int i = 0; i < pageCount; i++)
+            pageIds[i] = engine.AllocateIndexPage();
+
+        for (int i = 0; i < pageCount; i++)
+        {
+            var data = new byte[engine.PageSize];
+            data[0] = (byte)(i + 1);
+            engine.WritePageImmediate(pageIds[i], data);
+        }
+        engine.FlushPageFile();
+
+        var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        var tasks  = new List<Task>();
+
+        for (int r = 0; r < 20; r++)
+        {
+            var idx = r % pageCount;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    var buf = new byte[engine.PageSize];
+                    engine.ReadPage(pageIds[idx], null, buf);
+                    Assert.Equal((byte)(idx + 1), buf[0]);
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        for (int w = 0; w < 10; w++)
+        {
+            var idx = w % pageCount;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    var txn = engine.BeginTransaction();
+                    var data = new byte[engine.PageSize];
+                    data[0] = (byte)(idx + 1);
+                    engine.WritePage(pageIds[idx], txn.TransactionId, data);
+                    engine.CommitTransaction(txn);
+                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        await Task.WhenAll(tasks);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task ConcurrentReadWrite_CollectionFile_NoCrash()
+    {
+        var dbPath  = Path.Combine(_tempDir, "concur_coll.db");
+        var collDir = Path.Combine(_tempDir, "concur_coll_dir");
+        var config  = PageFileConfig.Small with { CollectionDataDirectory = collDir };
+
+        using var engine = new StorageEngine(dbPath, config);
+
+        const int pageCount = 20;
+        var pageIds = new uint[pageCount];
+        for (int i = 0; i < pageCount; i++)
+            pageIds[i] = engine.AllocateCollectionPage("items");
+
+        for (int i = 0; i < pageCount; i++)
+        {
+            var data = new byte[engine.PageSize];
+            data[0] = (byte)(i + 1);
+            engine.WritePageImmediate(pageIds[i], data);
+        }
+        engine.FlushPageFile();
+
+        var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        var tasks  = new List<Task>();
+
+        for (int r = 0; r < 20; r++)
+        {
+            var idx = r % pageCount;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    var buf = new byte[engine.PageSize];
+                    engine.ReadPage(pageIds[idx], null, buf);
+                    Assert.Equal((byte)(idx + 1), buf[0]);
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        for (int w = 0; w < 10; w++)
+        {
+            var idx = w % pageCount;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    var txn = engine.BeginTransaction();
+                    var data = new byte[engine.PageSize];
+                    data[0] = (byte)(idx + 1);
+                    engine.WritePage(pageIds[idx], txn.TransactionId, data);
+                    engine.CommitTransaction(txn);
+                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        await Task.WhenAll(tasks);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task ConcurrentAllocateAndRead_NoCrash()
+    {
+        // Exercises the race where AllocatePage() holds the write lock and grows
+        // the file while concurrent ReadPage() calls hold a read lock.
+        var dbPath = Path.Combine(_tempDir, "concur_alloc.db");
+        using var engine = new StorageEngine(dbPath, PageFileConfig.Small);
+
+        // Pre-allocate a stable page to read from during the race
+        var stablePage = engine.AllocatePage();
+        var seedData   = new byte[engine.PageSize];
+        seedData[0] = 0x42;
+        engine.WritePageImmediate(stablePage, seedData);
+        engine.FlushPageFile();
+
+        var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        var tasks  = new List<Task>();
+
+        // Readers continuously read the stable page
+        for (int r = 0; r < 20; r++)
+        {
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    for (int iter = 0; iter < 50; iter++)
+                    {
+                        var buf = new byte[engine.PageSize];
+                        engine.ReadPage(stablePage, null, buf);
+                        // Verify that the stable page content remains correct
+                        Assert.Equal(0x42, buf[0]);
+                    }
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        // Writers allocate new pages, potentially growing the file
+        for (int w = 0; w < 5; w++)
+        {
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    for (int iter = 0; iter < 10; iter++)
+                    {
+                        var newPage = engine.AllocatePage();
+                        var data = new byte[engine.PageSize];
+                        engine.WritePageImmediate(newPage, data);
+                    }
+                }
+                catch (Exception ex) { errors.Add(ex); }
+            }));
+        }
+
+        await Task.WhenAll(tasks);
+        Assert.Empty(errors);
+    }
 }

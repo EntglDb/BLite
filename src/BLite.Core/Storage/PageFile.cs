@@ -154,8 +154,22 @@ public sealed class PageFile : IDisposable
     private readonly PageFileConfig _config;
     private FileStream? _fileStream;
     private MemoryMappedFile? _mappedFile;
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    private bool _disposed;
+
+    // _rwLock guards _mappedFile, _nextPageId, and _firstFreePageId.
+    // Read lock:  ReadPage(), WritePage() when no file growth is needed.
+    // Write lock: Open(), AllocatePage(), FreePage(), WritePage() when file grows,
+    //             Flush(), Dispose() — any operation that recreates _mappedFile or
+    //             modifies structural state.
+    // ReaderWriterLockSlim allows many concurrent readers while serialising writers,
+    // eliminating the race where a concurrent resize (write lock) disposes _mappedFile
+    // while ReadPage() (read lock) is creating a view accessor from it.
+    private readonly ReaderWriterLockSlim _rwLock = new(LockRecursionPolicy.NoRecursion);
+
+    // _asyncLock serialises FlushAsync() and BackupAsync(), which must hold exclusive
+    // access across an await boundary and therefore cannot use ReaderWriterLockSlim.
+    private readonly SemaphoreSlim _asyncLock = new(1, 1);
+
+    private volatile bool _disposed;
     private uint _nextPageId;
     private uint _firstFreePageId;
 
@@ -185,7 +199,7 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void Open()
     {
-        _lock.Wait();
+        _rwLock.EnterWriteLock();
         try
         {
             if (_fileStream != null)
@@ -270,13 +284,9 @@ public sealed class PageFile : IDisposable
         }
         finally
         {
-            _lock.Release();
+            _rwLock.ExitWriteLock();
         }
     }
-
-    /// <summary>
-    /// Initializes the file header (page 0) and collection metadata (page 1)
-    /// </summary>
     private void InitializeHeader()
     {
         // 1. Initialize Header (Page 0)
@@ -318,30 +328,88 @@ public sealed class PageFile : IDisposable
         _fileStream.Flush();
     }
 
-    // ... (ReadPage / WritePage unchanged) ...
+    // ── Lock-free core helpers ─────────────────────────────────────────────
+    // These methods perform the raw MMF read/write without acquiring any lock.
+    // They MUST only be called by code that already holds _rwLock in an
+    // appropriate mode:
+    //   ReadPageCore    — ReadLock or WriteLock
+    //   WritePageCore   — ReadLock or WriteLock
+    //   EnsureCapacityCore — WriteLock only (modifies _mappedFile)
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(PageFile));
+    }
+
+    private void ReadPageCore(uint pageId, Span<byte> destination)
+    {
+        var offset = (long)pageId * _config.PageSize;
+        using var accessor = _mappedFile!.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Read);
+        var temp = new byte[_config.PageSize];
+        accessor.ReadArray(0, temp, 0, _config.PageSize);
+        temp.CopyTo(destination);
+    }
+
+    private void WritePageCore(uint pageId, ReadOnlySpan<byte> source)
+    {
+        var offset = (long)pageId * _config.PageSize;
+        using var accessor = _mappedFile!.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write);
+        accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+    }
+
+    // ── Grow-file helper ───────────────────────────────────────────────────
+    // Must be called under _rwLock write lock. Extends the file and recreates
+    // _mappedFile when the requested offset does not fit in the current mapping.
+    private void EnsureCapacityCore(long requiredOffset)
+    {
+        if (requiredOffset + _config.PageSize <= _fileStream!.Length)
+            return;
+
+        var newSize = AlignToBlock(requiredOffset + _config.PageSize);
+        _fileStream.SetLength(newSize);
+        _mappedFile!.Dispose();
+        _mappedFile = MemoryMappedFile.CreateFromFile(
+            _fileStream,
+            null,
+            _fileStream.Length,
+            _config.Access,
+            HandleInheritability.None,
+            leaveOpen: true);
+    }
+
+    // ── Public page I/O ────────────────────────────────────────────────────
+
     /// <summary>
     /// Reads a page by ID into the provided span (synchronous).
+    /// Acquires a shared read lock so multiple threads can read concurrently,
+    /// while being safely excluded from any concurrent file-resize operation.
     /// </summary>
     public void ReadPage(uint pageId, Span<byte> destination)
     {
+        ThrowIfDisposed();
         if (destination.Length < _config.PageSize)
             throw new ArgumentException($"Destination must be at least {_config.PageSize} bytes");
 
         if (_mappedFile == null)
             throw new InvalidOperationException("File not open");
 
-        var offset = (long)pageId * _config.PageSize;
-        
-        using var accessor = _mappedFile.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Read);
-        var temp = new byte[_config.PageSize];
-        accessor.ReadArray(0, temp, 0, _config.PageSize);
-        temp.CopyTo(destination);
+        _rwLock.EnterReadLock();
+        try
+        {
+            ReadPageCore(pageId, destination);
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     /// <summary>
     /// Reads a page by ID into the provided buffer (asynchronous).
     /// On .NET 6+: uses <see cref="RandomAccess.ReadAsync"/> for true lock-free OS-level async I/O (IOCP on Windows).
-    /// On .NET Standard 2.1: uses seek + <see cref="Stream.ReadAsync(Memory{byte},CancellationToken)"/> under a lock.
+    /// On .NET Standard 2.1: performs a synchronous read under the shared <see cref="_rwLock"/> read lock
+    /// so it is correctly excluded by concurrent write-lock resize operations (<see cref="EnsureCapacityCore"/>).
     /// WAL/in-memory paths should be handled by the caller before invoking this method.
     /// </summary>
     /// <param name="pageId">The page to read.</param>
@@ -349,6 +417,7 @@ public sealed class PageFile : IDisposable
     /// <param name="cancellationToken">Cancellation token.</param>
     public async ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         if (destination.Length < _config.PageSize)
             throw new ArgumentException($"Destination must be at least {_config.PageSize} bytes");
 
@@ -361,17 +430,20 @@ public sealed class PageFile : IDisposable
 #if NET6_0_OR_GREATER
         var bytesRead = await RandomAccess.ReadAsync(_fileStream.SafeFileHandle, slice, offset, cancellationToken).ConfigureAwait(false);
 #else
-        // netstandard2.1: FileStream.Seek + ReadAsync — not lock-free, serialize under _lock.
-        await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // netstandard2.1: FileStream.Seek+Read shares the same stream position as
+        // EnsureCapacityCore's SetLength. Use a synchronous read under the shared
+        // _rwLock read lock so it is excluded by any concurrent write-lock resize path.
+        cancellationToken.ThrowIfCancellationRequested();
         int bytesRead;
+        _rwLock.EnterReadLock();
         try
         {
             _fileStream.Seek(offset, SeekOrigin.Begin);
-            bytesRead = await _fileStream.ReadAsync(slice, cancellationToken).ConfigureAwait(false);
+            bytesRead = _fileStream.Read(slice.Span);
         }
         finally
         {
-            _lock.Release();
+            _rwLock.ExitReadLock();
         }
 #endif
 
@@ -380,10 +452,15 @@ public sealed class PageFile : IDisposable
     }
 
     /// <summary>
-    /// Writes a page at the specified ID from the provided span
+    /// Writes a page at the specified ID from the provided span.
+    /// If the write fits within the current file size, a shared read lock is used
+    /// (allowing other concurrent reads and non-growing writes).
+    /// If the file must grow, an exclusive write lock is taken to safely dispose
+    /// and recreate the memory-mapped file before writing.
     /// </summary>
     public void WritePage(uint pageId, ReadOnlySpan<byte> source)
     {
+        ThrowIfDisposed();
         if (source.Length < _config.PageSize)
             throw new ArgumentException($"Source must be at least {_config.PageSize} bytes");
 
@@ -391,48 +468,46 @@ public sealed class PageFile : IDisposable
             throw new InvalidOperationException("File not open");
 
         var offset = (long)pageId * _config.PageSize;
-        
-        // Ensure file is large enough
-        if (offset + _config.PageSize > _fileStream!.Length)
+
+        // Fast path: file is already large enough — share the mapping with readers.
+        if (offset + _config.PageSize <= _fileStream!.Length)
         {
-            _lock.Wait();
+            _rwLock.EnterReadLock();
             try
             {
-                if (offset + _config.PageSize > _fileStream.Length)
-                {
-                    var newSize = AlignToBlock(offset + _config.PageSize);
-                    _fileStream.SetLength(newSize);
-
-                    // Recreate memory-mapped file with new size
-                    _mappedFile.Dispose();
-                    _mappedFile = MemoryMappedFile.CreateFromFile(
-                        _fileStream,
-                        null,
-                        _fileStream.Length,
-                        _config.Access,
-                        HandleInheritability.None,
-                        leaveOpen: true);
-                }
+                WritePageCore(pageId, source);
             }
             finally
             {
-                _lock.Release();
+                _rwLock.ExitReadLock();
             }
+            return;
         }
 
-        // Write to memory-mapped file
-        using (var accessor = _mappedFile.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write))
+        // Slow path: the file must grow.  Exclusively lock so that no reader
+        // can hold a reference to the old _mappedFile while we dispose it.
+        _rwLock.EnterWriteLock();
+        try
         {
-            accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+            // Double-check: another writer may have grown the file already.
+            EnsureCapacityCore(offset);
+            WritePageCore(pageId, source);
+        }
+        finally
+        {
+            _rwLock.ExitWriteLock();
         }
     }
 
     /// <summary>
-    /// Allocates a new page (reuses free page if available) and returns its ID
+    /// Allocates a new page (reuses free page if available) and returns its ID.
+    /// Holds the write lock for the duration because it may grow the file and
+    /// always modifies <see cref="_nextPageId"/> or <see cref="_firstFreePageId"/>.
     /// </summary>
     public uint AllocatePage()
     {
-        _lock.Wait();
+        ThrowIfDisposed();
+        _rwLock.EnterWriteLock();
         try
         {
             if (_fileStream == null)
@@ -445,14 +520,14 @@ public sealed class PageFile : IDisposable
                 
                 // Read the recycled page to update the free list head
                 var buffer = new byte[_config.PageSize];
-                ReadPage(recycledPageId, buffer);
+                ReadPageCore(recycledPageId, buffer);
                 var header = PageHeader.ReadFrom(buffer);
                 
                 // The new head is what the recycled page pointed to
                 _firstFreePageId = header.NextPageId;
                 
                 // Update file header (Page 0) to point to new head
-                UpdateFileHeaderFreePtr(_firstFreePageId);
+                UpdateFileHeaderFreePtrCore(_firstFreePageId);
                 
                 return recycledPageId;
             }
@@ -460,38 +535,25 @@ public sealed class PageFile : IDisposable
             // 2. No free pages, append new one
             var pageId = _nextPageId++;
             
-            // Extend file if necessary
-            var requiredLength = (long)(pageId + 1) * _config.PageSize;
-            if (requiredLength > _fileStream.Length)
-            {
-                var newSize = AlignToBlock(requiredLength);
-                _fileStream.SetLength(newSize);
-                
-                // Recreate memory-mapped file with new size
-                _mappedFile?.Dispose();
-                _mappedFile = MemoryMappedFile.CreateFromFile(
-                    _fileStream,
-                    null,
-                    _fileStream.Length,
-                    _config.Access,
-                    HandleInheritability.None,
-                    leaveOpen: true);
-            }
+            // Extend file if necessary (EnsureCapacityCore replaces the mapping in-place)
+            EnsureCapacityCore((long)pageId * _config.PageSize);
             
             return pageId;
         }
         finally
         {
-            _lock.Release();
+            _rwLock.ExitWriteLock();
         }
     }
     
     /// <summary>
-    /// Marks a page as free and adds it to the free list
+    /// Marks a page as free and adds it to the free list.
+    /// Holds the write lock because it modifies <see cref="_firstFreePageId"/>.
     /// </summary>
     public void FreePage(uint pageId)
     {
-        _lock.Wait();
+        ThrowIfDisposed();
+        _rwLock.EnterWriteLock();
         try
         {
             if (_fileStream == null) throw new InvalidOperationException("File not open");
@@ -510,26 +572,27 @@ public sealed class PageFile : IDisposable
             var buffer = new byte[_config.PageSize];
             header.WriteTo(buffer);
             
-            // 2. Write the freed page
-            WritePage(pageId, buffer);
+            // 2. Write the freed page (file already large enough, no growth needed)
+            WritePageCore(pageId, buffer);
             
             // 3. Update head to point to this page
             _firstFreePageId = pageId;
             
             // 4. Update file header (Page 0)
-            UpdateFileHeaderFreePtr(_firstFreePageId);
+            UpdateFileHeaderFreePtrCore(_firstFreePageId);
         }
         finally
         {
-            _lock.Release();
+            _rwLock.ExitWriteLock();
         }
     }
     
-    private void UpdateFileHeaderFreePtr(uint newHead)
+    // Called only while _rwLock write lock is held.
+    private void UpdateFileHeaderFreePtrCore(uint newHead)
     {
         // Read Page 0
         var buffer = new byte[_config.PageSize];
-        ReadPage(0, buffer);
+        ReadPageCore(0, buffer);
         var header = PageHeader.ReadFrom(buffer);
         
         // Update NextPageId (which we use as FirstFreePageId)
@@ -537,33 +600,36 @@ public sealed class PageFile : IDisposable
         
         // Write back
         header.WriteTo(buffer);
-        WritePage(0, buffer);
+        WritePageCore(0, buffer);
     }
 
     /// <summary>
     /// Flushes all pending writes to disk.
     /// Called by CheckpointManager after applying WAL changes.
+    /// Uses the write lock to serialise with concurrent file-growth operations.
     /// </summary>
     public void Flush()
     {
-        _lock.Wait();
+        ThrowIfDisposed();
+        _rwLock.EnterWriteLock();
         try
         {
             _fileStream?.Flush(flushToDisk: true);
         }
         finally
         {
-            _lock.Release();
+            _rwLock.ExitWriteLock();
         }
     }
 
     /// <summary>
-    /// Async version of <see cref="Flush"/>. Uses <see cref="SemaphoreSlim.WaitAsync"/> to
-    /// avoid blocking a thread-pool thread while waiting.
+    /// Async version of <see cref="Flush"/>. Uses <see cref="_asyncLock"/> to
+    /// avoid blocking a thread-pool thread while waiting, and to allow the lock
+    /// to be held across the <c>await</c> boundary.
     /// </summary>
     public async Task FlushAsync(CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        await _asyncLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (_fileStream != null)
@@ -571,16 +637,18 @@ public sealed class PageFile : IDisposable
         }
         finally
         {
-            _lock.Release();
+            _asyncLock.Release();
         }
     }
 
     /// <summary>
     /// Creates a consistent file-level backup by flushing all dirty pages, then
     /// copying the .db file (and .wal if present) to <paramref name="destinationPath"/>.
-    /// The lock is held for the duration of the copy so no resize or flush can
-    /// interleave. Reads are opened with <see cref="FileShare.ReadWrite"/> so the
-    /// engine does not need to be stopped.
+    /// <see cref="_asyncLock"/> is held for the duration of the copy so that no
+    /// concurrent <see cref="FlushAsync"/> can interleave with the stream positioning.
+    /// Resize operations (which hold <see cref="_rwLock"/> write lock) may race with
+    /// this method at the PageFile level; callers that require a fully consistent
+    /// snapshot must hold the engine-level commit lock before calling this method.
     /// </summary>
     public async Task BackupAsync(string destinationPath, CancellationToken ct = default)
     {
@@ -591,7 +659,7 @@ public sealed class PageFile : IDisposable
             throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationPath));
 #endif
 
-        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        await _asyncLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (_fileStream == null)
@@ -600,7 +668,7 @@ public sealed class PageFile : IDisposable
             // 1. Flush dirty pages from MMF to the OS page cache, then to disk.
             _fileStream.Flush(flushToDisk: true);
 
-            // 2. Copy .db file under the lock so no resize can race.
+            // 2. Copy .db file under the lock so no concurrent FlushAsync can race.
             //    Re-use the existing _fileStream handle: _fileStream was opened with
             //    FileShare.None so any attempt to open a second handle (even read-only
             //    with FileShare.ReadWrite) would be rejected by the OS.
@@ -622,7 +690,7 @@ public sealed class PageFile : IDisposable
         }
         finally
         {
-            _lock.Release();
+            _asyncLock.Release();
         }
     }
 
@@ -631,9 +699,16 @@ public sealed class PageFile : IDisposable
         if (_disposed)
             return;
 
-        _lock.Wait();
+        // Acquire _asyncLock first to drain any in-flight FlushAsync / BackupAsync,
+        // then acquire _rwLock write lock to block all concurrent reads and writes.
+        // Lock order (_asyncLock before _rwLock) must be respected everywhere.
+        _asyncLock.Wait();
+        _rwLock.EnterWriteLock();
         try
         {
+            if (_disposed)
+                return;
+
             // 1. Flush any pending writes from memory-mapped file
             if (_fileStream != null)
             {
@@ -642,16 +717,20 @@ public sealed class PageFile : IDisposable
             
             // 2. Close memory-mapped file first
             _mappedFile?.Dispose();
+            _mappedFile = null;
             
             // 3. Then close file stream
             _fileStream?.Dispose();
+            _fileStream = null;
             
             _disposed = true;
         }
         finally
         {
-            _lock.Release();
-            _lock.Dispose();
+            _rwLock.ExitWriteLock();
+            _rwLock.Dispose();
+            _asyncLock.Release();
+            _asyncLock.Dispose();
         }
 
         GC.SuppressFinalize(this);
