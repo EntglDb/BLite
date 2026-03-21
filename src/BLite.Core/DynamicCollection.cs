@@ -1437,7 +1437,7 @@ public sealed class DynamicCollection : IDisposable
 
     private uint AllocateNewDataPage(ITransaction transaction)
     {
-        var pageId = _storage.AllocatePage();
+        var pageId = _storage.AllocateCollectionPage(_collectionName);
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
