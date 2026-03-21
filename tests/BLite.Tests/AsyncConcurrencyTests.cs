@@ -355,4 +355,145 @@ public class AsyncConcurrencyTests : IDisposable
         var values = await Task.WhenAll(tasks);
         Assert.All(values, v => Assert.Equal((byte)writeCount, v));
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 7. Concurrent transactions — multiple transactions active and committing
+    //    simultaneously via CommitTransactionAsync (group commit path).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ConcurrentTransactions_AsyncCommit_AllPagesVisible()
+    {
+        // N transactions, each writing to a distinct page.
+        // All are started, written, and committed asynchronously in parallel.
+        // After all commits, every page must be readable with the correct value.
+        const int txnCount = 20;
+
+        // Pre-allocate pages so allocation itself doesn't race
+        var pageIds = Enumerable.Range(0, txnCount)
+            .Select(_ => _storage.AllocatePage())
+            .ToArray();
+
+        // Open all transactions and write; then commit all concurrently
+        var txns = pageIds.Select((pageId, i) =>
+        {
+            var txn = _storage.BeginTransaction();
+            var data = new byte[_storage.PageSize];
+            data[0] = (byte)(i + 1);
+            _storage.WritePage(pageId, txn.TransactionId, data);
+            return (txn, pageId, expected: (byte)(i + 1));
+        }).ToArray();
+
+        // Fire all async commits at once — exercises the group commit writer
+        await Task.WhenAll(txns.Select(t => _storage.CommitTransactionAsync(t.txn)));
+
+        // Every page must now carry its sentinel byte
+        foreach (var (_, pageId, expected) in txns)
+        {
+            var buf = new byte[_storage.PageSize];
+            await _storage.ReadPageAsync(pageId, null, buf.AsMemory());
+            Assert.Equal(expected, buf[0]);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentTransactions_MixedSyncAsync_NoDeadlock()
+    {
+        // Verify that interleaving synchronous and asynchronous commits from
+        // independent transactions does not deadlock or corrupt data.
+        const int syncCount  = 5;
+        const int asyncCount = 10;
+
+        var syncPageIds  = Enumerable.Range(0, syncCount).Select(_ => _storage.AllocatePage()).ToArray();
+        var asyncPageIds = Enumerable.Range(0, asyncCount).Select(_ => _storage.AllocatePage()).ToArray();
+
+        // Sync commits run on thread-pool threads (concurrent with async commits)
+        var syncTasks = Enumerable.Range(0, syncCount).Select(i => Task.Run(() =>
+        {
+            var txn  = _storage.BeginTransaction();
+            var data = new byte[_storage.PageSize];
+            data[0] = (byte)(0xA0 + i);
+            _storage.WritePage(syncPageIds[i], txn.TransactionId, data);
+            _storage.CommitTransaction(txn); // sync path → _commitLock
+        })).ToArray();
+
+        // Async commits compete with the sync commits via the group commit writer
+        var asyncTasks = Enumerable.Range(0, asyncCount).Select(async i =>
+        {
+            var txn  = _storage.BeginTransaction();
+            var data = new byte[_storage.PageSize];
+            data[0] = (byte)(0xB0 + i);
+            _storage.WritePage(asyncPageIds[i], txn.TransactionId, data);
+            await _storage.CommitTransactionAsync(txn); // async path → group commit channel
+        }).ToArray();
+
+        await Task.WhenAll(syncTasks.Concat(asyncTasks));
+
+        // Verify all sync-committed pages
+        for (int i = 0; i < syncCount; i++)
+        {
+            var buf = new byte[_storage.PageSize];
+            await _storage.ReadPageAsync(syncPageIds[i], null, buf.AsMemory());
+            Assert.Equal((byte)(0xA0 + i), buf[0]);
+        }
+
+        // Verify all async-committed pages
+        for (int i = 0; i < asyncCount; i++)
+        {
+            var buf = new byte[_storage.PageSize];
+            await _storage.ReadPageAsync(asyncPageIds[i], null, buf.AsMemory());
+            Assert.Equal((byte)(0xB0 + i), buf[0]);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentTransactions_WriteReadIsolation_WhileOthersCommit()
+    {
+        // Transaction A holds an open write.
+        // Concurrently, many other transactions commit their own pages.
+        // After A commits, its page must be visible; concurrent commit pages must also be visible.
+        var pageA = _storage.AllocatePage();
+        const int concurrentCount = 10;
+
+        var txnA = _storage.BeginTransaction();
+        var dataA = new byte[_storage.PageSize];
+        dataA[0] = 0xAA;
+        _storage.WritePage(pageA, txnA.TransactionId, dataA);
+
+        // While txnA is open and uncommitted, fire N other transactions
+        var concurrentPageIds = Enumerable.Range(0, concurrentCount)
+            .Select(_ => _storage.AllocatePage()).ToArray();
+
+        var concurrentTasks = Enumerable.Range(0, concurrentCount).Select(async i =>
+        {
+            var txn  = _storage.BeginTransaction();
+            var data = new byte[_storage.PageSize];
+            data[0] = (byte)(0xC0 + i);
+            _storage.WritePage(concurrentPageIds[i], txn.TransactionId, data);
+            await _storage.CommitTransactionAsync(txn);
+        });
+
+        await Task.WhenAll(concurrentTasks);
+
+        // txnA's page is still uncommitted — must not be visible to outside readers
+        var outsideBuf = new byte[_storage.PageSize];
+        await _storage.ReadPageAsync(pageA, null, outsideBuf.AsMemory());
+        Assert.NotEqual(0xAA, outsideBuf[0]);
+
+        // Now commit txnA
+        await _storage.CommitTransactionAsync(txnA);
+
+        // After commit, txnA's page must be visible
+        var afterBuf = new byte[_storage.PageSize];
+        await _storage.ReadPageAsync(pageA, null, afterBuf.AsMemory());
+        Assert.Equal(0xAA, afterBuf[0]);
+
+        // All concurrent transaction pages must still be intact
+        for (int i = 0; i < concurrentCount; i++)
+        {
+            var buf = new byte[_storage.PageSize];
+            await _storage.ReadPageAsync(concurrentPageIds[i], null, buf.AsMemory());
+            Assert.Equal((byte)(0xC0 + i), buf[0]);
+        }
+    }
 }
