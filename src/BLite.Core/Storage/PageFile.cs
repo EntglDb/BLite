@@ -169,7 +169,7 @@ public sealed class PageFile : IDisposable
     // access across an await boundary and therefore cannot use ReaderWriterLockSlim.
     private readonly SemaphoreSlim _asyncLock = new(1, 1);
 
-    private bool _disposed;
+    private volatile bool _disposed;
     private uint _nextPageId;
     private uint _firstFreePageId;
 
@@ -336,6 +336,12 @@ public sealed class PageFile : IDisposable
     //   WritePageCore   — ReadLock or WriteLock
     //   EnsureCapacityCore — WriteLock only (modifies _mappedFile)
 
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(PageFile));
+    }
+
     private void ReadPageCore(uint pageId, Span<byte> destination)
     {
         var offset = (long)pageId * _config.PageSize;
@@ -381,6 +387,7 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void ReadPage(uint pageId, Span<byte> destination)
     {
+        ThrowIfDisposed();
         if (destination.Length < _config.PageSize)
             throw new ArgumentException($"Destination must be at least {_config.PageSize} bytes");
 
@@ -409,6 +416,7 @@ public sealed class PageFile : IDisposable
     /// <param name="cancellationToken">Cancellation token.</param>
     public async ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         if (destination.Length < _config.PageSize)
             throw new ArgumentException($"Destination must be at least {_config.PageSize} bytes");
 
@@ -448,6 +456,7 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void WritePage(uint pageId, ReadOnlySpan<byte> source)
     {
+        ThrowIfDisposed();
         if (source.Length < _config.PageSize)
             throw new ArgumentException($"Source must be at least {_config.PageSize} bytes");
 
@@ -493,6 +502,7 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public uint AllocatePage()
     {
+        ThrowIfDisposed();
         _rwLock.EnterWriteLock();
         try
         {
@@ -538,6 +548,7 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void FreePage(uint pageId)
     {
+        ThrowIfDisposed();
         _rwLock.EnterWriteLock();
         try
         {
@@ -595,6 +606,7 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void Flush()
     {
+        ThrowIfDisposed();
         _rwLock.EnterWriteLock();
         try
         {
@@ -701,9 +713,11 @@ public sealed class PageFile : IDisposable
             
             // 2. Close memory-mapped file first
             _mappedFile?.Dispose();
+            _mappedFile = null;
             
             // 3. Then close file stream
             _fileStream?.Dispose();
+            _fileStream = null;
             
             _disposed = true;
         }
