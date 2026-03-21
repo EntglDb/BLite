@@ -760,6 +760,8 @@ public class MultiFileStorageTests : IDisposable
                     {
                         var buf = new byte[engine.PageSize];
                         engine.ReadPage(stablePage, null, buf);
+                        // Verify that the stable page content remains correct
+                        Assert.Equal(0x42, buf[0]);
                     }
                 }
                 catch (Exception ex) { errors.Add(ex); }
