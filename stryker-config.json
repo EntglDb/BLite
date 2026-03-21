@@ -1,0 +1,17 @@
+{
+  "stryker-config": {
+    "solution": "BLite.slnx",
+    "reporters": [ "html", "progress", "cleartext" ],
+    "mutation-level": "Standard",
+    "thresholds": {
+      "high": 80,
+      "low": 60,
+      "break": 0
+    },
+    "mutate": [
+      "src/**/*.cs",
+      "!src/**/Polyfills.cs",
+      "!src/BLite.SourceGenerators/**"
+    ]
+  }
+}

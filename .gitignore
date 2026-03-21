@@ -13,6 +13,9 @@ publish/
 # BenchmarkDotNet
 BenchmarkDotNet.Artifacts/
 
+# Stryker mutation testing output
+mutation-testing/
+
 # Node.js / Web
 node_modules/
 dist/
