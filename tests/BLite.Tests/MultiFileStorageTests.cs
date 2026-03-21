@@ -586,8 +586,8 @@ public class MultiFileStorageTests : IDisposable
             }));
         }
 
-        // Concurrent transactional writers (may trigger file growth on first write
-        // if the engine was freshly opened with Small page config)
+        // Concurrent transactional writers: commit to WAL then force a checkpoint so
+        // the write propagates to PageFile.WritePage(), exercising the ReaderWriterLockSlim-protected write path.
         for (int w = 0; w < 10; w++)
         {
             var idx = w % pageCount;
@@ -600,6 +600,7 @@ public class MultiFileStorageTests : IDisposable
                     data[0] = (byte)(idx + 1);
                     engine.WritePage(pageIds[idx], txn.TransactionId, data);
                     engine.CommitTransaction(txn);
+                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
                 }
                 catch (Exception ex) { errors.Add(ex); }
             }));
@@ -661,6 +662,7 @@ public class MultiFileStorageTests : IDisposable
                     data[0] = (byte)(idx + 1);
                     engine.WritePage(pageIds[idx], txn.TransactionId, data);
                     engine.CommitTransaction(txn);
+                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
                 }
                 catch (Exception ex) { errors.Add(ex); }
             }));
@@ -722,6 +724,7 @@ public class MultiFileStorageTests : IDisposable
                     data[0] = (byte)(idx + 1);
                     engine.WritePage(pageIds[idx], txn.TransactionId, data);
                     engine.CommitTransaction(txn);
+                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
                 }
                 catch (Exception ex) { errors.Add(ex); }
             }));
