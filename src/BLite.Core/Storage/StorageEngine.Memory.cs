@@ -206,7 +206,7 @@ public sealed partial class StorageEngine
         }
     }
 
-    internal void LoadCollectionSlots()
+    private void LoadCollectionSlots()
     {
         if (_slotsFilePath == null || !File.Exists(_slotsFilePath))
             return;
