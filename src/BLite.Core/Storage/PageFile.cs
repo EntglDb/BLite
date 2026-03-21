@@ -17,6 +17,29 @@ public readonly struct PageFileConfig
     public MemoryMappedFileAccess Access { get; init; }
 
     /// <summary>
+    /// Optional explicit path for the WAL file.
+    /// If null, the WAL is placed next to the data file with the same name and .wal extension (default behavior).
+    /// Set this to place the WAL on a separate disk or directory for better I/O performance.
+    /// </summary>
+    public string? WalPath { get; init; }
+
+    /// <summary>
+    /// Optional explicit path for the index file (.idx).
+    /// If null, all pages (data + index) are stored in the same file (default embedded behavior).
+    /// Set this to place index pages on a separate file for parallel I/O with data pages.
+    /// </summary>
+    public string? IndexFilePath { get; init; }
+
+    /// <summary>
+    /// Optional directory where per-collection data files are stored.
+    /// If null, all collections share the main data file (default embedded behavior).
+    /// If set, each collection gets its own {CollectionName}.db file in this directory,
+    /// enabling independent I/O, per-collection backup, and instant space reclaim on drop.
+    /// The main data file still stores metadata (page 0, page 1, dictionary, KV store).
+    /// </summary>
+    public string? CollectionDataDirectory { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()
@@ -45,6 +68,38 @@ public readonly struct PageFileConfig
         GrowthBlockSize = 2 * 1024 * 1024, // grow by 2MB at a time
         Access = MemoryMappedFileAccess.ReadWrite
     };
+
+    /// <summary>
+    /// Server-optimized configuration: separate WAL, index, and per-collection files.
+    /// Designed for BLite.Server where each connection serves multiple clients.
+    /// </summary>
+    /// <param name="databasePath">
+    /// Full path to the .db file (e.g. <c>/data/blite/mydb.db</c>).
+    /// Sub-file paths are derived from the database filename so that multiple databases
+    /// in the same parent directory do not share WAL or index files.
+    /// </param>
+    /// <param name="baseConfig">
+    /// Optional base configuration that controls page size, growth block, and memory-map access.
+    /// When <c>null</c>, <see cref="Default"/> (16 KB pages) is used.
+    /// Use <see cref="Small"/> or <see cref="Large"/> to override the page size while keeping
+    /// the server-layout paths.
+    /// </param>
+    public static PageFileConfig Server(string databasePath, PageFileConfig? baseConfig = null)
+    {
+        var @base = baseConfig ?? Default;
+        return @base with
+        {
+            WalPath = Path.Combine(
+                Path.GetDirectoryName(databasePath) ?? ".",
+                "wal",
+                Path.GetFileNameWithoutExtension(databasePath) + ".wal"),
+            IndexFilePath = Path.ChangeExtension(databasePath, ".idx"),
+            CollectionDataDirectory = Path.Combine(
+                Path.GetDirectoryName(databasePath) ?? ".",
+                "collections",
+                Path.GetFileNameWithoutExtension(databasePath))
+        };
+    }
 
     /// <summary>
     /// Detects the page size from an existing database file by reading the page-0 header.

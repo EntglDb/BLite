@@ -473,7 +473,7 @@ public sealed class VectorSearchIndex
 
     private uint CreateNewPage(ITransaction? transaction)
     {
-        uint pageId = _storage.AllocatePage();
+        uint pageId = _storage.AllocateIndexPage();
         var buffer = RentPageBuffer();
         try
         {

@@ -158,6 +158,25 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         return _collections.Keys.ToList();
     }
 
+    /// <summary>
+    /// Returns storage metadata for the named collection, including index definitions
+    /// and TimeSeries settings. Returns <c>null</c> if the collection does not exist.
+    /// </summary>
+    public CollectionMetadata? GetCollectionMetadata(string name)
+    {
+        ThrowIfDisposed();
+        return _storage.GetCollectionMetadata(name);
+    }
+
+    /// <summary>
+    /// Returns storage metadata for all collections in the database.
+    /// </summary>
+    public IReadOnlyList<CollectionMetadata> GetAllCollectionsMetadata()
+    {
+        ThrowIfDisposed();
+        return _storage.GetAllCollectionsMetadata();
+    }
+
     #endregion
 
     #region Transactions
@@ -269,6 +288,17 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         }
     }
 
+    /// <summary>
+    /// Forces an immediate checkpoint: merges all committed WAL records into the main data file.
+    /// Call this before disposing the engine when you need to guarantee that the page file is
+    /// fully up-to-date on disk (e.g., before renaming or copying the database files).
+    /// </summary>
+    public void Checkpoint()
+    {
+        ThrowIfDisposed();
+        _storage.Checkpoint();
+    }
+
     #endregion
 
     #region ITransactionHolder
@@ -350,6 +380,22 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     {
         ThrowIfDisposed();
         return _storage.GetKeyReverseMap();
+    }
+
+    /// <summary>
+    /// Imports key→ID entries from <paramref name="sourceReverseMap"/> into this engine's
+    /// C-BSON key dictionary, preserving the original <see cref="ushort"/> IDs.
+    /// Entries already present (by name or ID) are silently skipped.
+    /// <para>
+    /// This method is <c>internal</c> and intended for cross-layout migration
+    /// (<see cref="BLiteMigration"/>) to ensure raw BSON bytes from the source engine
+    /// are decodable by the target without re-serialisation.
+    /// </para>
+    /// </summary>
+    internal void ImportDictionary(IReadOnlyDictionary<ushort, string> sourceReverseMap)
+    {
+        ThrowIfDisposed();
+        _storage.ImportDictionary(sourceReverseMap);
     }
 
     /// <summary>

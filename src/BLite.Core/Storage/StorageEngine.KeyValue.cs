@@ -129,6 +129,43 @@ public sealed partial class StorageEngine
     }
 
     /// <summary>
+    /// Retrieves both the value and the raw expiry timestamp (UTC ticks) for
+    /// <paramref name="key"/>. Returns <c>(null, 0)</c> if the key is absent or has expired.
+    /// A returned <c>ExpiryTicks</c> of <c>0</c> means the entry has no expiry.
+    /// </summary>
+    internal (byte[]? Value, long ExpiryTicks) KvGetWithExpiry(string key)
+    {
+        if (!_kvIndex.TryGetValue(key, out var loc)) return (null, 0);
+
+        var buf = new byte[PageSize];
+        ReadPage(loc.PageId, null, buf);
+        ReadOnlySpan<byte> view = buf;
+
+        long now  = DateTime.UtcNow.Ticks;
+        var  slot = KvPage.SlotAt(view, loc.SlotIndex);
+
+        if (KvPage.IsDeleted(slot))
+        {
+            _kvIndex.TryRemove(key, out _);
+            return (null, 0);
+        }
+
+        long expiryTicks = 0;
+        if (KvPage.HasExpiry(slot))
+        {
+            expiryTicks = KvPage.GetExpiryTicks(view, slot);
+            if (expiryTicks > 0 && now > expiryTicks)
+            {
+                KvSoftDeleteInPlace(loc.PageId, loc.SlotIndex);
+                _kvIndex.TryRemove(key, out _);
+                return (null, 0);
+            }
+        }
+
+        return (KvPage.GetValueSpan(view, slot).ToArray(), expiryTicks);
+    }
+
+    /// <summary>
     /// Stores <paramref name="value"/> under <paramref name="key"/> with optional TTL.
     /// Thread-safe; serialises structural mutations (new page alloc, compaction) but allows
     /// concurrent reads.

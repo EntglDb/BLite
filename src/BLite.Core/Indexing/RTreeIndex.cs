@@ -38,7 +38,7 @@ internal class RTreeIndex : IDisposable
         var buffer = RentPageBuffer();
         try
         {
-            _rootPageId = _storage.AllocatePage();
+            _rootPageId = _storage.AllocateIndexPage();
             SpatialPage.Initialize(buffer, _rootPageId, true, 0);
             _storage.WritePageImmediate(_rootPageId, buffer);
         }
@@ -245,7 +245,7 @@ internal class RTreeIndex : IDisposable
             entries.Remove(seed2);
 
             // Initialize two nodes
-            uint newPageId = _storage.AllocatePage();
+            uint newPageId = _storage.AllocateIndexPage();
             SpatialPage.Initialize(buffer, pageId, isLeaf, level);
             SpatialPage.Initialize(newBuffer, newPageId, isLeaf, level);
             SpatialPage.SetParentPageId(buffer, parentId);
@@ -302,7 +302,7 @@ internal class RTreeIndex : IDisposable
             if (pageId == _rootPageId)
             {
                 // New Root
-                uint newRootId = _storage.AllocatePage();
+                uint newRootId = _storage.AllocateIndexPage();
                 SpatialPage.Initialize(buffer, newRootId, false, (byte)(level + 1));
                 SpatialPage.WriteEntry(buffer, 0, mbr1, new DocumentLocation(pageId, 0));
                 SpatialPage.WriteEntry(buffer, 1, mbr2, new DocumentLocation(newPageId, 0));

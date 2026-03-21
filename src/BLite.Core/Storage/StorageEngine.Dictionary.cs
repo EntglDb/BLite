@@ -75,6 +75,40 @@ public sealed partial class StorageEngine
     public ConcurrentDictionary<ushort, string> GetKeyReverseMap() => _dictionaryReverseCache;
 
     /// <summary>
+    /// Imports key→ID entries from <paramref name="sourceReverseMap"/> into this engine,
+    /// preserving the original <see cref="ushort"/> IDs. Skips entries that are already
+    /// registered (by name or by ID). Updates <see cref="_nextDictionaryId"/> so that
+    /// future sequential allocations do not collide with any imported ID.
+    /// <para>
+    /// Used during cross-layout migration so that raw BSON pages copied from the source
+    /// remain decodable by the target engine without re-serialisation.
+    /// </para>
+    /// </summary>
+    internal void ImportDictionary(IReadOnlyDictionary<ushort, string> sourceReverseMap)
+    {
+        lock (_dictionaryLock)
+        {
+            foreach (var (id, name) in sourceReverseMap)
+            {
+                var lower = name.ToLowerInvariant();
+                // Skip if name already registered (reserved/internal keys) or ID already taken.
+                if (_dictionaryCache.ContainsKey(lower) || _dictionaryReverseCache.ContainsKey(id))
+                    continue;
+
+                if (!InsertDictionaryEntryGlobal(lower, id))
+                    continue; // Best-effort: skip if page is unexpectedly full.
+
+                _dictionaryCache[lower] = id;
+                _dictionaryReverseCache[id] = lower;
+
+                // Keep _nextDictionaryId beyond the highest imported ID.
+                if (id >= _nextDictionaryId)
+                    _nextDictionaryId = (ushort)(id + 1);
+            }
+        }
+    }
+
+    /// <summary>
     /// Gets the ID for a dictionary key, creating it if it doesn't exist.
     /// Thread-safe.
     /// </summary>

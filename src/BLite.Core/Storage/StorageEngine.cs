@@ -16,7 +16,8 @@ namespace BLite.Core.Storage;
 /// </summary>
 public sealed partial class StorageEngine : IDisposable
 {
-    private readonly PageFile _pageFile;
+    private readonly PageFile _pageFile;                // data: Data, Overflow, Collection, KV, Dictionary, TimeSeries, Metadata
+    private readonly PageFile? _indexFile;              // indices: Index, Vector, Spatial (null = uses _pageFile)
     private readonly WriteAheadLog _wal;
     private CDC.ChangeStreamDispatcher? _cdc;
     
@@ -27,6 +28,21 @@ public sealed partial class StorageEngine : IDisposable
     // WAL index cache: PageId → PageData (from latest committed transaction)
     // Lazily populated on first read after commit
     private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
+    
+    // Collection-per-file: collectionName → PageFile dedicated
+    // Null if CollectionDataDirectory not configured (embedded mode, single file)
+    private readonly ConcurrentDictionary<string, PageFile>? _collectionFiles;
+
+    // Collection slot registry — only populated in multi-file mode
+    // Maps collection name → slot index (0-63) and slot → name
+    private readonly ConcurrentDictionary<string, int>? _collectionNameToSlot;
+    private readonly Dictionary<int, string>? _collectionSlotToName;
+    private int _nextSlotIndex;
+    private readonly string? _slotsFilePath;
+    private readonly object _collectionSlotLock = new();
+
+    // Stored config for use by multi-file helpers
+    private readonly PageFileConfig _config;
     
     // Global lock for commit/checkpoint synchronization.
     // Held only by the group commit writer (and sync commit / checkpoint paths).
@@ -48,13 +64,40 @@ public sealed partial class StorageEngine : IDisposable
 
     public StorageEngine(string databasePath, PageFileConfig config)
     {
+        _config = config;
 
-        // Auto-derive WAL path
-        var walPath = Path.ChangeExtension(databasePath, ".wal");
+        // Use WalPath if specified, otherwise derive from databasePath (default behavior unchanged)
+        var walPath = config.WalPath ?? Path.ChangeExtension(databasePath, ".wal");
+
+        // Ensure WAL parent directory exists
+        var walDirectory = Path.GetDirectoryName(walPath);
+        if (!string.IsNullOrWhiteSpace(walDirectory))
+            Directory.CreateDirectory(walDirectory);
 
         // Initialize storage infrastructure
         _pageFile = new PageFile(databasePath, config);
         _pageFile.Open();
+
+        // Phase 3: open separate index file if configured
+        if (config.IndexFilePath != null)
+        {
+            var idxDirectory = Path.GetDirectoryName(config.IndexFilePath);
+            if (!string.IsNullOrWhiteSpace(idxDirectory))
+                Directory.CreateDirectory(idxDirectory);
+            _indexFile = new PageFile(config.IndexFilePath, AsStandaloneConfig(config));
+            _indexFile.Open();
+        }
+
+        // Phase 4: initialize collection-per-file structures if configured
+        if (config.CollectionDataDirectory != null)
+        {
+            Directory.CreateDirectory(config.CollectionDataDirectory);
+            _collectionFiles = new ConcurrentDictionary<string, PageFile>(StringComparer.OrdinalIgnoreCase);
+            _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            _collectionSlotToName = new Dictionary<int, string>();
+            _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
+            LoadCollectionSlots();
+        }
 
         _wal = new WriteAheadLog(walPath);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
@@ -140,6 +183,18 @@ public sealed partial class StorageEngine : IDisposable
         // 3. Close WAL and PageFile.
         _wal?.Dispose();
         _pageFile?.Dispose();
+        _indexFile?.Dispose();
+
+        // 4. Close per-collection PageFiles (Phase 4)
+        if (_collectionFiles != null)
+        {
+            foreach (var pf in _collectionFiles.Values)
+            {
+                try { pf.Dispose(); } catch { /* best-effort */ }
+            }
+            _collectionFiles.Clear();
+        }
+
         _commitLock?.Dispose();
     }
 
@@ -158,4 +213,12 @@ public sealed partial class StorageEngine : IDisposable
     {
         return _cdc ??= new CDC.ChangeStreamDispatcher();
     }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="config"/> with all multi-file routing fields cleared,
+    /// suitable for use when opening a standalone sub-file (index file or per-collection file)
+    /// that should not itself spawn further sub-files.
+    /// </summary>
+    private static PageFileConfig AsStandaloneConfig(PageFileConfig config)
+        => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
 }

@@ -36,7 +36,7 @@ public sealed partial class StorageEngine
         }
         
         // 3. Read committed baseline from PageFile
-        _pageFile.ReadPage(pageId, destination);
+        GetPageFile(pageId, out var physId).ReadPage(physId, destination);
     }
 
     /// <summary>
@@ -77,7 +77,7 @@ public sealed partial class StorageEngine
     /// <param name="data">Page data</param>
     public void WritePageImmediate(uint pageId, ReadOnlySpan<byte> data)
     {
-        _pageFile.WritePage(pageId, data);
+        GetPageFile(pageId, out var physId).WritePage(physId, data);
     }
 
     /// <summary>
@@ -124,7 +124,7 @@ public sealed partial class StorageEngine
         }
 
         // 3. PageFile — true async OS read
-        return _pageFile.ReadPageAsync(pageId, destination, cancellationToken);
+        return GetPageFile(pageId, out var physId).ReadPageAsync(physId, destination, cancellationToken);
     }
 
     /// <summary>

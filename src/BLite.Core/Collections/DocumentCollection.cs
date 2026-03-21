@@ -426,11 +426,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
         var txnId = transaction.TransactionId;
-        var pageCount = _storage.PageCount;
         var buffer = new byte[_storage.PageSize];
         var pageResults = new List<T>();
 
-        for (uint pageId = 0; pageId < pageCount; pageId++)
+        foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
         {
             pageResults.Clear();
             ScanPage(pageId, txnId, buffer, predicate, pageResults);
@@ -457,12 +456,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
-        var pageCount = _storage.PageCount;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
         {
-            for (uint pageId = 0; pageId < pageCount; pageId++)
+            foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
             {
                 ct.ThrowIfCancellationRequested();
                 await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
@@ -527,11 +525,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
         var txnId = transaction.TransactionId;
-        var pageCount = _storage.PageCount;
         var buffer = new byte[_storage.PageSize];
         var pageResults = new List<TResult>();
 
-        for (uint pageId = 0; pageId < pageCount; pageId++)
+        foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
         {
             pageResults.Clear();
             ScanPageProjected(pageId, txnId, buffer, projector, pageResults);
@@ -590,12 +587,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
-        var pageCount = _storage.PageCount;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
         {
-            for (uint pageId = 0; pageId < pageCount; pageId++)
+            foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
             {
                 ct.ThrowIfCancellationRequested();
                 await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
@@ -678,12 +674,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
         var txnId = transaction.TransactionId;
-        var pageCount = (int)_storage.PageCount;
+        var allPageIds = _storage.GetCollectionPageIds(_collectionName).ToArray();
 
         if (degreeOfParallelism <= 0)
             degreeOfParallelism = Environment.ProcessorCount;
 
-        return Partitioner.Create(0, pageCount)
+        return Partitioner.Create(0, allPageIds.Length)
             .AsParallel()
             .WithDegreeOfParallelism(degreeOfParallelism)
             .SelectMany(range =>
@@ -693,7 +689,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
                 for (int i = range.Item1; i < range.Item2; i++)
                 {
-                    ScanPage((uint)i, txnId, localBuffer, predicate, localResults);
+                    ScanPage(allPageIds[i], txnId, localBuffer, predicate, localResults);
                 }
                 return localResults;
                 // Wait: SelectMany iterates the returned IEnumerable. 
@@ -721,7 +717,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
-        var pageCount = (int)_storage.PageCount;
+        var allPageIds = _storage.GetCollectionPageIds(_collectionName).ToArray();
+        var pageCount = allPageIds.Length;
 
         if (degreeOfParallelism <= 0)
             degreeOfParallelism = Environment.ProcessorCount;
@@ -729,10 +726,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var semaphore = new SemaphoreSlim(degreeOfParallelism);
         var tasks = new List<Task<List<T>>>();
 
-        for (uint pageId = 0; pageId < pageCount; pageId++)
+        for (int pageIdx = 0; pageIdx < pageCount; pageIdx++)
         {
             await semaphore.WaitAsync(ct);
-            var localPageId = pageId;
+            var localPageId = allPageIds[pageIdx];
 
             var task = Task.Run(async () =>
             {
@@ -1025,7 +1022,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
 
-        var pageId = _storage.AllocatePage();
+        var pageId = _storage.AllocateCollectionPage(_collectionName);
 
         // Initialize slotted page header
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1175,7 +1172,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     private uint AllocateOverflowPage(ReadOnlySpan<byte> data, uint nextOverflowPageId, ITransaction transaction)
     {
-        var pageId = _storage.AllocatePage();
+        var pageId = _storage.AllocateCollectionPage(_collectionName);
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try

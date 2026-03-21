@@ -38,6 +38,12 @@ public sealed partial class StorageEngine
     public void FlushPageFile()
     {
         _pageFile.Flush();
+        _indexFile?.Flush();
+        if (_collectionFiles != null)
+        {
+            foreach (var pf in _collectionFiles.Values)
+                pf.Flush();
+        }
     }
     
     /// <summary>
@@ -66,19 +72,27 @@ public sealed partial class StorageEngine
         if (_walIndex.IsEmpty)
             return;
 
-        // 1. Write all committed pages from index to PageFile
+        // 1. Write all committed pages from index to the correct PageFile
         foreach (var kvp in _walIndex)
         {
-            _pageFile.WritePage(kvp.Key, kvp.Value);
+            GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
         }
         
-        // 2. Flush PageFile to ensure durability
+        // 2. Flush PageFile(s) to ensure durability
         _pageFile.Flush();
+        _indexFile?.Flush();
         
-        // 3. Clear in-memory WAL index (now persisted)
+        // 3. Flush collection files
+        if (_collectionFiles != null)
+        {
+            foreach (var pf in _collectionFiles.Values)
+                pf.Flush();
+        }
+        
+        // 4. Clear in-memory WAL index (now persisted)
         _walIndex.Clear();
         
-        // 4. Truncate WAL (all changes now in PageFile)
+        // 5. Truncate WAL (all changes now in PageFile)
         _wal.Truncate();
     }
 
@@ -90,20 +104,28 @@ public sealed partial class StorageEngine
             if (_walIndex.IsEmpty)
                 return;
 
-            // 1. Write all committed pages from index to PageFile
+            // 1. Write all committed pages from index to the correct PageFile
             // PageFile writes are sync (MMF), but that's fine as per plan (ValueTask strategy for MMF)
             foreach (var kvp in _walIndex)
             {
-                _pageFile.WritePage(kvp.Key, kvp.Value);
+                GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
             }
             
-            // 2. Flush PageFile to ensure durability
+            // 2. Flush PageFile(s) to ensure durability
             _pageFile.Flush();
+            _indexFile?.Flush();
             
-            // 3. Clear in-memory WAL index (now persisted)
+            // 3. Flush collection files
+            if (_collectionFiles != null)
+            {
+                foreach (var pf in _collectionFiles.Values)
+                    pf.Flush();
+            }
+            
+            // 4. Clear in-memory WAL index (now persisted)
             _walIndex.Clear();
             
-            // 4. Truncate WAL (all changes now in PageFile)
+            // 5. Truncate WAL (all changes now in PageFile)
             await _wal.TruncateAsync(ct);
         }
         finally
@@ -124,6 +146,13 @@ public sealed partial class StorageEngine
     /// </list>
     /// WAL is not copied because, after the checkpoint, it contains only housekeeping
     /// data and the destination DB is consistent on its own.
+    /// </para>
+    /// <para>
+    /// <strong>Multi-file mode limitation:</strong> when <see cref="PageFileConfig.IndexFilePath"/>
+    /// or <see cref="PageFileConfig.CollectionDataDirectory"/> are configured, this method backs up
+    /// only the <em>main</em> data file. Index pages and per-collection data pages reside in their
+    /// own files and are not included in this backup. A consistent multi-file backup must copy all
+    /// associated files while the commit lock is held; this is outside the scope of the current API.
     /// </para>
     /// </summary>
     /// <param name="destinationDbPath">
@@ -185,7 +214,7 @@ public sealed partial class StorageEngine
                 }
             }
             
-            // 2. Apply committed transactions to PageFile
+            // 2. Apply committed transactions to the correct PageFile
             foreach (var txnId in committedTxns)
             {
                 if (!txnWrites.ContainsKey(txnId))
@@ -193,12 +222,19 @@ public sealed partial class StorageEngine
                     
                 foreach (var (pageId, data) in txnWrites[txnId])
                 {
-                    _pageFile.WritePage(pageId, data);
+                    var targetFile = GetPageFile(pageId, out var physId);
+                    targetFile.WritePage(physId, data);
                 }
             }
             
-            // 3. Flush PageFile to ensure durability
+            // 3. Flush all PageFiles to ensure durability
             _pageFile.Flush();
+            _indexFile?.Flush();
+            if (_collectionFiles != null)
+            {
+                foreach (var pf in _collectionFiles.Values)
+                    pf.Flush();
+            }
             
             // 4. Clear in-memory WAL index (redundant since we just recovered)
             _walIndex.Clear();
