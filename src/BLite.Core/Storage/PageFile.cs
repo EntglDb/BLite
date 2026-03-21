@@ -84,12 +84,12 @@ public readonly struct PageFileConfig
         GrowthBlockSize = 4 * 1024 * 1024,  // 4MB growth block for server workloads
         Access = MemoryMappedFileAccess.ReadWrite,
         WalPath = Path.Combine(
-            Path.GetDirectoryName(databasePath)!,
+            Path.GetDirectoryName(databasePath) ?? ".",
             "wal",
             Path.GetFileNameWithoutExtension(databasePath) + ".wal"),
         IndexFilePath = Path.ChangeExtension(databasePath, ".idx"),
         CollectionDataDirectory = Path.Combine(
-            Path.GetDirectoryName(databasePath)!,
+            Path.GetDirectoryName(databasePath) ?? ".",
             "collections",
             Path.GetFileNameWithoutExtension(databasePath))
     };

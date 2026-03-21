@@ -215,7 +215,11 @@ public sealed partial class StorageEngine
         {
             var sep = line.IndexOf(',');
             if (sep < 0) continue;
+#if NET5_0_OR_GREATER
+            if (!int.TryParse(line.AsSpan(0, sep), out var slot)) continue;
+#else
             if (!int.TryParse(line.Substring(0, sep), out var slot)) continue;
+#endif
             var name = line.Substring(sep + 1);
             if (string.IsNullOrEmpty(name)) continue;
             _collectionNameToSlot![name] = slot;
@@ -246,7 +250,8 @@ public sealed partial class StorageEngine
         if (string.IsNullOrWhiteSpace(collectionName))
             throw new ArgumentException("Collection name must not be null or whitespace.", nameof(collectionName));
 
-        if (collectionName.Contains("..") ||
+        if (Path.IsPathRooted(collectionName) ||
+            collectionName.Contains("..") ||
             collectionName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             throw new ArgumentException(
                 $"Collection name '{collectionName}' contains characters that are invalid in a filename.",
