@@ -84,6 +84,8 @@ public sealed partial class StorageEngine
 
     private async Task ProcessBatchAsync(List<PendingCommit> batch)
     {
+        bool needsCheckpoint = false;
+
         // Acquire the commit lock once for the entire batch.
         await _commitLock.WaitAsync().ConfigureAwait(false);
         Exception? failure = null;
@@ -119,9 +121,8 @@ public sealed partial class StorageEngine
                 }
             }
 
-            // Auto-checkpoint if WAL has grown too large.
-            if (_wal.GetCurrentSize() > MaxWalSize)
-                CheckpointInternal();
+            // Check if checkpoint is needed, but defer until after releasing the lock
+            needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
         }
         catch (Exception ex)
         {
@@ -139,6 +140,12 @@ public sealed partial class StorageEngine
                 commit.Completion.TrySetException(failure);
             else
                 commit.Completion.TrySetResult(true);
+        }
+
+        // Run checkpoint outside _commitLock so concurrent commits aren't blocked.
+        if (needsCheckpoint && failure == null)
+        {
+            await CheckpointAsync().ConfigureAwait(false);
         }
     }
 

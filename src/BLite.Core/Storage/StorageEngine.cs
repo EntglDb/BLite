@@ -53,6 +53,10 @@ public sealed partial class StorageEngine : IDisposable
     // DeleteCollectionMetadata calls from corrupting the slotted-page structure.
     private readonly SemaphoreSlim _metadataLock = new(1, 1);
 
+    // Guard to prevent multiple concurrent checkpoint attempts.
+    // Only one checkpoint runs at a time; additional callers skip.
+    private int _checkpointRunning;
+
     // Group commit writer infrastructure.
     private readonly Channel<PendingCommit> _commitChannel;
     private readonly CancellationTokenSource _writerCts = new();

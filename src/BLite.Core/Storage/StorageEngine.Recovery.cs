@@ -54,83 +54,132 @@ public sealed partial class StorageEngine
     /// Performs a checkpoint: merges WAL into PageFile.
     /// Uses in-memory WAL index for efficiency and consistency.
     /// </summary>
+    /// <summary>
+    /// Opportunistic two-phase checkpoint — NEVER blocks commits.
+    /// <para>
+    /// Phase 1: snapshot walIndex, write pages to PageFiles, flush (no lock held).
+    /// Phase 2: try-acquire _commitLock (zero timeout). If commits are flowing, skip
+    ///          cleanup and let the WAL grow — next quiet moment will clean up.
+    /// </para>
+    /// Only one checkpoint runs at a time; concurrent callers skip immediately.
+    /// </summary>
     public void Checkpoint()
     {
-        _commitLock.Wait();
+        if (_walIndex.IsEmpty) return;
+        if (Interlocked.CompareExchange(ref _checkpointRunning, 1, 0) != 0) return;
         try
         {
-            CheckpointInternal();
-        }
-        finally
-        {
-            _commitLock.Release();
-        }
-    }
+            // Phase 1: Snapshot and write pages to PageFiles (no _commitLock).
+            // Commits can proceed concurrently — they write to WAL and add to _walIndex.
+            var snapshot = _walIndex.ToArray();
+            if (snapshot.Length == 0) return;
 
-    private void CheckpointInternal()
-    {
-        if (_walIndex.IsEmpty)
-            return;
-
-        // 1. Write all committed pages from index to the correct PageFile
-        foreach (var kvp in _walIndex)
-        {
-            GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
-        }
-        
-        // 2. Flush PageFile(s) to ensure durability
-        _pageFile.Flush();
-        _indexFile?.Flush();
-        
-        // 3. Flush collection files
-        if (_collectionFiles != null)
-        {
-            foreach (var pf in _collectionFiles.Values)
-                pf.Flush();
-        }
-        
-        // 4. Clear in-memory WAL index (now persisted)
-        _walIndex.Clear();
-        
-        // 5. Truncate WAL (all changes now in PageFile)
-        _wal.Truncate();
-    }
-
-    public async Task CheckpointAsync(CancellationToken ct = default)
-    {
-        await _commitLock.WaitAsync(ct);
-        try
-        {
-            if (_walIndex.IsEmpty)
-                return;
-
-            // 1. Write all committed pages from index to the correct PageFile
-            // PageFile writes are sync (MMF), but that's fine as per plan (ValueTask strategy for MMF)
-            foreach (var kvp in _walIndex)
-            {
+            foreach (var kvp in snapshot)
                 GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
-            }
-            
-            // 2. Flush PageFile(s) to ensure durability
+
             _pageFile.Flush();
             _indexFile?.Flush();
-            
-            // 3. Flush collection files
             if (_collectionFiles != null)
             {
                 foreach (var pf in _collectionFiles.Values)
                     pf.Flush();
             }
-            
-            // 4. Clear in-memory WAL index (now persisted)
-            _walIndex.Clear();
-            
-            // 5. Truncate WAL (all changes now in PageFile)
-            await _wal.TruncateAsync(ct);
+
+            // Phase 2: Try to acquire _commitLock without waiting.
+            // If commits are in flight, skip cleanup — the WAL grows, but commits aren't blocked.
+            // Pages are already durable on PageFile; next checkpoint will clean up.
+            if (!_commitLock.Wait(0)) return;
+            try
+            {
+                foreach (var kvp in snapshot)
+                {
+                    if (_walIndex.TryGetValue(kvp.Key, out var current) && ReferenceEquals(current, kvp.Value))
+                        _walIndex.TryRemove(kvp.Key, out _);
+                }
+
+                if (_walIndex.IsEmpty)
+                    _wal.Truncate();
+            }
+            finally
+            {
+                _commitLock.Release();
+            }
         }
         finally
         {
-            _commitLock.Release();
+            Interlocked.Exchange(ref _checkpointRunning, 0);
+        }
+    }
+
+    /// <summary>
+    /// Full checkpoint under _commitLock — used only by BackupAsync where full consistency
+    /// (lock held across checkpoint + file copy) is required.
+    /// </summary>
+    private void CheckpointInternal()
+    {
+        if (_walIndex.IsEmpty)
+            return;
+
+        foreach (var kvp in _walIndex)
+            GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
+
+        _pageFile.Flush();
+        _indexFile?.Flush();
+        if (_collectionFiles != null)
+        {
+            foreach (var pf in _collectionFiles.Values)
+                pf.Flush();
+        }
+
+        _walIndex.Clear();
+        _wal.Truncate();
+    }
+
+    /// <summary>
+    /// Async opportunistic checkpoint — NEVER blocks commits.
+    /// See <see cref="Checkpoint"/> for the strategy.
+    /// </summary>
+    public async Task CheckpointAsync(CancellationToken ct = default)
+    {
+        if (_walIndex.IsEmpty) return;
+        if (Interlocked.CompareExchange(ref _checkpointRunning, 1, 0) != 0) return;
+        try
+        {
+            var snapshot = _walIndex.ToArray();
+            if (snapshot.Length == 0) return;
+
+            foreach (var kvp in snapshot)
+                GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
+
+            _pageFile.Flush();
+            _indexFile?.Flush();
+            if (_collectionFiles != null)
+            {
+                foreach (var pf in _collectionFiles.Values)
+                    pf.Flush();
+            }
+
+            // Try-acquire: if commits are flowing, skip cleanup and let WAL grow.
+            if (!_commitLock.Wait(0)) return;
+            try
+            {
+                foreach (var kvp in snapshot)
+                {
+                    if (_walIndex.TryGetValue(kvp.Key, out var current) && ReferenceEquals(current, kvp.Value))
+                        _walIndex.TryRemove(kvp.Key, out _);
+                }
+
+                if (_walIndex.IsEmpty)
+                    await _wal.TruncateAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                _commitLock.Release();
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _checkpointRunning, 0);
         }
     }
 

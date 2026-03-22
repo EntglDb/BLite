@@ -128,6 +128,8 @@ public sealed partial class StorageEngine
     /// <param name="writeSet">All writes performed in this transaction (unused, kept for compatibility)</param>
     public void CommitTransaction(ulong transactionId)
     {
+        bool needsCheckpoint = false;
+
         _commitLock.Wait();
         try
         {
@@ -159,15 +161,19 @@ public sealed partial class StorageEngine
                 _walIndex[kvp.Key] = kvp.Value;
             }
 
-            // Auto-checkpoint if WAL grows too large
-            if (_wal.GetCurrentSize() > MaxWalSize)
-            {
-                CheckpointInternal();
-            }
+            // Check if checkpoint is needed, but defer it until after releasing the lock
+            needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
         }
         finally
         {
             _commitLock.Release();
+        }
+
+        // Run checkpoint outside _commitLock so other commits aren't blocked.
+        // Checkpoint() acquires _commitLock internally for the actual I/O.
+        if (needsCheckpoint)
+        {
+            Checkpoint();
         }
     }
 
@@ -189,6 +195,8 @@ public sealed partial class StorageEngine
     /// <param name="transactionId">Transaction to mark committed</param>
     public void MarkTransactionCommitted(ulong transactionId)
     {
+        bool needsCheckpoint = false;
+
         _commitLock.Wait();
         try
         {
@@ -204,15 +212,17 @@ public sealed partial class StorageEngine
                 }
             }
 
-            // Auto-checkpoint if WAL grows too large
-            if (_wal.GetCurrentSize() > MaxWalSize)
-            {
-                CheckpointInternal();
-            }
+            // Check if checkpoint is needed, but defer it until after releasing the lock
+            needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
         }
         finally
         {
             _commitLock.Release();
+        }
+
+        if (needsCheckpoint)
+        {
+            Checkpoint();
         }
     }
 

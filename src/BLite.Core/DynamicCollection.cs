@@ -104,16 +104,11 @@ public sealed class DynamicCollection : IDisposable
                 var fieldPath = idxMeta.PropertyPaths[0];
                 var indexName = idxMeta.Name; // capture for closure
 
-                Action<uint> makeRootCallback = newRoot =>
-                {
-                    var m = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
-                    var entry = m.Indexes.FirstOrDefault(i => i.Name == indexName);
-                    if (entry != null && entry.RootPageId != newRoot)
-                    {
-                        entry.RootPageId = newRoot;
-                        _storage.SaveCollectionMetadata(m);
-                    }
-                };
+                // Root page ID tracking is deferred to PersistIndexMetadata() at commit time.
+                // BTreeIndex already updates its internal _rootPageId before invoking this callback,
+                // so no action is needed here. Writing to disk during Insert was both unnecessary
+                // contention and a crash-safety bug (uncommitted root IDs on disk).
+                Action<uint> makeRootCallback = _ => { };
 
                 switch (idxMeta.Type)
                 {
@@ -150,16 +145,10 @@ public sealed class DynamicCollection : IDisposable
         }
 
         var indexOptions = IndexOptions.CreateUnique("_id");
+        // Root page ID tracking is deferred to PersistIndexMetadata() at commit time.
+        // BTreeIndex already updates its internal _rootPageId before invoking this callback.
         _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId,
-            onRootChanged: newRoot =>
-            {
-                var meta = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
-                if (meta.PrimaryRootPageId != newRoot)
-                {
-                    meta.PrimaryRootPageId = newRoot;
-                    _storage.SaveCollectionMetadata(meta);
-                }
-            });
+            onRootChanged: _ => { });
 
         // Persist root page if newly allocated
         if (metadata.PrimaryRootPageId != _primaryIndex.RootPageId)
