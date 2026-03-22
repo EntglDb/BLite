@@ -82,7 +82,12 @@ public static class BLiteMigration
                 + "or use PageFileConfig.Server() to build a server-layout config.");
 
         // Detect source page size; fall back to Default if the file is unreadable.
-        var sourceConfig = PageFileConfig.DetectFromFile(sourcePath) ?? PageFileConfig.Default;
+        // Strip any multi-file companion paths: DetectFromFile now probes for .idx / wal /
+        // collections/ files, so if they already exist (e.g. left from a previous migration)
+        // both the source and target engines would race on the same companion files.
+        // Only the page size is needed to correctly read the source.
+        var sourceConfig = (PageFileConfig.DetectFromFile(sourcePath) ?? PageFileConfig.Default)
+            with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
 
         // Target main .db is written to a temp path first so that we never
         // leave the source in a partially-overwritten state.
