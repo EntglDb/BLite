@@ -82,6 +82,15 @@ public partial class TestDbContext : DocumentDbContext
         InitializeCollections();
     }
 
+    /// <summary>
+    /// Creates a new context with an explicit page-file configuration.
+    /// Use <see cref="PageFileConfig.Server(string, PageFileConfig?)"/> to open a multi-file database.
+    /// </summary>
+    public TestDbContext(string databasePath, PageFileConfig config) : base(databasePath, config)
+    {
+        InitializeCollections();
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<AnnotatedUser>();

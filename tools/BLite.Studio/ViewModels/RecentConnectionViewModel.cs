@@ -11,12 +11,13 @@ public sealed class RecentConnectionViewModel
 {
     public RecentConnectionViewModel(RecentConnection model)
     {
-        Model       = model;
-        Id          = model.Id;
-        FilePath    = model.FilePath;
-        DisplayName = model.DisplayName;
-        PresetValue = model.PresetValue;
-        IsReadOnly  = model.IsReadOnly;
+        Model        = model;
+        Id           = model.Id;
+        FilePath     = model.FilePath;
+        DisplayName  = model.DisplayName;
+        PresetValue  = model.PresetValue;
+        IsReadOnly   = model.IsReadOnly;
+        IsMultiFile  = model.IsMultiFile;
         LastOpenedAt = model.LastOpenedAt;
     }
 
@@ -27,6 +28,7 @@ public sealed class RecentConnectionViewModel
     public string   DisplayName { get; }
     public int      PresetValue { get; }
     public bool     IsReadOnly  { get; }
+    public bool     IsMultiFile { get; }
     public DateTimeOffset LastOpenedAt { get; }
 
     public string PresetLabel => PresetValue switch

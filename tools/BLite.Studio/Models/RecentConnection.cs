@@ -29,6 +29,9 @@ public class RecentConnection
     /// <summary>True when the database was opened in read-only mode.</summary>
     public bool IsReadOnly { get; set; }
 
+    /// <summary>True when the database uses a multi-file (server) layout.</summary>
+    public bool IsMultiFile { get; set; }
+
     /// <summary>UTC timestamp of the last successful open.</summary>
     public DateTimeOffset LastOpenedAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -129,7 +129,7 @@ public readonly struct PageFileConfig
 
         int detectedPageSize = header.FreeBytes + 32;
 
-        return detectedPageSize switch
+        PageFileConfig baseConfig = detectedPageSize switch
         {
             8192  => Small,
             16384 => Default,
@@ -141,6 +141,33 @@ public readonly struct PageFileConfig
                 Access = MemoryMappedFileAccess.ReadWrite
             }
         };
+
+        // Probe for multi-file companion files.
+        // If the per-collection directory exists, this is a full server-layout database;
+        // return the canonical Server config so all companion paths are set consistently.
+        var dir     = Path.GetDirectoryName(path) ?? ".";
+        var name    = Path.GetFileNameWithoutExtension(path);
+        var collDir = Path.Combine(dir, "collections", name);
+
+        if (Directory.Exists(collDir))
+            return Server(path, baseConfig);
+
+        // Partial multi-file: separate index file and/or WAL, single data file.
+        var idxPath = Path.ChangeExtension(path, ".idx");
+        var walPath = Path.Combine(dir, "wal", name + ".wal");
+        var hasIdx  = File.Exists(idxPath);
+        var hasWal  = File.Exists(walPath);
+
+        if (hasIdx || hasWal)
+        {
+            return baseConfig with
+            {
+                IndexFilePath = hasIdx ? idxPath : null,
+                WalPath       = hasWal ? walPath : null,
+            };
+        }
+
+        return baseConfig;
     }
 }
 

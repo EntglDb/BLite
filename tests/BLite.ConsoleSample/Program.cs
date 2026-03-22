@@ -1,22 +1,53 @@
 using BLite.Bson;
+using BLite.Core.Storage;
 using BLite.Shared;
 using BLite.Tests;
 
-// ─── Setup ────────────────────────────────────────────────────────────────
-var dbPath  = Path.Combine(Path.GetTempPath(), $"blite_demo.db");
-var walPath = Path.ChangeExtension(dbPath, ".wal");
+// ─── Layout selection ─────────────────────────────────────────────────────
+// Flags:
+//   --multi-file          : server layout (separate WAL, index, per-collection files)
+//   --layout=small|large  : override page size preset (default = Default / 16 KB)
+//   (no flag)             : classic single-file embedded layout
+var isMultiFile = args.Any(a => a.Equals("--multi-file", StringComparison.OrdinalIgnoreCase));
+var layoutArg   = args.FirstOrDefault(a => a.StartsWith("--layout=", StringComparison.OrdinalIgnoreCase));
+PageFileConfig basePreset = layoutArg?.Split('=')[1].ToLowerInvariant() switch
+{
+    "small" => PageFileConfig.Small,
+    "large" => PageFileConfig.Large,
+    _       => PageFileConfig.Default,
+};
 
-if (File.Exists(dbPath))  File.Delete(dbPath);
-if (File.Exists(walPath)) File.Delete(walPath);
+// ─── Setup ────────────────────────────────────────────────────────────────
+var dbPath = Path.Combine(Path.GetTempPath(), "blie_demo", "blite_demo.db");
+var config = isMultiFile
+    ? PageFileConfig.Server(dbPath, basePreset)
+    : basePreset;
+
+// Remove any previous run's files (single-file and multi-file companions)
+DeleteIfExists(dbPath);
+DeleteIfExists(Path.ChangeExtension(dbPath, ".wal"));
+DeleteIfExists(Path.ChangeExtension(dbPath, ".idx"));
+var collDir = Path.Combine(Path.GetDirectoryName(dbPath)!, "collections",
+    Path.GetFileNameWithoutExtension(dbPath));
+if (Directory.Exists(collDir)) Directory.Delete(collDir, recursive: true);
+var walDir = Path.Combine(Path.GetDirectoryName(dbPath)!, "wal");
+if (isMultiFile && Directory.Exists(walDir)) Directory.Delete(walDir, recursive: true);
+
+string layoutLabel = isMultiFile
+    ? $"Multi-file server  (WAL + index + per-collection files, {basePreset.PageSize / 1024} KB pages)"
+    : $"Single-file embedded  ({basePreset.PageSize / 1024} KB pages)";
 
 Console.WriteLine("╔══════════════════════════════════════╗");
 Console.WriteLine("║       BLite Demo Database Seeder     ║");
 Console.WriteLine("╚══════════════════════════════════════╝");
-Console.WriteLine($"Path: {dbPath}\n");
+Console.WriteLine($"Layout : {layoutLabel}");
+Console.WriteLine($"Path   : {dbPath}");
+Console.WriteLine();
 
 var rng = new Random(42);
 
 // ─── Helper lambdas ───────────────────────────────────────────────────────
+void DeleteIfExists(string path) { if (File.Exists(path)) File.Delete(path); }
 ObjectId NewId() => ObjectId.NewObjectId();
 
 string Pick(params string[] values) => values[rng.Next(values.Length)];
@@ -48,7 +79,7 @@ Address RandAddress() => new() { Street = $"{Pick(streetNames)} {rng.Next(1, 200
 float[] RandVector(int dims) =>
     Enumerable.Range(0, dims).Select(_ => (float)rng.NextDouble()).ToArray();
 
-using var db = new TestDbContext(dbPath);
+using var db = new TestDbContext(dbPath, config);
 
 // ─── Users ────────────────────────────────────────────────────────────────
 Seed("Users", () =>
@@ -536,7 +567,13 @@ Console.WriteLine($"  ProductRefs               : {db.ProductRefs.Count()}");
 Console.WriteLine($"  MockCounters              : {db.MockCounters.Count()}");
 Console.WriteLine($"  TemporalEntities          : {db.TemporalEntities.Count()}");
 Console.WriteLine($"  EnumEntities              : {db.EnumEntities.Count()}");
-Console.WriteLine($"\nDatabase file: {dbPath}");
+Console.WriteLine($"\nDatabase file  : {dbPath}");
+if (isMultiFile)
+{
+    Console.WriteLine($"Index file     : {Path.ChangeExtension(dbPath, ".idx")}");
+    Console.WriteLine($"WAL file       : {config.WalPath}");
+    Console.WriteLine($"Collections dir: {config.CollectionDataDirectory}");
+}
 Console.WriteLine("Done.");
 
 db.Dispose();

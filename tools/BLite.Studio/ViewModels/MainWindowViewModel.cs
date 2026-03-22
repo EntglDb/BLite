@@ -169,6 +169,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private string? _openDatabaseName;
 
     private BLiteEngine? _engine;
+    private PageFileConfig? _openedConfig;
+
+    /// <summary>True when the open database uses a multi-file (server) layout.</summary>
+    public bool IsMultiFile =>
+        _openedConfig.HasValue &&
+        (_openedConfig.Value.CollectionDataDirectory != null ||
+         _openedConfig.Value.IndexFilePath           != null ||
+         _openedConfig.Value.WalPath                 != null);
+
+    public string LayoutDisplay => IsMultiFile ? "Multi-file" : "Single-file";
 
     // ── Explorer ──────────────────────────────────────────────────────────────
     [ObservableProperty]
@@ -208,10 +218,13 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _engine?.Dispose();
         _engine          = null;
+        _openedConfig    = null;
         IsDatabaseOpen   = false;
         StatusMessage    = null;
         OpenDatabaseName = null;
         Explorer         = null;
+        OnPropertyChanged(nameof(IsMultiFile));
+        OnPropertyChanged(nameof(LayoutDisplay));
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -221,7 +234,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             _engine?.Dispose();
 
-            // Auto-detect page size for existing files; fall back to user preset for new ones.
+            // Auto-detect page size and layout for existing files; fall back to user preset for new ones.
             var detected = PageFileConfig.DetectFromFile(path);
             var config   = detected ?? CurrentConfig;
             if (detected.HasValue)
@@ -232,16 +245,27 @@ public partial class MainWindowViewModel : ViewModelBase
                 config = detected.Value with { Access = access };
             }
 
-            _engine = new BLiteEngine(path, config);
+            _engine       = new BLiteEngine(path, config);
+            _openedConfig = config;
+
+            // Sync the preset selector to reflect the actual page size of the opened database.
+            SelectedPreset = config.PageSize switch
+            {
+                8192  => PagePreset.Small,
+                32768 => PagePreset.Large,
+                _     => PagePreset.Default,
+            };
 
             // Persist to history
-            _history.AddOrUpdate(path, presetValue, readOnly);
+            _history.AddOrUpdate(path, (int)SelectedPreset, readOnly, IsMultiFile);
             LoadRecentConnections();
 
             OpenDatabaseName = Path.GetFileName(path);
             StatusMessage    = null;
             IsDatabaseOpen   = true;
             Explorer         = new DatabaseExplorerViewModel(_engine, path);
+            OnPropertyChanged(nameof(IsMultiFile));
+            OnPropertyChanged(nameof(LayoutDisplay));
         }
         catch (Exception ex)
         {

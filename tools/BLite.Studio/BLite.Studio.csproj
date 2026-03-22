@@ -7,8 +7,9 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- Overridden by the CI pipeline via -p:Version=x.y.z -->
     <Version>3.8.0-preview.0</Version>
-    <AssemblyVersion>$(Version).0</AssemblyVersion>
-    <FileVersion>$(Version).0</FileVersion>
+    <!-- AssemblyVersion/FileVersion must be purely numeric; strip any pre-release suffix -->
+    <AssemblyVersion>3.8.0.0</AssemblyVersion>
+    <FileVersion>3.8.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

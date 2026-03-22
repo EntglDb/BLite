@@ -37,7 +37,7 @@ public sealed class ConnectionHistoryService : IDisposable
     /// Adds a new connection entry, or updates the timestamp if the same file path
     /// already exists in history.
     /// </summary>
-    public void AddOrUpdate(string filePath, int presetValue, bool isReadOnly)
+    public void AddOrUpdate(string filePath, int presetValue, bool isReadOnly, bool isMultiFile = false)
     {
         // Look for an existing record for this file path
         var existing = _db.RecentConnections
@@ -48,6 +48,7 @@ public sealed class ConnectionHistoryService : IDisposable
         {
             existing.PresetValue  = presetValue;
             existing.IsReadOnly   = isReadOnly;
+            existing.IsMultiFile  = isMultiFile;
             existing.LastOpenedAt = DateTimeOffset.UtcNow;
             _db.RecentConnections.Update(existing);
         }
@@ -59,6 +60,7 @@ public sealed class ConnectionHistoryService : IDisposable
                 DisplayName   = Path.GetFileName(filePath),
                 PresetValue   = presetValue,
                 IsReadOnly    = isReadOnly,
+                IsMultiFile   = isMultiFile,
                 LastOpenedAt  = DateTimeOffset.UtcNow,
             });
         }
