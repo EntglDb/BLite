@@ -1,5 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using BLite.Core.Storage;
 using BLite.Shared;
 using BLite.Tests;
 using Couchbase.Lite;
@@ -23,15 +24,17 @@ public class ReadBenchmarks
     private const int DocCount   = 1000;
     private const string ScanStatus = "shipped"; // ~250 hits out of 1000
 
-    private string _docDbPath = null!;
-    private string _sqlitePath = null!;
+    private string _docDbPath      = null!;
+    private string _docDbServerPath = null!;
+    private string _sqlitePath      = null!;
     private string _sqliteConnString = null!;
     private string _litePath = null!;
     private string _cblDir = null!;
     private string _duckPath = null!;
 
-    private TestDbContext _ctx    = null!;
-    private LiteDatabase  _liteDb = null!;
+    private TestDbContext _ctx       = null!;
+    private TestDbContext _serverCtx = null!;
+    private LiteDatabase  _liteDb    = null!;
     private Database      _cblDb  = null!;
     private Couchbase.Lite.Collection _cblCol = null!;
 
@@ -43,6 +46,7 @@ public class ReadBenchmarks
         var temp = AppContext.BaseDirectory;
         var id   = Guid.NewGuid().ToString("N");
         _docDbPath        = Path.Combine(temp, $"bench_read_docdb_{id}.db");
+        _docDbServerPath  = Path.Combine(temp, $"bench_read_docdb_server_{id}.db");
         _sqlitePath       = Path.Combine(temp, $"bench_read_sqlite_{id}.db");
         _sqliteConnString = $"Data Source={_sqlitePath}";
         _litePath         = Path.Combine(temp, $"bench_read_lite_{id}.db");
@@ -63,7 +67,12 @@ public class ReadBenchmarks
         _ctx = new TestDbContext(_docDbPath);
         _ctx.CustomerOrders.InsertBulk(orders);
 
-        // 2. SQLite + JSON
+        // 2. BLite Server (multi-file)
+        InsertBenchmarks.DeleteServerDb(_docDbServerPath);
+        _serverCtx = new TestDbContext(_docDbServerPath, PageFileConfig.Server(_docDbServerPath));
+        _serverCtx.CustomerOrders.InsertBulk(orders);
+
+        // 3. SQLite + JSON
         using var conn = new SqliteConnection(_sqliteConnString);
         conn.Open();
         conn.Execute("CREATE TABLE Orders (Id TEXT PRIMARY KEY, Data TEXT NOT NULL)");
@@ -111,6 +120,8 @@ public class ReadBenchmarks
     {
         _ctx?.Dispose();
         _liteDb?.Dispose();
+        _serverCtx?.Dispose();
+        InsertBenchmarks.DeleteServerDb(_docDbServerPath);
         _cblCol = null!;
         _cblDb?.Dispose();
         SqliteConnection.ClearAllPools();
@@ -129,6 +140,10 @@ public class ReadBenchmarks
     [Benchmark(Baseline = true, Description = "BLite – FindById")]
     [BenchmarkCategory("FindById")]
     public CustomerOrder? BLite_FindById() => _ctx.CustomerOrders.FindById(_targetId);
+
+    [Benchmark(Description = "BLite Server – FindById")]
+    [BenchmarkCategory("FindById")]
+    public CustomerOrder? BLiteServer_FindById() => _serverCtx.CustomerOrders.FindById(_targetId);
 
     [Benchmark(Description = "LiteDB – FindById")]
     [BenchmarkCategory("FindById")]
@@ -152,6 +167,11 @@ public class ReadBenchmarks
     [BenchmarkCategory("Scan")]
     public List<CustomerOrder> BLite_Scan()
         => _ctx.CustomerOrders.Find(x => x.Status == ScanStatus).ToList();
+
+    [Benchmark(Description = "BLite Server – Scan by Status")]
+    [BenchmarkCategory("Scan")]
+    public List<CustomerOrder> BLiteServer_Scan()
+        => _serverCtx.CustomerOrders.Find(x => x.Status == ScanStatus).ToList();
 
     [Benchmark(Description = "LiteDB – Scan by Status")]
     [BenchmarkCategory("Scan")]

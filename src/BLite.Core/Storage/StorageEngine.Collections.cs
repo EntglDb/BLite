@@ -221,6 +221,9 @@ public sealed partial class StorageEngine
 
     public void SaveCollectionMetadata(CollectionMetadata metadata)
     {
+        _metadataLock.Wait();
+        try
+        {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
 
@@ -419,6 +422,8 @@ public sealed partial class StorageEngine
         th.WriteTo(targetBuf);
 
         WritePageImmediate(targetPageId, targetBuf);
+        } // end try
+        finally { _metadataLock.Release(); }
     }
 
     /// <summary>
@@ -428,6 +433,9 @@ public sealed partial class StorageEngine
     /// </summary>
     public void DeleteCollectionMetadata(string name)
     {
+        _metadataLock.Wait();
+        try
+        {
         var buffer = new byte[PageSize];
         uint pageId = 1;
 
@@ -464,6 +472,8 @@ public sealed partial class StorageEngine
 
             pageId = header.NextOverflowPage;
         }
+        } // end try
+        finally { _metadataLock.Release(); }
     }
 
     public IReadOnlyList<CollectionMetadata> GetAllCollectionsMetadata()

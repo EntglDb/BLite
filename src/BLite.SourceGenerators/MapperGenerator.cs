@@ -225,6 +225,61 @@ public readonly struct BLiteDiagnostic
                         sb.AppendLine($"        }}");
                     }
 
+                    // Generate OpenTypedSession() factory and {ClassName}Session nested class
+                    if (collectionsWithProperties.Any())
+                    {
+                        var sessionClassName = $"{dbContext.ClassName}Session";
+                        sb.AppendLine();
+                        sb.AppendLine($"        /// <summary>");
+                        sb.AppendLine($"        /// Opens a typed session with an independent transaction context.");
+                        sb.AppendLine($"        /// Every session's collections are bound to a dedicated <see cref=\"global::BLite.Core.BLiteSession\"/>,");
+                        sb.AppendLine($"        /// enabling concurrent callers to run independent transactions on the same database.");
+                        sb.AppendLine($"        /// </summary>");
+                        var newKeyword = dbContext.HasBaseDbContext ? "new " : "";
+                        sb.AppendLine($"        public {newKeyword}{sessionClassName} OpenTypedSession()");
+                        sb.AppendLine($"        {{");
+                        sb.AppendLine($"            if (_disposed) throw new global::System.ObjectDisposedException(GetType().Name);");
+                        sb.AppendLine($"            return new {sessionClassName}(this);");
+                        sb.AppendLine($"        }}");
+                        sb.AppendLine();
+                        sb.AppendLine($"        /// <summary>");
+                        sb.AppendLine($"        /// Exposes all collections of <see cref=\"{dbContext.ClassName}\"/> each bound to an independent");
+                        sb.AppendLine($"        /// transaction context. Obtain via <see cref=\"OpenTypedSession\"/> and dispose when done.");
+                        sb.AppendLine($"        /// </summary>");
+                        sb.AppendLine($"        public sealed class {sessionClassName} : global::System.IDisposable");
+                        sb.AppendLine($"        {{");
+                        sb.AppendLine($"            private readonly global::BLite.Core.BLiteSession _session;");
+                        sb.AppendLine();
+                        foreach (var entity in collectionsWithProperties)
+                        {
+                            var entityTypeStr = $"global::{entity.FullTypeName}";
+                            var idTypeStr = entity.CollectionIdTypeFullName;
+                            sb.AppendLine($"            public global::BLite.Core.Collections.IDocumentCollection<{idTypeStr}, {entityTypeStr}> {entity.CollectionPropertyName} {{ get; }}");
+                        }
+                        sb.AppendLine();
+                        sb.AppendLine($"            internal {sessionClassName}({dbContext.ClassName} ctx)");
+                        sb.AppendLine($"            {{");
+                        sb.AppendLine($"                _session = ctx.OpenSession();");
+                        foreach (var entity in collectionsWithProperties)
+                        {
+                            var mapperName = $"global::{mapperNamespace}.{CodeGenerator.GetMapperName(entity.FullTypeName)}";
+                            sb.AppendLine($"                {entity.CollectionPropertyName} = ctx.CreateSessionCollection(new {mapperName}(), _session);");
+                        }
+                        sb.AppendLine($"            }}");
+                        sb.AppendLine();
+                        sb.AppendLine($"            /// <summary>Commits all pending changes in this session.</summary>");
+                        sb.AppendLine($"            public void SaveChanges() => _session.Commit();");
+                        sb.AppendLine($"            /// <summary>Asynchronously commits all pending changes in this session.</summary>");
+                        sb.AppendLine($"            public global::System.Threading.Tasks.Task SaveChangesAsync(global::System.Threading.CancellationToken ct = default) => _session.CommitAsync(ct);");
+                        sb.AppendLine($"            /// <summary>Begins a new transaction for this session or returns the active one.</summary>");
+                        sb.AppendLine($"            public global::BLite.Core.Transactions.ITransaction BeginTransaction() => _session.BeginTransaction();");
+                        sb.AppendLine($"            /// <summary>Rolls back the active transaction, discarding uncommitted changes.</summary>");
+                        sb.AppendLine($"            public void Rollback() => _session.Rollback();");
+                        sb.AppendLine($"            /// <summary>Disposes this session, rolling back any uncommitted transaction.</summary>");
+                        sb.AppendLine($"            public void Dispose() => _session.Dispose();");
+                        sb.AppendLine($"        }}");
+                    }
+
                     sb.AppendLine($"    }}");
                     sb.AppendLine($"}}");
                 }

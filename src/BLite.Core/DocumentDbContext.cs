@@ -107,6 +107,54 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         }
     }
 
+    /// <summary>
+    /// Opens a new isolated session backed by this context's storage engine.
+    /// Each session carries its own independent transaction context, enabling
+    /// concurrent operations from multiple callers on the same database.
+    /// </summary>
+    public BLiteSession OpenSession()
+    {
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
+        return new BLiteSession(_storage);
+    }
+
+    /// <summary>
+    /// Creates a document collection bound to an explicit <paramref name="holder"/>.
+    /// Use together with sessions from <see cref="OpenSession"/> so that the resulting
+    /// collection's operations run inside the session's independent transaction context.
+    /// </summary>
+    public IDocumentCollection<TId, T> CreateSessionCollection<TId, T>(IDocumentMapper<TId, T> mapper, ITransactionHolder holder)
+        where T : class
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+
+        string? customName = null;
+        EntityTypeBuilder<T>? builder = null;
+
+        if (_model.TryGetValue(typeof(T), out var builderObj))
+        {
+            builder = builderObj as EntityTypeBuilder<T>;
+            customName = builder?.CollectionName;
+        }
+
+        var collection = new DocumentCollection<TId, T>(_storage, holder, mapper, customName);
+
+        if (builder != null)
+        {
+            if (builder.PropertyConverters.Count > 0)
+                collection.SetConverterRegistry(new ValueConverterRegistry(builder.PropertyConverters));
+
+            foreach (var indexBuilder in builder.Indexes)
+                collection.ApplyIndexBuilder(indexBuilder);
+
+            if (builder.TimeSeriesTtlField != null && builder.TimeSeriesRetention.HasValue)
+                collection.SetTimeSeries(builder.TimeSeriesTtlField, builder.TimeSeriesRetention.Value);
+        }
+
+        return collection;
+    }
+
     protected virtual void InitializeCollections()
     {
         // Derived classes can override to initialize collections

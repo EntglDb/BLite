@@ -48,6 +48,11 @@ public sealed partial class StorageEngine : IDisposable
     // Held only by the group commit writer (and sync commit / checkpoint paths).
     private readonly SemaphoreSlim _commitLock = new(1, 1);
 
+    // Serialises the multi-step read-modify-write on the Collection catalog pages
+    // (page 1 and its overflow chain).  Prevents concurrent SaveCollectionMetadata /
+    // DeleteCollectionMetadata calls from corrupting the slotted-page structure.
+    private readonly SemaphoreSlim _metadataLock = new(1, 1);
+
     // Group commit writer infrastructure.
     private readonly Channel<PendingCommit> _commitChannel;
     private readonly CancellationTokenSource _writerCts = new();
@@ -196,6 +201,7 @@ public sealed partial class StorageEngine : IDisposable
         }
 
         _commitLock?.Dispose();
+        _metadataLock?.Dispose();
     }
 
     internal void RegisterCdc(CDC.ChangeStreamDispatcher cdc)

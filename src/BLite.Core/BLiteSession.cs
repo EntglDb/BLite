@@ -26,7 +26,7 @@ namespace BLite.Core;
 public sealed class BLiteSession : ITransactionHolder, IDisposable
 {
     private readonly StorageEngine _storage;
-    private readonly ConcurrentDictionary<string, DynamicCollection> _collections =
+    private readonly ConcurrentDictionary<string, Lazy<DynamicCollection>> _collections =
         new(StringComparer.OrdinalIgnoreCase);
     private ITransaction? _currentTransaction;
     private bool _disposed;
@@ -92,8 +92,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         ThrowIfDisposed();
         // Flush index root-page IDs into collection metadata before committing,
         // so vector/spatial indexes survive a reopen.
-        foreach (var col in _collections.Values)
-            col.PersistIndexMetadata();
+        foreach (var lazy in _collections.Values)
+            lazy.Value.PersistIndexMetadata();
         if (CurrentTransaction != null)
         {
             try { CurrentTransaction.Commit(); }
@@ -107,8 +107,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     public async Task CommitAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
-        foreach (var col in _collections.Values)
-            col.PersistIndexMetadata();
+        foreach (var lazy in _collections.Values)
+            lazy.Value.PersistIndexMetadata();
         if (CurrentTransaction != null)
         {
             try { await CurrentTransaction.CommitAsync(ct).ConfigureAwait(false); }
@@ -152,7 +152,10 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentNullException(nameof(name));
 
-        return _collections.GetOrAdd(name, n => new DynamicCollection(_storage, this, n, idType));
+        return _collections.GetOrAdd(name,
+            n => new Lazy<DynamicCollection>(
+                () => new DynamicCollection(_storage, this, n, idType),
+                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
     /// <summary>
@@ -162,7 +165,7 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     public DynamicCollection? GetCollection(string name)
     {
         ThrowIfDisposed();
-        return _collections.TryGetValue(name, out var col) ? col : null;
+        return _collections.TryGetValue(name, out var lazy) ? lazy.Value : null;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -371,9 +374,9 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         }
         _currentTransaction = null;
 
-        foreach (var col in _collections.Values)
+        foreach (var lazy in _collections.Values)
         {
-            try { col.Dispose(); }
+            try { lazy.Value.Dispose(); }
             catch { /* best-effort */ }
         }
         _collections.Clear();

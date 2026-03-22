@@ -1,6 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BLite.Bson;
+using BLite.Core.Storage;
 using BLite.Shared;
 using BLite.Tests;
 using Couchbase.Lite;
@@ -10,6 +11,7 @@ using LiteDB;
 using Microsoft.Data.Sqlite;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 
 namespace BLite.Benchmark;
 
@@ -22,14 +24,16 @@ public class InsertBenchmarks
 {
     private const int BatchSize = 1000;
 
-    private string _docDbPath = "";
-    private string _sqlitePath = "";
+    private string _docDbPath       = "";
+    private string _docDbServerPath  = "";
+    private string _sqlitePath       = "";
     private string _sqliteConnString = "";
-    private string _litePath = "";
-    private string _cblDir = "";
-    private string _duckPath = "";
+    private string _litePath         = "";
+    private string _cblDir           = "";
+    private string _duckPath         = "";
 
-    private TestDbContext?          _ctx    = null;
+    private TestDbContext?          _ctx       = null;
+    private TestDbContext?          _serverCtx = null;
     private LiteDatabase?           _liteDb = null;
     private Database?               _cblDb  = null;
     private Couchbase.Lite.Collection? _cblCol = null;
@@ -43,6 +47,7 @@ public class InsertBenchmarks
         var temp = AppContext.BaseDirectory;
         var id   = Guid.NewGuid().ToString("N");
         _docDbPath         = Path.Combine(temp, $"bench_docdb_{id}.db");
+        _docDbServerPath   = Path.Combine(temp, $"bench_docdb_server_{id}.db");
         _sqlitePath        = Path.Combine(temp, $"bench_sqlite_{id}.db");
         _sqliteConnString  = $"Data Source={_sqlitePath}";
         _litePath          = Path.Combine(temp, $"bench_lite_{id}.db");
@@ -62,6 +67,9 @@ public class InsertBenchmarks
     {
         if (File.Exists(_docDbPath)) File.Delete(_docDbPath);
         _ctx = new TestDbContext(_docDbPath);
+
+        DeleteServerDb(_docDbServerPath);
+        _serverCtx = new TestDbContext(_docDbServerPath, PageFileConfig.Server(_docDbServerPath));
 
         if (File.Exists(_sqlitePath)) File.Delete(_sqlitePath);
         using var conn = new SqliteConnection(_sqliteConnString);
@@ -88,6 +96,8 @@ public class InsertBenchmarks
         try
         {
             _ctx?.Dispose();
+            _serverCtx?.Dispose();
+            DeleteServerDb(_docDbServerPath);
             _liteDb?.Dispose();
             _cblCol = null!;
             _cblDb?.Dispose();
@@ -110,7 +120,11 @@ public class InsertBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
-    public void BLite_Insert_Single()  => _ctx!.CustomerOrders.Insert(_singleOrder!);
+    public void BLite_Insert_Single() => _ctx!.CustomerOrders.Insert(_singleOrder!);
+
+    [Benchmark(Description = "BLite Server – Single Insert")]
+    [BenchmarkCategory("Insert_Single")]
+    public void BLiteServer_Insert_Single() => _serverCtx!.CustomerOrders.Insert(_singleOrder!);
 
     [Benchmark(Description = "LiteDB – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
@@ -130,7 +144,11 @@ public class InsertBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
-    public void BLite_Insert_Batch()  => _ctx!.CustomerOrders.InsertBulk(_batchData);
+    public void BLite_Insert_Batch() => _ctx!.CustomerOrders.InsertBulk(_batchData);
+
+    [Benchmark(Description = "BLite Server – Batch Insert (1000)")]
+    [BenchmarkCategory("Insert_Batch")]
+    public void BLiteServer_Insert_Batch() => _serverCtx!.CustomerOrders.InsertBulk(_batchData);
 
     [Benchmark(Description = "LiteDB – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
@@ -198,5 +216,29 @@ public class InsertBenchmarks
             conn.Execute("INSERT INTO Orders (Id, Data) VALUES ($Id, $Data)",
                 new { o.Id, Data = System.Text.Json.JsonSerializer.Serialize(o) }, transaction: txn);
         txn.Commit();
+    }
+
+    // ──── helpers ─────────────────────────────────────────────────────
+
+    internal static void DeleteServerDb(string dbPath)
+    {
+        if (File.Exists(dbPath)) File.Delete(dbPath);
+        var dir  = Path.GetDirectoryName(dbPath) ?? ".";
+        var name = Path.GetFileNameWithoutExtension(dbPath);
+        var idx  = Path.ChangeExtension(dbPath, ".idx");
+        if (File.Exists(idx)) File.Delete(idx);
+        var walFile = Path.Combine(dir, "wal", name + ".wal");
+        if (File.Exists(walFile)) File.Delete(walFile);
+        var collDir = Path.Combine(dir, "collections", name);
+        if (Directory.Exists(collDir))
+        {
+            // On Windows, file handles inside the directory may still be open briefly
+            // after StorageEngine.Dispose() returns. Retry with back-off.
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                try { Directory.Delete(collDir, true); break; }
+                catch (IOException) when (attempt < 4) { Thread.Sleep(50 << attempt); }
+            }
+        }
     }
 }
