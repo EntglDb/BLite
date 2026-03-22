@@ -30,6 +30,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     private ITransaction? _currentTransaction;
 
     /// <summary>
+    /// Exposes the underlying storage engine to session instances created by this engine.
+    /// </summary>
+    internal StorageEngine Storage => _storage;
+
+    /// <summary>
     /// Gets or sets the current transaction. Returns null if no active transaction exists.
     /// </summary>
     public ITransaction? CurrentTransaction
@@ -81,6 +86,30 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
         _storage = new StorageEngine(databasePath, config);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    #endregion
+
+    #region Session Management
+
+    /// <summary>
+    /// Opens a new <see cref="BLiteSession"/> against this engine.
+    /// <para>
+    /// Each session carries its own isolated transaction context, so multiple sessions can
+    /// execute concurrent transactions against the same database — the typical pattern for
+    /// server-mode usage where one <see cref="BLiteEngine"/> is shared across many
+    /// client connections.
+    /// </para>
+    /// <para>
+    /// The caller is responsible for disposing the session when the client disconnects.
+    /// Disposing a session rolls back any uncommitted transaction automatically.
+    /// </para>
+    /// </summary>
+    /// <returns>A new <see cref="BLiteSession"/> backed by this engine's storage.</returns>
+    public BLiteSession OpenSession()
+    {
+        ThrowIfDisposed();
+        return new BLiteSession(_storage);
     }
 
     #endregion
