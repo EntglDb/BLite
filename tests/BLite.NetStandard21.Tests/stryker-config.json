@@ -1,8 +1,11 @@
 {
   "stryker-config": {
     "project": "BLite.Core.csproj",
-    "reporters": [ "html", "progress", "cleartext" ],
+    "reporters": [ "html", "json", "progress", "cleartext" ],
     "mutation-level": "Standard",
+    "coverage-analysis": "perTest",
+    "concurrency": 4,
+    "additional-timeout": 5000,
     "thresholds": {
       "high": 80,
       "low": 60,

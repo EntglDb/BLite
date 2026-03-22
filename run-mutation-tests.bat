@@ -24,7 +24,6 @@ set "MI=%MI: =0%"
 set "TIMESTAMP=%YY%%MM%%DD%_%HH%%MI%"
 
 set "OUT_ROOT=%ROOT%\mutation-testing\StrykerOutput"
-set "LOG_DIR=%OUT_ROOT%\logs"
 set "SUMMARY=%OUT_ROOT%\summary_%TIMESTAMP%.txt"
 
 :: Assicura che dotnet tool sia ripristinato
@@ -36,8 +35,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Crea cartella log
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+if not exist "%OUT_ROOT%" mkdir "%OUT_ROOT%"
 
 echo.
 echo ============================================================
@@ -56,24 +54,23 @@ goto :run_%TARGET% 2>nul || (
     echo         Valori validi: bson, core, netstandard, all
     exit /b 1
 )
-goto :collect_and_exit
 
 :: ============================================================
 :run_bson
     echo [RUN] BLite.Bson (via BLite.Tests)
-    call :run_stryker "%ROOT%\tests\BLite.Tests" "BLite.Bson.csproj" "BLite.Bson" "%LOG_DIR%\bson.log"
+    call :run_stryker "%ROOT%\tests\BLite.Tests" "BLite.Bson.csproj" "BLite.Bson"
     if "%TARGET%"=="bson" goto :collect_and_exit
     goto :eof
 
 :run_core
     echo [RUN] BLite.Core (via BLite.Tests)
-    call :run_stryker "%ROOT%\tests\BLite.Tests" "BLite.Core.csproj" "BLite.Core" "%LOG_DIR%\core.log"
+    call :run_stryker "%ROOT%\tests\BLite.Tests" "BLite.Core.csproj" "BLite.Core"
     if "%TARGET%"=="core" goto :collect_and_exit
     goto :eof
 
 :run_netstandard
     echo [RUN] BLite.Core — .NET Standard 2.1 (via BLite.NetStandard21.Tests)
-    call :run_stryker "%ROOT%\tests\BLite.NetStandard21.Tests" "BLite.Core.csproj" "BLite.NetStandard21" "%LOG_DIR%\netstandard.log"
+    call :run_stryker "%ROOT%\tests\BLite.NetStandard21.Tests" "BLite.Core.csproj" "BLite.NetStandard21"
     if "%TARGET%"=="netstandard" goto :collect_and_exit
     goto :eof
 
@@ -84,38 +81,34 @@ goto :collect_and_exit
     goto :collect_and_exit
 
 :: ============================================================
-:: Subroutine: run_stryker <test-dir> <project> <out-subdir> <log-file>
+:: Subroutine: run_stryker <test-dir> <project> <out-subdir>
 :run_stryker
     set "_DIR=%~1"
     set "_PROJ=%~2"
     set "_OUTDIR=%OUT_ROOT%\%~3"
-    set "_LOG=%~4"
 
     echo   Directory : %_DIR%
     echo   Progetto  : %_PROJ%
     echo   Output    : %_OUTDIR%
 
-    :: Pulizia eventuale StrykerOutput residuo prima di avviare
+    :: Pulizia StrykerOutput locale residuo da run precedenti
     if exist "%_DIR%\StrykerOutput" rmdir /s /q "%_DIR%\StrykerOutput"
 
     cd /d "%_DIR%"
-    dotnet tool run dotnet-stryker -- --project "%_PROJ%" 2>&1 | tee "%_LOG%"
 
-    if errorlevel 1 (
-        echo [WARN] Stryker ha restituito un errore per %_PROJ% — controlla %_LOG%
+    :: --output scrive direttamente nella cartella centralizzata;
+    :: l'exitcode viene catturato SENZA pipe (pipe in CMD riflette exitcode del
+    :: comando a destra, non di Stryker — bug silenzioso con tee)
+    dotnet tool run dotnet-stryker -- --project "%_PROJ%" --output "%_OUTDIR%"
+    set "_EC=%ERRORLEVEL%"
+
+    if %_EC% neq 0 (
+        echo [WARN] Stryker ha restituito un errore (exitcode: %_EC%) per %_PROJ%
         set "EXITCODE=1"
     ) else (
         echo [OK]   %_PROJ% completato.
     )
 
-    :: Sposta StrykerOutput nella cartella centralizzata
-    if exist "%_DIR%\StrykerOutput" (
-        if exist "%_OUTDIR%" rmdir /s /q "%_OUTDIR%"
-        move "%_DIR%\StrykerOutput" "%_OUTDIR%" >nul
-        echo [INFO] Report spostato in: %_OUTDIR%
-    ) else (
-        echo [WARN] Nessun StrykerOutput trovato in %_DIR%
-    )
     echo.
     cd /d "%ROOT%"
     goto :eof
@@ -134,12 +127,15 @@ goto :collect_and_exit
 
     set "FOUND=0"
     for /r "%OUT_ROOT%" %%f in (mutation-report.html) do (
-        echo Report: %%f >> "%SUMMARY%"
+        echo Report HTML : %%f >> "%SUMMARY%"
         set /a "FOUND+=1"
+    )
+    for /r "%OUT_ROOT%" %%f in (mutation-report.json) do (
+        echo Report JSON : %%f >> "%SUMMARY%"
     )
 
     if "%FOUND%"=="0" (
-        echo (nessun report HTML trovato) >> "%SUMMARY%"
+        echo (nessun report trovato) >> "%SUMMARY%"
     )
 
     echo.
