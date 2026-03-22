@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.8.0-preview.0"></a>
+## [3.8.0-preview.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.8.0-preview.0) (2026-03-22)
+
+### Features
+
+* add BLiteSession for per-connection isolated transaction context (server mode) ([13b59ec](https://www.github.com/EntglDb/BLite/commit/13b59ec0e72302fad08771bdef49e050c77f661c))
+* **storage:** Server() base config, BLiteMigration (single↔multi), KvGetWithExpiry + ImportDictionary ([1a7946e](https://www.github.com/EntglDb/BLite/commit/1a7946eae2ab43b89e98809bcd87992c58d4a950))
+
+### Bug Fixes
+
+* harden PageFile post-dispose safety — volatile _disposed, ThrowIfDisposed, null fields on close ([3411e17](https://www.github.com/EntglDb/BLite/commit/3411e179da5783cbccd2a6812b8749697d22271d))
+* replace SemaphoreSlim with ReaderWriterLockSlim in PageFile to fix concurrent read/write race ([97dbb47](https://www.github.com/EntglDb/BLite/commit/97dbb477b274666c9194806bd384c61b11e9624f))
+* use _rwLock read lock for netstandard2.1 ReadPageAsync to prevent race with EnsureCapacityCore ([815cfa3](https://www.github.com/EntglDb/BLite/commit/815cfa3cfd002d4f7c484b9b0ae8dad28a34abe7))
+* **storage:** bit-tagged pageIds for collision-free multi-file routing, collection scans, WAL recovery, path validation ([7b643a5](https://www.github.com/EntglDb/BLite/commit/7b643a5eccb0ff89000ffda3c45731e183edc572))
+* **storage:** implement bit-tagged pageIds to eliminate collision and routing bugs ([4c8ef15](https://www.github.com/EntglDb/BLite/commit/4c8ef15496d3309c3ee991ae10b61be57a14c948))
+
 <a name="3.7.0"></a>
 ## [3.7.0](https://www.github.com/EntglDb/BLite/releases/tag/v3.7.0) (2026-03-17)
 
