@@ -221,6 +221,8 @@ public class BLiteSessionTests : IDisposable
         const int sessionCount = 10;
         const string coll = "concurrent";
 
+        // Pre-register the key before spawning concurrent tasks to avoid any
+        // dictionary-growth races in the global C-BSON key map.
         _engine.RegisterKeys(["n"]);
 
         var tasks = Enumerable.Range(0, sessionCount).Select(async i =>
