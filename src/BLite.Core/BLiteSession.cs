@@ -1,0 +1,383 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using BLite.Bson;
+using BLite.Core.Storage;
+using BLite.Core.Transactions;
+
+namespace BLite.Core;
+
+/// <summary>
+/// Represents an isolated client session backed by a shared <see cref="BLiteEngine"/>.
+/// <para>
+/// In server mode, the BLite.Server layer creates one <see cref="BLiteEngine"/> per database
+/// and one <see cref="BLiteSession"/> per connected client via
+/// <see cref="BLiteEngine.OpenSession"/>. Each session carries its own transaction context so
+/// multiple clients can run independent, concurrent transactions against the same database.
+/// </para>
+/// <para>
+/// In single-process embedded mode the <see cref="BLiteEngine"/> itself serves as both engine
+/// and implicit session; <see cref="BLiteSession"/> is only required when the kernel is shared
+/// across several independent callers.
+/// </para>
+/// </summary>
+public sealed class BLiteSession : ITransactionHolder, IDisposable
+{
+    private readonly StorageEngine _storage;
+    private readonly ConcurrentDictionary<string, DynamicCollection> _collections =
+        new(StringComparer.OrdinalIgnoreCase);
+    private ITransaction? _currentTransaction;
+    private bool _disposed;
+
+    internal BLiteSession(StorageEngine storage)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Current transaction
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets the current transaction for this session, or <c>null</c> when no transaction is
+    /// active.
+    /// </summary>
+    public ITransaction? CurrentTransaction
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _currentTransaction != null && _currentTransaction.State == TransactionState.Active
+                ? _currentTransaction : null;
+        }
+        private set => _currentTransaction = value;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Transaction management
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Begins a new transaction for this session, or returns the already-active one.
+    /// </summary>
+    public ITransaction BeginTransaction()
+    {
+        ThrowIfDisposed();
+        if (CurrentTransaction != null)
+            return CurrentTransaction;
+        CurrentTransaction = _storage.BeginTransaction();
+        return CurrentTransaction!;
+    }
+
+    /// <summary>
+    /// Begins a new transaction asynchronously for this session, or returns the already-active one.
+    /// </summary>
+    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (CurrentTransaction != null)
+            return CurrentTransaction;
+        CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
+            .ConfigureAwait(false);
+        return CurrentTransaction!;
+    }
+
+    /// <summary>
+    /// Commits the active transaction, persisting all changes made in this session.
+    /// </summary>
+    public void Commit()
+    {
+        ThrowIfDisposed();
+        // Flush index root-page IDs into collection metadata before committing,
+        // so vector/spatial indexes survive a reopen.
+        foreach (var col in _collections.Values)
+            col.PersistIndexMetadata();
+        if (CurrentTransaction != null)
+        {
+            try { CurrentTransaction.Commit(); }
+            finally { CurrentTransaction = null; }
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously commits the active transaction.
+    /// </summary>
+    public async Task CommitAsync(CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        foreach (var col in _collections.Values)
+            col.PersistIndexMetadata();
+        if (CurrentTransaction != null)
+        {
+            try { await CurrentTransaction.CommitAsync(ct).ConfigureAwait(false); }
+            finally { CurrentTransaction = null; }
+        }
+    }
+
+    /// <summary>
+    /// Rolls back the active transaction, discarding all uncommitted changes.
+    /// </summary>
+    public void Rollback()
+    {
+        ThrowIfDisposed();
+        if (CurrentTransaction != null)
+        {
+            try { CurrentTransaction.Rollback(); }
+            finally { CurrentTransaction = null; }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ITransactionHolder
+    // ─────────────────────────────────────────────────────────────────────────
+
+    ITransaction ITransactionHolder.GetCurrentTransactionOrStart() => BeginTransaction();
+
+    Task<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync()
+        => BeginTransactionAsync();
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Collection management
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets or creates a dynamic collection by name. The returned instance is scoped to this
+    /// session — its operations use this session's transaction context.
+    /// </summary>
+    public DynamicCollection GetOrCreateCollection(string name, BsonIdType idType = BsonIdType.ObjectId)
+    {
+        ThrowIfDisposed();
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentNullException(nameof(name));
+
+        return _collections.GetOrAdd(name, n => new DynamicCollection(_storage, this, n, idType));
+    }
+
+    /// <summary>
+    /// Gets a dynamic collection by name if it was previously opened in this session,
+    /// returning <c>null</c> otherwise.
+    /// </summary>
+    public DynamicCollection? GetCollection(string name)
+    {
+        ThrowIfDisposed();
+        return _collections.TryGetValue(name, out var col) ? col : null;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Convenience CRUD — collection + auto-commit
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Inserts a document and commits immediately.</summary>
+    public BsonId Insert(string collectionName, BsonDocument document)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var id = col.Insert(document);
+        Commit();
+        return id;
+    }
+
+    /// <summary>Inserts a document and commits asynchronously.</summary>
+    public async ValueTask<BsonId> InsertAsync(
+        string collectionName, BsonDocument document, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var id = col.Insert(document);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return id;
+    }
+
+    /// <summary>Inserts multiple documents and commits immediately.</summary>
+    public List<BsonId> InsertBulk(string collectionName, IEnumerable<BsonDocument> documents)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var ids = col.InsertBulk(documents);
+        Commit();
+        return ids;
+    }
+
+    /// <summary>Inserts multiple documents and commits asynchronously.</summary>
+    public async Task<List<BsonId>> InsertBulkAsync(
+        string collectionName, IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var ids = await col.InsertBulkAsync(documents, ct).ConfigureAwait(false);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return ids;
+    }
+
+    /// <summary>Finds a document by ID.</summary>
+    public BsonDocument? FindById(string collectionName, BsonId id)
+    {
+        ThrowIfDisposed();
+        return GetOrCreateCollection(collectionName).FindById(id);
+    }
+
+    /// <summary>Finds a document by ID asynchronously.</summary>
+    public ValueTask<BsonDocument?> FindByIdAsync(
+        string collectionName, BsonId id, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        return GetOrCreateCollection(collectionName).FindByIdAsync(id, ct);
+    }
+
+    /// <summary>Returns all documents in the named collection.</summary>
+    public IEnumerable<BsonDocument> FindAll(string collectionName)
+    {
+        ThrowIfDisposed();
+        return GetOrCreateCollection(collectionName).FindAll();
+    }
+
+    /// <summary>Asynchronously streams all documents in the named collection.</summary>
+    public IAsyncEnumerable<BsonDocument> FindAllAsync(
+        string collectionName, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        return GetOrCreateCollection(collectionName).FindAllAsync(ct);
+    }
+
+    /// <summary>Returns documents matching the predicate.</summary>
+    public IEnumerable<BsonDocument> Find(
+        string collectionName, Func<BsonDocument, bool> predicate)
+    {
+        ThrowIfDisposed();
+        return GetOrCreateCollection(collectionName).Find(predicate);
+    }
+
+    /// <summary>Asynchronously yields documents matching the predicate.</summary>
+    public IAsyncEnumerable<BsonDocument> FindAsync(
+        string collectionName, Func<BsonDocument, bool> predicate, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        return GetOrCreateCollection(collectionName).FindAsync(predicate, ct);
+    }
+
+    /// <summary>Updates a document and commits immediately.</summary>
+    public bool Update(string collectionName, BsonId id, BsonDocument document)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var result = col.Update(id, document);
+        Commit();
+        return result;
+    }
+
+    /// <summary>Updates a document and commits asynchronously.</summary>
+    public async ValueTask<bool> UpdateAsync(
+        string collectionName, BsonId id, BsonDocument document, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var result = col.Update(id, document);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Updates multiple documents and commits immediately.</summary>
+    public int UpdateBulk(
+        string collectionName, IEnumerable<(BsonId Id, BsonDocument Document)> updates)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var count = col.UpdateBulk(updates);
+        Commit();
+        return count;
+    }
+
+    /// <summary>Updates multiple documents and commits asynchronously.</summary>
+    public async Task<int> UpdateBulkAsync(
+        string collectionName,
+        IEnumerable<(BsonId Id, BsonDocument Document)> updates,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var count = await col.UpdateBulkAsync(updates, ct).ConfigureAwait(false);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return count;
+    }
+
+    /// <summary>Deletes a document and commits immediately.</summary>
+    public bool Delete(string collectionName, BsonId id)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var result = col.Delete(id);
+        Commit();
+        return result;
+    }
+
+    /// <summary>Deletes a document and commits asynchronously.</summary>
+    public async ValueTask<bool> DeleteAsync(
+        string collectionName, BsonId id, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var result = col.Delete(id);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Deletes multiple documents and commits immediately.</summary>
+    public int DeleteBulk(string collectionName, IEnumerable<BsonId> ids)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var count = col.DeleteBulk(ids);
+        Commit();
+        return count;
+    }
+
+    /// <summary>Deletes multiple documents and commits asynchronously.</summary>
+    public async Task<int> DeleteBulkAsync(
+        string collectionName, IEnumerable<BsonId> ids, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var col = GetOrCreateCollection(collectionName);
+        var count = await col.DeleteBulkAsync(ids, ct).ConfigureAwait(false);
+        await CommitAsync(ct).ConfigureAwait(false);
+        return count;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Disposal
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(BLiteSession));
+    }
+
+    /// <summary>
+    /// Disposes this session. Any uncommitted transaction is rolled back automatically.
+    /// The underlying <see cref="BLiteEngine"/> (and its storage) is <b>not</b> affected.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        // Roll back any uncommitted transaction so the engine's WAL stays clean.
+        if (_currentTransaction?.State == TransactionState.Active)
+        {
+            try { _currentTransaction.Rollback(); }
+            catch { /* best-effort */ }
+        }
+        _currentTransaction = null;
+
+        foreach (var col in _collections.Values)
+        {
+            try { col.Dispose(); }
+            catch { /* best-effort */ }
+        }
+        _collections.Clear();
+
+        GC.SuppressFinalize(this);
+    }
+}
