@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="3.8.0-preview.3"></a>
+## [3.8.0-preview.3](https://www.github.com/EntglDb/BLite/releases/tag/v3.8.0-preview.3) (2026-03-22)
+
+### Bug Fixes
+
+* Non-blocking checkpoints; defer metadata writes ([455d28a](https://www.github.com/EntglDb/BLite/commit/455d28af28df3ebd5459e07e4d208b15d6061e89))
+* Use Lazy<PageFile> for collection files ([8e017a1](https://www.github.com/EntglDb/BLite/commit/8e017a128be72b3533aed61eee98bb2a7a7b9c37))
+
 <a name="3.8.0-preview.2"></a>
 ## [3.8.0-preview.2](https://www.github.com/EntglDb/BLite/releases/tag/v3.8.0-preview.2) (2026-03-22)
 
