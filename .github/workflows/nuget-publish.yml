@@ -8,7 +8,15 @@ on:
     branches:
       - main # Si attiva a ogni push sul branch 'main'
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+' # Si attiva quando viene pushato un tag come 'v1.0.0'
+      - 'v[0-9]+.[0-9]+.[0-9]+'                  # stable:     v1.2.3
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha'             # pre-release: v1.2.3-alpha
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'      #              v1.2.3-alpha.1
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta'              #              v1.2.3-beta
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'       #              v1.2.3-beta.1
+      - 'v[0-9]+.[0-9]+.[0-9]+-preview'           #              v1.2.3-preview
+      - 'v[0-9]+.[0-9]+.[0-9]+-preview.[0-9]+'    #              v1.2.3-preview.1
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc'                #              v1.2.3-rc
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'         #              v1.2.3-rc.1
   pull_request:
     branches:
       - main # Si attiva quando viene aperta/aggiornata una PR verso 'main'
@@ -37,25 +45,58 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # 2b. Deriva la versione dal tag e rilevare se è pre-release
+      #     VERSION  = "1.2.3" oppure "1.2.3-alpha.1"  (senza 'v' iniziale)
+      #     IS_PRERELEASE = "true" quando il tag contiene un suffisso (-, alpha, beta…)
+      - name: Resolve version from tag
+        id: ver
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+          echo "value=$VERSION"         >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
       # 3. Ripristina le dipendenze NuGet del progetto
       - name: Restore dependencies
         run: dotnet restore
 
       # 4. Compila i progetti in configurazione Release
+      #    -p:Version viene passato solo quando siamo su un tag, così il .nupkg
+      #    incorpora già la versione corretta (incluso l'eventuale suffisso pre-release).
+      #    Quando NON siamo su un tag (push su main / PR) la variabile è vuota e
+      #    dotnet usa la versione definita nel .csproj.
+      - name: Set VERSION env var
+        run: echo "VERSION=${{ steps.ver.outputs.value }}" >> "$GITHUB_ENV"
+
       - name: Build BLite.Bson
-        run: dotnet build src/BLite.Bson/BLite.Bson.csproj --no-restore --configuration Release
+        run: |
+          dotnet build src/BLite.Bson/BLite.Bson.csproj --no-restore --configuration Release \
+            ${VERSION:+-p:Version=$VERSION}
       
       - name: Build BLite.Core
-        run: dotnet build src/BLite.Core/BLite.Core.csproj --no-restore --configuration Release
+        run: |
+          dotnet build src/BLite.Core/BLite.Core.csproj --no-restore --configuration Release \
+            ${VERSION:+-p:Version=$VERSION}
       
       - name: Build BLite.SourceGenerators
-        run: dotnet build src/BLite.SourceGenerators/BLite.SourceGenerators.csproj --no-restore --configuration Release
+        run: |
+          dotnet build src/BLite.SourceGenerators/BLite.SourceGenerators.csproj --no-restore --configuration Release \
+            ${VERSION:+-p:Version=$VERSION}
       
       - name: Build BLite
-        run: dotnet build src/BLite/BLite.csproj --no-restore --configuration Release
+        run: |
+          dotnet build src/BLite/BLite.csproj --no-restore --configuration Release \
+            ${VERSION:+-p:Version=$VERSION}
       
       - name: Build BLite.Caching
-        run: dotnet build src/BLite.Caching/BLite.Caching.csproj --no-restore --configuration Release
+        run: |
+          dotnet build src/BLite.Caching/BLite.Caching.csproj --no-restore --configuration Release \
+            ${VERSION:+-p:Version=$VERSION}
       
       - name: Build Tests
         run: dotnet build tests/BLite.Tests/BLite.Tests.csproj --no-restore --configuration Release
@@ -66,19 +107,22 @@ jobs:
 
       # --- Pubblicazione ---
       # I seguenti passaggi vengono eseguiti SOLO se il workflow
-      # è stato attivato dal push di un tag (es. v1.2.3)
+      # è stato attivato dal push di un tag (es. v1.2.3 oppure v1.2.3-alpha.1)
 
       # 6. Crea i pacchetti NuGet per i progetti pacchettizzabili
       - name: Pack projects
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          dotnet pack src/BLite.Bson/BLite.Bson.csproj --no-build --configuration Release --output ./packages
-          dotnet pack src/BLite.Core/BLite.Core.csproj --no-build --configuration Release --output ./packages
-          dotnet pack src/BLite.SourceGenerators/BLite.SourceGenerators.csproj --no-build --configuration Release --output ./packages
-          dotnet pack src/BLite/BLite.csproj --no-build --configuration Release --output ./packages
-          dotnet pack src/BLite.Caching/BLite.Caching.csproj --no-build --configuration Release --output ./packages
+          PACK_ARGS="-p:Version=${{ steps.ver.outputs.value }}"
+          dotnet pack src/BLite.Bson/BLite.Bson.csproj             --no-build --configuration Release --output ./packages $PACK_ARGS
+          dotnet pack src/BLite.Core/BLite.Core.csproj             --no-build --configuration Release --output ./packages $PACK_ARGS
+          dotnet pack src/BLite.SourceGenerators/BLite.SourceGenerators.csproj --no-build --configuration Release --output ./packages $PACK_ARGS
+          dotnet pack src/BLite/BLite.csproj                       --no-build --configuration Release --output ./packages $PACK_ARGS
+          dotnet pack src/BLite.Caching/BLite.Caching.csproj       --no-build --configuration Release --output ./packages $PACK_ARGS
 
       # 7. Pubblica tutti i pacchetti .nupkg creati nel passo precedente
+      #    I pacchetti pre-release (es. 1.2.3-alpha.1) vengono accettati da nuget.org
+      #    ma vengono mostrati come "pre-release" nel feed pubblico.
       - name: Publish to NuGet
         if: startsWith(github.ref, 'refs/tags/v')
         run: dotnet nuget push "./packages/*.nupkg" --api-key "${{ secrets.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json
@@ -87,7 +131,7 @@ jobs:
       - name: Extract Release Notes
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+          VERSION="${{ steps.ver.outputs.value }}"
           awk -v ver="$VERSION" '
             BEGIN { p=0 }
             $0 ~ "^<a name=\"" ver "\">" { p=1; next }
@@ -96,10 +140,12 @@ jobs:
           ' CHANGELOG.md > RELEASE_NOTES.md
 
       # 9. Crea una Release su GitHub e carica i pacchetti come artefatti
+      #    prerelease=true viene impostato automaticamente quando il tag ha un suffisso
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ./packages/*.nupkg
+          prerelease: ${{ steps.ver.outputs.is_prerelease == 'true' }}
           # Usa solo le note specifiche della versione estratte nel passo precedente
           body_path: RELEASE_NOTES.md
