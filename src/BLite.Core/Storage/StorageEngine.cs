@@ -31,7 +31,9 @@ public sealed partial class StorageEngine : IDisposable
     
     // Collection-per-file: collectionName → PageFile dedicated
     // Null if CollectionDataDirectory not configured (embedded mode, single file)
-    private readonly ConcurrentDictionary<string, PageFile>? _collectionFiles;
+    // Lazy<PageFile> ensures the file-open factory runs exactly once per collection,
+    // even when ConcurrentDictionary.GetOrAdd is called concurrently for the same key.
+    private readonly ConcurrentDictionary<string, Lazy<PageFile>>? _collectionFiles;
 
     // Collection slot registry — only populated in multi-file mode
     // Maps collection name → slot index (0-63) and slot → name
@@ -101,7 +103,7 @@ public sealed partial class StorageEngine : IDisposable
         if (config.CollectionDataDirectory != null)
         {
             Directory.CreateDirectory(config.CollectionDataDirectory);
-            _collectionFiles = new ConcurrentDictionary<string, PageFile>(StringComparer.OrdinalIgnoreCase);
+            _collectionFiles = new ConcurrentDictionary<string, Lazy<PageFile>>(StringComparer.OrdinalIgnoreCase);
             _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             _collectionSlotToName = new Dictionary<int, string>();
             _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
@@ -197,9 +199,9 @@ public sealed partial class StorageEngine : IDisposable
         // 4. Close per-collection PageFiles (Phase 4)
         if (_collectionFiles != null)
         {
-            foreach (var pf in _collectionFiles.Values)
+            foreach (var lazy in _collectionFiles.Values)
             {
-                try { pf.Dispose(); } catch { /* best-effort */ }
+                try { if (lazy.IsValueCreated) lazy.Value.Dispose(); } catch { /* best-effort */ }
             }
             _collectionFiles.Clear();
         }

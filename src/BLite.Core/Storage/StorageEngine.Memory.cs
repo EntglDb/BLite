@@ -114,12 +114,13 @@ public sealed partial class StorageEngine
             return _pageFile;
 
         return _collectionFiles.GetOrAdd(collectionName, name =>
-        {
-            var filePath = CollectionFilePath(name);
-            var pf = new PageFile(filePath, AsStandaloneConfig(_config));
-            pf.Open();
-            return pf;
-        });
+            new Lazy<PageFile>(() =>
+            {
+                var filePath = CollectionFilePath(name);
+                var pf = new PageFile(filePath, AsStandaloneConfig(_config));
+                pf.Open();
+                return pf;
+            })).Value;
     }
 
     // -----------------------------------------------------------------------
@@ -141,9 +142,9 @@ public sealed partial class StorageEngine
     {
         if (_collectionFiles == null) return;
 
-        if (_collectionFiles.TryRemove(collectionName, out var pf))
+        if (_collectionFiles.TryRemove(collectionName, out var lazy))
         {
-            pf.Dispose();
+            if (lazy.IsValueCreated) lazy.Value.Dispose();
             var filePath = CollectionFilePath(collectionName);
             if (File.Exists(filePath))
                 File.Delete(filePath);

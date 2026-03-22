@@ -41,8 +41,8 @@ public sealed partial class StorageEngine
         _indexFile?.Flush();
         if (_collectionFiles != null)
         {
-            foreach (var pf in _collectionFiles.Values)
-                pf.Flush();
+            foreach (var lazy in _collectionFiles.Values)
+                if (lazy.IsValueCreated) lazy.Value.Flush();
         }
     }
     
@@ -81,8 +81,8 @@ public sealed partial class StorageEngine
             _indexFile?.Flush();
             if (_collectionFiles != null)
             {
-                foreach (var pf in _collectionFiles.Values)
-                    pf.Flush();
+                foreach (var lazy in _collectionFiles.Values)
+                    if (lazy.IsValueCreated) lazy.Value.Flush();
             }
 
             // Phase 2: Try to acquire _commitLock without waiting.
@@ -127,8 +127,8 @@ public sealed partial class StorageEngine
         _indexFile?.Flush();
         if (_collectionFiles != null)
         {
-            foreach (var pf in _collectionFiles.Values)
-                pf.Flush();
+            foreach (var lazy in _collectionFiles.Values)
+                if (lazy.IsValueCreated) lazy.Value.Flush();
         }
 
         _walIndex.Clear();
@@ -155,8 +155,8 @@ public sealed partial class StorageEngine
             _indexFile?.Flush();
             if (_collectionFiles != null)
             {
-                foreach (var pf in _collectionFiles.Values)
-                    pf.Flush();
+                foreach (var lazy in _collectionFiles.Values)
+                    if (lazy.IsValueCreated) lazy.Value.Flush();
             }
 
             // Try-acquire: if commits are flowing, skip cleanup and let WAL grow.
@@ -281,8 +281,8 @@ public sealed partial class StorageEngine
             _indexFile?.Flush();
             if (_collectionFiles != null)
             {
-                foreach (var pf in _collectionFiles.Values)
-                    pf.Flush();
+                foreach (var lazy in _collectionFiles.Values)
+                    if (lazy.IsValueCreated) lazy.Value.Flush();
             }
             
             // 4. Clear in-memory WAL index (redundant since we just recovered)
