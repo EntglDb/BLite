@@ -709,6 +709,88 @@ if (doc is not null)
 
 ---
 
+## 🔌 BLiteSession — Per-Connection Isolation *(v3.8.0)*
+
+When a single `BLiteEngine` is shared across multiple concurrent clients (e.g. inside a custom server layer), `BLiteSession` provides **per-connection isolated transaction contexts**. Each session carries its own transaction state so independent callers cannot interfere with each other.
+
+Open a session with `engine.OpenSession()`. Disposing the session automatically rolls back any uncommitted transaction.
+
+```csharp
+using var engine = new BLiteEngine("data.db");
+
+// One session per connected client / per request
+using var session = engine.OpenSession();
+
+// Begin an explicit transaction scoped to this session
+using var txn = session.BeginTransaction();
+try
+{
+    await session.InsertAsync("orders",   orderDoc,   ct);
+    await session.InsertAsync("invoices", invoiceDoc, ct);
+    await session.CommitAsync(ct);
+}
+catch
+{
+    session.Rollback(); // or disposed automatically
+    throw;
+}
+
+// Convenience CRUD (auto-commit each call)
+BsonId id  = await session.InsertAsync("users", userDoc, ct);
+BsonDocument? doc = await session.FindByIdAsync("users", id, ct);
+
+// Access collections scoped to this session
+var col = session.GetOrCreateCollection("events");
+col.Insert(eventDoc);
+```
+
+> **BLiteSession API** (selected): `BeginTransaction()`, `CommitAsync()`, `Rollback()`, `GetOrCreateCollection(name)`, `GetCollection(name)`, `Insert/InsertAsync/InsertBulk/InsertBulkAsync`, `FindById/FindByIdAsync/FindAll/FindAllAsync/Find/FindAsync`, `Update/UpdateAsync/UpdateBulk/UpdateBulkAsync`.
+
+---
+
+## 📂 Multi-File Storage Layout *(v3.8.0)*
+
+BLite 3.8.0 introduces an optional **multi-file storage layout** designed for server deployments where each database should keep its WAL, indexes and collection data in separate files rather than a single monolithic `.db` file.
+
+```csharp
+using BLite.Core.Storage;
+
+// Build a server-style config — WAL, index and collection data go to separate files
+var config = PageFileConfig.Server("data/mydb.db");
+// → WAL:         data/wal/mydb.wal
+// → Index file:  data/mydb.idx
+// → Collections: data/collections/mydb/<collection>.col
+
+using var engine = new BLiteEngine("data/mydb.db", config);
+```
+
+`PageFileConfig.Server()` accepts an optional base config to control page size:
+
+```csharp
+var config = PageFileConfig.Server("data/mydb.db", PageFileConfig.Large); // 32 KB pages
+```
+
+### BLiteMigration — Single ↔ Multi-File Migration
+
+`BLiteMigration` migrates an existing database between layouts without data loss:
+
+```csharp
+// Migrate from single-file to server multi-file layout
+BLiteMigration.ToMultiFile(
+    sourcePath:   "data/mydb.db",
+    targetConfig: PageFileConfig.Server("data/mydb.db"));
+
+// Migrate back to a single file
+BLiteMigration.ToSingleFile(
+    sourcePath:   "data/mydb.db",
+    sourceConfig: PageFileConfig.Server("data/mydb.db"),
+    targetPath:   "export/mydb-single.db");
+```
+
+Both methods preserve documents, KV entries (including TTL expiry times), and index definitions.
+
+---
+
 ## 🔎 BLQL — BLite Query Language
 
 BLQL is a **BLite Query Language** for `DynamicCollection` — the schema-less counterpart of LINQ for `DocumentDbContext`. Inspired by MQL (MongoDB Query Language), it lets you filter, sort, project, and page `BsonDocument` results using **JSON strings** or a **fluent C# API**, with no compile-time type information required.
@@ -884,6 +966,10 @@ We are actively building the core. Here is where we stand:
 - ✅ **`IDocumentCollection<TId, T>` Abstraction (v3.5.0)**: typed collections implement `IDocumentCollection<TId, T>` — a clean interface covering CRUD, LINQ, async, and bulk operations (`Update`, `UpdateBulk`, `Delete`, `DeleteBulk`). Enables constructor injection and mocking without coupling to the concrete `DocumentCollection` class.
 - ✅ **CDC Watch on `DynamicCollection` (v3.6.0)**: `DynamicCollection.Watch()` adds real-time change streams to the schema-less API — previously only available on typed `DocumentCollection<TId, T>`.
 - ✅ **HNSW Vector Search Correctness (v3.6.2)**: full correctness pass — fixes `AllocateNode` overflow, neighbor link integrity, `SelectNeighbors` heuristic, random level distribution (`mL = 1/ln(M)`), and index persistence across close/reopen. 12 dedicated edge-case tests added.
+- ✅ **OLAP GroupBy Push-down (v3.7.0)**: aggregate terminal operators (`Count`, `Sum`, `Min`, `Max`, `Average`) are pushed down to the storage layer via `BTreeQueryProvider.TryBsonAggregate<TResult>`, eliminating unnecessary document materialization for large scans.
+- ✅ **BLiteSession — Per-Connection Isolation (v3.8.0)**: `BLiteEngine.OpenSession()` returns a `BLiteSession` with its own isolated transaction context. Multiple sessions on the same engine run independent concurrent transactions. Disposing a session rolls back any uncommitted transaction automatically.
+- ✅ **Multi-File Storage Layout (v3.8.0)**: `PageFileConfig.Server(dbPath)` configures separate files for WAL, index data, and per-collection data. `BLiteMigration.ToMultiFile()` / `ToSingleFile()` migrate existing databases between layouts, preserving all documents, KV entries (including TTL), and index definitions.
+- ✅ **Non-Blocking Checkpoints (v3.8.0)**: checkpoint and metadata writes are deferred to avoid blocking the hot path. `PageFile` uses `Lazy<T>` for collection file initialization and `ReaderWriterLockSlim` to fix concurrent read/write races.
 
 ## 🔮 Future Vision
 
