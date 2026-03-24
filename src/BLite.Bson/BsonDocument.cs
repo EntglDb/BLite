@@ -232,7 +232,7 @@ public sealed class BsonDocument
     /// <summary>
     /// Creates a new BsonDocument from field values using a builder pattern
     /// </summary>
-    public static BsonDocument Create(ConcurrentDictionary<string, ushort> keyMap, Action<BsonDocumentBuilder> buildAction)
+    public static BsonDocument Create(IReadOnlyDictionary<string, ushort> keyMap, Action<BsonDocumentBuilder> buildAction)
     {
         var builder = new BsonDocumentBuilder(keyMap);
         buildAction(builder);
@@ -242,7 +242,7 @@ public sealed class BsonDocument
     /// <summary>
     /// Creates a new BsonDocument from field values using a builder pattern, with explicit reverse key map for reading.
     /// </summary>
-    public static BsonDocument Create(ConcurrentDictionary<string, ushort> keyMap, ConcurrentDictionary<ushort, string> reverseKeyMap, Action<BsonDocumentBuilder> buildAction)
+    public static BsonDocument Create(IReadOnlyDictionary<string, ushort> keyMap, ConcurrentDictionary<ushort, string> reverseKeyMap, Action<BsonDocumentBuilder> buildAction)
     {
         var builder = new BsonDocumentBuilder(keyMap, reverseKeyMap);
         buildAction(builder);
@@ -258,10 +258,10 @@ public sealed class BsonDocumentBuilder
 {
     private byte[] _buffer = new byte[1024]; // Start with 1KB
     private int _position;
-    private readonly ConcurrentDictionary<string, ushort> _keyMap;
+    private readonly IReadOnlyDictionary<string, ushort> _keyMap;
     private readonly ConcurrentDictionary<ushort, string>? _reverseKeyMap;
 
-    public BsonDocumentBuilder(ConcurrentDictionary<string, ushort> keyMap)
+    public BsonDocumentBuilder(IReadOnlyDictionary<string, ushort> keyMap)
     {
         _keyMap = keyMap;
         _reverseKeyMap = null;
@@ -269,7 +269,7 @@ public sealed class BsonDocumentBuilder
         _position = writer.Position;
     }
 
-    public BsonDocumentBuilder(ConcurrentDictionary<string, ushort> keyMap, ConcurrentDictionary<ushort, string> reverseKeyMap)
+    public BsonDocumentBuilder(IReadOnlyDictionary<string, ushort> keyMap, ConcurrentDictionary<ushort, string> reverseKeyMap)
     {
         _keyMap = keyMap;
         _reverseKeyMap = reverseKeyMap;

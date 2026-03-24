@@ -232,7 +232,7 @@ public sealed class DynamicCollection : IDisposable
     public BsonDocument CreateDocument(string[] fieldNames, Action<BsonDocumentBuilder> buildAction)
     {
         _storage.RegisterKeys(fieldNames);
-        return BsonDocument.Create(_storage.GetKeyMap(), _storage.GetKeyReverseMap(), buildAction);
+        return BsonDocument.Create(_storage.GetFrozenKeyMap(), _storage.GetKeyReverseMap(), buildAction);
     }
 
     #region Insert
@@ -309,14 +309,13 @@ public sealed class DynamicCollection : IDisposable
 
     private BsonDocument PrependId(BsonDocument document, BsonId id)
     {
-        var keyMap = _storage.GetKeyMap();
         // Register _id key if not already present
         _storage.RegisterKeys(new[] { "_id" });
 
         // Estimate size: existing doc + id field overhead
         var estimatedSize = document.RawData.Length + 64;
         var buffer = new byte[estimatedSize];
-        var writer = new BsonSpanWriter(buffer, keyMap);
+        var writer = new BsonSpanWriter(buffer, _storage.GetFrozenKeyMap());
 
         var sizePos = writer.BeginDocument();
         id.WriteTo(ref writer, "_id");

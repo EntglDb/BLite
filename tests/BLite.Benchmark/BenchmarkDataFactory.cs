@@ -1,5 +1,7 @@
 using BLite.Bson;
+using BLite.Core;
 using BLite.Shared;
+using System.Collections.Generic;
 
 namespace BLite.Benchmark;
 
@@ -72,4 +74,102 @@ public static class BenchmarkDataFactory
             new OrderNote { Author = $"agent{i % 5}",  Text = "Verificato e approvato.",             CreatedAt = DateTime.UtcNow }
         ]
     };
+
+    /// <summary>All BSON field names used by <see cref="CreateBsonDocument"/>. Register once per engine instance.</summary>
+    public static readonly string[] BsonOrderFieldNames =
+    [
+        "_id", "ordernumber", "placedat", "status", "currency",
+        "subtotal", "taxamount", "total", "tags",
+        "customer", "fullname", "email", "phone", "billingaddress",
+        "street", "city", "zipcode", "country",
+        "shipping", "carrier", "trackingnumber", "estimateddelivery", "destination",
+        "lines", "sku", "productname", "quantity", "unitprice",
+        "notes", "author", "text", "createdat"
+    ];
+
+    /// <summary>
+    /// Creates a <see cref="BsonDocument"/> equivalent to <see cref="CreateOrder"/> for the given index.
+    /// The engine's key dictionary must be seeded with <see cref="BsonOrderFieldNames"/> before calling
+    /// (use <c>engine.RegisterKeys(BsonOrderFieldNames)</c> or let this method register them on the first call).
+    /// </summary>
+    public static BsonDocument CreateBsonDocument(int i, BLiteEngine engine)
+    {
+        return engine.CreateDocument(BsonOrderFieldNames, b =>
+        {
+            b.AddId(BsonId.NewId(BsonIdType.ObjectId));
+            b.AddString("ordernumber", $"ORD-{10000 + i:D6}");
+            b.AddDateTime("placedat", DateTime.UtcNow.AddDays(-(i % 365)));
+            b.AddString("status", Statuses[i % 4]);
+            b.AddString("currency", "EUR");
+            b.AddDecimal("subtotal", 100m + i * 1.5m);
+            b.AddDecimal("taxamount", (100m + i * 1.5m) * 0.22m);
+            b.AddDecimal("total", (100m + i * 1.5m) * 1.22m);
+            b.Add("tags", BsonValue.FromArray(
+                new List<BsonValue> { "web", i % 2 == 0 ? "promo" : "standard", "b2c" }));
+
+            b.AddDocument("customer", c =>
+            {
+                c.AddString("fullname", $"Cliente {i}");
+                c.AddString("email", $"customer{i}@example.com");
+                c.AddString("phone", $"+39 333 {i:D7}");
+                c.AddDocument("billingaddress", a =>
+                {
+                    a.AddString("street", $"Via Roma {i}");
+                    a.AddString("city", Cities[i % Cities.Length]);
+                    a.AddString("zipcode", $"{20100 + i % 100:D5}");
+                    a.AddString("country", "IT");
+                });
+            });
+
+            b.AddDocument("shipping", s =>
+            {
+                s.AddString("carrier", Carriers[i % Carriers.Length]);
+                s.AddString("trackingnumber", $"TRK{i:D10}");
+                s.AddDateTime("estimateddelivery", DateTime.UtcNow.AddDays(3 + i % 5));
+                s.AddDocument("destination", a =>
+                {
+                    a.AddString("street", $"Via Spedizione {i}");
+                    a.AddString("city", Cities[(i + 1) % Cities.Length]);
+                    a.AddString("zipcode", $"{100 + i % 100:D5}");
+                    a.AddString("country", "IT");
+                });
+            });
+
+            // Lines: array of 5 subdocuments (same structure as OrderLine)
+            var lines = new List<BsonValue>(5);
+            for (int j = 0; j < 5; j++)
+            {
+                var lineDoc = engine.CreateDocument([], inner =>
+                {
+                    inner.AddString("sku", $"SKU-{i:D5}-{j:D3}");
+                    inner.AddString("productname", $"Prodotto {j} (batch {i / 100})");
+                    inner.AddInt32("quantity", j + 1);
+                    inner.AddDecimal("unitprice", 20m + j * 5m);
+                    inner.AddDecimal("subtotal", (j + 1) * (20m + j * 5m));
+                    inner.Add("tags", BsonValue.FromArray(
+                        new List<BsonValue> { "cat-a", j % 2 == 0 ? "promo" : "regular", "in-stock" }));
+                });
+                lines.Add(BsonValue.FromDocument(lineDoc));
+            }
+            b.Add("lines", BsonValue.FromArray(lines));
+
+            // Notes: array of 2 subdocuments (same structure as OrderNote)
+            var notes = new List<BsonValue>(2)
+            {
+                BsonValue.FromDocument(engine.CreateDocument([], n =>
+                {
+                    n.AddString("author", "system");
+                    n.AddString("text", "Ordine confermato automaticamente.");
+                    n.AddDateTime("createdat", DateTime.UtcNow.AddMinutes(-10));
+                })),
+                BsonValue.FromDocument(engine.CreateDocument([], n =>
+                {
+                    n.AddString("author", $"agent{i % 5}");
+                    n.AddString("text", "Verificato e approvato.");
+                    n.AddDateTime("createdat", DateTime.UtcNow);
+                }))
+            };
+            b.Add("notes", BsonValue.FromArray(notes));
+        });
+    }
 }

@@ -114,7 +114,7 @@ public sealed partial class StorageEngine
     {
         int requiredSize = schema.CalculateSize();
         var buffer = new byte[requiredSize];
-        var writer = new BsonSpanWriter(buffer, GetKeyMap());
+        var writer = new BsonSpanWriter(buffer, GetFrozenKeyMap());
         schema.ToBson(ref writer);
         return buffer;
     }

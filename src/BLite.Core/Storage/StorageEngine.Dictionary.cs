@@ -1,5 +1,9 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Text;
+#if NET8_0_OR_GREATER
+using System.Collections.Frozen;
+#endif
 
 namespace BLite.Core.Storage;
 
@@ -12,6 +16,12 @@ public sealed partial class StorageEngine
     
     // Lock for dictionary modifications (simple lock for now, could be RW lock)
     private readonly object _dictionaryLock = new();
+
+    // Lazily built read-only snapshot for hot-path lookups during serialization.
+    // On .NET 8+ this is a FrozenDictionary (~3x faster TryGetValue than ConcurrentDictionary).
+    // On netstandard2.1 fallback to a plain Dictionary copy (still faster than ConcurrentDictionary).
+    // Invalidated (set to null) whenever a new key is added; rebuilt on next access.
+    private volatile IReadOnlyDictionary<string, ushort>? _frozenKeyMapCache;
 
     private void InitializeDictionary()
     {
@@ -75,6 +85,32 @@ public sealed partial class StorageEngine
     public ConcurrentDictionary<ushort, string> GetKeyReverseMap() => _dictionaryReverseCache;
 
     /// <summary>
+    /// Returns a read-only snapshot of the key map optimised for concurrent lookups.
+    /// On .NET 8+ this is a <see cref="FrozenDictionary{TKey,TValue}"/> (~3x faster TryGetValue).
+    /// On netstandard2.1 falls back to a plain <see cref="Dictionary{TKey,TValue}"/> copy.
+    /// The snapshot is rebuilt lazily whenever a new key is registered; callers must invoke
+    /// <see cref="RegisterKeys"/> before requesting the snapshot so all required keys are present.
+    /// </summary>
+    public IReadOnlyDictionary<string, ushort> GetFrozenKeyMap()
+        => _frozenKeyMapCache ?? RebuildFrozenKeyMap();
+
+    private IReadOnlyDictionary<string, ushort> RebuildFrozenKeyMap()
+    {
+        lock (_dictionaryLock)
+        {
+            if (_frozenKeyMapCache is null)
+            {
+#if NET8_0_OR_GREATER
+                _frozenKeyMapCache = _dictionaryCache.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+#else
+                _frozenKeyMapCache = new Dictionary<string, ushort>(_dictionaryCache, StringComparer.OrdinalIgnoreCase);
+#endif
+            }
+            return _frozenKeyMapCache;
+        }
+    }
+
+    /// <summary>
     /// Imports key→ID entries from <paramref name="sourceReverseMap"/> into this engine,
     /// preserving the original <see cref="ushort"/> IDs. Skips entries that are already
     /// registered (by name or by ID). Updates <see cref="_nextDictionaryId"/> so that
@@ -105,6 +141,7 @@ public sealed partial class StorageEngine
                 if (id >= _nextDictionaryId)
                     _nextDictionaryId = (ushort)(id + 1);
             }
+            _frozenKeyMapCache = null; // invalidate snapshot after bulk import
         }
     }
 
@@ -153,6 +190,7 @@ public sealed partial class StorageEngine
                 _dictionaryCache[key] = nextId;
                 _dictionaryReverseCache[nextId] = key;
                 _nextDictionaryId++;
+                _frozenKeyMapCache = null; // invalidate snapshot
                 return nextId;
             }
             else

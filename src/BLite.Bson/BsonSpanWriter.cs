@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.Text;
 
 namespace BLite.Bson;
@@ -12,9 +13,9 @@ public ref struct BsonSpanWriter
 {
     private Span<byte> _buffer;
     private int _position;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ushort> _keyMap;
+    private readonly IReadOnlyDictionary<string, ushort> _keyMap;
 
-    public BsonSpanWriter(Span<byte> buffer, System.Collections.Concurrent.ConcurrentDictionary<string, ushort> keyMap)
+    public BsonSpanWriter(Span<byte> buffer, IReadOnlyDictionary<string, ushort> keyMap)
     {
         _buffer = buffer;
         _keyMap = keyMap;
@@ -88,14 +89,22 @@ public ref struct BsonSpanWriter
     {
         WriteElementHeader(BsonType.String, name);
 
+#if NET7_0_OR_GREATER
+        // Single-pass: encode directly into the buffer, then back-patch the 4-byte length prefix.
+        // Avoids the extra GetByteCount scan over the string characters.
+        var sizePos = _position;
+        _position += 4; // reserve space for the length prefix
+        if (!Encoding.UTF8.TryGetBytes(value.AsSpan(), _buffer[_position..], out var bytesWritten))
+            throw new ArgumentException($"Buffer too small to encode string field '{name}'.");
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(sizePos, 4), bytesWritten + 1); // +1 null terminator
+        _position += bytesWritten;
+#else
         var valueBytes = Encoding.UTF8.GetByteCount(value);
-        var stringLength = valueBytes + 1; // Include null terminator
-
-        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), stringLength);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position, 4), valueBytes + 1);
         _position += 4;
-
         Encoding.UTF8.GetBytes(value, _buffer[_position..]);
         _position += valueBytes;
+#endif
 
         _buffer[_position] = 0; // Null terminator
         _position++;

@@ -377,7 +377,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     {
         ThrowIfDisposed();
         _storage.RegisterKeys(fieldNames);
-        return BsonDocument.Create(_storage.GetKeyMap(), _storage.GetKeyReverseMap(), buildAction);
+        return BsonDocument.Create(_storage.GetFrozenKeyMap(), _storage.GetKeyReverseMap(), buildAction);
     }
 
     /// <summary>

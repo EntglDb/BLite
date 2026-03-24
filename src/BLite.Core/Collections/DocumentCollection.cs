@@ -1472,7 +1472,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         var transaction = _transactionHolder.GetCurrentTransactionOrStart();
 
-        const int BATCH_SIZE = 50;
+        // Scale batch size with available cores: more parallelism on multi-core machines.
+        // Clamped to [32, 200] to avoid pathological cases on very high-core-count machines.
+        int BATCH_SIZE = Math.Max(32, Math.Min(Environment.ProcessorCount * 4, 200));
 
         for (int batchStart = 0; batchStart < entityList.Count; batchStart += BATCH_SIZE)
         {
@@ -2391,20 +2393,20 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     private int SerializeWithRetry(T entity, out byte[] rentedBuffer)
     {
-        // 64KB, 2MB, 16MB
-        int[] steps = { 65536, 2097152, 16777216 };
+        // Cache once — avoids repeated volatile reads of the FrozenDictionary snapshot inside the loop.
+        var keyMap = _storage.GetFrozenKeyMap();
 
-        for (int i = 0; i < steps.Length; i++)
+        // Stored as compiler-constant data segment — no heap allocation.
+        ReadOnlySpan<int> steps = [65536, 2097152, 16777216]; // 64KB, 2MB, 16MB
+
+        foreach (var size in steps)
         {
-            int size = steps[i];
+            int bufSize = size < _storage.PageSize ? _storage.PageSize : size;
 
-            // Ensure we at least cover PageSize (unlikely to be > 64KB but safe)
-            if (size < _storage.PageSize) size = _storage.PageSize;
-
-            var buffer = ArrayPool<byte>.Shared.Rent(size);
+            var buffer = ArrayPool<byte>.Shared.Rent(bufSize);
             try
             {
-                int bytesWritten = _mapper.Serialize(entity, new BsonSpanWriter(buffer, _storage.GetKeyMap()));
+                int bytesWritten = _mapper.Serialize(entity, new BsonSpanWriter(buffer, keyMap));
 
                 // Inject schema version if available
                 if (CurrentSchemaVersion != null)
