@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="BLite.Shared" />
   </ItemGroup>
 
   <ItemGroup>

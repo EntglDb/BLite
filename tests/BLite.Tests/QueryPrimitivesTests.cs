@@ -40,7 +40,7 @@ public class QueryPrimitivesTests : IDisposable
         Insert("B", txnId);
         Insert("C", txnId);
         
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
     }
 
     private void Insert(dynamic value, ulong txnId)

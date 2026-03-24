@@ -42,7 +42,7 @@ public class BlqlInjectionTests : IDisposable
                   .AddInt32("age", 30)
                   .AddString("status", "active")
                   .AddString("role", "admin"));
-        _col.Insert(doc);
+        _col.InsertAsync(doc).GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -403,7 +403,7 @@ public class BlqlInjectionTests : IDisposable
     }
 
     [Fact]
-    public void SqlInjection_StringValue_CanStillMatchExact()
+    public async Task SqlInjection_StringValue_CanStillMatchExact()
     {
         // A filter whose VALUE is an injection string must match only documents
         // that literally have that value stored — it cannot affect other docs.
@@ -411,7 +411,7 @@ public class BlqlInjectionTests : IDisposable
         var doc = col.CreateDocument(
             ["_id", "name"],
             b => b.AddString("name", "'; DROP TABLE items; --"));
-        col.Insert(doc);
+        await col.InsertAsync(doc);
 
         var filter = BlqlFilterParser.Parse("""{ "name": "'; DROP TABLE items; --" }""");
         var docs = col.Query(filter).ToList();

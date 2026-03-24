@@ -12,7 +12,7 @@ namespace BLite.Core.Storage;
 /// - WAL Cache: Uncommitted transaction writes (in-memory)
 /// - Read: PageFile + WAL cache overlay (for Read Your Own Writes)
 /// - Commit: Flush to WAL, clear cache
-/// - Checkpoint: Merge WAL ? PageFile periodically
+/// - CheckpointAsync: Merge WAL ? PageFile periodically
 /// </summary>
 public sealed partial class StorageEngine : IDisposable
 {
@@ -125,11 +125,11 @@ public sealed partial class StorageEngine : IDisposable
         });
         _writerTask = Task.Run(() => GroupCommitWriterAsync(_writerCts.Token));
         
-        // Recover from WAL if exists (crash recovery or resume after close)
+        // RecoverAsync from WAL if exists (crash recovery or resume after close)
         // This replays any committed transactions not yet checkpointed
         if (_wal.GetCurrentSize() > 0)
         {
-            Recover();
+            RecoverAsync().GetAwaiter().GetResult();
         }
         
         InitializeDictionary();
@@ -177,14 +177,14 @@ public sealed partial class StorageEngine : IDisposable
         try { _writerTask?.Wait(TimeSpan.FromSeconds(5)); } catch { /* best-effort */ }
         _writerCts?.Dispose();
 
-        // 2. Rollback any active transactions.
+        // 2. RollbackAsync any active transactions.
         if (_activeTransactions != null)
         {
             foreach (var txn in _activeTransactions.Values)
             {
                 try
                 {
-                    RollbackTransaction(txn.TransactionId);
+                    RollbackTransactionAsync(txn.TransactionId).GetAwaiter().GetResult();
                 }
                 catch { /* Ignore errors during dispose */ }
             }

@@ -1,5 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using BLite.Core.Query;
 using BLite.Core.Storage;
 using BLite.Shared;
 using BLite.Tests;
@@ -59,7 +60,7 @@ public class LayoutBenchmarks
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     [GlobalSetup]
-    public void GlobalSetup()
+    public async Task GlobalSetup()
     {
         var temp = AppContext.BaseDirectory;
         var id   = Guid.NewGuid().ToString("N");
@@ -71,10 +72,10 @@ public class LayoutBenchmarks
         _targetId = orders[DocCount / 2].Id;
 
         _rDefaultCtx = new TestDbContext(_rDefaultPath);
-        _rDefaultCtx.CustomerOrders.InsertBulk(orders);
+        await _rDefaultCtx.CustomerOrders.InsertBulkAsync(orders);
 
         _rServerCtx = new TestDbContext(_rServerPath, PageFileConfig.Server(_rServerPath));
-        _rServerCtx.CustomerOrders.InsertBulk(orders);
+        await _rServerCtx.CustomerOrders.InsertBulkAsync(orders);
 
         _batchData   = Enumerable.Range(0, BatchSize).Select(BenchmarkDataFactory.CreateOrder).ToArray();
         _singleOrder = BenchmarkDataFactory.CreateOrder(999_999);
@@ -124,37 +125,37 @@ public class LayoutBenchmarks
 
     [Benchmark(Description = "Default – Insert Single")]
     [BenchmarkCategory("Layout_Insert_Single")]
-    public void Default_Insert_Single() => _wDefaultCtx.CustomerOrders.Insert(_singleOrder);
+    public async Task Default_Insert_Single() => await _wDefaultCtx.CustomerOrders.InsertAsync(_singleOrder);
 
     [Benchmark(Description = "Default – Insert Bulk (1 000)")]
     [BenchmarkCategory("Layout_Insert_Bulk")]
-    public void Default_Insert_Bulk() => _wDefaultCtx.CustomerOrders.InsertBulk(_batchData);
+    public async Task Default_Insert_Bulk() => await _wDefaultCtx.CustomerOrders.InsertBulkAsync(_batchData);
 
     [Benchmark(Description = "Default – FindById")]
     [BenchmarkCategory("Layout_Read_FindById")]
-    public CustomerOrder? Default_FindById() => _rDefaultCtx.CustomerOrders.FindById(_targetId);
+    public async Task<CustomerOrder?> Default_FindById() => await _rDefaultCtx.CustomerOrders.FindByIdAsync(_targetId);
 
     [Benchmark(Description = "Default – Scan by Status")]
     [BenchmarkCategory("Layout_Read_Scan")]
-    public List<CustomerOrder> Default_Scan()
-        => _rDefaultCtx.CustomerOrders.Find(o => o.Status == ScanStatus).ToList();
+    public async Task<List<CustomerOrder>> Default_Scan()
+        => await _rDefaultCtx.CustomerOrders.AsQueryable().Where(o => o.Status == ScanStatus).ToListAsync();
 
     // ── BLite Server (multi-file, 16 KB pages, separate WAL + index) ─────
 
     [Benchmark(Description = "Server – Insert Single")]
     [BenchmarkCategory("Layout_Insert_Single")]
-    public void Server_Insert_Single() => _wServerCtx.CustomerOrders.Insert(_singleOrder);
+    public async Task Server_Insert_Single() => await _wServerCtx.CustomerOrders.InsertAsync(_singleOrder);
 
     [Benchmark(Description = "Server – Insert Bulk (1 000)")]
     [BenchmarkCategory("Layout_Insert_Bulk")]
-    public void Server_Insert_Bulk() => _wServerCtx.CustomerOrders.InsertBulk(_batchData);
+    public async Task Server_Insert_Bulk() => await _wServerCtx.CustomerOrders.InsertBulkAsync(_batchData);
 
     [Benchmark(Description = "Server – FindById")]
     [BenchmarkCategory("Layout_Read_FindById")]
-    public CustomerOrder? Server_FindById() => _rServerCtx.CustomerOrders.FindById(_targetId);
+    public async Task<CustomerOrder?> Server_FindById() => await _rServerCtx.CustomerOrders.FindByIdAsync(_targetId);
 
     [Benchmark(Description = "Server – Scan by Status")]
     [BenchmarkCategory("Layout_Read_Scan")]
-    public List<CustomerOrder> Server_Scan()
-        => _rServerCtx.CustomerOrders.Find(o => o.Status == ScanStatus).ToList();
+    public async Task<List<CustomerOrder>> Server_Scan()
+        => await _rServerCtx.CustomerOrders.AsQueryable().Where(o => o.Status == ScanStatus).ToListAsync();
 }

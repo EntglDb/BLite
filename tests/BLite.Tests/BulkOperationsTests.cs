@@ -23,7 +23,7 @@ public class BulkOperationsTests : IDisposable
     }
 
     [Fact]
-    public void UpdateBulk_UpdatesMultipleDocuments()
+    public async Task UpdateBulk_UpdatesMultipleDocuments()
     {
         // Arrange: Insert 100 users
         var users = new List<User>();
@@ -31,8 +31,8 @@ public class BulkOperationsTests : IDisposable
         {
             users.Add(new User { Id = ObjectId.NewObjectId(), Name = $"User {i}", Age = 20 });
         }
-        _dbContext.Users.InsertBulk(users);
-        _dbContext.SaveChanges();
+        await _dbContext.Users.InsertBulkAsync(users);
+        await _dbContext.SaveChangesAsync();
 
         // Modify users
         foreach (var u in users)
@@ -42,8 +42,8 @@ public class BulkOperationsTests : IDisposable
         }
 
         // Act
-        var updatedCount = _dbContext.Users.UpdateBulk(users);
-        _dbContext.SaveChanges();
+        var updatedCount = await _dbContext.Users.UpdateBulkAsync(users);
+        await _dbContext.SaveChangesAsync();
 
         // Assert
         Assert.Equal(100, updatedCount);
@@ -51,7 +51,7 @@ public class BulkOperationsTests : IDisposable
         // Verify changes
         foreach (var u in users)
         {
-            var stored = _dbContext.Users.FindById(u.Id);
+            var stored = await _dbContext.Users.FindByIdAsync(u.Id);
             Assert.NotNull(stored);
             Assert.Equal(30, stored.Age);
             Assert.Equal(u.Name, stored.Name);
@@ -59,7 +59,7 @@ public class BulkOperationsTests : IDisposable
     }
 
     [Fact]
-    public void DeleteBulk_RemovesMultipleDocuments()
+    public async Task DeleteBulk_RemovesMultipleDocuments()
     {
         // Arrange: Insert 100 users
         var users = new List<User>();
@@ -67,14 +67,14 @@ public class BulkOperationsTests : IDisposable
         {
             users.Add(new User { Id = ObjectId.NewObjectId(), Name = $"User {i}", Age = 20 });
         }
-        _dbContext.Users.InsertBulk(users);
-        _dbContext.SaveChanges();
+        await _dbContext.Users.InsertBulkAsync(users);
+        await _dbContext.SaveChangesAsync();
 
         var idsToDelete = users.Take(50).Select(u => u.Id).ToList();
 
         // Act
-        var deletedCount = _dbContext.Users.DeleteBulk(idsToDelete);
-        _dbContext.SaveChanges();
+        var deletedCount = await _dbContext.Users.DeleteBulkAsync(idsToDelete);
+        await _dbContext.SaveChangesAsync();
 
         // Assert
         Assert.Equal(50, deletedCount);
@@ -82,38 +82,38 @@ public class BulkOperationsTests : IDisposable
         // Verify deleted
         foreach (var id in idsToDelete)
         {
-            Assert.Null(_dbContext.Users.FindById(id));
+            Assert.Null(await _dbContext.Users.FindByIdAsync(id));
         }
 
         // Verify remaining
         var remaining = users.Skip(50).ToList();
         foreach (var u in remaining)
         {
-            Assert.NotNull(_dbContext.Users.FindById(u.Id));
+            Assert.NotNull(await _dbContext.Users.FindByIdAsync(u.Id));
         }
         
         // Verify count
         // Note: Count() is not fully implemented efficiently yet (iterates everything), but FindAll().Count() works
-        Assert.Equal(50, _dbContext.Users.FindAll().Count());
+        Assert.Equal(50, (await _dbContext.Users.FindAllAsync().ToListAsync()).Count);
     }
 
     [Fact]
-    public void DeleteBulk_WithTransaction_Rollworks()
+    public async Task DeleteBulk_WithTransaction_Rollworks()
     {
         // Arrange
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Txn User", Age = 20 };
-        _dbContext.Users.Insert(user);
-        _dbContext.SaveChanges();
+        await _dbContext.Users.InsertAsync(user);
+        await _dbContext.SaveChangesAsync();
 
-        Assert.NotNull(_dbContext.Users.FindById(user.Id));
+        Assert.NotNull(await _dbContext.Users.FindByIdAsync(user.Id));
 
         using (var txn = _dbContext.BeginTransaction())
         {
-            _dbContext.Users.DeleteBulk(new[] { user.Id });
-            txn.Rollback();
+            await _dbContext.Users.DeleteBulkAsync(new[] { user.Id });
+            await txn.RollbackAsync();
         }
 
         // Assert: Should still exist
-        Assert.NotNull(_dbContext.Users.FindById(user.Id));
+        Assert.NotNull(await _dbContext.Users.FindByIdAsync(user.Id));
     }
 }

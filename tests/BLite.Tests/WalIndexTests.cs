@@ -23,7 +23,7 @@ public class WalIndexTests : IDisposable
     }
 
     [Fact]
-    public void IndexWritesAreLoggedToWal()
+    public async Task IndexWritesAreLoggedToWal()
     {
         // 2. Start a transaction
         using var txn = _db.BeginTransaction();
@@ -31,10 +31,10 @@ public class WalIndexTests : IDisposable
         
         // 3. Insert a user
         var user = new User { Name = "Alice", Age = 30 };
-        _db.Users.Insert(user);
+        await _db.Users.InsertAsync(user);
         
         // 4. Commit
-        txn.Commit();
+        await txn.CommitAsync();
         _output.WriteLine("Committed Transaction");
         
         // 5. Verify WAL

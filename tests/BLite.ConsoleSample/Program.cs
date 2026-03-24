@@ -82,19 +82,19 @@ float[] RandVector(int dims) =>
 using var db = new TestDbContext(dbPath, config);
 
 // ─── Users ────────────────────────────────────────────────────────────────
-Seed("Users", () =>
+await SeedAsync("Users", async () =>
 {
     foreach (var name in firstNames)
-        db.Users.Insert(new User { Id = NewId(), Name = name, Age = rng.Next(20, 65) });
+        await db.Users.InsertAsync(new User { Id = NewId(), Name = name, Age = rng.Next(20, 65) });
 });
 
 // ─── AnnotatedUsers ───────────────────────────────────────────────────────
-Seed("AnnotatedUsers", () =>
+await SeedAsync("AnnotatedUsers", async () =>
 {
     for (int i = 0; i < 8; i++)
     {
         var name = RandName();
-        db.AnnotatedUsers.Insert(new AnnotatedUser
+        await db.AnnotatedUsers.InsertAsync(new AnnotatedUser
         {
             Id       = NewId(),
             Name     = name[..Math.Min(name.Length, 50)],
@@ -105,10 +105,10 @@ Seed("AnnotatedUsers", () =>
 });
 
 // ─── ComplexUsers ─────────────────────────────────────────────────────────
-Seed("ComplexUsers", () =>
+await SeedAsync("ComplexUsers", async () =>
 {
     for (int i = 0; i < 6; i++)
-        db.ComplexUsers.Insert(new ComplexUser
+        await db.ComplexUsers.InsertAsync(new ComplexUser
         {
             Id             = NewId(),
             Name           = RandName(),
@@ -119,26 +119,26 @@ Seed("ComplexUsers", () =>
 });
 
 // ─── People ───────────────────────────────────────────────────────────────
-Seed("People", () =>
+await SeedAsync("People", async () =>
 {
     for (int i = 1; i <= 10; i++)
-        db.People.Insert(new Person { Id = i, Name = RandName(), Age = rng.Next(18, 80) });
+        await db.People.InsertAsync(new Person { Id = i, Name = RandName(), Age = rng.Next(18, 80) });
 });
 
 // ─── PeopleV2 ─────────────────────────────────────────────────────────────
-Seed("PeopleV2", () =>
+await SeedAsync("PeopleV2", async () =>
 {
     for (int i = 0; i < 8; i++)
-        db.PeopleV2.Insert(new PersonV2 { Id = NewId(), Name = RandName(), Age = rng.Next(18, 80) });
+        await db.PeopleV2.InsertAsync(new PersonV2 { Id = NewId(), Name = RandName(), Age = rng.Next(18, 80) });
 });
 
 // ─── PeopleWithContacts ───────────────────────────────────────────────────
-Seed("PeopleWithContacts", () =>
+await SeedAsync("PeopleWithContacts", async () =>
 {
     for (int i = 0; i < 5; i++)
     {
         var name = RandName();
-        db.PeopleWithContacts.Insert(new PersonWithContact
+        await db.PeopleWithContacts.InsertAsync(new PersonWithContact
         {
             Id          = NewId(),
             Name        = name,
@@ -149,10 +149,10 @@ Seed("PeopleWithContacts", () =>
 });
 
 // ─── Products ─────────────────────────────────────────────────────────────
-Seed("Products", () =>
+await SeedAsync("Products", async () =>
 {
     for (int i = 0; i < productTitles.Length; i++)
-        db.Products.Insert(new Product
+        await db.Products.InsertAsync(new Product
         {
             Id    = i + 1,
             Title = productTitles[i],
@@ -161,10 +161,10 @@ Seed("Products", () =>
 });
 
 // ─── Orders ───────────────────────────────────────────────────────────────
-Seed("Orders", () =>
+await SeedAsync("Orders", async () =>
 {
     for (int i = 1; i <= 8; i++)
-        db.Orders.Insert(new Order
+        await db.Orders.InsertAsync(new Order
         {
             Id           = new OrderId($"ORD-{2025_000 + i:D6}"),
             CustomerName = RandName()
@@ -172,7 +172,7 @@ Seed("Orders", () =>
 });
 
 // ─── CustomerOrders ───────────────────────────────────────────────────────
-Seed("CustomerOrders", () =>
+await SeedAsync("CustomerOrders", async () =>
 {
     for (int i = 1; i <= 6; i++)
     {
@@ -195,7 +195,7 @@ Seed("CustomerOrders", () =>
         var tax      = Math.Round(subtotal * 0.22m, 2);
         var cust     = RandName();
 
-        db.CustomerOrders.Insert(new CustomerOrder
+        await db.CustomerOrders.InsertAsync(new CustomerOrder
         {
             Id          = $"CO-{i:D4}",
             OrderNumber = $"#{2025_000 + i}",
@@ -240,10 +240,10 @@ Seed("CustomerOrders", () =>
 
 // ─── TestDocuments ────────────────────────────────────────────────────────
 string[] categories = ["Electronics", "Books", "Clothing", "Food", "Sports"];
-Seed("TestDocuments", () =>
+await SeedAsync("TestDocuments", async () =>
 {
     for (int i = 0; i < 10; i++)
-        db.TestDocuments.Insert(new TestDocument
+        await db.TestDocuments.InsertAsync(new TestDocument
         {
             Id       = NewId(),
             Category = Pick(categories),
@@ -253,10 +253,10 @@ Seed("TestDocuments", () =>
 });
 
 // ─── OrderDocuments ───────────────────────────────────────────────────────
-Seed("OrderDocuments", () =>
+await SeedAsync("OrderDocuments", async () =>
 {
     for (int i = 0; i < 8; i++)
-        db.OrderDocuments.Insert(new OrderDocument
+        await db.OrderDocuments.InsertAsync(new OrderDocument
         {
             Id       = NewId(),
             ItemName = productTitles[rng.Next(productTitles.Length)],
@@ -265,10 +265,10 @@ Seed("OrderDocuments", () =>
 });
 
 // ─── ComplexDocuments ─────────────────────────────────────────────────────
-Seed("ComplexDocuments", () =>
+await SeedAsync("ComplexDocuments", async () =>
 {
     for (int i = 0; i < 5; i++)
-        db.ComplexDocuments.Insert(new ComplexDocument
+        await db.ComplexDocuments.InsertAsync(new ComplexDocument
         {
             Id              = NewId(),
             Title           = $"Complex Document #{i + 1}",
@@ -283,39 +283,39 @@ Seed("ComplexDocuments", () =>
 });
 
 // ─── AutoInitEntities ─────────────────────────────────────────────────────
-Seed("AutoInitEntities", () =>
+await SeedAsync("AutoInitEntities", async () =>
 {
     for (int i = 1; i <= 8; i++)
-        db.AutoInitEntities.Insert(new AutoInitEntity { Id = i, Name = $"AutoEntity-{i}" });
+        await db.AutoInitEntities.InsertAsync(new AutoInitEntity { Id = i, Name = $"AutoEntity-{i}" });
 });
 
 // ─── IntEntities ──────────────────────────────────────────────────────────
-Seed("IntEntities", () =>
+await SeedAsync("IntEntities", async () =>
 {
     for (int i = 1; i <= 8; i++)
-        db.IntEntities.Insert(new IntEntity { Id = i, Name = $"IntEntity-{i}" });
+        await db.IntEntities.InsertAsync(new IntEntity { Id = i, Name = $"IntEntity-{i}" });
 });
 
 // ─── StringEntities ───────────────────────────────────────────────────────
-Seed("StringEntities", () =>
+await SeedAsync("StringEntities", async () =>
 {
     for (int i = 1; i <= 6; i++)
-        db.StringEntities.Insert(new StringEntity { Id = $"str-{i:D3}", Value = $"Value for string key {i}" });
+        await db.StringEntities.InsertAsync(new StringEntity { Id = $"str-{i:D3}", Value = $"Value for string key {i}" });
 });
 
 // ─── GuidEntities ─────────────────────────────────────────────────────────
-Seed("GuidEntities", () =>
+await SeedAsync("GuidEntities", async () =>
 {
     for (int i = 0; i < 6; i++)
-        db.GuidEntities.Insert(new GuidEntity { Id = Guid.NewGuid(), Name = $"GuidEntity-{i + 1}" });
+        await db.GuidEntities.InsertAsync(new GuidEntity { Id = Guid.NewGuid(), Name = $"GuidEntity-{i + 1}" });
 });
 
 // ─── CustomKeyEntities ────────────────────────────────────────────────────
-Seed("CustomKeyEntities", () =>
+await SeedAsync("CustomKeyEntities", async () =>
 {
     string[] codes = ["ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON"];
     foreach (var code in codes)
-        db.CustomKeyEntities.Insert(new CustomKeyEntity
+        await db.CustomKeyEntities.InsertAsync(new CustomKeyEntity
         {
             Code        = code,
             Description = $"Description for {code}"
@@ -323,24 +323,24 @@ Seed("CustomKeyEntities", () =>
 });
 
 // ─── AsyncDocs ────────────────────────────────────────────────────────────
-Seed("AsyncDocs", () =>
+await SeedAsync("AsyncDocs", async () =>
 {
     for (int i = 1; i <= 8; i++)
-        db.AsyncDocs.Insert(new AsyncDoc { Id = i, Name = $"AsyncDoc-{i}" });
+        await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = i, Name = $"AsyncDoc-{i}" });
 });
 
 // ─── SchemaUsers ──────────────────────────────────────────────────────────
-Seed("SchemaUsers", () =>
+await SeedAsync("SchemaUsers", async () =>
 {
     for (int i = 1; i <= 6; i++)
-        db.SchemaUsers.Insert(new SchemaUser { Id = i, Name = RandName(), Address = RandAddress() });
+        await db.SchemaUsers.InsertAsync(new SchemaUser { Id = i, Name = RandName(), Address = RandAddress() });
 });
 
 // ─── VectorItems ──────────────────────────────────────────────────────────
-Seed("VectorItems", () =>
+await SeedAsync("VectorItems", async () =>
 {
     for (int i = 0; i < 8; i++)
-        db.VectorItems.Insert(new VectorEntity
+        await db.VectorItems.InsertAsync(new VectorEntity
         {
             Id        = NewId(),
             Title     = $"Vector Item {i + 1}",
@@ -349,7 +349,7 @@ Seed("VectorItems", () =>
 });
 
 // ─── GeoItems ─────────────────────────────────────────────────────────────
-Seed("GeoItems", () =>
+await SeedAsync("GeoItems", async () =>
 {
     (string name, double lat, double lon)[] places =
     [
@@ -361,14 +361,14 @@ Seed("GeoItems", () =>
         ("Gran Paradiso",    45.5173,  7.2469),
     ];
     foreach (var (name, lat, lon) in places)
-        db.GeoItems.Insert(new GeoEntity { Id = NewId(), Name = name, Location = (lat, lon) });
+        await db.GeoItems.InsertAsync(new GeoEntity { Id = NewId(), Name = name, Location = (lat, lon) });
 });
 
 // ─── DerivedEntities ──────────────────────────────────────────────────────
-Seed("DerivedEntities", () =>
+await SeedAsync("DerivedEntities", async () =>
 {
     for (int i = 0; i < 5; i++)
-        db.DerivedEntities.Insert(new DerivedEntity
+        await db.DerivedEntities.InsertAsync(new DerivedEntity
         {
             Id          = NewId(),
             CreatedAt   = DateTime.UtcNow.AddDays(-rng.Next(1, 365)),
@@ -378,10 +378,10 @@ Seed("DerivedEntities", () =>
 });
 
 // ─── ComputedPropertyEntities ─────────────────────────────────────────────
-Seed("ComputedPropertyEntities", () =>
+await SeedAsync("ComputedPropertyEntities", async () =>
 {
     for (int i = 0; i < 5; i++)
-        db.ComputedPropertyEntities.Insert(new EntityWithComputedProperties
+        await db.ComputedPropertyEntities.InsertAsync(new EntityWithComputedProperties
         {
             Id        = NewId(),
             FirstName = Pick(firstNames),
@@ -391,10 +391,10 @@ Seed("ComputedPropertyEntities", () =>
 });
 
 // ─── AdvancedCollectionEntities ───────────────────────────────────────────
-Seed("AdvancedCollectionEntities", () =>
+await SeedAsync("AdvancedCollectionEntities", async () =>
 {
     for (int i = 0; i < 4; i++)
-        db.AdvancedCollectionEntities.Insert(new EntityWithAdvancedCollections
+        await db.AdvancedCollectionEntities.InsertAsync(new EntityWithAdvancedCollections
         {
             Id           = NewId(),
             Name         = $"AdvancedCollection-{i + 1}",
@@ -408,18 +408,18 @@ Seed("AdvancedCollectionEntities", () =>
 });
 
 // ─── PrivateSetterEntities ────────────────────────────────────────────────
-Seed("PrivateSetterEntities", () =>
+await SeedAsync("PrivateSetterEntities", async () =>
 {
     for (int i = 0; i < 5; i++)
-        db.PrivateSetterEntities.Insert(
+        await db.PrivateSetterEntities.InsertAsync(
             EntityWithPrivateSetters.Create(RandName(), rng.Next(20, 60)));
 });
 
 // ─── InitSetterEntities ───────────────────────────────────────────────────
-Seed("InitSetterEntities", () =>
+await SeedAsync("InitSetterEntities", async () =>
 {
     for (int i = 0; i < 5; i++)
-        db.InitSetterEntities.Insert(new EntityWithInitSetters
+        await db.InitSetterEntities.InsertAsync(new EntityWithInitSetters
         {
             Id        = NewId(),
             Name      = RandName(),
@@ -429,7 +429,7 @@ Seed("InitSetterEntities", () =>
 });
 
 // ─── Employees (hierarchy) ────────────────────────────────────────────────
-Seed("Employees", () =>
+await SeedAsync("Employees", async () =>
 {
     var ceo  = new Employee { Id = NewId(), Name = "CEO",   Department = "Management" };
     var cto  = new Employee { Id = NewId(), Name = "CTO",   Department = "Engineering", ManagerId = ceo.Id };
@@ -439,29 +439,26 @@ Seed("Employees", () =>
     ceo.DirectReportIds = [cto.Id, cfo.Id];
     cto.DirectReportIds = [dev1.Id, dev2.Id];
     foreach (var e in new[] { ceo, cto, cfo, dev1, dev2 })
-        db.Employees.Insert(e);
+        await db.Employees.InsertAsync(e);
 });
 
 // ─── CategoryRefs & ProductRefs ───────────────────────────────────────────
-Seed("CategoryRefs & ProductRefs", () =>
+await SeedAsync("CategoryRefs & ProductRefs", async () =>
 {
-    var prodRefs = Enumerable.Range(1, 6).Select(i =>
+    var prodRefs = Enumerable.Range(1, 6).Select(i => new ProductRef
     {
-        var p = new ProductRef
-        {
-            Id    = NewId(),
-            Name  = productTitles[i - 1],
-            Price = Math.Round((decimal)(rng.NextDouble() * 999 + 9), 2)
-        };
-        db.ProductRefs.Insert(p);
-        return p;
+        Id    = NewId(),
+        Name  = productTitles[i - 1],
+        Price = Math.Round((decimal)(rng.NextDouble() * 999 + 9), 2)
     }).ToList();
+    foreach (var p in prodRefs)
+        await db.ProductRefs.InsertAsync(p);
 
     string[] catNames = ["Tech", "Office", "Audio", "Storage", "Accessories"];
     foreach (var cat in catNames)
     {
         var subset = prodRefs.OrderBy(_ => rng.Next()).Take(rng.Next(1, 4)).Select(p => p.Id).ToList();
-        db.CategoryRefs.Insert(new CategoryRef
+        await db.CategoryRefs.InsertAsync(new CategoryRef
         {
             Id          = NewId(),
             Name        = cat,
@@ -472,22 +469,22 @@ Seed("CategoryRefs & ProductRefs", () =>
 });
 
 // ─── MockCounters ─────────────────────────────────────────────────────────
-Seed("MockCounters", () =>
+await SeedAsync("MockCounters", async () =>
 {
     string[] counterNames = ["page_views", "logins", "api_calls", "errors", "signups"];
     foreach (var (name, idx) in counterNames.Select((n, i) => (n, i)))
-        db.MockCounters.Insert(
+        await db.MockCounters.InsertAsync(
             new MockCounter($"CTR-{idx + 1:D3}") { Name = name, Value = rng.Next(0, 100_000) });
 });
 
 // ─── TemporalEntities ─────────────────────────────────────────────────────
-Seed("TemporalEntities", () =>
+await SeedAsync("TemporalEntities", async () =>
 {
     for (int i = 0; i < 6; i++)
     {
         var birth = DateOnly.FromDateTime(
             DateTime.Today.AddYears(-rng.Next(20, 60)).AddDays(-rng.Next(0, 365)));
-        db.TemporalEntities.Insert(new TemporalEntity
+        await db.TemporalEntities.InsertAsync(new TemporalEntity
         {
             Id               = NewId(),
             Name             = RandName(),
@@ -505,7 +502,7 @@ Seed("TemporalEntities", () =>
 });
 
 // ─── EnumEntities ─────────────────────────────────────────────────────────
-Seed("EnumEntities", () =>
+await SeedAsync("EnumEntities", async () =>
 {
     var roles      = Enum.GetValues<UserRole>();
     var statuses2  = Enum.GetValues<OrderStatus>();
@@ -514,7 +511,7 @@ Seed("EnumEntities", () =>
     Permissions[] perms = [Permissions.Read, Permissions.Read | Permissions.Write, Permissions.All];
 
     for (int i = 0; i < 6; i++)
-        db.EnumEntities.Insert(new EnumEntity
+        await db.EnumEntities.InsertAsync(new EnumEntity
         {
             Id               = NewId(),
             Role             = roles[rng.Next(roles.Length)],
@@ -529,44 +526,44 @@ Seed("EnumEntities", () =>
         });
 });
 
-db.SaveChanges();
+await db.SaveChangesAsync();
 
 // ─── Summary ──────────────────────────────────────────────────────────────
 Console.WriteLine("\n╔══════════════════════════════════════╗");
 Console.WriteLine("║             Seeding Summary          ║");
 Console.WriteLine("╚══════════════════════════════════════╝");
-Console.WriteLine($"  Users                     : {db.Users.Count()}");
-Console.WriteLine($"  AnnotatedUsers            : {db.AnnotatedUsers.Count()}");
-Console.WriteLine($"  ComplexUsers              : {db.ComplexUsers.Count()}");
-Console.WriteLine($"  People                    : {db.People.Count()}");
-Console.WriteLine($"  PeopleV2                  : {db.PeopleV2.Count()}");
-Console.WriteLine($"  PeopleWithContacts        : {db.PeopleWithContacts.Count()}");
-Console.WriteLine($"  Products                  : {db.Products.Count()}");
-Console.WriteLine($"  Orders                    : {db.Orders.Count()}");
-Console.WriteLine($"  CustomerOrders            : {db.CustomerOrders.Count()}");
-Console.WriteLine($"  TestDocuments             : {db.TestDocuments.Count()}");
-Console.WriteLine($"  OrderDocuments            : {db.OrderDocuments.Count()}");
-Console.WriteLine($"  ComplexDocuments          : {db.ComplexDocuments.Count()}");
-Console.WriteLine($"  AutoInitEntities          : {db.AutoInitEntities.Count()}");
-Console.WriteLine($"  IntEntities               : {db.IntEntities.Count()}");
-Console.WriteLine($"  StringEntities            : {db.StringEntities.Count()}");
-Console.WriteLine($"  GuidEntities              : {db.GuidEntities.Count()}");
-Console.WriteLine($"  CustomKeyEntities         : {db.CustomKeyEntities.Count()}");
-Console.WriteLine($"  AsyncDocs                 : {db.AsyncDocs.Count()}");
-Console.WriteLine($"  SchemaUsers               : {db.SchemaUsers.Count()}");
-Console.WriteLine($"  VectorItems               : {db.VectorItems.Count()}");
-Console.WriteLine($"  GeoItems                  : {db.GeoItems.Count()}");
-Console.WriteLine($"  DerivedEntities           : {db.DerivedEntities.Count()}");
-Console.WriteLine($"  ComputedPropertyEntities  : {db.ComputedPropertyEntities.Count()}");
-Console.WriteLine($"  AdvancedCollectionEntities: {db.AdvancedCollectionEntities.Count()}");
-Console.WriteLine($"  PrivateSetterEntities     : {db.PrivateSetterEntities.Count()}");
-Console.WriteLine($"  InitSetterEntities        : {db.InitSetterEntities.Count()}");
-Console.WriteLine($"  Employees                 : {db.Employees.Count()}");
-Console.WriteLine($"  CategoryRefs              : {db.CategoryRefs.Count()}");
-Console.WriteLine($"  ProductRefs               : {db.ProductRefs.Count()}");
-Console.WriteLine($"  MockCounters              : {db.MockCounters.Count()}");
-Console.WriteLine($"  TemporalEntities          : {db.TemporalEntities.Count()}");
-Console.WriteLine($"  EnumEntities              : {db.EnumEntities.Count()}");
+Console.WriteLine($"  Users                     : {await db.Users.CountAsync()}");
+Console.WriteLine($"  AnnotatedUsers            : {await db.AnnotatedUsers.CountAsync()}");
+Console.WriteLine($"  ComplexUsers              : {await db.ComplexUsers.CountAsync()}");
+Console.WriteLine($"  People                    : {await db.People.CountAsync()}");
+Console.WriteLine($"  PeopleV2                  : {await db.PeopleV2.CountAsync()}");
+Console.WriteLine($"  PeopleWithContacts        : {await db.PeopleWithContacts.CountAsync()}");
+Console.WriteLine($"  Products                  : {await db.Products.CountAsync()}");
+Console.WriteLine($"  Orders                    : {await db.Orders.CountAsync()}");
+Console.WriteLine($"  CustomerOrders            : {await db.CustomerOrders.CountAsync()}");
+Console.WriteLine($"  TestDocuments             : {await db.TestDocuments.CountAsync()}");
+Console.WriteLine($"  OrderDocuments            : {await db.OrderDocuments.CountAsync()}");
+Console.WriteLine($"  ComplexDocuments          : {await db.ComplexDocuments.CountAsync()}");
+Console.WriteLine($"  AutoInitEntities          : {await db.AutoInitEntities.CountAsync()}");
+Console.WriteLine($"  IntEntities               : {await db.IntEntities.CountAsync()}");
+Console.WriteLine($"  StringEntities            : {await db.StringEntities.CountAsync()}");
+Console.WriteLine($"  GuidEntities              : {await db.GuidEntities.CountAsync()}");
+Console.WriteLine($"  CustomKeyEntities         : {await db.CustomKeyEntities.CountAsync()}");
+Console.WriteLine($"  AsyncDocs                 : {await db.AsyncDocs.CountAsync()}");
+Console.WriteLine($"  SchemaUsers               : {await db.SchemaUsers.CountAsync()}");
+Console.WriteLine($"  VectorItems               : {await db.VectorItems.CountAsync()}");
+Console.WriteLine($"  GeoItems                  : {await db.GeoItems.CountAsync()}");
+Console.WriteLine($"  DerivedEntities           : {await db.DerivedEntities.CountAsync()}");
+Console.WriteLine($"  ComputedPropertyEntities  : {await db.ComputedPropertyEntities.CountAsync()}");
+Console.WriteLine($"  AdvancedCollectionEntities: {await db.AdvancedCollectionEntities.CountAsync()}");
+Console.WriteLine($"  PrivateSetterEntities     : {await db.PrivateSetterEntities.CountAsync()}");
+Console.WriteLine($"  InitSetterEntities        : {await db.InitSetterEntities.CountAsync()}");
+Console.WriteLine($"  Employees                 : {await db.Employees.CountAsync()}");
+Console.WriteLine($"  CategoryRefs              : {await db.CategoryRefs.CountAsync()}");
+Console.WriteLine($"  ProductRefs               : {await db.ProductRefs.CountAsync()}");
+Console.WriteLine($"  MockCounters              : {await db.MockCounters.CountAsync()}");
+Console.WriteLine($"  TemporalEntities          : {await db.TemporalEntities.CountAsync()}");
+Console.WriteLine($"  EnumEntities              : {await db.EnumEntities.CountAsync()}");
 Console.WriteLine($"\nDatabase file  : {dbPath}");
 if (isMultiFile)
 {
@@ -579,9 +576,9 @@ Console.WriteLine("Done.");
 db.Dispose();
 
 // ─── Helper ───────────────────────────────────────────────────────────────
-void Seed(string collectionName, Action action)
+async Task SeedAsync(string collectionName, Func<Task> action)
 {
     Console.Write($"  Seeding {collectionName}...");
-    action();
+    await action();
     Console.WriteLine(" OK");
 }

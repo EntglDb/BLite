@@ -14,36 +14,9 @@ public sealed partial class StorageEngine
         return transaction;
     }
 
-    public Task<Transaction> BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted, CancellationToken ct = default)
-    {
-        var txnId = (ulong)Interlocked.Increment(ref _nextTransactionId);
-        var transaction = new Transaction(txnId, this, isolationLevel);
-        _activeTransactions[txnId] = transaction;
-        return Task.FromResult(transaction);
-    }
-
-    public void CommitTransaction(Transaction transaction)
-    {
-        // NOTE: Do NOT acquire _commitLock here.
-        // CommitTransaction(ulong) already serialises under _commitLock and performs
-        // the full prepare+commit cycle (BEGIN record, DATA records, COMMIT record,
-        // WAL flush, walCache → walIndex move).
-        // Acquiring the lock here too would cause a non-reentrant SemaphoreSlim deadlock.
-        // Similarly, PrepareTransaction(ulong) must NOT be called here because
-        // CommitTransaction(ulong) already writes BEGIN+DATA records internally—
-        // calling it first would duplicate those WAL records.
-
-        if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
-
-        CommitTransaction(transaction.TransactionId);
-
-        _activeTransactions.TryRemove(transaction.TransactionId, out _);
-    }
-
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
-        // Same reasoning as CommitTransaction(Transaction) above: no outer lock,
+        // Same reasoning as CommitTransactionAsync(Transaction) above: no outer lock,
         // no separate PrepareTransactionAsync call.
 
         if (!_activeTransactions.ContainsKey(transaction.TransactionId))
@@ -54,9 +27,9 @@ public sealed partial class StorageEngine
         _activeTransactions.TryRemove(transaction.TransactionId, out _);
     }
 
-    public void RollbackTransaction(Transaction transaction)
+    public async Task RollbackTransactionAsync(Transaction transaction)
     {
-        RollbackTransaction(transaction.TransactionId);
+        await RollbackTransactionAsync(transaction.TransactionId);
         _activeTransactions.TryRemove(transaction.TransactionId, out _);
     }
     
@@ -72,18 +45,18 @@ public sealed partial class StorageEngine
     /// <param name="transactionId">Transaction ID</param>
     /// <param name="writeSet">All writes to record in WAL</param>
     /// <returns>True if preparation succeeded</returns>
-    public bool PrepareTransaction(ulong transactionId)
+    public async Task<bool> PrepareTransactionAsync(ulong transactionId)
     {
         try
         {
-            _wal.WriteBeginRecord(transactionId);
+            await _wal.WriteBeginRecordAsync(transactionId);
 
             foreach (var walEntry in _walCache[transactionId])
             {
-                _wal.WriteDataRecord(transactionId, walEntry.Key, walEntry.Value);
+                await _wal.WriteDataRecordAsync(transactionId, walEntry.Key, walEntry.Value);
             }
-            
-            _wal.Flush(); // Ensure WAL is persisted
+
+            await _wal.FlushAsync(); // Ensure WAL is persisted
             return true;
         }
         catch (Exception ex)
@@ -126,33 +99,33 @@ public sealed partial class StorageEngine
     /// </summary>
     /// <param name="transactionId">Transaction to commit</param>
     /// <param name="writeSet">All writes performed in this transaction (unused, kept for compatibility)</param>
-    public void CommitTransaction(ulong transactionId)
+    public async Task CommitTransactionAsync(ulong transactionId)
     {
         bool needsCheckpoint = false;
 
-        _commitLock.Wait();
+        await _commitLock.WaitAsync();
         try
         {
             // Get ALL pages from WAL cache (includes both data and index pages)
             if (!_walCache.TryGetValue(transactionId, out var pages))
             {
                 // No writes for this transaction, just write commit record
-                _wal.WriteCommitRecord(transactionId);
-                _wal.Flush();
+                await _wal.WriteCommitRecordAsync(transactionId);
+                await _wal.FlushAsync();
                 return;
             }
-            
+
             // 1. Write all changes to WAL (from cache, not writeSet!)
-            _wal.WriteBeginRecord(transactionId);
+            await _wal.WriteBeginRecordAsync(transactionId);
             
             foreach (var (pageId, data) in pages)
             {
-                _wal.WriteDataRecord(transactionId, pageId, data);
+                await _wal.WriteDataRecordAsync(transactionId, pageId, data);
             }
-            
+
             // 2. Write commit record and flush
-            _wal.WriteCommitRecord(transactionId);
-            _wal.Flush(); // Durability: ensure WAL is on disk
+            await _wal.WriteCommitRecordAsync(transactionId);
+            await _wal.FlushAsync(); // Durability: ensure WAL is on disk
             
             // 3. Move pages from cache to WAL index (for reads)
             _walCache.TryRemove(transactionId, out _);
@@ -170,10 +143,10 @@ public sealed partial class StorageEngine
         }
 
         // Run checkpoint outside _commitLock so other commits aren't blocked.
-        // Checkpoint() acquires _commitLock internally for the actual I/O.
+        // CheckpointAsync() acquires _commitLock internally for the actual I/O.
         if (needsCheckpoint)
         {
-            Checkpoint();
+            await CheckpointAsync();
         }
     }
 
@@ -190,18 +163,18 @@ public sealed partial class StorageEngine
     
     /// <summary>
     /// Marks a transaction as committed after WAL writes.
-    /// Used for 2PC: after Prepare() writes to WAL, this finalizes the commit.
+    /// Used for 2PC: after PrepareAsync() writes to WAL, this finalizes the commit.
     /// </summary>
     /// <param name="transactionId">Transaction to mark committed</param>
-    public void MarkTransactionCommitted(ulong transactionId)
+    public async Task MarkTransactionCommittedAsync(ulong transactionId)
     {
         bool needsCheckpoint = false;
 
         _commitLock.Wait();
         try
         {
-            _wal.WriteCommitRecord(transactionId);
-            _wal.Flush();
+            await _wal.WriteCommitRecordAsync(transactionId);
+            await _wal.FlushAsync();
             
             // Move from cache to WAL index
             if (_walCache.TryRemove(transactionId, out var pages))
@@ -222,7 +195,7 @@ public sealed partial class StorageEngine
 
         if (needsCheckpoint)
         {
-            Checkpoint();
+            await CheckpointAsync();
         }
     }
 
@@ -230,15 +203,10 @@ public sealed partial class StorageEngine
     /// Rolls back a transaction: discards all uncommitted changes.
     /// </summary>
     /// <param name="transactionId">Transaction to rollback</param>
-    public void RollbackTransaction(ulong transactionId)
+    public async Task RollbackTransactionAsync(ulong transactionId)
     {
         _walCache.TryRemove(transactionId, out _);
-        _wal.WriteAbortRecord(transactionId);
-    }
-
-    internal void WriteAbortRecord(ulong transactionId)
-    {
-        _wal.WriteAbortRecord(transactionId);
+        await _wal.WriteAbortRecordAsync(transactionId);
     }
 
     /// <summary>

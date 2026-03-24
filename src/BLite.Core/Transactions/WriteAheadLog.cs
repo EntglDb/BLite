@@ -37,22 +37,6 @@ public sealed class WriteAheadLog : IDisposable
         // Durability is ensured by explicit Flush() calls
     }
 
-    /// <summary>
-    /// Writes a begin transaction record
-    /// </summary>
-    public void WriteBeginRecord(ulong transactionId)
-    {
-        _lock.Wait();
-        try
-        {
-            WriteBeginRecordInternal(transactionId);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
     public async ValueTask WriteBeginRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
@@ -79,35 +63,6 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    private void WriteBeginRecordInternal(ulong transactionId)
-    {
-        Span<byte> buffer = stackalloc byte[17];  // type(1) + txnId(8) + timestamp(8)
-        buffer[0] = (byte)WalRecordType.Begin;
-        BitConverter.TryWriteBytes(buffer[1..9], transactionId);
-        BitConverter.TryWriteBytes(buffer[9..17], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        
-        _walStream!.Write(buffer);
-    }
-
-
-    /// <summary>
-    /// Writes a commit record
-    /// </summary>
-    /// <summary>
-    /// Writes a commit record
-    /// </summary>
-    public void WriteCommitRecord(ulong transactionId)
-    {
-        _lock.Wait();
-        try
-        {
-            WriteCommitRecordInternal(transactionId);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
 
     public async ValueTask WriteCommitRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
@@ -134,35 +89,6 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    private void WriteCommitRecordInternal(ulong transactionId)
-    {
-        Span<byte> buffer = stackalloc byte[17];  // type(1) + txnId(8) + timestamp(8)
-        buffer[0] = (byte)WalRecordType.Commit;
-        BitConverter.TryWriteBytes(buffer[1..9], transactionId);
-        BitConverter.TryWriteBytes(buffer[9..17], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        
-        _walStream!.Write(buffer);
-    }
-
-
-    /// <summary>
-    /// Writes an abort record
-    /// </summary>
-    /// <summary>
-    /// Writes an abort record
-    /// </summary>
-    public void WriteAbortRecord(ulong transactionId)
-    {
-        _lock.Wait();
-        try
-        {
-            WriteAbortRecordInternal(transactionId);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
 
     public async ValueTask WriteAbortRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
@@ -189,35 +115,6 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    private void WriteAbortRecordInternal(ulong transactionId)
-    {
-        Span<byte> buffer = stackalloc byte[17];  // type(1) + txnId(8) + timestamp(8)
-        buffer[0] = (byte)WalRecordType.Abort;
-        BitConverter.TryWriteBytes(buffer[1..9], transactionId);
-        BitConverter.TryWriteBytes(buffer[9..17], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        
-        _walStream!.Write(buffer);
-    }
-
-
-    /// <summary>
-    /// Writes a data modification record
-    /// </summary>
-    /// <summary>
-    /// Writes a data modification record
-    /// </summary>
-    public void WriteDataRecord(ulong transactionId, uint pageId, ReadOnlySpan<byte> afterImage)
-    {
-        _lock.Wait();
-        try
-        {
-            WriteDataRecordInternal(transactionId, pageId, afterImage);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
 
     public async ValueTask WriteDataRecordAsync(ulong transactionId, uint pageId, ReadOnlyMemory<byte> afterImage, CancellationToken ct = default)
     {
@@ -275,25 +172,6 @@ public sealed class WriteAheadLog : IDisposable
     }
 
 
-    /// <summary>
-    /// Flushes all buffered writes to disk
-    /// </summary>
-    /// <summary>
-    /// Flushes all buffered writes to disk
-    /// </summary>
-    public void Flush()
-    {
-        _lock.Wait();
-        try
-        {
-            _walStream?.Flush(flushToDisk: true);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
     public async Task FlushAsync(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
@@ -338,28 +216,6 @@ public sealed class WriteAheadLog : IDisposable
 
     /// <summary>
     /// Truncates the WAL file (removes all content).
-    /// Should only be called after successful checkpoint.
-    /// </summary>
-    public void Truncate()
-    {
-        _lock.Wait();
-        try
-        {
-            if (_walStream != null)
-            {
-                _walStream.SetLength(0);
-                _walStream.Position = 0;
-                _walStream.Flush(flushToDisk: true);
-            }
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Asynchronously truncates the WAL file (removes all content).
     /// Should only be called after successful checkpoint.
     /// </summary>
     public async Task TruncateAsync(CancellationToken ct = default)

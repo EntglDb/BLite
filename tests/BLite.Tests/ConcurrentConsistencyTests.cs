@@ -54,7 +54,7 @@ public class ConcurrentConsistencyTests : IDisposable
 
         var allIds = new ConcurrentBag<(int thread, int index, BsonId id)>();
 
-        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(async() =>
         {
             var collName = $"thread_{t}";
             using var session = _engine.OpenSession();
@@ -62,13 +62,13 @@ public class ConcurrentConsistencyTests : IDisposable
             for (int i = 0; i < docsPerThread; i++)
             {
                 var value = t * docsPerThread + i;
-                var id = col.Insert(col.CreateDocument(["thread", "index", "value"], b => b
+                var id = await col.InsertAsync(col.CreateDocument(["thread", "index", "value"], b => b
                     .AddInt32("thread", t)
                     .AddInt32("index", i)
                     .AddInt32("value", value)));
                 allIds.Add((t, i, id));
             }
-            session.Commit();
+            await session.CommitAsync();
         })).ToArray();
 
         await Task.WhenAll(tasks);
@@ -82,11 +82,11 @@ public class ConcurrentConsistencyTests : IDisposable
         foreach (var group in allIds.GroupBy(x => x.thread))
         {
             var readCol = readSession.GetOrCreateCollection($"thread_{group.Key}");
-            Assert.Equal(docsPerThread, readCol.Count());
+            Assert.Equal(docsPerThread, await readCol.CountAsync());
 
             foreach (var (thread, index, id) in group)
             {
-                var doc = readCol.FindById(id);
+                var doc = await readCol.FindByIdAsync(id);
                 Assert.NotNull(doc);
                 Assert.True(doc.TryGetInt32("thread", out var docThread));
                 Assert.Equal(thread, docThread);
@@ -118,11 +118,11 @@ public class ConcurrentConsistencyTests : IDisposable
             var col = session.GetOrCreateCollection(readCollection);
             for (int i = 0; i < seedCount; i++)
             {
-                seedIds[i] = col.Insert(col.CreateDocument(["seed", "value"], b => b
+                seedIds[i] = await col.InsertAsync(col.CreateDocument(["seed", "value"], b => b
                     .AddInt32("seed", 1)
                     .AddInt32("value", i)));
             }
-            session.Commit();
+            await session.CommitAsync();
         }
 
         var writeIds = new ConcurrentBag<(int writer, BsonId id)>();
@@ -131,22 +131,22 @@ public class ConcurrentConsistencyTests : IDisposable
         using var cts = new CancellationTokenSource();
 
         // Writers: each thread inserts into its own collection
-        var writerTasks = Enumerable.Range(0, writerCount).Select(t => Task.Run(() =>
+        var writerTasks = Enumerable.Range(0, writerCount).Select(t => Task.Run(async () =>
         {
             using var session = _engine.OpenSession();
             var col = session.GetOrCreateCollection($"writer_{t}");
             for (int i = 0; i < docsPerWriter; i++)
             {
-                var id = col.Insert(col.CreateDocument(["writer", "seq"], b => b
+                var id = await col.InsertAsync(col.CreateDocument(["writer", "seq"], b => b
                     .AddInt32("writer", t)
                     .AddInt32("seq", i)));
                 writeIds.Add((t, id));
             }
-            session.Commit();
+            await session.CommitAsync();
         })).ToArray();
 
         // Readers: continuously read seeded documents while writers are active
-        var readerTasks = Enumerable.Range(0, readerCount).Select(r => Task.Run(() =>
+        var readerTasks = Enumerable.Range(0, readerCount).Select(r => Task.Run(async () =>
         {
             int reads = 0;
             while (!cts.Token.IsCancellationRequested)
@@ -154,7 +154,7 @@ public class ConcurrentConsistencyTests : IDisposable
                 using var session = _engine.OpenSession();
                 var col = session.GetOrCreateCollection(readCollection);
                 var idx = reads % seedCount;
-                var doc = col.FindById(seedIds[idx]);
+                var doc = await col.FindByIdAsync(seedIds[idx]);
                 if (doc == null)
                 {
                     readErrors.Add($"Reader {r}: seeded doc {seedIds[idx]} not found on read #{reads}");
@@ -187,7 +187,7 @@ public class ConcurrentConsistencyTests : IDisposable
         for (int t = 0; t < writerCount; t++)
         {
             var verifyCol = verifySession.GetOrCreateCollection($"writer_{t}");
-            Assert.Equal(docsPerWriter, verifyCol.Count());
+            Assert.Equal(docsPerWriter, await verifyCol.CountAsync());
         }
     }
 
@@ -204,7 +204,7 @@ public class ConcurrentConsistencyTests : IDisposable
 
         var allIds = new ConcurrentBag<(int thread, int txn, int doc, BsonId id)>();
 
-        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(async () =>
         {
             var collName = $"contention_{t}";
             for (int txn = 0; txn < txnsPerThread; txn++)
@@ -213,13 +213,13 @@ public class ConcurrentConsistencyTests : IDisposable
                 var col = session.GetOrCreateCollection(collName);
                 for (int d = 0; d < docsPerTxn; d++)
                 {
-                    var id = col.Insert(col.CreateDocument(["t", "tx", "d"], b => b
+                    var id = await col.InsertAsync(col.CreateDocument(["t", "tx", "d"], b => b
                         .AddInt32("t", t)
                         .AddInt32("tx", txn)
                         .AddInt32("d", d)));
                     allIds.Add((t, txn, d, id));
                 }
-                session.Commit();
+                await session.CommitAsync();
             }
         })).ToArray();
 
@@ -233,11 +233,11 @@ public class ConcurrentConsistencyTests : IDisposable
         foreach (var group in allIds.GroupBy(x => x.thread))
         {
             var readCol = readSession.GetOrCreateCollection($"contention_{group.Key}");
-            Assert.Equal(txnsPerThread * docsPerTxn, readCol.Count());
+            Assert.Equal(txnsPerThread * docsPerTxn, await readCol.CountAsync());
 
             foreach (var (thread, txn, doc, id) in group)
             {
-                var found = readCol.FindById(id);
+                var found = await readCol.FindByIdAsync(id);
                 Assert.NotNull(found);
                 Assert.True(found.TryGetInt32("t", out var ft) && ft == thread);
                 Assert.True(found.TryGetInt32("tx", out var ftx) && ftx == txn);
@@ -266,18 +266,18 @@ public class ConcurrentConsistencyTests : IDisposable
             var col = session.GetOrCreateCollection($"crud_{t}");
             for (int i = 0; i < opsPerThread; i++)
             {
-                seedIdsByThread[t][i] = col.Insert(col.CreateDocument(["status", "v"], b => b
+                seedIdsByThread[t][i] = await col.InsertAsync(col.CreateDocument(["status", "v"], b => b
                     .AddString("status", "original")
                     .AddInt32("v", i)));
             }
-            session.Commit();
+            await session.CommitAsync();
         }
 
         var updatedIds = new ConcurrentBag<(int thread, BsonId id)>();
         var deletedIds = new ConcurrentBag<(int thread, BsonId id)>();
         var insertedIds = new ConcurrentBag<(int thread, BsonId id)>();
 
-        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(async () =>
         {
             using var session = _engine.OpenSession();
             var col = session.GetOrCreateCollection($"crud_{t}");
@@ -292,24 +292,24 @@ public class ConcurrentConsistencyTests : IDisposable
                         var updated = col.CreateDocument(["status", "v"], b => b
                             .AddString("status", "updated")
                             .AddInt32("v", i * 10));
-                        if (col.Update(seedIdsByThread[t][i], updated))
+                        if (await col.UpdateAsync(seedIdsByThread[t][i], updated))
                             updatedIds.Add((t, seedIdsByThread[t][i]));
                         break;
 
                     case 1: // delete
-                        if (col.Delete(seedIdsByThread[t][i]))
+                        if (await col.DeleteAsync(seedIdsByThread[t][i]))
                             deletedIds.Add((t, seedIdsByThread[t][i]));
                         break;
 
                     case 2: // insert new
-                        var id = col.Insert(col.CreateDocument(["status", "v"], b => b
+                        var id = await col.InsertAsync(col.CreateDocument(["status", "v"], b => b
                             .AddString("status", "new")
                             .AddInt32("v", i)));
                         insertedIds.Add((t, id));
                         break;
                 }
             }
-            session.Commit();
+            await session.CommitAsync();
         })).ToArray();
 
         await Task.WhenAll(tasks);
@@ -323,7 +323,7 @@ public class ConcurrentConsistencyTests : IDisposable
             // Updated docs should have new values
             foreach (var (thread, id) in updatedIds.Where(x => x.thread == t))
             {
-                var doc = verifyCol.FindById(id);
+                var doc = await verifyCol.FindByIdAsync(id);
                 Assert.NotNull(doc);
                 Assert.True(doc.TryGetString("status", out var status));
                 Assert.Equal("updated", status);
@@ -332,14 +332,14 @@ public class ConcurrentConsistencyTests : IDisposable
             // Deleted docs should be gone
             foreach (var (thread, id) in deletedIds.Where(x => x.thread == t))
             {
-                var doc = verifyCol.FindById(id);
+                var doc = await verifyCol.FindByIdAsync(id);
                 Assert.Null(doc);
             }
 
             // Inserted docs should exist
             foreach (var (thread, id) in insertedIds.Where(x => x.thread == t))
             {
-                var doc = verifyCol.FindById(id);
+                var doc = await verifyCol.FindByIdAsync(id);
                 Assert.NotNull(doc);
                 Assert.True(doc.TryGetString("status", out var status));
                 Assert.Equal("new", status);
@@ -366,11 +366,11 @@ public class ConcurrentConsistencyTests : IDisposable
             var col = session.GetOrCreateCollection(readCollection);
             for (int i = 0; i < seedCount; i++)
             {
-                seedIds[i] = col.Insert(col.CreateDocument(["w", "s"], b => b
+                seedIds[i] = await col.InsertAsync(col.CreateDocument(["w", "s"], b => b
                     .AddInt32("w", -1)
                     .AddInt32("s", i)));
             }
-            session.Commit();
+            await session.CommitAsync();
         }
 
         var allIds = new ConcurrentBag<(int writer, int seq, BsonId id)>();
@@ -384,7 +384,7 @@ public class ConcurrentConsistencyTests : IDisposable
             var col = session.GetOrCreateCollection($"async_{w}");
             for (int i = 0; i < docsPerWriter; i++)
             {
-                var id = col.Insert(col.CreateDocument(["w", "s"], b => b
+                var id = await col.InsertAsync(col.CreateDocument(["w", "s"], b => b
                     .AddInt32("w", w)
                     .AddInt32("s", i)));
                 allIds.Add((w, i, id));
@@ -393,13 +393,13 @@ public class ConcurrentConsistencyTests : IDisposable
         })).ToArray();
 
         // Readers: scan the seeded collection while writers are active
-        var readerTasks = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        var readerTasks = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
         {
             while (!cts.Token.IsCancellationRequested)
             {
                 using var session = _engine.OpenSession();
                 var col = session.GetOrCreateCollection(readCollection);
-                foreach (var doc in col.FindAll())
+                await foreach (var doc in col.FindAllAsync())
                 {
                     if (!doc.TryGetInt32("w", out _) || !doc.TryGetInt32("s", out _))
                     {
@@ -426,11 +426,11 @@ public class ConcurrentConsistencyTests : IDisposable
         foreach (var group in allIds.GroupBy(x => x.writer))
         {
             var verifyCol = verifySession.GetOrCreateCollection($"async_{group.Key}");
-            Assert.Equal(docsPerWriter, verifyCol.Count());
+            Assert.Equal(docsPerWriter, await verifyCol.CountAsync());
 
             foreach (var (writer, seq, id) in group)
             {
-                var doc = verifyCol.FindById(id);
+                var doc = await verifyCol.FindByIdAsync(id);
                 Assert.NotNull(doc);
                 Assert.True(doc.TryGetInt32("w", out var w) && w == writer);
                 Assert.True(doc.TryGetInt32("s", out var s) && s == seq);

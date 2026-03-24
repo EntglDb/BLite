@@ -178,7 +178,7 @@ public partial class TestDbContext : DocumentDbContext
 
     public void ForceCheckpoint()
     {
-        _storage.Checkpoint();
+        _storage.CheckpointAsync().GetAwaiter().GetResult();
     }
 
     public StorageEngine Storage => _storage;  

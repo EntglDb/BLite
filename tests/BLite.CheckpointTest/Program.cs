@@ -9,7 +9,7 @@ namespace BLite.CheckpointTest;
 /// </summary>
 class Program
 {
-    static void Main(string[] args)
+    static async Task Main(string[] args)
     {
         Console.WriteLine("=== DocumentDb Checkpoint Performance Test ===\n");
 
@@ -38,7 +38,7 @@ class Program
             // Old: txn.AddWrite(...)
             storage.WritePage(pageId, txn.TransactionId, data);
             
-            storage.CommitTransaction(txn);
+            await storage.CommitTransactionAsync(txn);
         }
         
         sw.Stop();
@@ -50,7 +50,7 @@ class Program
 
         Console.WriteLine("2. Performing Manual Checkpoint...");
         sw.Restart();
-        storage.Checkpoint();
+        await storage.CheckpointAsync();
         sw.Stop();
         
         Console.WriteLine($"   ? Checkpoint completed in {sw.ElapsedMilliseconds}ms");
@@ -61,7 +61,7 @@ class Program
         Console.WriteLine($"   ? WAL size after checkpoint: {walSizeAfter / 1024.0:F1} KB\n");
 
         Console.WriteLine("3. Testing Checkpoint with Truncate (Integrated)...");
-        storage.Checkpoint();
+        await storage.CheckpointAsync();
         
         walSizeAfter = new FileInfo(walPath).Length;
         Console.WriteLine($"   ? WAL size after truncate: {walSizeAfter / 1024.0:F1} KB\n");
@@ -79,7 +79,7 @@ class Program
             
             storage.WritePage(pageId, txn.TransactionId, data);
             
-            storage.CommitTransaction(txn);
+            await storage.CommitTransactionAsync(txn);
         }
         
         sw.Stop();
@@ -90,7 +90,7 @@ class Program
         Console.WriteLine($"   ? WAL size: {walSize / 1024.0:F1} KB\n");
 
         Console.WriteLine("5. Final checkpoint and cleanup...");
-        storage.Checkpoint();
+        await storage.CheckpointAsync();
         
         dbSize = new FileInfo(dbPath).Length;
         walSizeAfter = new FileInfo(walPath).Length;

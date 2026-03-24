@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Studio.Data;
 using BLite.Studio.Models;
@@ -37,7 +38,7 @@ public sealed class ConnectionHistoryService : IDisposable
     /// Adds a new connection entry, or updates the timestamp if the same file path
     /// already exists in history.
     /// </summary>
-    public void AddOrUpdate(string filePath, int presetValue, bool isReadOnly, bool isMultiFile = false)
+    public async Task AddOrUpdate(string filePath, int presetValue, bool isReadOnly, bool isMultiFile = false)
     {
         // Look for an existing record for this file path
         var existing = _db.RecentConnections
@@ -50,11 +51,11 @@ public sealed class ConnectionHistoryService : IDisposable
             existing.IsReadOnly   = isReadOnly;
             existing.IsMultiFile  = isMultiFile;
             existing.LastOpenedAt = DateTimeOffset.UtcNow;
-            _db.RecentConnections.Update(existing);
+            await _db.RecentConnections.UpdateAsync(existing);
         }
         else
         {
-            _db.RecentConnections.Insert(new RecentConnection
+            await _db.RecentConnections.InsertAsync(new RecentConnection
             {
                 FilePath      = filePath,
                 DisplayName   = Path.GetFileName(filePath),
@@ -64,16 +65,16 @@ public sealed class ConnectionHistoryService : IDisposable
                 LastOpenedAt  = DateTimeOffset.UtcNow,
             });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
     }
 
     /// <summary>
     /// Removes a connection entry by its document ID.
     /// </summary>
-    public void Remove(ObjectId id)
+    public async Task Remove(ObjectId id)
     {
-        _db.RecentConnections.Delete(id);
-        _db.SaveChanges();
+        await _db.RecentConnections.DeleteAsync(id);
+        await _db.SaveChangesAsync();
     }
 
     public void Dispose() => _db.Dispose();

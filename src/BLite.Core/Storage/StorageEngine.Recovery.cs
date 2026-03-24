@@ -11,23 +11,6 @@ public sealed partial class StorageEngine
     {
         return _wal.GetCurrentSize();
     }
-    
-    /// <summary>
-    /// Truncates the WAL file.
-    /// Should only be called after a successful checkpoint.
-    /// </summary>
-    public void TruncateWal()
-    {
-        _wal.Truncate();
-    }
-    
-    /// <summary>
-    /// Flushes the WAL to disk.
-    /// </summary>
-    public void FlushWal()
-    {
-        _wal.Flush();
-    }
 
     /// <summary>
     /// Flushes pending memory-mapped (MMF) writes from the PageFile to the OS kernel buffer.
@@ -44,95 +27,6 @@ public sealed partial class StorageEngine
             foreach (var lazy in _collectionFiles.Values)
                 if (lazy.IsValueCreated) lazy.Value.Flush();
         }
-    }
-    
-    /// <summary>
-    /// Performs a checkpoint: merges WAL into PageFile.
-    /// Uses in-memory WAL index for efficiency and consistency.
-    /// </summary>
-    /// <summary>
-    /// Performs a checkpoint: merges WAL into PageFile.
-    /// Uses in-memory WAL index for efficiency and consistency.
-    /// </summary>
-    /// <summary>
-    /// Opportunistic two-phase checkpoint — NEVER blocks commits.
-    /// <para>
-    /// Phase 1: snapshot walIndex, write pages to PageFiles, flush (no lock held).
-    /// Phase 2: try-acquire _commitLock (zero timeout). If commits are flowing, skip
-    ///          cleanup and let the WAL grow — next quiet moment will clean up.
-    /// </para>
-    /// Only one checkpoint runs at a time; concurrent callers skip immediately.
-    /// </summary>
-    public void Checkpoint()
-    {
-        if (_walIndex.IsEmpty) return;
-        if (Interlocked.CompareExchange(ref _checkpointRunning, 1, 0) != 0) return;
-        try
-        {
-            // Phase 1: Snapshot and write pages to PageFiles (no _commitLock).
-            // Commits can proceed concurrently — they write to WAL and add to _walIndex.
-            var snapshot = _walIndex.ToArray();
-            if (snapshot.Length == 0) return;
-
-            foreach (var kvp in snapshot)
-                GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
-
-            _pageFile.Flush();
-            _indexFile?.Flush();
-            if (_collectionFiles != null)
-            {
-                foreach (var lazy in _collectionFiles.Values)
-                    if (lazy.IsValueCreated) lazy.Value.Flush();
-            }
-
-            // Phase 2: Try to acquire _commitLock without waiting.
-            // If commits are in flight, skip cleanup — the WAL grows, but commits aren't blocked.
-            // Pages are already durable on PageFile; next checkpoint will clean up.
-            if (!_commitLock.Wait(0)) return;
-            try
-            {
-                foreach (var kvp in snapshot)
-                {
-                    if (_walIndex.TryGetValue(kvp.Key, out var current) && ReferenceEquals(current, kvp.Value))
-                        _walIndex.TryRemove(kvp.Key, out _);
-                }
-
-                if (_walIndex.IsEmpty)
-                    _wal.Truncate();
-            }
-            finally
-            {
-                _commitLock.Release();
-            }
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _checkpointRunning, 0);
-        }
-    }
-
-    /// <summary>
-    /// Full checkpoint under _commitLock — used only by BackupAsync where full consistency
-    /// (lock held across checkpoint + file copy) is required.
-    /// </summary>
-    private void CheckpointInternal()
-    {
-        if (_walIndex.IsEmpty)
-            return;
-
-        foreach (var kvp in _walIndex)
-            GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
-
-        _pageFile.Flush();
-        _indexFile?.Flush();
-        if (_collectionFiles != null)
-        {
-            foreach (var lazy in _collectionFiles.Values)
-                if (lazy.IsValueCreated) lazy.Value.Flush();
-        }
-
-        _walIndex.Clear();
-        _wal.Truncate();
     }
 
     /// <summary>
@@ -170,7 +64,7 @@ public sealed partial class StorageEngine
                 }
 
                 if (_walIndex.IsEmpty)
-                    await _wal.TruncateAsync(ct).ConfigureAwait(false);
+                    await _wal.TruncateAsync(ct);
             }
             finally
             {
@@ -189,7 +83,7 @@ public sealed partial class StorageEngine
     /// Strategy (fully safe under concurrent writes):
     /// <list type="number">
     ///   <item>Acquire the commit lock — no new transaction can commit while we work.</item>
-    ///   <item>Checkpoint: merge all committed WAL entries into the PageFile and flush.</item>
+    ///   <item>CheckpointAsync: merge all committed WAL entries into the PageFile and flush.</item>
     ///   <item>Copy the PageFile while holding the lock (no concurrent resize possible).</item>
     ///   <item>Release the lock — normal writes resume.</item>
     /// </list>
@@ -216,16 +110,16 @@ public sealed partial class StorageEngine
             throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationDbPath));
 #endif
 
-        await _commitLock.WaitAsync(ct).ConfigureAwait(false);
+        await _commitLock.WaitAsync(ct);
         try
         {
-            // 1. Checkpoint: push committed WAL pages into the PageFile.
-            CheckpointInternal();
+            // 1. CheckpointAsync: push committed WAL pages into the PageFile.
+            await CheckpointAsync();
 
             // 2. Copy the PageFile. _pageFile.BackupAsync acquires PageFile._lock,
             //    which is safe because no other caller can hold _commitLock + PageFile._lock
             //    simultaneously in the reverse order.
-            await _pageFile.BackupAsync(destinationDbPath, ct).ConfigureAwait(false);
+            await _pageFile.BackupAsync(destinationDbPath, ct);
         }
         finally
         {
@@ -237,9 +131,9 @@ public sealed partial class StorageEngine
     /// Recovers from crash by replaying WAL.
     /// Applies all committed transactions to PageFile, then truncates WAL.
     /// </summary>
-    public void Recover()
+    public async Task RecoverAsync(CancellationToken ct = default)
     {
-        _commitLock.Wait();
+        await _commitLock.WaitAsync();
         try
         {
             // 1. Read WAL and identify committed transactions
@@ -277,8 +171,9 @@ public sealed partial class StorageEngine
             }
             
             // 3. Flush all PageFiles to ensure durability
-            _pageFile.Flush();
-            _indexFile?.Flush();
+            await _pageFile.FlushAsync(ct);
+            if (_indexFile != null)
+                await _indexFile.FlushAsync(ct);
             if (_collectionFiles != null)
             {
                 foreach (var lazy in _collectionFiles.Values)
@@ -289,7 +184,7 @@ public sealed partial class StorageEngine
             _walIndex.Clear();
             
             // 5. Truncate WAL (all changes now in PageFile)
-            _wal.Truncate();
+            await _wal.TruncateAsync(ct);
         }
         finally
         {

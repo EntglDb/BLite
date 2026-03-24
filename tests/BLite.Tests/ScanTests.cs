@@ -27,16 +27,16 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Scan_FindsMatchingDocuments()
+        public async Task Scan_FindsMatchingDocuments()
         {
             // Arrange
-            _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-            _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-            _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-            _db.SaveChanges();
+            await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+            await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+            await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+            await _db.SaveChangesAsync();
 
             // Act: Find users older than 28
-            var results = _db.Users.Scan((BsonReaderPredicate)(reader => ParseAge(reader) > 28)).ToList();
+            var results = await _db.Users.ScanAsync((BsonReaderPredicate)(reader => ParseAge(reader) > 28)).ToListAsync();
 
             // Assert
             Assert.Equal(2, results.Count);
@@ -45,31 +45,31 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Repro_Insert_Loop_Hang()
+        public async Task Repro_Insert_Loop_Hang()
         {
             // Reproduce hang reported by user at 501 documents
             int count = 600;
             for (int i = 0; i < count; i++)
             {
-                _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+                await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
             }
-            _db.SaveChanges();
+            await _db.SaveChangesAsync();
         }
 
         [Fact]
-        public void ParallelScan_FindsMatchingDocuments()
+        public async Task ParallelScan_FindsMatchingDocuments()
         {
             // Arrange
             int count = 1000;
             for (int i = 0; i < count; i++)
             {
-                _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+                await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
             }
-            _db.SaveChanges();
+            await _db.SaveChangesAsync();
 
             // Act: Find users with Age >= 500
             // Parallelism 2 to force partitioning
-            var results = _db.Users.ParallelScan(reader => ParseAge(reader) >= 500, degreeOfParallelism: 2).ToList();
+            var results = await _db.Users.ParallelScanAsync(reader => ParseAge(reader) >= 500, degreeOfParallelism: 2).ToListAsync();
 
             // Assert
             Assert.Equal(500, results.Count);

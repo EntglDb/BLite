@@ -56,7 +56,7 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void MultiFile_CreateCollectionAndInsert_Works()
+    public async Task MultiFile_CreateCollectionAndInsert_Works()
     {
         var dbPath = DbPath("multifile");
         var config = PageFileConfig.Server(dbPath);
@@ -70,16 +70,16 @@ public class StorageMigrationCoverageTests : IDisposable
         
         var doc = col.CreateDocument(["_id", "name", "age"], b =>
             b.AddString("name", "Alice").AddInt32("age", 30));
-        col.Insert(doc);
+        await col.InsertAsync(doc);
 
-        var found = col.FindAll().ToList();
+        var found = (await col.FindAllAsync().ToListAsync());
         Assert.Single(found);
         found[0].TryGetString("name", out var name);
         Assert.Equal("Alice", name);
     }
 
     [Fact]
-    public void MultiFile_MultipleCollections_IndependentFiles()
+    public async Task MultiFile_MultipleCollections_IndependentFiles()
     {
         var dbPath = DbPath("multicol");
         var config = PageFileConfig.Server(dbPath);
@@ -93,14 +93,13 @@ public class StorageMigrationCoverageTests : IDisposable
             var col2 = engine.GetOrCreateCollection("orders");
 
             var doc1 = col1.CreateDocument(["_id", "name"], b => b.AddString("name", "Alice"));
-            col1.Insert(doc1);
+            await col1.InsertAsync(doc1);
 
             var doc2 = col2.CreateDocument(["_id", "item"], b => b.AddString("item", "Widget"));
-            col2.Insert(doc2);
-            engine.Commit();
-
-            Assert.Single(col1.FindAll().ToList());
-            Assert.Single(col2.FindAll().ToList());
+            await col2.InsertAsync(doc2);
+            await engine.CommitAsync();
+            Assert.Single((await col1.FindAllAsync().ToListAsync()));
+            Assert.Single((await col2.FindAllAsync().ToListAsync()));
         }
 
         // Verify collection files exist
@@ -109,7 +108,7 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void MultiFile_Reopen_DataPersisted()
+    public async Task MultiFile_Reopen_DataPersisted()
     {
         var dbPath = DbPath("reopen");
         var config = PageFileConfig.Server(dbPath);
@@ -121,14 +120,14 @@ public class StorageMigrationCoverageTests : IDisposable
         {
             var col = engine.GetOrCreateCollection("items");
             var doc = col.CreateDocument(["_id", "val"], b => b.AddInt32("val", 42));
-            col.Insert(doc);
-            engine.Commit();
+            await col.InsertAsync(doc);
+            await engine.CommitAsync();
         }
 
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("items");
-            var docs = col.FindAll().ToList();
+            var docs = (await col.FindAllAsync().ToListAsync());
             Assert.Single(docs);
             docs[0].TryGetInt32("val", out var val);
             Assert.Equal(42, val);
@@ -136,7 +135,7 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void MultiFile_DropCollection_RemovesFile()
+    public async Task MultiFile_DropCollection_RemovesFile()
     {
         var dbPath = DbPath("dropcol");
         var config = PageFileConfig.Server(dbPath);
@@ -147,7 +146,7 @@ public class StorageMigrationCoverageTests : IDisposable
         using var engine = new BLiteEngine(dbPath, config);
         var col = engine.GetOrCreateCollection("temp");
         var doc = col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1));
-        col.Insert(doc);
+        await col.InsertAsync(doc);
 
         engine.DropCollection("temp");
 
@@ -156,11 +155,11 @@ public class StorageMigrationCoverageTests : IDisposable
         // The drop may not immediately remove the file on all platforms,
         // but re-creating should work regardless
         var col2 = engine.GetOrCreateCollection("temp");
-        Assert.Empty(col2.FindAll().ToList());
+        Assert.Empty((await col2.FindAllAsync().ToListAsync()));
     }
 
     [Fact]
-    public void MultiFile_WithIndex_Works()
+    public async Task MultiFile_WithIndex_Works()
     {
         var dbPath = DbPath("withidx");
         var config = PageFileConfig.Server(dbPath);
@@ -170,18 +169,18 @@ public class StorageMigrationCoverageTests : IDisposable
 
         using var engine = new BLiteEngine(dbPath, config);
         var col = engine.GetOrCreateCollection("items");
-        col.CreateIndex("name", "idx_name");
+        await col.CreateIndexAsync("name", "idx_name");
 
         for (int i = 0; i < 10; i++)
         {
             var doc = col.CreateDocument(["_id", "name", "value"], b =>
                 b.AddString("name", $"item_{i:D2}").AddInt32("value", i));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
 
         // Index file should be used
-        var results = col.QueryIndex("idx_name", "item_05", "item_07");
-        Assert.Equal(3, results.Count());
+        var results = await col.QueryIndexAsync("idx_name", "item_05", "item_07").ToListAsync();
+        Assert.Equal(3, results.Count);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -189,40 +188,40 @@ public class StorageMigrationCoverageTests : IDisposable
     // ══════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void Migration_ToMultiFile_SourceNotFound_Throws()
+    public async Task Migration_ToMultiFile_SourceNotFound_Throws()
     {
         var config = PageFileConfig.Server(DbPath("nonexistent"));
-        Assert.Throws<FileNotFoundException>(() =>
-            BLiteMigration.ToMultiFile(DbPath("nonexistent"), config));
+        await Assert.ThrowsAsync<FileNotFoundException>(async () =>
+            await BLiteMigration.ToMultiFileAsync(DbPath("nonexistent"), config));
     }
 
     [Fact]
-    public void Migration_ToMultiFile_NoMultiFilePaths_Throws()
+    public async Task Migration_ToMultiFile_NoMultiFilePaths_Throws()
     {
         // Create a file first
         var dbPath = DbPath("nomulti");
         using (var engine = new BLiteEngine(dbPath))
         {
             var col = engine.GetOrCreateCollection("test");
-            col.Insert(col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1)));
-            engine.Commit();
+            await col.InsertAsync(col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1)));
+            await engine.CommitAsync();
         }
 
         var config = PageFileConfig.Default;
-        Assert.Throws<InvalidOperationException>(() =>
-            BLiteMigration.ToMultiFile(dbPath, config));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await BLiteMigration.ToMultiFileAsync(dbPath, config));
     }
 
     [Fact]
-    public void Migration_ToSingleFile_SourceNotFound_Throws()
+    public async Task Migration_ToSingleFile_SourceNotFound_Throws()
     {
         var sourceConfig = PageFileConfig.Server(DbPath("nonexistent"));
-        Assert.Throws<FileNotFoundException>(() =>
-            BLiteMigration.ToSingleFile(DbPath("nonexistent"), sourceConfig, DbPath("target")));
+        await Assert.ThrowsAsync<FileNotFoundException>(async () =>
+            await BLiteMigration.ToSingleFileAsync(DbPath("nonexistent"), sourceConfig, DbPath("target")));
     }
 
     [Fact]
-    public void Migration_ToMultiFile_WithMultipleCollections_PreservesData()
+    public async Task Migration_ToMultiFile_WithMultipleCollections_PreservesData()
     {
         var dbPath = DbPath("mig_multi");
         // Create single-file DB with data
@@ -235,49 +234,49 @@ public class StorageMigrationCoverageTests : IDisposable
             {
                 var doc = users.CreateDocument(["_id", "name"], b =>
                     b.AddString("name", $"User{i}"));
-                users.Insert(doc);
+                await users.InsertAsync(doc);
             }
 
             for (int i = 0; i < 3; i++)
             {
                 var doc = orders.CreateDocument(["_id", "item"], b =>
                     b.AddString("item", $"Order{i}"));
-                orders.Insert(doc);
+                await orders.InsertAsync(doc);
             }
-            engine.Commit();
+            await engine.CommitAsync();
         }
 
         var targetConfig = PageFileConfig.Server(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(targetConfig.WalPath!)!);
         Directory.CreateDirectory(targetConfig.CollectionDataDirectory!);
 
-        BLiteMigration.ToMultiFile(dbPath, targetConfig);
+        await BLiteMigration.ToMultiFileAsync(dbPath, targetConfig);
 
         using (var engine = new BLiteEngine(dbPath, targetConfig))
         {
             var users = engine.GetOrCreateCollection("users");
             var orders = engine.GetOrCreateCollection("orders");
-            Assert.Equal(5, users.FindAll().Count());
-            Assert.Equal(3, orders.FindAll().Count());
+            Assert.Equal(5, (await users.FindAllAsync().ToListAsync()).Count);
+            Assert.Equal(3, (await orders.FindAllAsync().ToListAsync()).Count);
         }
     }
 
     [Fact]
-    public void Migration_ToMultiFile_WithKvStore_PreservesData()
+    public async Task Migration_ToMultiFile_WithKvStore_PreservesData()
     {
         var dbPath = DbPath("mig_kv");
         using (var engine = new BLiteEngine(dbPath))
         {
             engine.KvStore.Set("key1", "val1"u8.ToArray());
             engine.KvStore.Set("key2", "val2"u8.ToArray());
-            engine.Commit();
+            await engine.CommitAsync();
         }
 
         var targetConfig = PageFileConfig.Server(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(targetConfig.WalPath!)!);
         Directory.CreateDirectory(targetConfig.CollectionDataDirectory!);
 
-        BLiteMigration.ToMultiFile(dbPath, targetConfig);
+        await BLiteMigration.ToMultiFileAsync(dbPath, targetConfig);
 
         using (var engine = new BLiteEngine(dbPath, targetConfig))
         {
@@ -287,7 +286,7 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Migration_ToSingleFile_Simple()
+    public async Task Migration_ToSingleFile_Simple()
     {
         var dbPath = DbPath("mig_tosingle");
         var targetPath = DbPath("mig_tosingle_out");
@@ -303,22 +302,22 @@ public class StorageMigrationCoverageTests : IDisposable
             for (int i = 0; i < 10; i++)
             {
                 var doc = col.CreateDocument(["_id", "v"], b => b.AddInt32("v", i));
-                col.Insert(doc);
+                await col.InsertAsync(doc);
             }
-            engine.Commit();
+            await engine.CommitAsync();
         }
 
-        BLiteMigration.ToSingleFile(dbPath, multiConfig, targetPath);
+        await BLiteMigration.ToSingleFileAsync(dbPath, multiConfig, targetPath);
 
         using (var engine = new BLiteEngine(targetPath))
         {
             var col = engine.GetOrCreateCollection("items");
-            Assert.Equal(10, col.FindAll().Count());
+            Assert.Equal(10, (await col.FindAllAsync().ToListAsync()).Count);
         }
     }
 
     [Fact]
-    public void Migration_ToSingleFile_InPlace()
+    public async Task Migration_ToSingleFile_InPlace()
     {
         var dbPath = DbPath("mig_inplace");
         var multiConfig = PageFileConfig.Server(dbPath);
@@ -329,17 +328,16 @@ public class StorageMigrationCoverageTests : IDisposable
         {
             var col = engine.GetOrCreateCollection("data");
             var doc = col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 99));
-            col.Insert(doc);
-            engine.Commit();
+            await col.InsertAsync(doc);
+            await engine.CommitAsync();
         }
 
-        BLiteMigration.ToSingleFile(dbPath, multiConfig, dbPath);
-
+        await BLiteMigration.ToSingleFileAsync(dbPath, multiConfig, dbPath);
         // After in-place migration, multi-file components should be cleaned up
         using (var engine = new BLiteEngine(dbPath))
         {
             var col = engine.GetOrCreateCollection("data");
-            var docs = col.FindAll().ToList();
+            var docs = (await col.FindAllAsync().ToListAsync());
             Assert.Single(docs);
             docs[0].TryGetInt32("x", out var x);
             Assert.Equal(99, x);
@@ -347,27 +345,27 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Migration_ToMultiFile_WithSecondaryIndex_RecreatesIndex()
+    public async Task Migration_ToMultiFile_WithSecondaryIndex_RecreatesIndex()
     {
         var dbPath = DbPath("mig_idx");
         using (var engine = new BLiteEngine(dbPath))
         {
             var col = engine.GetOrCreateCollection("items");
-            col.CreateIndex("name", "idx_name");
+            await col.CreateIndexAsync("name", "idx_name");
             for (int i = 0; i < 5; i++)
             {
                 var doc = col.CreateDocument(["_id", "name"], b =>
                     b.AddString("name", $"Item{i}"));
-                col.Insert(doc);
+                await col.InsertAsync(doc);
             }
-            engine.Commit();
+            await engine.CommitAsync();
         }
 
         var targetConfig = PageFileConfig.Server(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(targetConfig.WalPath!)!);
         Directory.CreateDirectory(targetConfig.CollectionDataDirectory!);
 
-        BLiteMigration.ToMultiFile(dbPath, targetConfig);
+        await BLiteMigration.ToMultiFileAsync(dbPath, targetConfig);
 
         using (var engine = new BLiteEngine(dbPath, targetConfig))
         {
@@ -379,7 +377,7 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Migration_RoundTrip_SingleToMultiToSingle_PreservesData()
+    public async Task Migration_RoundTrip_SingleToMultiToSingle_PreservesData()
     {
         var dbPath = DbPath("mig_roundtrip");
         var finalPath = DbPath("mig_roundtrip_final");
@@ -392,25 +390,25 @@ public class StorageMigrationCoverageTests : IDisposable
             {
                 var doc = col.CreateDocument(["_id", "name", "val"], b =>
                     b.AddString("name", $"Item{i}").AddInt32("val", i));
-                col.Insert(doc);
+                await col.InsertAsync(doc);
             }
             engine.KvStore.Set("meta", "test"u8.ToArray());
-            engine.Commit();
+            await engine.CommitAsync();
         }
 
         // Single → Multi
         var multiConfig = PageFileConfig.Server(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(multiConfig.WalPath!)!);
         Directory.CreateDirectory(multiConfig.CollectionDataDirectory!);
-        BLiteMigration.ToMultiFile(dbPath, multiConfig);
+        await BLiteMigration.ToMultiFileAsync(dbPath, multiConfig);
 
         // Multi → Single
-        BLiteMigration.ToSingleFile(dbPath, multiConfig, finalPath);
+        await BLiteMigration.ToSingleFileAsync(dbPath, multiConfig, finalPath);
 
         using (var engine = new BLiteEngine(finalPath))
         {
             var col = engine.GetOrCreateCollection("items");
-            Assert.Equal(20, col.FindAll().Count());
+            Assert.Equal(20, (await col.FindAllAsync().ToListAsync()).Count);
             Assert.Equal("test"u8.ToArray(), engine.KvStore.Get("meta"));
         }
     }
@@ -756,13 +754,13 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void DetectFromFile_ValidDb_ReturnsConfig()
+    public async Task DetectFromFile_ValidDb_ReturnsConfig()
     {
         var dbPath = DbPath("detect");
         using (var engine = new BLiteEngine(dbPath))
         {
             var col = engine.GetOrCreateCollection("test");
-            col.Insert(col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1)));
+            await col.InsertAsync(col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1)));
         }
 
         var config = PageFileConfig.DetectFromFile(dbPath);
@@ -878,13 +876,13 @@ public class StorageMigrationCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Engine_WithConfig_CreatesDb()
+    public async Task Engine_WithConfig_CreatesDb()
     {
         var dbPath = DbPath("withconfig");
         using var engine = new BLiteEngine(dbPath, PageFileConfig.Default);
         var col = engine.GetOrCreateCollection("test");
-        col.Insert(col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1)));
-        Assert.Single(col.FindAll().ToList());
+        await col.InsertAsync(col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1)));
+        Assert.Single((await col.FindAllAsync().ToListAsync()));
     }
 
     // ══════════════════════════════════════════════════════════════════════

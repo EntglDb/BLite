@@ -47,21 +47,21 @@ public class DynamicCollectionTests : IDisposable
     // ─── Name / IdType / IsTimeSeries properties ──────────────────────────────
 
     [Fact]
-    public void Name_ReturnsCollectionName()
+    public async Task Name_ReturnsCollectionName()
     {
         var col = _engine.GetOrCreateCollection("mycol");
         Assert.Equal("mycol", col.Name);
     }
 
     [Fact]
-    public void IdType_DefaultsToObjectId()
+    public async Task IdType_DefaultsToObjectId()
     {
         var col = _engine.GetOrCreateCollection("mycol");
         Assert.Equal(BsonIdType.ObjectId, col.IdType);
     }
 
     [Fact]
-    public void IsTimeSeries_DefaultsFalse()
+    public async Task IsTimeSeries_DefaultsFalse()
     {
         var col = _engine.GetOrCreateCollection("mycol");
         Assert.False(col.IsTimeSeries);
@@ -70,39 +70,39 @@ public class DynamicCollectionTests : IDisposable
     // ─── Insert + FindById ────────────────────────────────────────────────────
 
     [Fact]
-    public void Insert_AutoGenerates_ObjectId()
+    public async Task Insert_AutoGenerates_ObjectId()
     {
         var col = _engine.GetOrCreateCollection("users");
         var doc = MakeDoc("Alice", 30);
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.False(id.IsEmpty);
         Assert.Equal(BsonIdType.ObjectId, id.Type);
     }
 
     [Fact]
-    public void Insert_ExplicitId_PreservesId()
+    public async Task Insert_ExplicitId_PreservesId()
     {
         var col = _engine.GetOrCreateCollection("users");
         var explicitId = new BsonId(ObjectId.NewObjectId());
         var doc = MakeDocWithId(explicitId, "Bob", 25);
 
-        var returned = col.Insert(doc);
-        _engine.Commit();
+        var returned = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.Equal(explicitId, returned);
     }
 
     [Fact]
-    public void FindById_Found_ReturnsDocument()
+    public async Task FindById_Found_ReturnsDocument()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id = col.Insert(MakeDoc("Carol", 28));
-        _engine.Commit();
+        var id = await col.InsertAsync(MakeDoc("Carol", 28));
+        await _engine.CommitAsync();
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
 
         Assert.NotNull(found);
         found.TryGetString("name", out var name);
@@ -110,11 +110,11 @@ public class DynamicCollectionTests : IDisposable
     }
 
     [Fact]
-    public void FindById_NotFound_ReturnsNull()
+    public async Task FindById_NotFound_ReturnsNull()
     {
         var col = _engine.GetOrCreateCollection("users");
 
-        var found = col.FindById(new BsonId(ObjectId.NewObjectId()));
+        var found = await col.FindByIdAsync(new BsonId(ObjectId.NewObjectId()));
 
         Assert.Null(found);
     }
@@ -122,65 +122,69 @@ public class DynamicCollectionTests : IDisposable
     // ─── FindAll + Count ──────────────────────────────────────────────────────
 
     [Fact]
-    public void FindAll_ReturnsAllInsertedDocuments()
+    public async Task FindAll_ReturnsAllInsertedDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("Alice", 30));
-        col.Insert(MakeDoc("Bob", 25));
-        col.Insert(MakeDoc("Carol", 35));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await col.InsertAsync(MakeDoc("Bob", 25));
+        await col.InsertAsync(MakeDoc("Carol", 35));
+        await _engine.CommitAsync();
 
-        var all = col.FindAll().ToList();
+        IEnumerable<BsonDocument> all = [];
+        await foreach (var doc in col.FindAllAsync())
+        {
+            all = all.Append(doc);
+        }
 
-        Assert.Equal(3, all.Count);
+        Assert.Equal(3, all.Count());
     }
 
     [Fact]
-    public void Count_ReturnsCorrectCount()
+    public async Task Count_ReturnsCorrectCount()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("Alice", 30));
-        col.Insert(MakeDoc("Bob", 25));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await col.InsertAsync(MakeDoc("Bob", 25));
+        await _engine.CommitAsync();
 
-        Assert.Equal(2, col.Count());
+        Assert.Equal(2, await col.CountAsync());
     }
 
     [Fact]
-    public void Count_EmptyCollection_ReturnsZero()
+    public async Task Count_EmptyCollection_ReturnsZero()
     {
         var col = _engine.GetOrCreateCollection("empty");
-        Assert.Equal(0, col.Count());
+        Assert.Equal(0, await col.CountAsync());
     }
 
-    // ─── Update ───────────────────────────────────────────────────────────────
+    // ─── UpdateAsync ───────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Update_ReplacesDocument()
+    public async Task Update_ReplacesDocument()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id = col.Insert(MakeDoc("Alice", 30));
-        _engine.Commit();
+        var id = await col.InsertAsync(MakeDoc("Alice", 30));
+        await _engine.CommitAsync();
 
         var updated = MakeDocWithId(id, "Alice", 31);
-        var result = col.Update(id, updated);
-        _engine.Commit();
+        var result = await col.UpdateAsync(id, updated);
+        await _engine.CommitAsync();
 
         Assert.True(result);
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         found.TryGetInt32("age", out int age);
         Assert.Equal(31, age);
     }
 
     [Fact]
-    public void Update_NonExistent_ReturnsFalse()
+    public async Task Update_NonExistent_ReturnsFalse()
     {
         var col = _engine.GetOrCreateCollection("users");
         var ghostId = new BsonId(ObjectId.NewObjectId());
         var doc = MakeDocWithId(ghostId, "Ghost", 99);
 
-        var result = col.Update(ghostId, doc);
+        var result = await col.UpdateAsync(ghostId, doc);
 
         Assert.False(result);
     }
@@ -188,26 +192,26 @@ public class DynamicCollectionTests : IDisposable
     // ─── Delete ───────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Delete_RemovesDocument()
+    public async Task Delete_RemovesDocument()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id = col.Insert(MakeDoc("Alice", 30));
-        _engine.Commit();
+        var id = await col.InsertAsync(MakeDoc("Alice", 30));
+        await _engine.CommitAsync();
 
-        var removed = col.Delete(id);
-        _engine.Commit();
+        var removed = await col.DeleteAsync(id);
+        await _engine.CommitAsync();
 
         Assert.True(removed);
-        Assert.Null(col.FindById(id));
+        Assert.Null(await col.FindByIdAsync(id));
     }
 
     [Fact]
-    public void Delete_NonExistent_ReturnsFalse()
+    public async Task Delete_NonExistent_ReturnsFalse()
     {
         var col = _engine.GetOrCreateCollection("users");
         var ghostId = new BsonId(ObjectId.NewObjectId());
 
-        var result = col.Delete(ghostId);
+        var result = await col.DeleteAsync(ghostId);
 
         Assert.False(result);
     }
@@ -215,17 +219,17 @@ public class DynamicCollectionTests : IDisposable
     // ─── InsertBulk ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void InsertBulk_ReturnsCorrectIdsAndAllDocumentsSaved()
+    public async Task InsertBulk_ReturnsCorrectIdsAndAllDocumentsSaved()
     {
         var col = _engine.GetOrCreateCollection("users");
         var docs = Enumerable.Range(1, 5).Select(i => MakeDoc($"User{i}", i * 10)).ToList();
 
-        var ids = col.InsertBulk(docs);
-        _engine.Commit();
+        var ids = await col.InsertBulkAsync(docs);
+        await _engine.CommitAsync();
 
         Assert.Equal(5, ids.Count);
         Assert.All(ids, id => Assert.False(id.IsEmpty));
-        Assert.Equal(5, col.Count());
+        Assert.Equal(5, await col.CountAsync());
     }
 
     [Fact]
@@ -235,33 +239,35 @@ public class DynamicCollectionTests : IDisposable
         var docs = Enumerable.Range(1, 4).Select(i => MakeDoc($"Async{i}", i * 5)).ToList();
 
         var ids = await col.InsertBulkAsync(docs);
-        _engine.Commit();
+        await _engine.CommitAsync();
 
         Assert.Equal(4, ids.Count);
-        Assert.Equal(4, col.Count());
+        Assert.Equal(4, await col.CountAsync());
     }
 
     // ─── UpdateBulk ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void UpdateBulk_UpdatesMultipleDocuments()
+    public async Task UpdateBulk_UpdatesMultipleDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id1 = col.Insert(MakeDoc("Alice", 30));
-        var id2 = col.Insert(MakeDoc("Bob", 25));
-        _engine.Commit();
+        var id1 = await col.InsertAsync(MakeDoc("Alice", 30));
+        var id2 = await col.InsertAsync(MakeDoc("Bob", 25));
+        await _engine.CommitAsync();
 
         var updates = new[]
         {
             (id1, MakeDocWithId(id1, "Alice", 31)),
             (id2, MakeDocWithId(id2, "Bob", 26))
         };
-        var count = col.UpdateBulk(updates);
-        _engine.Commit();
+        var count = await col.UpdateBulkAsync(updates);
+        await _engine.CommitAsync();
 
         Assert.Equal(2, count);
-        col.FindById(id1)!.TryGetInt32("age", out int age1);
-        col.FindById(id2)!.TryGetInt32("age", out int age2);
+        var doc1 = await col.FindByIdAsync(id1);
+        var doc2 = await col.FindByIdAsync(id2);
+        doc1!.TryGetInt32("age", out int age1);
+        doc2!.TryGetInt32("age", out int age2);
         Assert.Equal(31, age1);
         Assert.Equal(26, age2);
     }
@@ -270,9 +276,9 @@ public class DynamicCollectionTests : IDisposable
     public async Task UpdateBulkAsync_UpdatesMultipleDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id1 = col.Insert(MakeDoc("Alice", 30));
-        var id2 = col.Insert(MakeDoc("Bob", 25));
-        _engine.Commit();
+        var id1 = await col.InsertAsync(MakeDoc("Alice", 30));
+        var id2 = await col.InsertAsync(MakeDoc("Bob", 25));
+        await _engine.CommitAsync();
 
         var updates = new[]
         {
@@ -280,62 +286,65 @@ public class DynamicCollectionTests : IDisposable
             (id2, MakeDocWithId(id2, "Bob", 88))
         };
         var count = await col.UpdateBulkAsync(updates);
-        _engine.Commit();
+        await _engine.CommitAsync();
 
         Assert.Equal(2, count);
-        col.FindById(id1)!.TryGetInt32("age", out int age1);
+        var doc1 = await col.FindByIdAsync(id1);
+        doc1!.TryGetInt32("age", out int age1);
         Assert.Equal(99, age1);
     }
 
     // ─── DeleteBulk ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void DeleteBulk_DeletesMultipleDocuments()
+    public async Task DeleteBulk_DeletesMultipleDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id1 = col.Insert(MakeDoc("Alice", 30));
-        var id2 = col.Insert(MakeDoc("Bob", 25));
-        var id3 = col.Insert(MakeDoc("Carol", 35));
-        _engine.Commit();
+        var id1 = await col.InsertAsync(MakeDoc("Alice", 30));
+        var id2 = await col.InsertAsync(MakeDoc("Bob", 25));
+        var id3 = await col.InsertAsync(MakeDoc("Carol", 35));
+        await _engine.CommitAsync();
 
-        var deleted = col.DeleteBulk([id1, id2]);
-        _engine.Commit();
+        var deleted = await col.DeleteBulkAsync([id1, id2]);
+        await _engine.CommitAsync();
 
         Assert.Equal(2, deleted);
-        Assert.Equal(1, col.Count());
+        Assert.Equal(1, await col.CountAsync());
     }
 
     [Fact]
     public async Task DeleteBulkAsync_DeletesMultipleDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id1 = col.Insert(MakeDoc("Alice", 30));
-        var id2 = col.Insert(MakeDoc("Bob", 25));
-        _engine.Commit();
+        var id1 = await col.InsertAsync(MakeDoc("Alice", 30));
+        var id2 = await col.InsertAsync(MakeDoc("Bob", 25));
+        await _engine.CommitAsync();
 
         var deleted = await col.DeleteBulkAsync([id1, id2]);
-        _engine.Commit();
+        await _engine.CommitAsync();
 
         Assert.Equal(2, deleted);
-        Assert.Equal(0, col.Count());
+        Assert.Equal(0, await col.CountAsync());
     }
 
     // ─── Find + FindAsync predicate ───────────────────────────────────────────
 
     [Fact]
-    public void Find_Predicate_FiltersCorrectly()
+    public async Task Find_Predicate_FiltersCorrectly()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("Alice", 30));
-        col.Insert(MakeDoc("Bob", 25));
-        col.Insert(MakeDoc("Carol", 35));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await col.InsertAsync(MakeDoc("Bob", 25));
+        await col.InsertAsync(MakeDoc("Carol", 35));
+        await _engine.CommitAsync();
 
-        var results = col.Find(doc =>
+        var results = new List<BsonDocument>();
+        await foreach (var doc in col.FindAsync(d =>
         {
-            doc.TryGetInt32("age", out int age);
+            d.TryGetInt32("age", out int age);
             return age >= 30;
-        }).ToList();
+        }))
+            results.Add(doc);
 
         Assert.Equal(2, results.Count);
     }
@@ -344,10 +353,10 @@ public class DynamicCollectionTests : IDisposable
     public async Task FindAsync_Predicate_FiltersCorrectly()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("Alice", 30));
-        col.Insert(MakeDoc("Bob", 25));
-        col.Insert(MakeDoc("Carol", 35));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await col.InsertAsync(MakeDoc("Bob", 25));
+        await col.InsertAsync(MakeDoc("Carol", 35));
+        await _engine.CommitAsync();
 
         var results = new List<BsonDocument>();
         await foreach (var doc in col.FindAsync(d =>
@@ -365,78 +374,78 @@ public class DynamicCollectionTests : IDisposable
     // ─── Scan predicate ───────────────────────────────────────────────────────
 
     [Fact]
-    public void Scan_Predicate_ReturnsAllWhenAlwaysTrue()
+    public async Task Scan_Predicate_ReturnsAllWhenAlwaysTrue()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("Alice", 30));
-        col.Insert(MakeDoc("Bob", 25));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await col.InsertAsync(MakeDoc("Bob", 25));
+        await _engine.CommitAsync();
 
-        var results = col.Scan((BsonReaderPredicate)(_ => true)).ToList();
+        var results = await col.ScanAsync((BsonReaderPredicate)(_ => true)).ToListAsync();
 
         Assert.Equal(2, results.Count);
     }
 
     [Fact]
-    public void Scan_Predicate_ReturnsNoneWhenAlwaysFalse()
+    public async Task Scan_Predicate_ReturnsNoneWhenAlwaysFalse()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("Alice", 30));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await _engine.CommitAsync();
 
-        var results = col.Scan((BsonReaderPredicate)(_ => false)).ToList();
+        var results = await col.ScanAsync((BsonReaderPredicate)(_ => false)).ToListAsync();
 
         Assert.Empty(results);
     }
 
-    // ─── CreateIndex + QueryIndex ─────────────────────────────────────────────
+    // ─── CreateIndexAsync + QueryIndex ─────────────────────────────────────────────
 
     [Fact]
-    public void CreateIndex_ThenQueryByRange_ReturnsMatchingDocuments()
+    public async Task CreateIndex_ThenQueryByRange_ReturnsMatchingDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        _engine.GetOrCreateCollection("users").CreateIndex("age", name: "idx_age");
-        col.Insert(MakeDoc("Alice", 30));
-        col.Insert(MakeDoc("Bob", 25));
-        col.Insert(MakeDoc("Carol", 35));
-        _engine.Commit();
+        await _engine.GetOrCreateCollection("users").CreateIndexAsync("age", name: "idx_age");
+        await col.InsertAsync(MakeDoc("Alice", 30));
+        await col.InsertAsync(MakeDoc("Bob", 25));
+        await col.InsertAsync(MakeDoc("Carol", 35));
+        await _engine.CommitAsync();
 
-        var results = col.QueryIndex("idx_age", 25, 30).ToList();
+        var results = await col.QueryIndexAsync("idx_age", 25, 30).ToListAsync();
 
         Assert.Equal(2, results.Count);
     }
 
     [Fact]
-    public void QueryIndex_Nonexistent_ThrowsArgumentException()
+    public async Task QueryIndex_Nonexistent_ThrowsArgumentException()
     {
         var col = _engine.GetOrCreateCollection("users");
 
-        Assert.Throws<ArgumentException>(() => col.QueryIndex("ghost_idx", null, null).ToList());
+        await Assert.ThrowsAsync<ArgumentException>(async () => await col.QueryIndexAsync("ghost_idx", null, null).ToListAsync());
     }
 
     [Fact]
-    public void QueryIndex_VectorIndex_ThrowsInvalidOperationException()
+    public async Task QueryIndex_VectorIndex_ThrowsInvalidOperationException()
     {
         var col = _engine.GetOrCreateCollection("vectors");
-        col.CreateVectorIndex("embedding", dimensions: 4, name: "idx_vec");
+        await col.CreateVectorIndexAsync("embedding", dimensions: 4, name: "idx_vec");
 
-        Assert.Throws<InvalidOperationException>(() => col.QueryIndex("idx_vec", null, null).ToList());
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await col.QueryIndexAsync("idx_vec", null, null).ToListAsync());
     }
 
     [Fact]
-    public void ListIndexes_ContainsCreatedIndex()
+    public async Task ListIndexes_ContainsCreatedIndex()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.CreateIndex("age", name: "idx_age");
+        await col.CreateIndexAsync("age", name: "idx_age");
 
         Assert.Contains("idx_age", col.ListIndexes());
     }
 
     [Fact]
-    public void DropIndex_CreatedIndex_ReturnsTrue()
+    public async Task DropIndex_CreatedIndex_ReturnsTrue()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.CreateIndex("age", name: "idx_age");
+        await col.CreateIndexAsync("age", name: "idx_age");
 
         var dropped = col.DropIndex("idx_age");
 
@@ -445,7 +454,7 @@ public class DynamicCollectionTests : IDisposable
     }
 
     [Fact]
-    public void DropIndex_NonExistent_ReturnsFalse()
+    public async Task DropIndex_NonExistent_ReturnsFalse()
     {
         var col = _engine.GetOrCreateCollection("users");
 
@@ -457,7 +466,7 @@ public class DynamicCollectionTests : IDisposable
     // ─── GetTimeSeriesConfig ──────────────────────────────────────────────────
 
     [Fact]
-    public void GetTimeSeriesConfig_OnNonTimeSeries_ReturnsDefaults()
+    public async Task GetTimeSeriesConfig_OnNonTimeSeries_ReturnsDefaults()
     {
         var col = _engine.GetOrCreateCollection("users");
 
@@ -470,7 +479,7 @@ public class DynamicCollectionTests : IDisposable
     // ─── SetTimeSeries ────────────────────────────────────────────────────────
 
     [Fact]
-    public void SetTimeSeries_SetsIsTimeSeriesTrue()
+    public async Task SetTimeSeries_SetsIsTimeSeriesTrue()
     {
         var col = _engine.GetOrCreateCollection("sensors");
         col.SetTimeSeries("timestamp", TimeSpan.FromDays(7));
@@ -479,7 +488,7 @@ public class DynamicCollectionTests : IDisposable
     }
 
     [Fact]
-    public void SetTimeSeries_GetTimeSeriesConfig_ReturnsConfiguredValues()
+    public async Task SetTimeSeries_GetTimeSeriesConfig_ReturnsConfiguredValues()
     {
         var col = _engine.GetOrCreateCollection("sensors");
         col.SetTimeSeries("ts", TimeSpan.FromHours(24));
@@ -490,49 +499,49 @@ public class DynamicCollectionTests : IDisposable
         Assert.True(retention > 0);
     }
 
-    // ─── ForcePrune ───────────────────────────────────────────────────────────
+    // ─── ForcePruneAsync ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void ForcePrune_OnNonTimeSeries_ThrowsInvalidOperationException()
+    public async Task ForcePrune_OnNonTimeSeries_ThrowsInvalidOperationException()
     {
         var col = _engine.GetOrCreateCollection("users");
 
-        Assert.Throws<InvalidOperationException>(() => col.ForcePrune());
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await col.ForcePruneAsync());
     }
 
     // ─── CreateDocument ───────────────────────────────────────────────────────
 
     [Fact]
-    public void CreateDocument_RegistersKeys_CanBeInserted()
+    public async Task CreateDocument_RegistersKeys_CanBeInserted()
     {
         var col = _engine.GetOrCreateCollection("products");
         var doc = col.CreateDocument(["sku", "price"], b => b
             .AddString("sku", "ABC-123")
             .AddInt32("price", 99));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.False(id.IsEmpty);
-        Assert.Equal(1, col.Count());
+        Assert.Equal(1, await col.CountAsync());
     }
 
     // ─── Persistence ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void Persistence_InsertThenReopen_FindByIdStillWorks()
+    public async Task Persistence_InsertThenReopen_FindByIdStillWorks()
     {
         BsonId savedId;
         {
             var col = _engine.GetOrCreateCollection("users");
-            savedId = col.Insert(MakeDoc("Persistent", 42));
-            _engine.Commit();
+            savedId = await col.InsertAsync(MakeDoc("Persistent", 42));
+            await _engine.CommitAsync();
             _engine.Dispose();
         }
 
         using var engine2 = new BLiteEngine(_dbPath);
         var col2 = engine2.GetOrCreateCollection("users");
-        var doc = col2.FindById(savedId);
+        var doc = await col2.FindByIdAsync(savedId);
 
         Assert.NotNull(doc);
         doc.TryGetString("name", out var name);
@@ -542,18 +551,18 @@ public class DynamicCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Persistence_BulkInsert_DataSurvivesRestart()
+    public async Task Persistence_BulkInsert_DataSurvivesRestart()
     {
         {
             var col = _engine.GetOrCreateCollection("logs");
-            col.InsertBulk(Enumerable.Range(1, 10).Select(i => MakeDoc($"log{i}", i)));
-            _engine.Commit();
+            await col.InsertBulkAsync(Enumerable.Range(1, 10).Select(i => MakeDoc($"log{i}", i)));
+            await _engine.CommitAsync();
             _engine.Dispose();
         }
 
         using var engine2 = new BLiteEngine(_dbPath);
         var col2 = engine2.GetOrCreateCollection("logs");
-        Assert.Equal(10, col2.Count());
+        Assert.Equal(10, await col2.CountAsync());
 
         _engine = engine2;
     }
@@ -564,10 +573,10 @@ public class DynamicCollectionTests : IDisposable
     public async Task FindAllAsync_ReturnsAllInsertedDocuments()
     {
         var col = _engine.GetOrCreateCollection("users");
-        col.Insert(MakeDoc("A", 1));
-        col.Insert(MakeDoc("B", 2));
-        col.Insert(MakeDoc("C", 3));
-        _engine.Commit();
+        await col.InsertAsync(MakeDoc("A", 1));
+        await col.InsertAsync(MakeDoc("B", 2));
+        await col.InsertAsync(MakeDoc("C", 3));
+        await _engine.CommitAsync();
 
         var results = new List<BsonDocument>();
         await foreach (var doc in col.FindAllAsync())
@@ -576,20 +585,21 @@ public class DynamicCollectionTests : IDisposable
         Assert.Equal(3, results.Count);
     }
 
-    // ─── Async Update + Delete ────────────────────────────────────────────────
+    // ─── Async UpdateAsync + Delete ────────────────────────────────────────────────
 
     [Fact]
     public async Task UpdateAsync_ReplacesDocument()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id = col.Insert(MakeDoc("Alice", 30));
-        _engine.Commit();
+        var id = await col.InsertAsync(MakeDoc("Alice", 30));
+        await _engine.CommitAsync();
 
         var updated = await col.UpdateAsync(id, MakeDocWithId(id, "Alice", 99));
-        _engine.Commit();
+        await _engine.CommitAsync();
 
         Assert.True(updated);
-        col.FindById(id)!.TryGetInt32("age", out int age);
+        var doc = await col.FindByIdAsync(id);
+        doc!.TryGetInt32("age", out int age);
         Assert.Equal(99, age);
     }
 
@@ -597,13 +607,13 @@ public class DynamicCollectionTests : IDisposable
     public async Task DeleteAsync_RemovesDocument()
     {
         var col = _engine.GetOrCreateCollection("users");
-        var id = col.Insert(MakeDoc("Alice", 30));
-        _engine.Commit();
+        var id = await col.InsertAsync(MakeDoc("Alice", 30));
+        await _engine.CommitAsync();
 
         var removed = await col.DeleteAsync(id);
-        _engine.Commit();
+        await _engine.CommitAsync();
 
         Assert.True(removed);
-        Assert.Null(col.FindById(id));
+        Assert.Null(await col.FindByIdAsync(id));
     }
 }

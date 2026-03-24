@@ -315,7 +315,7 @@ internal class RTreeIndex : IDisposable
 
                 _rootPageId = newRootId;
                 
-                // Update parent pointers
+                // UpdateAsync parent pointers
                 UpdateParentPointer(pageId, newRootId, transaction);
                 UpdateParentPointer(newPageId, newRootId, transaction);
             }

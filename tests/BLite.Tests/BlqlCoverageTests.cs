@@ -22,7 +22,7 @@ public class BlqlCoverageTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"blql_cov_{Guid.NewGuid()}.db");
         _engine = new BLiteEngine(_dbPath);
         _col = _engine.GetOrCreateCollection("items");
-        SeedData();
+        SeedData().GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -37,21 +37,21 @@ public class BlqlCoverageTests : IDisposable
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
-    private void SeedData()
+    private async Task SeedData()
     {
-        InsertFull("Alice", 30, "active", "admin", "alice@example.com",
+        await InsertFull("Alice", 30, "active", "admin", "alice@example.com",
             new DateTime(2024, 1, 10), new[] { "c#", "go" }, 100);
-        InsertFull("Bob", 25, "inactive", "user", null,
+        await InsertFull("Bob", 25, "inactive", "user", null,
             new DateTime(2024, 2, 5), new[] { "python" }, 200);
-        InsertFull("Charlie", 35, "active", "mod", "charlie@x.com",
+        await InsertFull("Charlie", 35, "active", "mod", "charlie@x.com",
             new DateTime(2024, 3, 1), new[] { "c#", "rust", "go" }, 300);
-        InsertFull("Diana", 28, "active", "user", "diana@x.com",
+        await InsertFull("Diana", 28, "active", "user", "diana@x.com",
             new DateTime(2024, 4, 15), new[] { "java" }, 150);
-        InsertFull("Eve", 22, "banned", "user", "eve@x.com",
+        await InsertFull("Eve", 22, "banned", "user", "eve@x.com",
             new DateTime(2024, 5, 20), Array.Empty<string>(), 50);
     }
 
-    private void InsertFull(string name, int age, string status, string role,
+    private async Task InsertFull(string name, int age, string status, string role,
         string? email, DateTime createdAt, string[] tags, long score)
     {
         var doc = _col.CreateDocument(
@@ -67,7 +67,7 @@ public class BlqlCoverageTests : IDisposable
                 if (email != null) b.AddString("email", email);
                 b.Add("tags", BsonValue.FromArray(tags.Select(BsonValue.FromString).ToList()));
             });
-        _col.Insert(doc);
+        await _col.InsertAsync(doc);
     }
 
     private static string GetName(BsonDocument doc)
@@ -928,7 +928,7 @@ public class BlqlCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Sort_ToComparison_SortsCorrectly()
+    public async Task Sort_ToComparison_SortsCorrectly()
     {
         var sort = BlqlSort.Ascending("age");
         var docs = _col.Query().Sort(sort).ToList();

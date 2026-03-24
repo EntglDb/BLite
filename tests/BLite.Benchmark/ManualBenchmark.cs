@@ -28,9 +28,10 @@ public class ManualBenchmark
         Log("1. Batch Insert (1000 CustomerOrders)");
 
         long Measure(Action action) { sw.Restart(); action(); sw.Stop(); return sw.ElapsedMilliseconds; }
+        long MeasureAsync(Func<Task> action) { sw.Restart(); action().GetAwaiter().GetResult(); sw.Stop(); return sw.ElapsedMilliseconds; }
 
         var b1 = new InsertBenchmarks(); b1.Setup(); b1.IterationSetup();
-        var bliteBatch = Measure(b1.BLite_Insert_Batch);
+        var bliteBatch = MeasureAsync(b1.BLite_Insert_Batch);
         Log($"   BLite:        {bliteBatch} ms");
 
         var b2 = new InsertBenchmarks(); b2.Setup(); b2.IterationSetup();
@@ -55,7 +56,7 @@ public class ManualBenchmark
         Log("2. Single Insert");
 
         var s1 = new InsertBenchmarks(); s1.Setup(); s1.IterationSetup();
-        var bliteSingle = Measure(s1.BLite_Insert_Single);
+        var bliteSingle = MeasureAsync(s1.BLite_Insert_Single);
         Log($"   BLite:        {bliteSingle} ms");
 
         var s2 = new InsertBenchmarks(); s2.Setup(); s2.IterationSetup();
@@ -79,10 +80,10 @@ public class ManualBenchmark
         // ── FindById (1000 ops) ─────────────────────────────────────
         Log("3. FindById Performance (1000 operations over 1000 documents)");
         var r = new ReadBenchmarks();
-        r.Setup();
+        r.Setup().GetAwaiter().GetResult();
 
         sw.Restart();
-        for (int i = 0; i < 1000; i++) r.BLite_FindById();
+        for (int i = 0; i < 1000; i++) r.BLite_FindById().GetAwaiter().GetResult();
         var bliteRead = sw.ElapsedMilliseconds;
         Log($"   BLite:        {bliteRead} ms  ({bliteRead / 1000.0:F3} ms/op)");
 
@@ -110,7 +111,7 @@ public class ManualBenchmark
         Log("4. Scan by Status = \"shipped\" (~250 results, 100 operations)");
 
         sw.Restart();
-        for (int i = 0; i < 100; i++) r.BLite_Scan();
+        for (int i = 0; i < 100; i++) r.BLite_Scan().GetAwaiter().GetResult();
         var bliteScan = sw.ElapsedMilliseconds;
         Log($"   BLite:        {bliteScan} ms  ({bliteScan / 100.0:F1} ms/op)");
 
@@ -141,31 +142,31 @@ public class ManualBenchmark
         // ════════════════════════════════════════════════════════════
         Log("── OLAP Analytical Operations (10 000 documents) ──────────────────────────\n");
         var olap = new OlapBenchmarks();
-        olap.Setup();
+        olap.Setup().GetAwaiter().GetResult();
 
         Log("5. Aggregate – SUM / AVG / COUNT");
-        var oBliteAgg  = Measure(() => { olap.BLite_Aggregate(); });  Log($"   BLite:        {oBliteAgg} ms");
+        var oBliteAgg  = MeasureAsync(() => olap.BLite_Aggregate());  Log($"   BLite:        {oBliteAgg} ms");
         var oLiteAgg   = Measure(() => { olap.LiteDb_Aggregate(); }); Log($"   LiteDB:       {oLiteAgg} ms");
         var oSqlAgg    = Measure(() => { olap.Sqlite_Aggregate(); }); Log($"   SQLite+JSON:  {oSqlAgg} ms");
         var oCblAgg    = Measure(() => { olap.CBL_Aggregate(); });    Log($"   CouchbaseLite:{oCblAgg} ms");
         var oDuckAgg   = Measure(() => { olap.DuckDB_Aggregate(); }); Log($"   DuckDB:       {oDuckAgg} ms\n");
 
         Log("6. GroupBy Status – COUNT + SUM(Total)");
-        var oBliteGrp  = Measure(() => { olap.BLite_GroupBy(); });    Log($"   BLite:        {oBliteGrp} ms");
+        var oBliteGrp  = MeasureAsync(() => olap.BLite_GroupBy());    Log($"   BLite:        {oBliteGrp} ms");
         var oLiteGrp   = Measure(() => { olap.LiteDb_GroupBy(); });   Log($"   LiteDB:       {oLiteGrp} ms");
         var oSqlGrp    = Measure(() => { olap.Sqlite_GroupBy(); });   Log($"   SQLite+JSON:  {oSqlGrp} ms");
         var oCblGrp    = Measure(() => { olap.CBL_GroupBy(); });      Log($"   CouchbaseLite:{oCblGrp} ms");
         var oDuckGrp   = Measure(() => { olap.DuckDB_GroupBy(); });   Log($"   DuckDB:       {oDuckGrp} ms\n");
 
         Log("7. Range Filter – Total > 4000 (~top 25 %)");
-        var oBliteRng  = Measure(() => { olap.BLite_Range(); });      Log($"   BLite:        {oBliteRng} ms");
+        var oBliteRng  = MeasureAsync(() => olap.BLite_Range());      Log($"   BLite:        {oBliteRng} ms");
         var oLiteRng   = Measure(() => { olap.LiteDb_Range(); });     Log($"   LiteDB:       {oLiteRng} ms");
         var oSqlRng    = Measure(() => { olap.Sqlite_Range(); });     Log($"   SQLite+JSON:  {oSqlRng} ms");
         var oCblRng    = Measure(() => { olap.CBL_Range(); });        Log($"   CouchbaseLite:{oCblRng} ms");
         var oDuckRng   = Measure(() => { olap.DuckDB_Range(); });     Log($"   DuckDB:       {oDuckRng} ms\n");
 
         Log("8. Top-10 by Total DESC");
-        var oBliteTop  = Measure(() => { olap.BLite_TopN(); });       Log($"   BLite:        {oBliteTop} ms");
+        var oBliteTop  = MeasureAsync(() => olap.BLite_TopN());       Log($"   BLite:        {oBliteTop} ms");
         var oLiteTop   = Measure(() => { olap.LiteDb_TopN(); });      Log($"   LiteDB:       {oLiteTop} ms");
         var oSqlTop    = Measure(() => { olap.Sqlite_TopN(); });      Log($"   SQLite+JSON:  {oSqlTop} ms");
         var oCblTop    = Measure(() => { olap.CBL_TopN(); });         Log($"   CouchbaseLite:{oCblTop} ms");

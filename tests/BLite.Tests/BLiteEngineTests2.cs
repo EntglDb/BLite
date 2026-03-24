@@ -71,18 +71,18 @@ public class BLiteEngineTests2 : IDisposable
         Assert.Null(found);
     }
 
-    // ─── Async Update ─────────────────────────────────────────────────────────
+    // ─── Async UpdateAsync ─────────────────────────────────────────────────────────
 
     [Fact]
     public async Task UpdateAsync_ReplacesDocument()
     {
-        var id = _engine.Insert("col", MakeDoc("Alice", 30));
+        var id = await _engine.InsertAsync("col", MakeDoc("Alice", 30));
         var updated = MakeDoc("Alice", 99);
 
         var result = await _engine.UpdateAsync("col", id, updated);
 
         Assert.True(result);
-        var found = _engine.FindById("col", id);
+        var found = await _engine.FindByIdAsync("col", id);
         found!.TryGetInt32("age", out int age);
         Assert.Equal(99, age);
     }
@@ -100,12 +100,13 @@ public class BLiteEngineTests2 : IDisposable
     [Fact]
     public async Task DeleteAsync_RemovesDocument()
     {
-        var id = _engine.Insert("col", MakeDoc("Alice", 30));
+        var id = await _engine.InsertAsync("col", MakeDoc("Alice", 30));
 
         var removed = await _engine.DeleteAsync("col", id);
 
         Assert.True(removed);
-        Assert.Null(_engine.FindById("col", id));
+        var found = await _engine.FindByIdAsync("col", id);
+        Assert.Null(found);
     }
 
     [Fact]
@@ -120,9 +121,9 @@ public class BLiteEngineTests2 : IDisposable
     [Fact]
     public async Task FindAllAsync_ReturnsAllDocuments()
     {
-        _engine.Insert("col", MakeDoc("Alice", 30));
-        _engine.Insert("col", MakeDoc("Bob", 25));
-        _engine.Insert("col", MakeDoc("Carol", 35));
+        await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        await _engine.InsertAsync("col", MakeDoc("Bob", 25));
+        await _engine.InsertAsync("col", MakeDoc("Carol", 35));
 
         var results = new List<BsonDocument>();
         await foreach (var doc in _engine.FindAllAsync("col"))
@@ -134,12 +135,11 @@ public class BLiteEngineTests2 : IDisposable
     // ─── InsertBulk + InsertBulkAsync ─────────────────────────────────────────
 
     [Fact]
-    public void InsertBulk_ReturnsAllIds()
+    public async Task InsertBulk_ReturnsAllIds()
     {
         var docs = Enumerable.Range(1, 4).Select(i => MakeDoc($"User{i}", i * 10)).ToList();
 
-        var ids = _engine.InsertBulk("col", docs);
-
+        var ids = await _engine.InsertBulkAsync("col", docs);
         Assert.Equal(4, ids.Count);
         Assert.All(ids, id => Assert.False(id.IsEmpty));
     }
@@ -158,26 +158,25 @@ public class BLiteEngineTests2 : IDisposable
     // ─── Find + FindAsync (predicate) ─────────────────────────────────────────
 
     [Fact]
-    public void Find_Predicate_FiltersCorrectly()
+    public async Task Find_Predicate_FiltersCorrectly()
     {
-        _engine.Insert("col", MakeDoc("Alice", 30));
-        _engine.Insert("col", MakeDoc("Bob", 25));
-        _engine.Insert("col", MakeDoc("Carol", 35));
+        await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        await _engine.InsertAsync("col", MakeDoc("Bob", 25));
+        await _engine.InsertAsync("col", MakeDoc("Carol", 35));
 
-        var results = _engine.Find("col", doc =>
+        var results = await _engine.FindAsync("col", doc =>
         {
             doc.TryGetInt32("age", out int age);
             return age >= 30;
-        }).ToList();
-
+        }).ToListAsync();
         Assert.Equal(2, results.Count);
     }
 
     [Fact]
     public async Task FindAsync_Predicate_FiltersCorrectly()
     {
-        _engine.Insert("col", MakeDoc("Alice", 30));
-        _engine.Insert("col", MakeDoc("Bob", 25));
+        await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        await _engine.InsertAsync("col", MakeDoc("Bob", 25));
 
         var results = new List<BsonDocument>();
         await foreach (var doc in _engine.FindAsync("col", d =>
@@ -195,28 +194,29 @@ public class BLiteEngineTests2 : IDisposable
     // ─── UpdateBulk + UpdateBulkAsync ─────────────────────────────────────────
 
     [Fact]
-    public void UpdateBulk_UpdatesMultipleDocuments()
+    public async Task UpdateBulk_UpdatesMultipleDocuments()
     {
-        var id1 = _engine.Insert("col", MakeDoc("Alice", 30));
-        var id2 = _engine.Insert("col", MakeDoc("Bob", 25));
+        var id1 = await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        var id2 = await _engine.InsertAsync("col", MakeDoc("Bob", 25));
 
         var updates = new[]
         {
             (id1, MakeDoc("Alice", 99)),
             (id2, MakeDoc("Bob", 88))
         };
-        var count = _engine.UpdateBulk("col", updates);
+        var count = await _engine.UpdateBulkAsync("col", updates);
 
         Assert.Equal(2, count);
-        _engine.FindById("col", id1)!.TryGetInt32("age", out int age1);
+        var updatedDoc = await _engine.FindByIdAsync("col", id1);
+        updatedDoc!.TryGetInt32("age", out int age1);
         Assert.Equal(99, age1);
     }
 
     [Fact]
     public async Task UpdateBulkAsync_UpdatesMultipleDocuments()
     {
-        var id1 = _engine.Insert("col", MakeDoc("Alice", 30));
-        var id2 = _engine.Insert("col", MakeDoc("Bob", 25));
+        var id1 = await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        var id2 = await _engine.InsertAsync("col", MakeDoc("Bob", 25));
 
         var updates = new[] { (id1, MakeDoc("Alice", 77)), (id2, MakeDoc("Bob", 66)) };
         var count = await _engine.UpdateBulkAsync("col", updates);
@@ -227,29 +227,28 @@ public class BLiteEngineTests2 : IDisposable
     // ─── DeleteBulk + DeleteBulkAsync ─────────────────────────────────────────
 
     [Fact]
-    public void DeleteBulk_DeletesMultipleDocuments()
+    public async Task DeleteBulk_DeletesMultipleDocuments()
     {
-        var id1 = _engine.Insert("col", MakeDoc("Alice", 30));
-        var id2 = _engine.Insert("col", MakeDoc("Bob", 25));
-        var id3 = _engine.Insert("col", MakeDoc("Carol", 35));
-
-        var deleted = _engine.DeleteBulk("col", [id1, id2]);
+        var id1 = await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        var id2 = await _engine.InsertAsync("col", MakeDoc("Bob", 25));
+        var id3 = await _engine.InsertAsync("col", MakeDoc("Carol", 35));
+        var deleted = await _engine.DeleteBulkAsync("col", [id1, id2]);
 
         Assert.Equal(2, deleted);
         // Only Carol remains
-        Assert.Single(_engine.FindAll("col").ToList());
+        Assert.Single(await _engine.FindAllAsync("col").ToListAsync());
     }
 
     [Fact]
     public async Task DeleteBulkAsync_DeletesMultipleDocuments()
     {
-        var id1 = _engine.Insert("col", MakeDoc("Alice", 30));
-        var id2 = _engine.Insert("col", MakeDoc("Bob", 25));
+        var id1 = await _engine.InsertAsync("col", MakeDoc("Alice", 30));
+        var id2 = await _engine.InsertAsync("col", MakeDoc("Bob", 25));
 
         var deleted = await _engine.DeleteBulkAsync("col", [id1, id2]);
 
         Assert.Equal(2, deleted);
-        Assert.Empty(_engine.FindAll("col").ToList());
+        Assert.Empty(await _engine.FindAllAsync("col").ToListAsync());
     }
 
     // ─── BackupAsync ──────────────────────────────────────────────────────────
@@ -260,7 +259,7 @@ public class BLiteEngineTests2 : IDisposable
         var backupPath = Path.Combine(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}.db");
         try
         {
-            _engine.Insert("col", MakeDoc("Alice", 30));
+            await _engine.InsertAsync("col", MakeDoc("Alice", 30));
 
             await _engine.BackupAsync(backupPath);
 
@@ -268,7 +267,7 @@ public class BLiteEngineTests2 : IDisposable
 
             // Open the backup and verify data
             using var backup = new BLiteEngine(backupPath);
-            var all = backup.FindAll("col").ToList();
+            var all = await backup.FindAllAsync("col").ToListAsync();
             Assert.Single(all);
             all[0].TryGetString("name", out var name);
             Assert.Equal("Alice", name);
@@ -299,72 +298,80 @@ public class BLiteEngineTests2 : IDisposable
     // ─── After-dispose guards for new operations ──────────────────────────────
 
     [Fact]
-    public void AfterDispose_Insert_Convenience_Throws()
+    public async Task AfterDispose_Insert_Convenience_Throws()
     {
         var doc = MakeDoc("x", 1);
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Insert("col", doc));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await _engine.InsertAsync("col", doc));
     }
 
     [Fact]
-    public void AfterDispose_FindById_Convenience_Throws()
+    public async Task AfterDispose_FindById_Convenience_Throws()
     {
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.FindById("col", new BsonId(ObjectId.NewObjectId())));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.FindByIdAsync("col", new BsonId(ObjectId.NewObjectId())));
     }
 
     [Fact]
-    public void AfterDispose_Update_Convenience_Throws()
-    {
-        var doc = MakeDoc("x", 1);
-        _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Update("col", new BsonId(ObjectId.NewObjectId()), doc));
-    }
-
-    [Fact]
-    public void AfterDispose_Delete_Convenience_Throws()
-    {
-        _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Delete("col", new BsonId(ObjectId.NewObjectId())));
-    }
-
-    [Fact]
-    public void AfterDispose_FindAll_Convenience_Throws()
-    {
-        _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.FindAll("col").ToList());
-    }
-
-    [Fact]
-    public void AfterDispose_Find_Convenience_Throws()
-    {
-        _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Find("col", _ => true).ToList());
-    }
-
-    [Fact]
-    public void AfterDispose_InsertBulk_Throws()
+    public async Task AfterDispose_Update_Convenience_Throws()
     {
         var doc = MakeDoc("x", 1);
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.InsertBulk("col", [doc]));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.UpdateAsync("col", new BsonId(ObjectId.NewObjectId()), doc));
     }
 
     [Fact]
-    public void AfterDispose_UpdateBulk_Throws()
+    public async Task AfterDispose_Delete_Convenience_Throws()
+    {
+        _engine.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.DeleteAsync("col", new BsonId(ObjectId.NewObjectId())));
+    }
+
+    [Fact]
+    public async Task AfterDispose_FindAll_Convenience_Throws()
+    {
+        _engine.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.FindAllAsync("col").ToListAsync());
+    }
+
+    [Fact]
+    public async Task AfterDispose_Find_Convenience_Throws()
+    {
+        _engine.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.FindAsync("col", _ => true).ToListAsync());
+    }
+
+    [Fact]
+    public async Task AfterDispose_InsertBulk_Throws()
+    {
+        var doc = MakeDoc("x", 1);
+        _engine.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.InsertBulkAsync("col", [doc]));
+    }
+
+    [Fact]
+    public async Task AfterDispose_UpdateBulk_Throws()
     {
         var id = new BsonId(ObjectId.NewObjectId());
         var doc = MakeDoc("x", 1);
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.UpdateBulk("col", [(id, doc)]));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.UpdateBulkAsync("col", [(id, doc)]));
     }
 
     [Fact]
-    public void AfterDispose_DeleteBulk_Throws()
+    public async Task AfterDispose_DeleteBulk_Throws()
     {
         var id = new BsonId(ObjectId.NewObjectId());
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.DeleteBulk("col", [id]));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await _engine.DeleteBulkAsync("col", [id]));
     }
 
     [Fact]

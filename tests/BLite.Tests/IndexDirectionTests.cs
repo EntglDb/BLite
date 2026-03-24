@@ -23,54 +23,54 @@ public class IndexDirectionTests : IDisposable
     }
 
     [Fact]
-    public void Range_Forward_ReturnsOrderedResults()
+    public async Task Range_Forward_ReturnsOrderedResults()
     {
         var collection = _db.People;
-        var index = (CollectionSecondaryIndex<int, Person>)collection.EnsureIndex(p => p.Age, "idx_age");
+        var index = (CollectionSecondaryIndex<int, Person>)(await collection.EnsureIndexAsync(p => p.Age, "idx_age"));
 
         var people = Enumerable.Range(1, 100).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
-        collection.InsertBulk(people);
-        _db.SaveChanges();
+        await collection.InsertBulkAsync(people);
+        await _db.SaveChangesAsync();
 
         // Scan Forward
         var results = index.Range(10, 20, IndexDirection.Forward).ToList();
 
         Assert.Equal(11, results.Count); // 10 to 20 inclusive
-        Assert.Equal(10, collection.FindByLocation(results.First())!.Age); // First is 10
-        Assert.Equal(20, collection.FindByLocation(results.Last())!.Age);  // Last is 20
+        Assert.Equal(10, (await collection.FindByLocation(results.First()))!.Age); // First is 10
+        Assert.Equal(20, (await collection.FindByLocation(results.Last()))!.Age);  // Last is 20
     }
-
+            
     [Fact]
-    public void Range_Backward_ReturnsReverseOrderedResults()
+    public async Task Range_Backward_ReturnsReverseOrderedResults()
     {
         var collection = _db.People;
-        var index = (CollectionSecondaryIndex<int, Person>)collection.EnsureIndex(p => p.Age, "idx_age");
+        var index = (CollectionSecondaryIndex<int, Person>) (await collection.EnsureIndexAsync(p => p.Age, "idx_age"));
 
         var people = Enumerable.Range(1, 100).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
-        collection.InsertBulk(people);
-        _db.SaveChanges();
+        await collection.InsertBulkAsync(people);
+        await _db.SaveChangesAsync();
 
         // Scan Backward
         var results = index.Range(10, 20, IndexDirection.Backward).ToList();
 
         Assert.Equal(11, results.Count); // 10 to 20 inclusive
-        Assert.Equal(20, collection.FindByLocation(results.First())!.Age); // First is 20 (Reverse)
-        Assert.Equal(10, collection.FindByLocation(results.Last())!.Age);  // Last is 10
+        Assert.Equal(20, (await collection.FindByLocation(results.First()))!.Age); // First is 20 (Reverse)
+        Assert.Equal(10, (await collection.FindByLocation(results.Last()))!.Age);  // Last is 10
     }
 
     [Fact]
-    public void Range_Backward_WithMultiplePages_ReturnsReverseOrderedResults()
+    public async Task Range_Backward_WithMultiplePages_ReturnsReverseOrderedResults()
     {
         var collection = _db.People;
-        var index = (CollectionSecondaryIndex<int, Person>)collection.EnsureIndex(p => p.Age, "idx_age_large");
+        var index = (CollectionSecondaryIndex<int, Person>)(await collection.EnsureIndexAsync(p => p.Age, "idx_age_large"));
 
         // Insert enough to force splits (default page size is smallish, 4096, so 1000 items should split)
         // Entry size approx 10 bytes key + 6 bytes loc + overhead
         // 1000 items * 20 bytes = 20KB > 4KB.
         var count = 1000;
         var people = Enumerable.Range(1, count).Select(i => new Person { Id = i, Name = $"Person {i}", Age = i }).ToList();
-        collection.InsertBulk(people);
-        _db.SaveChanges();
+        await collection.InsertBulkAsync(people);
+        await _db.SaveChangesAsync();
 
         // Scan ALL Backward
         var results = index.Range(null, null, IndexDirection.Backward).ToList();

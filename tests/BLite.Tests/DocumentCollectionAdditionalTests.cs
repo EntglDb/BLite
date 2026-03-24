@@ -6,7 +6,7 @@ namespace BLite.Tests;
 /// <summary>
 /// Additional tests for <see cref="DocumentCollection{TId,T}"/> targeting mutation
 /// survivors not yet covered by the existing DocumentCollectionTests:
-/// secondary indexes (Create/Ensure/Drop/Get/Query), ScanPairs, async variants,
+/// secondary indexes (Create/Ensure/Drop/Get/Query), ScanPairsAsync, async variants,
 /// bulk async, and CurrentSchemaVersion.
 /// </summary>
 public class DocumentCollectionAdditionalTests : IDisposable
@@ -29,67 +29,67 @@ public class DocumentCollectionAdditionalTests : IDisposable
         if (File.Exists(_walPath)) File.Delete(_walPath);
     }
 
-    // ─── CreateIndex ──────────────────────────────────────────────────────────
+    // ─── CreateIndexAsync ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void CreateIndex_OnEmptyCollection_CanBeQueried()
+    public async Task CreateIndex_OnEmptyCollection_CanBeQueried()
     {
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age");
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age");
+        await _db.SaveChangesAsync();
 
-        var results = _db.Users.QueryIndex("idx_age", null, null).ToList();
+        var results = await _db.Users.QueryIndexAsync("idx_age", null, null).ToListAsync();
         Assert.Empty(results);
     }
 
     [Fact]
-    public void CreateIndex_ThenQueryByRange_ReturnsMatchingDocuments()
+    public async Task CreateIndex_ThenQueryByRange_ReturnsMatchingDocuments()
     {
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age");
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Carol", Age = 35 });
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age");
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Carol", Age = 35 });
+        await _db.SaveChangesAsync();
 
-        var results = _db.Users.QueryIndex("idx_age", 25, 30).ToList();
+        var results = await _db.Users.QueryIndexAsync("idx_age", 25, 30).ToListAsync();
 
         Assert.Equal(2, results.Count);
         Assert.All(results, u => Assert.True(u.Age >= 25 && u.Age <= 30));
     }
 
     [Fact]
-    public void CreateIndex_ForExistingData_RebuildsIndexCorrectly()
+    public async Task CreateIndex_ForExistingData_RebuildsIndexCorrectly()
     {
         // Insert data BEFORE creating the index
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
 
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age_late");
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age_late");
+        await _db.SaveChangesAsync();
 
-        var results = _db.Users.QueryIndex("idx_age_late", 25, 30).ToList();
+        var results = await _db.Users.QueryIndexAsync("idx_age_late", 25, 30).ToListAsync();
         Assert.Equal(2, results.Count);
     }
 
     // ─── QueryIndex ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void QueryIndex_Nonexistent_ThrowsArgumentException()
+    public async Task QueryIndex_Nonexistent_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() =>
-            _db.Users.QueryIndex("ghost_index", null, null).ToList());
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await _db.Users.QueryIndexAsync("ghost_index", null, null).ToListAsync());
     }
 
     [Fact]
-    public void QueryIndex_Descending_ReturnsSortedDescending()
+    public async Task QueryIndex_Descending_ReturnsSortedDescending()
     {
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age");
-        _db.Users.Insert(new User { Name = "Alice", Age = 10 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 20 });
-        _db.Users.Insert(new User { Name = "Carol", Age = 30 });
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age");
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 10 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 20 });
+        await _db.Users.InsertAsync(new User { Name = "Carol", Age = 30 });
+        await _db.SaveChangesAsync();
 
-        var results = _db.Users.QueryIndex("idx_age", null, null, ascending: false).ToList();
+        var results = await _db.Users.QueryIndexAsync("idx_age", null, null, ascending: false).ToListAsync();
 
         Assert.Equal(3, results.Count);
         Assert.Equal(30, results[0].Age);
@@ -99,35 +99,35 @@ public class DocumentCollectionAdditionalTests : IDisposable
     // ─── EnsureIndex ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void EnsureIndex_WhenIndexDoesNotExist_CreatesIt()
+    public async Task EnsureIndex_WhenIndexDoesNotExist_CreatesIt()
     {
-        var idx = _db.Users.EnsureIndex(u => u.Age, name: "idx_age_ensure");
-        _db.SaveChanges();
+        var idx = await _db.Users.EnsureIndexAsync(u => u.Age, name: "idx_age_ensure");
+        await _db.SaveChangesAsync();
 
         Assert.NotNull(idx);
-        Assert.NotNull(_db.Users.GetIndex("idx_age_ensure"));
+        Assert.NotNull(await _db.Users.GetIndexAsync("idx_age_ensure"));
     }
 
     [Fact]
-    public void EnsureIndex_WhenIndexExists_ReturnsSameIndex_NoRebuild()
+    public async Task EnsureIndex_WhenIndexExists_ReturnsSameIndex_NoRebuild()
     {
-        var idx1 = _db.Users.EnsureIndex(u => u.Age, name: "idx_age_idem");
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.SaveChanges();
+        var idx1 = await _db.Users.EnsureIndexAsync(u => u.Age, name: "idx_age_idem");
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.SaveChangesAsync();
 
-        var idx2 = _db.Users.EnsureIndex(u => u.Age, name: "idx_age_idem");
+        var idx2 = await _db.Users.EnsureIndexAsync(u => u.Age, name: "idx_age_idem");
 
         // Must be the same logical instance — no data loss from rebuild
         Assert.NotNull(idx2);
-        Assert.Equal(1, _db.Users.QueryIndex("idx_age_idem", 30, 30).Count());
+        Assert.Single((await _db.Users.QueryIndexAsync("idx_age_idem", 30, 30).ToListAsync()));
     }
 
     [Fact]
     public async Task EnsureIndexAsync_Idempotent_ReturnsSameIndex()
     {
         await _db.Users.EnsureIndexAsync(u => u.Age, name: "idx_age_async_idem");
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.SaveChangesAsync();
 
         var idx2 = await _db.Users.EnsureIndexAsync(u => u.Age, name: "idx_age_async_idem");
 
@@ -137,67 +137,67 @@ public class DocumentCollectionAdditionalTests : IDisposable
     // ─── DropIndex ────────────────────────────────────────────────────────────
 
     [Fact]
-    public void DropIndex_PrimaryIndex_ThrowsInvalidOperationException()
+    public async Task DropIndex_PrimaryIndex_ThrowsInvalidOperationException()
     {
-        Assert.Throws<InvalidOperationException>(() => _db.Users.DropIndex("_id"));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await _db.Users.DropIndexAsync("_id"));
     }
 
     [Fact]
-    public void DropIndex_EmptyName_ThrowsArgumentException()
+    public async Task DropIndex_EmptyName_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => _db.Users.DropIndex(""));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await _db.Users.DropIndexAsync(""));
     }
 
     [Fact]
-    public void DropIndex_WhitespaceName_ThrowsArgumentException()
+    public async Task DropIndex_WhitespaceName_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => _db.Users.DropIndex("   "));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await _db.Users.DropIndexAsync("   "));
     }
 
     [Fact]
-    public void DropIndex_NonExistent_ReturnsFalse()
+    public async Task DropIndex_NonExistent_ReturnsFalse()
     {
-        var result = _db.Users.DropIndex("ghost_idx");
+        var result = await _db.Users.DropIndexAsync("ghost_idx");
         Assert.False(result);
     }
 
     [Fact]
-    public void DropIndex_ExistingIndex_ReturnsTrueAndIndexIsGone()
+    public async Task DropIndex_ExistingIndex_ReturnsTrueAndIndexIsGone()
     {
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age_drop");
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age_drop");
+        await _db.SaveChangesAsync();
 
-        var dropped = _db.Users.DropIndex("idx_age_drop");
+        var dropped = await _db.Users.DropIndexAsync("idx_age_drop");
 
         Assert.True(dropped);
-        Assert.Null(_db.Users.GetIndex("idx_age_drop"));
+        Assert.Null(await _db.Users.GetIndexAsync("idx_age_drop"));
     }
 
-    // ─── GetIndex + GetIndexes ────────────────────────────────────────────────
+    // ─── GetIndexAsync + GetIndexes ────────────────────────────────────────────────
 
     [Fact]
-    public void GetIndex_NonExistent_ReturnsNull()
+    public async Task GetIndexAsync_NonExistent_ReturnsNull()
     {
-        Assert.Null(_db.Users.GetIndex("ghost_idx"));
+        Assert.Null(await _db.Users.GetIndexAsync("ghost_idx"));
     }
 
     [Fact]
-    public void GetIndex_Existing_ReturnsInstance()
+    public async Task GetIndexAsync_Existing_ReturnsInstance()
     {
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age_get");
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age_get");
+        await _db.SaveChangesAsync();
 
-        var idx = _db.Users.GetIndex("idx_age_get");
+        var idx = await _db.Users.GetIndexAsync("idx_age_get");
 
         Assert.NotNull(idx);
     }
 
     [Fact]
-    public void GetIndexes_ReturnsCreatedIndexes()
+    public async Task GetIndexes_ReturnsCreatedIndexes()
     {
-        _db.Users.CreateIndex(u => u.Age, name: "idx_age");
-        _db.Users.CreateIndex(u => u.Name, name: "idx_name");
-        _db.SaveChanges();
+        await _db.Users.CreateIndexAsync(u => u.Age, name: "idx_age");
+        await _db.Users.CreateIndexAsync(u => u.Name, name: "idx_name");
+        await _db.SaveChangesAsync();
 
         var indexes = _db.Users.GetIndexes().ToList();
 
@@ -207,16 +207,16 @@ public class DocumentCollectionAdditionalTests : IDisposable
         Assert.Contains("idx_name", names);
     }
 
-    // ─── ScanPairs ────────────────────────────────────────────────────────────
+    // ─── ScanPairsAsync ────────────────────────────────────────────────────────────
 
     [Fact]
-    public void ScanPairs_WithSimpleSelectors_FastPath_ReturnsPairs()
+    public async Task ScanPairs_WithSimpleSelectors_FastPath_ReturnsPairs()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
 
-        var pairs = _db.Users.ScanPairs(u => u.Name, u => u.Age).ToList();
+        var pairs = await _db.Users.ScanPairsAsync(u => u.Name, u => u.Age).ToListAsync();
 
         Assert.Equal(2, pairs.Count);
         Assert.Contains(pairs, p => p.Key == "Alice" && p.Value == 30);
@@ -224,13 +224,12 @@ public class DocumentCollectionAdditionalTests : IDisposable
     }
 
     [Fact]
-    public void ScanPairs_ReturnsCorrectCountMatchingAllDocuments()
+    public async Task ScanPairs_ReturnsCorrectCountMatchingAllDocuments()
     {
         for (int i = 1; i <= 5; i++)
-            _db.Users.Insert(new User { Name = $"User{i}", Age = i * 10 });
-        _db.SaveChanges();
-
-        var pairs = _db.Users.ScanPairs(u => u.Name, u => u.Age).ToList();
+            await _db.Users.InsertAsync(new User { Name = $"User{i}", Age = i * 10 });
+        await _db.SaveChangesAsync();
+        var pairs = await _db.Users.ScanPairsAsync(u => u.Name, u => u.Age).ToListAsync();
 
         Assert.Equal(5, pairs.Count);
         Assert.All(pairs, p => Assert.NotNull(p.Key));
@@ -242,8 +241,8 @@ public class DocumentCollectionAdditionalTests : IDisposable
     public async Task FindByIdAsync_Found_ReturnsDocument()
     {
         var user = new User { Name = "Alice", Age = 30 };
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
 
         var found = await _db.Users.FindByIdAsync(id);
 
@@ -261,9 +260,9 @@ public class DocumentCollectionAdditionalTests : IDisposable
     [Fact]
     public async Task FindAllAsync_ReturnsAllDocuments()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
 
         var results = new List<User>();
         await foreach (var u in _db.Users.FindAllAsync())
@@ -282,10 +281,10 @@ public class DocumentCollectionAdditionalTests : IDisposable
             .ToList();
 
         var ids = await _db.Users.InsertBulkAsync(users);
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         Assert.Equal(6, ids.Count);
-        Assert.Equal(6, _db.Users.Count());
+        Assert.Equal(6, await _db.Users.CountAsync());
     }
 
     // ─── CurrentSchemaVersion ─────────────────────────────────────────────────

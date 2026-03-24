@@ -70,20 +70,20 @@ public class BLiteEngineTests : IDisposable
     #region Insert & FindById (ObjectId)
 
     [Fact]
-    public void Insert_And_FindById_ObjectId()
+    public async Task Insert_And_FindById_ObjectId()
     {
         var col = _engine.GetOrCreateCollection("users");
         var doc = col.CreateDocument(["_id", "name", "age"], b => b
             .AddString("name", "Alice")
             .AddInt32("age", 30));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.False(id.IsEmpty);
         Assert.Equal(BsonIdType.ObjectId, id.Type);
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("name", out var name));
         Assert.Equal("Alice", name);
@@ -92,22 +92,22 @@ public class BLiteEngineTests : IDisposable
     }
 
     [Fact]
-    public void Insert_With_Duplicate_Id_Throws()
+    public async Task Insert_With_Duplicate_Id_Throws()
     {
         var col = _engine.GetOrCreateCollection("users", BsonIdType.Int32);
 
-        col.Insert(col.CreateDocument(["_id", "name"], b => b
+        await col.InsertAsync(col.CreateDocument(["_id", "name"], b => b
             .AddId((BsonId)1)
             .AddString("name", "Alice")));
-        _engine.Commit();
+        await _engine.CommitAsync();
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            col.Insert(col.CreateDocument(["_id", "name"], b => b
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await col.InsertAsync(col.CreateDocument(["_id", "name"], b => b
                 .AddId((BsonId)1)
                 .AddString("name", "Bob"))));
 
         Assert.Contains("Duplicate key violation", ex.Message);
-        Assert.Equal(1, col.Count());
+        Assert.Equal(1, await col.CountAsync());
     }
 
     #endregion
@@ -115,7 +115,7 @@ public class BLiteEngineTests : IDisposable
     #region Insert & FindById (Int32)
 
     [Fact]
-    public void Insert_And_FindById_Int32()
+    public async Task Insert_And_FindById_Int32()
     {
         var col = _engine.GetOrCreateCollection("products", BsonIdType.Int32);
         var doc = col.CreateDocument(["_id", "title", "price"], b => b
@@ -123,12 +123,12 @@ public class BLiteEngineTests : IDisposable
             .AddString("title", "Widget")
             .AddInt32("price", 999));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.Equal(42, id.AsInt32());
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("title", out var title));
         Assert.Equal("Widget", title);
@@ -139,19 +139,19 @@ public class BLiteEngineTests : IDisposable
     #region Insert & FindById (String)
 
     [Fact]
-    public void Insert_And_FindById_String()
+    public async Task Insert_And_FindById_String()
     {
         var col = _engine.GetOrCreateCollection("configs", BsonIdType.String);
         var doc = col.CreateDocument(["_id", "value"], b => b
             .AddId((BsonId)"app.setting.1")
             .AddString("value", "enabled"));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.Equal("app.setting.1", id.AsString());
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("value", out var val));
         Assert.Equal("enabled", val);
@@ -162,7 +162,7 @@ public class BLiteEngineTests : IDisposable
     #region Insert & FindById (Guid)
 
     [Fact]
-    public void Insert_And_FindById_Guid()
+    public async Task Insert_And_FindById_Guid()
     {
         var guid = Guid.NewGuid();
         var col = _engine.GetOrCreateCollection("sessions", BsonIdType.Guid);
@@ -170,12 +170,12 @@ public class BLiteEngineTests : IDisposable
             .AddId((BsonId)guid)
             .AddString("user", "bob"));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.Equal(guid, id.AsGuid());
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("user", out var user));
         Assert.Equal("bob", user);
@@ -186,19 +186,19 @@ public class BLiteEngineTests : IDisposable
     #region Auto-generated ID
 
     [Fact]
-    public void Insert_Without_Id_AutoGenerates_ObjectId()
+    public async Task Insert_Without_Id_AutoGenerates_ObjectId()
     {
         var col = _engine.GetOrCreateCollection("auto");
         var doc = col.CreateDocument(["name"], b => b
             .AddString("name", "NoIdDoc"));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         Assert.False(id.IsEmpty);
         Assert.Equal(BsonIdType.ObjectId, id.Type);
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("name", out var n));
         Assert.Equal("NoIdDoc", n);
@@ -209,7 +209,7 @@ public class BLiteEngineTests : IDisposable
     #region FindAll & Count
 
     [Fact]
-    public void FindAll_Returns_All_Documents()
+    public async Task FindAll_Returns_All_Documents()
     {
         var col = _engine.GetOrCreateCollection("items");
         for (int i = 0; i < 5; i++)
@@ -217,13 +217,13 @@ public class BLiteEngineTests : IDisposable
             var doc = col.CreateDocument(["_id", "idx"], b => b
                 .AddId((BsonId)(i + 1))
                 .AddInt32("idx", i));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        _engine.Commit();
+        await _engine.CommitAsync();
 
-        var all = col.FindAll().ToList();
+        var all = (await col.FindAllAsync().ToListAsync());
         Assert.Equal(5, all.Count);
-        Assert.Equal(5, col.Count());
+        Assert.Equal(5, await col.CountAsync());
     }
 
     #endregion
@@ -231,7 +231,7 @@ public class BLiteEngineTests : IDisposable
     #region Update
 
     [Fact]
-    public void Update_Replaces_Document()
+    public async Task Update_Replaces_Document()
     {
         var col = _engine.GetOrCreateCollection("updatable");
         var doc = col.CreateDocument(["_id", "name", "version"], b => b
@@ -239,18 +239,18 @@ public class BLiteEngineTests : IDisposable
             .AddString("name", "v1")
             .AddInt32("version", 1));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         var updated = col.CreateDocument(["_id", "name", "version"], b => b
             .AddId((BsonId)1)
             .AddString("name", "v2")
             .AddInt32("version", 2));
 
-        Assert.True(col.Update(id, updated));
-        _engine.Commit();
+        Assert.True(await col.UpdateAsync(id, updated));
+        await _engine.CommitAsync();
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("name", out var name));
         Assert.Equal("v2", name);
@@ -259,11 +259,11 @@ public class BLiteEngineTests : IDisposable
     }
 
     [Fact]
-    public void Update_NonExistent_Returns_False()
+    public async Task Update_NonExistent_Returns_False()
     {
         var col = _engine.GetOrCreateCollection("ghost");
         var doc = col.CreateDocument(["name"], b => b.AddString("name", "x"));
-        Assert.False(col.Update((BsonId)999, doc));
+        Assert.False(await col.UpdateAsync((BsonId)999, doc));
     }
 
     #endregion
@@ -271,28 +271,27 @@ public class BLiteEngineTests : IDisposable
     #region Delete
 
     [Fact]
-    public void Delete_Removes_Document()
+    public async Task Delete_Removes_Document()
     {
         var col = _engine.GetOrCreateCollection("deletable");
         var doc = col.CreateDocument(["_id", "name"], b => b
             .AddId((BsonId)1)
             .AddString("name", "ToDelete"));
 
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
-        Assert.True(col.Delete(id));
-        _engine.Commit();
-
-        Assert.Null(col.FindById(id));
-        Assert.Equal(0, col.Count());
+        Assert.True(await col.DeleteAsync(id));
+        await _engine.CommitAsync();
+        Assert.Null(await col.FindByIdAsync(id));
+        Assert.Equal(0, await col.CountAsync());
     }
 
     [Fact]
-    public void Delete_NonExistent_Returns_False()
+    public async Task Delete_NonExistent_Returns_False()
     {
         var col = _engine.GetOrCreateCollection("empty");
-        Assert.False(col.Delete((BsonId)999));
+        Assert.False(await col.DeleteAsync((BsonId)999));
     }
 
     #endregion
@@ -300,7 +299,7 @@ public class BLiteEngineTests : IDisposable
     #region Multiple Documents
 
     [Fact]
-    public void Insert_Multiple_And_FindAll()
+    public async Task Insert_Multiple_And_FindAll()
     {
         var col = _engine.GetOrCreateCollection("people");
         var names = new[] { "Alice", "Bob", "Charlie", "Diana", "Eve" };
@@ -310,11 +309,11 @@ public class BLiteEngineTests : IDisposable
             var doc = col.CreateDocument(["name", "active"], b => b
                 .AddString("name", name)
                 .AddBoolean("active", true));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        _engine.Commit();
+        await _engine.CommitAsync();
 
-        var all = col.FindAll().ToList();
+        var all = (await col.FindAllAsync().ToListAsync());
         Assert.Equal(5, all.Count);
     }
 
@@ -323,19 +322,19 @@ public class BLiteEngineTests : IDisposable
     #region Transaction Management
 
     [Fact]
-    public void Rollback_Discards_Changes()
+    public async Task Rollback_Discards_Changes()
     {
         var col = _engine.GetOrCreateCollection("transactional");
         var doc = col.CreateDocument(["_id", "name"], b => b
             .AddId((BsonId)1)
             .AddString("name", "WillRollback"));
 
-        col.Insert(doc);
+        await col.InsertAsync(doc);
         _engine.Rollback();
 
         // After rollback, the document should not be findable
         // (Note: exact behavior depends on WAL/transaction isolation implementation)
-        var count = col.Count();
+        var count = await col.CountAsync();
         Assert.Equal(0, count);
     }
 
@@ -343,7 +342,7 @@ public class BLiteEngineTests : IDisposable
     /// Replicates the exact server-side transaction flow used by BLite.Server's TransactionManager:
     ///   1. BeginTransactionAsync (explicit begin, like TransactionManager.BeginAsync)
     ///   2. DynamicCollection.InsertAsync (like DynamicServiceImpl.Insert with a transaction_id)
-    ///   3. engine.Rollback (like RollbackCoreAsync)
+    ///   3. engine.RollbackAsync (like RollbackCoreAsync)
     ///   4. FindByIdAsync must return null
     /// </summary>
     [Fact]
@@ -364,7 +363,7 @@ public class BLiteEngineTests : IDisposable
         var duringTxn = await col.FindByIdAsync(id);
         Assert.NotNull(duringTxn);
 
-        // Step 3: rollback (mirrors RollbackCoreAsync → engine.Rollback())
+        // Step 3: rollback (mirrors RollbackCoreAsync → engine.RollbackAsync())
         _engine.Rollback();
 
         // Step 4: document must not be visible after rollback
@@ -372,7 +371,7 @@ public class BLiteEngineTests : IDisposable
         Assert.Null(afterRollback);
 
         // Also verify via Count
-        Assert.Equal(0, col.Count());
+        Assert.Equal(0, await col.CountAsync());
     }
 
     /// <summary>
@@ -389,7 +388,7 @@ public class BLiteEngineTests : IDisposable
         var idA  = await col.InsertAsync(docA);
         await _engine.CommitAsync();
 
-        // Rollback a second document
+        // RollbackAsync a second document
         await _engine.BeginTransactionAsync();
         var docB = col.CreateDocument(["name"], b => b.AddString("name", "WillRollback"));
         await col.InsertAsync(docB);
@@ -398,7 +397,7 @@ public class BLiteEngineTests : IDisposable
         // Only the committed document must be visible
         var found = await col.FindByIdAsync(idA);
         Assert.NotNull(found);
-        Assert.Equal(1, col.Count());
+        Assert.Equal(1, await col.CountAsync());
     }
 
     #endregion
@@ -406,56 +405,57 @@ public class BLiteEngineTests : IDisposable
     #region Convenience CRUD (BLiteEngine shortcuts)
 
     [Fact]
-    public void Engine_Insert_And_FindById_Convenience()
+    public async Task Engine_Insert_And_FindById_Convenience()
     {
         var doc = _engine.CreateDocument(["name", "role"], b => b
             .AddString("name", "Admin")
             .AddString("role", "superuser"));
 
-        var id = _engine.Insert("staff", doc);
+        var id = await _engine.InsertAsync("staff", doc);
 
-        var found = _engine.FindById("staff", id);
+        var found = await _engine.FindByIdAsync("staff", id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("role", out var role));
         Assert.Equal("superuser", role);
     }
 
     [Fact]
-    public void Engine_FindAll_Convenience()
+    public async Task Engine_FindAll_Convenience()
     {
         for (int i = 0; i < 3; i++)
         {
             var doc = _engine.CreateDocument(["idx"], b => b.AddInt32("idx", i));
-            _engine.Insert("batch", doc);
+            await _engine.InsertAsync("batch", doc);
         }
 
-        var all = _engine.FindAll("batch").ToList();
+        var all = await _engine.FindAllAsync("batch").ToListAsync();
         Assert.Equal(3, all.Count);
     }
 
     [Fact]
-    public void Engine_Update_Convenience()
+    public async Task Engine_Update_Convenience()
     {
         var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "Old"));
-        var id = _engine.Insert("mutable", doc);
+        var id = await _engine.InsertAsync("mutable", doc);
 
         var newDoc = _engine.CreateDocument(["name"], b => b.AddString("name", "New"));
-        Assert.True(_engine.Update("mutable", id, newDoc));
+        Assert.True(await _engine.UpdateAsync("mutable", id, newDoc));
 
-        var found = _engine.FindById("mutable", id);
+        var found = await _engine.FindByIdAsync("mutable", id);
         Assert.NotNull(found);
         Assert.True(found.TryGetString("name", out var name));
         Assert.Equal("New", name);
     }
 
     [Fact]
-    public void Engine_Delete_Convenience()
+    public async Task Engine_Delete_Convenience()
     {
         var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "Bye"));
-        var id = _engine.Insert("removable", doc);
+        var id = await _engine.InsertAsync("removable", doc);
 
-        Assert.True(_engine.Delete("removable", id));
-        Assert.Null(_engine.FindById("removable", id));
+        Assert.True(await _engine.DeleteAsync("removable", id));
+        var found = await _engine.FindByIdAsync("removable", id);
+        Assert.Null(found);
     }
 
     #endregion
@@ -463,7 +463,7 @@ public class BLiteEngineTests : IDisposable
     #region BSON Types
 
     [Fact]
-    public void Supports_All_Primitive_Types()
+    public async Task Supports_All_Primitive_Types()
     {
         var col = _engine.GetOrCreateCollection("types");
         var now = DateTime.UtcNow;
@@ -484,10 +484,10 @@ public class BLiteEngineTests : IDisposable
                 .AddObjectId("oid", objId)
                 .AddGuid("guid", guid));
 
-        col.Insert(doc);
-        _engine.Commit();
+        await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
-        var found = col.FindById((BsonId)1)!;
+        var found = await col.FindByIdAsync((BsonId)1);
         var fields = found.EnumerateFields();
 
         // Verify via TryGet methods
@@ -591,7 +591,7 @@ public class BLiteEngineTests : IDisposable
     #region EnumerateFields
 
     [Fact]
-    public void EnumerateFields_Returns_All_Fields()
+    public async Task EnumerateFields_Returns_All_Fields()
     {
         var col = _engine.GetOrCreateCollection("enum");
         var doc = col.CreateDocument(["_id", "a", "b", "c"], b => b
@@ -600,10 +600,10 @@ public class BLiteEngineTests : IDisposable
             .AddInt32("b", 2)
             .AddBoolean("c", true));
 
-        col.Insert(doc);
-        _engine.Commit();
+        await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
-        var found = col.FindById((BsonId)1)!;
+        var found = await col.FindByIdAsync((BsonId)1);
         var fields = found.EnumerateFields();
 
         Assert.True(fields.Count >= 4); // _id, a, b, c
@@ -618,7 +618,7 @@ public class BLiteEngineTests : IDisposable
     #region Secondary Index
 
     [Fact]
-    public void CreateIndex_And_QueryIndex()
+    public async Task CreateIndex_And_QueryIndex()
     {
         var col = _engine.GetOrCreateCollection("indexed");
 
@@ -629,18 +629,18 @@ public class BLiteEngineTests : IDisposable
                 .AddId((BsonId)(i + 1))
                 .AddString("name", $"User{i}")
                 .AddInt32("age", 20 + i));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        _engine.Commit();
+        await _engine.CommitAsync();
 
         // Create secondary index on "age"
-        col.CreateIndex("age", "idx_age");
+        await col.CreateIndexAsync("age", "idx_age");
 
         var indexes = col.ListIndexes();
         Assert.Contains("idx_age", indexes);
 
         // Query: age between 23 and 27 (inclusive)
-        var results = col.QueryIndex("idx_age", 23, 27).ToList();
+        var results = await col.QueryIndexAsync("idx_age", 23, 27).ToListAsync();
         Assert.True(results.Count >= 3); // ages 23, 24, 25, 26, 27
 
         foreach (var r in results)
@@ -651,10 +651,10 @@ public class BLiteEngineTests : IDisposable
     }
 
     [Fact]
-    public void DropIndex_Removes_Index()
+    public async Task DropIndex_Removes_Index()
     {
         var col = _engine.GetOrCreateCollection("dropidx");
-        col.CreateIndex("name", "idx_name");
+        await col.CreateIndexAsync("name", "idx_name");
         Assert.Contains("idx_name", col.ListIndexes());
 
         Assert.True(col.DropIndex("idx_name"));
@@ -666,7 +666,7 @@ public class BLiteEngineTests : IDisposable
     #region Persistence Across Restart
 
     [Fact]
-    public void Data_Persists_After_Engine_Restart()
+    public async Task Data_Persists_After_Engine_Restart()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"test_persist_{Guid.NewGuid()}.db");
         BsonId insertedId;
@@ -679,14 +679,14 @@ public class BLiteEngineTests : IDisposable
                 var doc = engine1.CreateDocument(["name", "count"], b => b
                     .AddString("name", "Persistent")
                     .AddInt32("count", 42));
-                insertedId = engine1.Insert("data", doc);
+                insertedId = await engine1.InsertAsync("data", doc);
             }
 
             // Phase 2: Reopen and verify
             using (var engine2 = new BLiteEngine(dbPath))
             {
                 var col = engine2.GetOrCreateCollection("data");
-                var found = col.FindById(insertedId);
+                var found = await col.FindByIdAsync(insertedId);
                 Assert.NotNull(found);
                 Assert.True(found.TryGetString("name", out var name));
                 Assert.Equal("Persistent", name);
@@ -707,45 +707,44 @@ public class BLiteEngineTests : IDisposable
     #region Edge Cases
 
     [Fact]
-    public void FindById_NonExistent_Returns_Null()
+    public async Task FindById_NonExistent_Returns_Null()
     {
         var col = _engine.GetOrCreateCollection("sparse");
-        Assert.Null(col.FindById((BsonId)ObjectId.NewObjectId()));
+        Assert.Null(await col.FindByIdAsync((BsonId)ObjectId.NewObjectId()));
     }
 
     [Fact]
-    public void Empty_Collection_FindAll_Returns_Empty()
+    public async Task Empty_Collection_FindAll_Returns_Empty()
     {
         var col = _engine.GetOrCreateCollection("empty_col");
-        Assert.Empty(col.FindAll());
-        Assert.Equal(0, col.Count());
+        Assert.Empty(await col.FindAllAsync().ToListAsync());
+        Assert.Equal(0, await col.CountAsync());
     }
 
     [Fact]
-    public void Multiple_Collections_Are_Independent()
+    public async Task Multiple_Collections_Are_Independent()
     {
         var users = _engine.GetOrCreateCollection("users2");
         var orders = _engine.GetOrCreateCollection("orders2");
 
         var userDoc = users.CreateDocument(["_id", "name"], b => b
             .AddId((BsonId)1).AddString("name", "Alice"));
-        users.Insert(userDoc);
-        _engine.Commit();
+        await users.InsertAsync(userDoc);
+        await _engine.CommitAsync();
 
         var orderDoc = orders.CreateDocument(["_id", "item"], b => b
             .AddId((BsonId)1).AddString("item", "Widget"));
-        orders.Insert(orderDoc);
-        _engine.Commit();
+        await orders.InsertAsync(orderDoc);
+        await _engine.CommitAsync();
 
-        Assert.Equal(1, users.Count());
-        Assert.Equal(1, orders.Count());
-
+        Assert.Equal(1, await users.CountAsync());
+        Assert.Equal(1, await orders.CountAsync());
         // Verify data isolation
-        var user = users.FindById((BsonId)1)!;
+        var user = await users.FindByIdAsync((BsonId)1)!;
         Assert.True(user.TryGetString("name", out var name));
         Assert.Equal("Alice", name);
 
-        var order = orders.FindById((BsonId)1)!;
+        var order = await orders.FindByIdAsync((BsonId)1)!;
         Assert.True(order.TryGetString("item", out var item));
         Assert.Equal("Widget", item);
     }
@@ -755,7 +754,7 @@ public class BLiteEngineTests : IDisposable
     #region Diagnostic
 
     [Fact]
-    public void Diagnostic_Builder_Bytes()
+    public async Task Diagnostic_Builder_Bytes()
     {
         var col = _engine.GetOrCreateCollection("diag", BsonIdType.Int32);
         var doc = col.CreateDocument(["_id", "name"], b => b

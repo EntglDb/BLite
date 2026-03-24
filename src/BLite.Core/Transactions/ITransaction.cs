@@ -29,12 +29,6 @@ public interface ITransaction : IDisposable
     TransactionState State { get; }
 
     /// <summary>
-    /// Commits the transaction, making all changes permanent.
-    /// Must be called before Dispose() to persist changes.
-    /// </summary>
-    void Commit();
-
-    /// <summary>
     /// Asynchronously commits the transaction, making all changes permanent.
     /// </summary>
     Task CommitAsync(CancellationToken ct = default);
@@ -43,7 +37,7 @@ public interface ITransaction : IDisposable
     /// Rolls back the transaction, discarding all changes.
     /// Called automatically on Dispose() if Commit() was not called.
     /// </summary>
-    void Rollback();
+    Task RollbackAsync();
 
     /// <summary>
     /// Adds a write operation to the current batch or transaction.
@@ -55,7 +49,7 @@ public interface ITransaction : IDisposable
     /// Prepares the object for use by performing any necessary initialization or setup.
     /// </summary>
     /// <returns>true if the preparation was successful; otherwise, false.</returns>
-    bool Prepare();
+    Task<bool> PrepareAsync();
 
     /// <summary>
     /// Event triggered when the transaction acts rollback.

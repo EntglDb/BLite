@@ -57,12 +57,12 @@ public class MetadataPersistenceTests : IDisposable
     }
     
     [Fact]
-    public void EnsureIndex_DoesNotRecreate_IfIndexExists()
+    public async Task EnsureIndex_DoesNotRecreate_IfIndexExists()
     {
         // 1. Create index
         using (var context = new TestDbContext(_dbPath))
         {            
-            context.Users.EnsureIndex(u => u.Age);
+            await context.Users.EnsureIndexAsync(u => u.Age);
         }
         
         // 2. Re-open and EnsureIndex again - should be fast/no-op
@@ -74,16 +74,16 @@ public class MetadataPersistenceTests : IDisposable
             // Currently hard to verify "no rebuild" without logs or mocking.
             // But we can verify it doesn't throw and index is still valid.
             
-            var idx = context.Users.EnsureIndex(u => u.Age);
+            var idx = await context.Users.EnsureIndexAsync(u => u.Age);
             Assert.NotNull(idx);
             
             // Verify functioning
-            using var txn = context.BeginTransaction();
-            context.Users.Insert(new User { Name = "Bob", Age = 50 });
-            txn.Commit();
+            using var txn = await context.BeginTransactionAsync();
+            await context.Users.InsertAsync(new User { Name = "Bob", Age = 50 });
+            await txn.CommitAsync();
             
             // Should find it via index
-            var results = context.Users.Find(u => u.Age == 50).ToList();
+            var results = await context.Users.FindAsync(u => u.Age == 50).ToListAsync();
             Assert.Single(results);
         }
     }

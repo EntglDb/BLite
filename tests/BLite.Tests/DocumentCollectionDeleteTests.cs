@@ -23,53 +23,51 @@ public class DocumentCollectionDeleteTests : IDisposable
     }
 
     [Fact]
-    public void Delete_RemovesDocumentAndIndexEntry()
+    public async Task Delete_RemovesDocumentAndIndexEntry()
     {
         var user = new User { Id = ObjectId.NewObjectId(), Name = "To Delete", Age = 10 };
-        _dbContext.Users.Insert(user);
-        _dbContext.SaveChanges();
-
+        await _dbContext.Users.InsertAsync(user);
+        await _dbContext.SaveChangesAsync();
         // Verify inserted
-        Assert.NotNull(_dbContext.Users.FindById(user.Id));
+        Assert.NotNull(await _dbContext.Users.FindByIdAsync(user.Id));
 
         // Delete
-        var deleted = _dbContext.Users.Delete(user.Id);
-        _dbContext.SaveChanges();
+        var deleted = await _dbContext.Users.DeleteAsync(user.Id);
+        await _dbContext.SaveChangesAsync();
 
         // Assert
         Assert.True(deleted, "Delete returned false");
 
         // Verify deleted from storage
-        Assert.Null(_dbContext.Users.FindById(user.Id));
+        Assert.Null(await _dbContext.Users.FindByIdAsync(user.Id));
 
         // Verify Index is clean (FindAll uses index scan)
-        var all = _dbContext.Users.FindAll();
+        var all = await _dbContext.Users.FindAllAsync().ToListAsync();
         Assert.Empty(all);
     }
 
     [Fact]
-    public void Delete_NonExistent_ReturnsFalse()
+    public async Task Delete_NonExistent_ReturnsFalse()
     {
         var id = ObjectId.NewObjectId();
-        var deleted = _dbContext.Users.Delete(id);
-        _dbContext.SaveChanges();
+        var deleted = await _dbContext.Users.DeleteAsync(id);
+        await _dbContext.SaveChangesAsync();
         Assert.False(deleted);
     }
 
     [Fact]
-    public void Delete_WithTransaction_CommitsSuccessfully()
+    public async Task Delete_WithTransaction_CommitsSuccessfully()
     {
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Txn Delete", Age = 20 };
-        _dbContext.Users.Insert(user);
-        _dbContext.SaveChanges();
-
+        await _dbContext.Users.InsertAsync(user);
+        await _dbContext.SaveChangesAsync();
         using (var txn = _dbContext.BeginTransaction())
         {
-            _dbContext.Users.Delete(user.Id);
-            _dbContext.SaveChanges();
+            await _dbContext.Users.DeleteAsync(user.Id);
+            await _dbContext.SaveChangesAsync();
         }
 
         // Verify
-        Assert.Null(_dbContext.Users.FindById(user.Id));
+        Assert.Null(await _dbContext.Users.FindByIdAsync(user.Id));
     }
 }

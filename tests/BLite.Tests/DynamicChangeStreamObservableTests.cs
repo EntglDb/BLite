@@ -53,8 +53,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         var events = new List<BsonChangeEvent>();
         using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
-        _col.Insert(MakeDoc("Alice"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("Alice"));
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 1);
 
@@ -70,8 +70,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
         for (int i = 0; i < 5; i++)
-            _col.Insert(MakeDoc($"Item{i}"));
-        _engine.Commit();
+            await _col.InsertAsync(MakeDoc($"Item{i}"));
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 5);
 
@@ -87,8 +87,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         var events = new List<BsonChangeEvent>();
         using var sub = _col.Watch(capturePayload: true).Subscribe(e => events.Add(e));
 
-        _col.Insert(MakeDoc("WithPayload"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("WithPayload"));
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 1);
 
@@ -102,8 +102,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         var events = new List<BsonChangeEvent>();
         using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
-        _col.Insert(MakeDoc("NoPayload"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("NoPayload"));
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 1);
 
@@ -111,22 +111,22 @@ public class DynamicChangeStreamObservableTests : IDisposable
         Assert.Null(events[0].Payload);
     }
 
-    // ── Update events ─────────────────────────────────────────────────────────
+    // ── UpdateAsync events ─────────────────────────────────────────────────────────
 
     [Fact]
     public async Task Watch_Update_FiresUpdateEvent()
     {
         var doc = MakeDoc("Original");
-        var id = _col.Insert(doc);
-        _engine.Commit();
+        var id = await _col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         var events = new List<BsonChangeEvent>();
         using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
         var updated = _col.CreateDocument(["name"],
             b => b.AddString("name", "Updated"));
-        _col.Update(id, updated);
-        _engine.Commit();
+        await _col.UpdateAsync(id, updated);
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 1);
 
@@ -140,14 +140,14 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_Delete_FiresDeleteEvent()
     {
         var doc = MakeDoc("ToDelete");
-        var id = _col.Insert(doc);
-        _engine.Commit();
+        var id = await _col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
         var events = new List<BsonChangeEvent>();
         using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
-        _col.Delete(id);
-        _engine.Commit();
+        await _col.DeleteAsync(id);
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 1);
 
@@ -163,15 +163,15 @@ public class DynamicChangeStreamObservableTests : IDisposable
         var events = new List<BsonChangeEvent>();
         var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
-        _col.Insert(MakeDoc("Before"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("Before"));
+        await _engine.CommitAsync();
         await WaitForEvents(events, 1);
         Assert.Single(events);
 
         sub.Dispose();
 
-        _col.Insert(MakeDoc("After"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("After"));
+        await _engine.CommitAsync();
         await Task.Delay(200); // let any pending events arrive
 
         // No new events after dispose
@@ -189,8 +189,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         using var sub1 = _col.Watch(capturePayload: false).Subscribe(e => events1.Add(e));
         using var sub2 = _col.Watch(capturePayload: false).Subscribe(e => events2.Add(e));
 
-        _col.Insert(MakeDoc("Shared"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("Shared"));
+        await _engine.CommitAsync();
 
         await WaitForEvents(events1, 1);
         await WaitForEvents(events2, 1);
@@ -224,8 +224,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         var events = new List<BsonChangeEvent>();
         using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
-        _col.Insert(MakeDoc("Stamped"));
-        _engine.Commit();
+        await _col.InsertAsync(MakeDoc("Stamped"));
+        await _engine.CommitAsync();
 
         await WaitForEvents(events, 1);
 

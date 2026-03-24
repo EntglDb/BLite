@@ -22,7 +22,7 @@ public class DocumentOverflowTests : IDisposable
     }
 
     [Fact]
-    public void Insert_MediumDoc_64KB_ShouldSucceed()
+    public async Task Insert_MediumDoc_64KB_ShouldSucceed()
     {
         // 20KB - Fits in 64KB buffer (First attempt)
         // But triggers overflow pages in storage (20KB > 16KB PageSize)
@@ -34,16 +34,16 @@ public class DocumentOverflowTests : IDisposable
             Age = 10
         };
 
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
-        var retrieved = _db.Users.FindById(id);
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.Users.FindByIdAsync(id);
         
         Assert.NotNull(retrieved);
         Assert.Equal(largeString, retrieved.Name);
     }
 
     [Fact]
-    public void Insert_LargeDoc_100KB_ShouldSucceed()
+    public async Task Insert_LargeDoc_100KB_ShouldSucceed()
     {
         // 100KB - Fails 64KB buffer, Retries with 2MB
         var largeString = new string('B', 100 * 1024);
@@ -54,16 +54,16 @@ public class DocumentOverflowTests : IDisposable
             Age = 20
         };
 
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
-        var retrieved = _db.Users.FindById(id);
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.Users.FindByIdAsync(id);
         
         Assert.NotNull(retrieved);
         Assert.Equal(largeString, retrieved.Name);
     }
 
     [Fact]
-    public void Insert_HugeDoc_3MB_ShouldSucceed()
+    public async Task Insert_HugeDoc_3MB_ShouldSucceed()
     {
         // 3MB - Fails 64KB, Fails 2MB, Retries with 16MB
         var largeString = new string('C', 3 * 1024 * 1024);
@@ -74,9 +74,9 @@ public class DocumentOverflowTests : IDisposable
             Age = 30
         };
 
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
-        var retrieved = _db.Users.FindById(id);
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.Users.FindByIdAsync(id);
         
         Assert.NotNull(retrieved);
         Assert.Equal(largeString.Length, retrieved.Name.Length);
@@ -86,28 +86,28 @@ public class DocumentOverflowTests : IDisposable
     }
 
     [Fact]
-    public void Update_SmallToHuge_ShouldSucceed()
+    public async Task Update_SmallToHuge_ShouldSucceed()
     {
         // Insert Small
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Small", Age = 1 };
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
 
-        // Update to Huge (3MB)
+        // UpdateAsync to Huge (3MB)
         var hugeString = new string('U', 3 * 1024 * 1024);
         user.Name = hugeString;
         
-        var updated = _db.Users.Update(user);
-        _db.SaveChanges();
+        var updated = await _db.Users.UpdateAsync(user);
+        await _db.SaveChangesAsync();
         Assert.True(updated);
 
-        var retrieved = _db.Users.FindById(id);
+        var retrieved = await _db.Users.FindByIdAsync(id);
         Assert.NotNull(retrieved);
         Assert.Equal(hugeString.Length, retrieved.Name.Length);
     }
 
     [Fact]
-    public void InsertBulk_MixedSizes_ShouldSucceed()
+    public async Task InsertBulk_MixedSizes_ShouldSucceed()
     {
         var users = new List<User>
         {
@@ -117,12 +117,12 @@ public class DocumentOverflowTests : IDisposable
             new User { Id = ObjectId.NewObjectId(), Name = new string('H', 3 * 1024 * 1024), Age = 4 } // 3MB
         };
 
-        var ids = _db.Users.InsertBulk(users);
+        var ids = await _db.Users.InsertBulkAsync(users);
         Assert.Equal(4, ids.Count);
 
         foreach (var u in users)
         {
-            var r = _db.Users.FindById(u.Id);
+            var r = await _db.Users.FindByIdAsync(u.Id);
             Assert.NotNull(r);
             Assert.Equal(u.Name.Length, r.Name.Length);
         }

@@ -7,7 +7,7 @@ namespace BLite.Tests;
 /// <summary>
 /// Additional tests for <see cref="BLiteEngine"/> targeting mutation survivors not yet
 /// covered by the existing BLiteEngineTests: disposal guards, metadata accessors,
-/// key-dictionary methods, transaction edge cases, and Checkpoint.
+/// key-dictionary methods, transaction edge cases, and CheckpointAsync.
 /// </summary>
 public class BLiteEngineAdditionalTests : IDisposable
 {
@@ -73,18 +73,18 @@ public class BLiteEngineAdditionalTests : IDisposable
     }
 
     [Fact]
-    public void AfterDispose_Insert_Throws()
+    public async Task AfterDispose_Insert_Throws()
     {
         var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "x"));
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Insert("col", doc));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await _engine.InsertAsync("col", doc));
     }
 
     [Fact]
-    public void AfterDispose_Commit_Throws()
+    public async Task AfterDispose_Commit_Throws()
     {
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Commit());
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await _engine.CommitAsync());
     }
 
     [Fact]
@@ -109,17 +109,17 @@ public class BLiteEngineAdditionalTests : IDisposable
     }
 
     [Fact]
-    public void AfterDispose_Checkpoint_Throws()
+    public async Task AfterDispose_Checkpoint_Throws()
     {
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.Checkpoint());
+        await Assert.ThrowsAsync<ObjectDisposedException>(_engine.CheckpointAsync);
     }
 
     [Fact]
-    public void AfterDispose_BeginTransaction_Throws()
+    public async Task AfterDispose_BeginTransaction_Throws()
     {
         _engine.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _engine.BeginTransaction());
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await _engine.BeginTransactionAsync());
     }
 
     [Fact]
@@ -195,26 +195,25 @@ public class BLiteEngineAdditionalTests : IDisposable
     }
 
     [Fact]
-    public void GetCollectionMetadata_AfterCreateAndCommit_ReturnsMetadata()
+    public async Task GetCollectionMetadata_AfterCreateAndCommit_ReturnsMetadata()
     {
         _engine.GetOrCreateCollection("meta_col");
         var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "x"));
-        _engine.Insert("meta_col", doc); // also commits
-
+        await _engine.InsertAsync("meta_col", doc); // also commits
         var meta = _engine.GetCollectionMetadata("meta_col");
         Assert.NotNull(meta);
         Assert.Equal("meta_col", meta!.Name, StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void GetAllCollectionsMetadata_ReturnsEntryForEachCommittedCollection()
+    public async Task GetAllCollectionsMetadata_ReturnsEntryForEachCommittedCollection()
     {
         _engine.GetOrCreateCollection("a_col");
         _engine.GetOrCreateCollection("b_col");
         var doc = _engine.CreateDocument(["v"], b => b.AddInt32("v", 1));
-        _engine.Insert("a_col", doc);
+        await _engine.InsertAsync("a_col", doc);
         var doc2 = _engine.CreateDocument(["v"], b => b.AddInt32("v", 2));
-        _engine.Insert("b_col", doc2);
+        await _engine.InsertAsync("b_col", doc2);
 
         var all = _engine.GetAllCollectionsMetadata();
         var names = all.Select(m => m.Name).ToList();
@@ -231,50 +230,50 @@ public class BLiteEngineAdditionalTests : IDisposable
     }
 
     [Fact]
-    public void BeginTransaction_ReturnsActiveTransaction()
+    public async Task BeginTransaction_ReturnsActiveTransaction()
     {
-        var txn = _engine.BeginTransaction();
+        var txn = await _engine.BeginTransactionAsync();
         Assert.NotNull(txn);
         Assert.Equal(TransactionState.Active, txn.State);
         _engine.Rollback();
     }
 
     [Fact]
-    public void BeginTransaction_WhenAlreadyActive_ReturnsSameTransaction()
+    public async Task BeginTransaction_WhenAlreadyActive_ReturnsSameTransaction()
     {
-        var txn1 = _engine.BeginTransaction();
-        var txn2 = _engine.BeginTransaction();
+        var txn1 = await _engine.BeginTransactionAsync();
+        var txn2 = await _engine.BeginTransactionAsync();
         Assert.Same(txn1, txn2);
         _engine.Rollback();
     }
 
     [Fact]
-    public void CurrentTransaction_AfterCommit_IsNull()
+    public async Task CurrentTransaction_AfterCommit_IsNull()
     {
-        _engine.BeginTransaction();
-        _engine.Commit();
+        await _engine.BeginTransactionAsync();
+        await _engine.CommitAsync();
         Assert.Null(_engine.CurrentTransaction);
     }
 
     [Fact]
-    public void CurrentTransaction_AfterRollback_IsNull()
+    public async Task CurrentTransaction_AfterRollback_IsNull()
     {
-        _engine.BeginTransaction();
+        await _engine.BeginTransactionAsync();
         _engine.Rollback();
         Assert.Null(_engine.CurrentTransaction);
     }
 
     [Fact]
-    public void Commit_WithNoActiveTransaction_DoesNotThrow()
+    public async Task Commit_WithNoActiveTransaction_DoesNotThrow()
     {
         // No transaction started — Commit should be a silent no-op
-        _engine.Commit(); // must not throw
+        await _engine.CommitAsync(); // must not throw
     }
 
     [Fact]
     public void Rollback_WithNoActiveTransaction_DoesNotThrow()
     {
-        // No transaction started — Rollback should be a silent no-op
+        // No transaction started — RollbackAsync should be a silent no-op
         _engine.Rollback(); // must not throw
     }
 
@@ -302,20 +301,20 @@ public class BLiteEngineAdditionalTests : IDisposable
         _engine.Rollback();
     }
 
-    // ─── Checkpoint ───────────────────────────────────────────────────────────
+    // ─── CheckpointAsync ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void Checkpoint_DoesNotThrow_AndDataRemainsIntact()
+    public async Task Checkpoint_DoesNotThrow_AndDataRemainsIntact()
     {
         var col = _engine.GetOrCreateCollection("chk_col");
         var doc = col.CreateDocument(["_id", "name"], b =>
             b.AddId((BsonId)1).AddString("name", "BeforeCheckpoint"));
-        var id = col.Insert(doc);
-        _engine.Commit();
+        var id = await col.InsertAsync(doc);
+        await _engine.CommitAsync();
 
-        _engine.Checkpoint(); // must not throw
+        await _engine.CheckpointAsync(); // must not throw
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found!.TryGetString("name", out var name));
         Assert.Equal("BeforeCheckpoint", name);

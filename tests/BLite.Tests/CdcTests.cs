@@ -21,8 +21,8 @@ public class CdcTests : IDisposable
         using var subscription = _db.People.Watch(capturePayload: true).Subscribe(e => events.Add(e));
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
-        _db.People.Insert(person);
-        _db.SaveChanges();
+        await _db.People.InsertAsync(person);
+        await _db.SaveChangesAsync();
 
         // Wait for event (it's async via Channel)
         await Task.Delay(200);
@@ -41,8 +41,8 @@ public class CdcTests : IDisposable
         using var subscription = _db.People.Watch(capturePayload: false).Subscribe(e => events.Add(e));
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
-        _db.People.Insert(person);
-        _db.SaveChanges();
+        await _db.People.InsertAsync(person);
+        await _db.SaveChangesAsync();
 
         await Task.Delay(200);
 
@@ -56,22 +56,22 @@ public class CdcTests : IDisposable
         var events = new List<ChangeStreamEvent<int, Person>>();
         using var subscription = _db.People.Watch(capturePayload: true).Subscribe(e => events.Add(e));
 
-        using (var txn = _db.BeginTransaction())
+        using (var txn = await _db.BeginTransactionAsync())
         {
-            _db.People.Insert(new Person { Id = 1, Name = "John" });
+            await _db.People.InsertAsync(new Person { Id = 1, Name = "John" });
             await Task.Delay(50);
             Assert.Empty(events); // Not committed yet
 
-            txn.Rollback();
+            await txn.RollbackAsync();
         }
 
         await Task.Delay(200);
         Assert.Empty(events); // Rolled back
 
-        using (var txn = _db.BeginTransaction())
+        using (var txn = await _db.BeginTransactionAsync())
         {
-            _db.People.Insert(new Person { Id = 2, Name = "Jane" });
-            txn.Commit();
+            await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane" });
+            await txn.CommitAsync();
         }
 
         await Task.Delay(200);
@@ -79,22 +79,21 @@ public class CdcTests : IDisposable
         Assert.Equal(2, events[0].DocumentId);
     }
 
-    [Fact(Skip = "Flaky timing test - run manually when needed")]
+    [Fact]
     public async Task Test_Cdc_Update_And_Delete()
     {
         var events = new List<ChangeStreamEvent<int, Person>>();
         using var subscription = _db.People.Watch(capturePayload: true).Subscribe(e => events.Add(e));
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
-        _db.People.Insert(person);
-        _db.SaveChanges();
+        await _db.People.InsertAsync(person);
+        await _db.SaveChangesAsync();
 
         person.Name = "Johnny";
-        _db.People.Update(person);
-        _db.SaveChanges();
-
-        _db.People.Delete(1);
-        _db.SaveChanges();
+        await _db.People.UpdateAsync(person);
+        await _db.SaveChangesAsync();
+        await _db.People.DeleteAsync(1);
+        await _db.SaveChangesAsync();
 
         await Task.Delay(300);
 

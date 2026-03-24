@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests
@@ -28,7 +29,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void TemporalEntity_Insert_And_FindById_Works()
+        public async Task TemporalEntity_Insert_And_FindById_Works()
         {
             // Arrange
             var now = DateTime.UtcNow;
@@ -53,8 +54,8 @@ namespace BLite.Tests
             };
 
             // Act
-            _db.TemporalEntities.Insert(entity);
-            var retrieved = _db.TemporalEntities.FindById(entity.Id);
+            await _db.TemporalEntities.InsertAsync(entity);
+            var retrieved = await _db.TemporalEntities.FindByIdAsync(entity.Id);
 
             // Assert
             Assert.NotNull(retrieved);
@@ -85,7 +86,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void TemporalEntity_Insert_WithNullOptionalFields_Works()
+        public async Task TemporalEntity_Insert_WithNullOptionalFields_Works()
         {
             // Arrange
             var entity = new TemporalEntity
@@ -105,8 +106,8 @@ namespace BLite.Tests
             };
 
             // Act
-            _db.TemporalEntities.Insert(entity);
-            var retrieved = _db.TemporalEntities.FindById(entity.Id);
+            await _db.TemporalEntities.InsertAsync(entity);
+            var retrieved = await _db.TemporalEntities.FindByIdAsync(entity.Id);
 
             // Assert
             Assert.NotNull(retrieved);
@@ -118,7 +119,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void TemporalEntity_Update_Works()
+        public async Task TemporalEntity_Update_Works()
         {
             // Arrange
             var entity = new TemporalEntity
@@ -132,17 +133,17 @@ namespace BLite.Tests
                 OpeningTime = new TimeOnly(9, 0, 0)
             };
 
-            _db.TemporalEntities.Insert(entity);
+            await _db.TemporalEntities.InsertAsync(entity);
 
-            // Act - Update temporal fields
+            // Act - UpdateAsync temporal fields
             entity.Name = "Updated";
             entity.UpdatedAt = DateTimeOffset.UtcNow.AddDays(1);
             entity.Duration = TimeSpan.FromHours(2);
             entity.BirthDate = new DateOnly(1991, 2, 2);
             entity.OpeningTime = new TimeOnly(10, 0, 0);
             
-            _db.TemporalEntities.Update(entity);
-            var retrieved = _db.TemporalEntities.FindById(entity.Id);
+            await _db.TemporalEntities.UpdateAsync(entity);
+            var retrieved = await _db.TemporalEntities.FindByIdAsync(entity.Id);
 
             // Assert
             Assert.NotNull(retrieved);
@@ -153,7 +154,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void TemporalEntity_Query_Works()
+        public async Task TemporalEntity_Query_Works()
         {
             // Arrange
             var birthDate1 = new DateOnly(1990, 1, 1);
@@ -181,13 +182,13 @@ namespace BLite.Tests
                 OpeningTime = new TimeOnly(10, 0, 0)
             };
 
-            _db.TemporalEntities.Insert(entity1);
-            _db.TemporalEntities.Insert(entity2);
+            await _db.TemporalEntities.InsertAsync(entity1);
+            await _db.TemporalEntities.InsertAsync(entity2);
 
             // Act
-            var results = _db.TemporalEntities.AsQueryable()
+            var results = await _db.TemporalEntities.AsQueryable()
                 .Where(e => e.BirthDate == birthDate1)
-                .ToList();
+                .ToListAsync();
 
             // Assert
             Assert.Single(results);
@@ -195,7 +196,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void TimeSpan_EdgeCases_Work()
+        public async Task TimeSpan_EdgeCases_Work()
         {
             // Arrange - Test various TimeSpan values
             var entity = new TemporalEntity
@@ -211,8 +212,8 @@ namespace BLite.Tests
             };
 
             // Act
-            _db.TemporalEntities.Insert(entity);
-            var retrieved = _db.TemporalEntities.FindById(entity.Id);
+            await _db.TemporalEntities.InsertAsync(entity);
+            var retrieved = await _db.TemporalEntities.FindByIdAsync(entity.Id);
 
             // Assert
             Assert.NotNull(retrieved);
@@ -229,12 +230,12 @@ namespace BLite.Tests
         /// because the OrderByClause key-selector had a DateTimeOffset parameter instead of T.
         /// </summary>
         [Fact]
-        public void Select_Then_OrderBy_DateTimeOffset_DoesNotThrow()
+        public async Task Select_Then_OrderBy_DateTimeOffset_DoesNotThrow()
         {
             // Arrange
             var base_ = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
-            _db.TemporalEntities.Insert(new TemporalEntity
+            await _db.TemporalEntities.InsertAsync(new TemporalEntity
             {
                 Id = ObjectId.NewObjectId(),
                 Name = "C",
@@ -244,7 +245,7 @@ namespace BLite.Tests
                 BirthDate = DateOnly.MinValue,
                 OpeningTime = TimeOnly.MinValue
             });
-            _db.TemporalEntities.Insert(new TemporalEntity
+            await _db.TemporalEntities.InsertAsync(new TemporalEntity
             {
                 Id = ObjectId.NewObjectId(),
                 Name = "A",
@@ -254,7 +255,7 @@ namespace BLite.Tests
                 BirthDate = DateOnly.MinValue,
                 OpeningTime = TimeOnly.MinValue
             });
-            _db.TemporalEntities.Insert(new TemporalEntity
+            await _db.TemporalEntities.InsertAsync(new TemporalEntity
             {
                 Id = ObjectId.NewObjectId(),
                 Name = "B",
@@ -266,10 +267,10 @@ namespace BLite.Tests
             });
 
             // Act — this chain triggered the ArgumentException before the fix
-            var dates = _db.TemporalEntities.AsQueryable()
+            var dates = await _db.TemporalEntities.AsQueryable()
                 .Select(e => e.UpdatedAt)
                 .OrderBy(d => d)
-                .ToList();
+                .ToListAsync();
 
             // Assert
             Assert.Equal(3, dates.Count);
@@ -280,14 +281,14 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Where_Then_Select_Then_OrderByDescending_DateTimeOffset_DoesNotThrow()
+        public async Task Where_Then_Select_Then_OrderByDescending_DateTimeOffset_DoesNotThrow()
         {
             // Arrange
             var base_ = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
             for (int i = 0; i < 4; i++)
             {
-                _db.TemporalEntities.Insert(new TemporalEntity
+                await _db.TemporalEntities.InsertAsync(new TemporalEntity
                 {
                     Id = ObjectId.NewObjectId(),
                     Name = i % 2 == 0 ? "even" : "odd",
@@ -300,12 +301,11 @@ namespace BLite.Tests
             }
 
             // Act
-            var dates = _db.TemporalEntities.AsQueryable()
+            var dates = await _db.TemporalEntities.AsQueryable()
                 .Where(e => e.Name == "even")
                 .Select(e => e.UpdatedAt)
                 .OrderByDescending(d => d)
-                .ToList();
-
+                .ToListAsync();
             // Assert — only even-indexed items (day 0 and day 2), descending
             Assert.Equal(2, dates.Count);
             Assert.True(dates[0] > dates[1]);

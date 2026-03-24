@@ -18,15 +18,15 @@ public class DocumentCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Insert_And_FindById_Works()
+    public async Task Insert_And_FindById_Works()
     {
         // Arrange
         var user = new User { Name = "Alice", Age = 30 };
         
         // Act
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
-        var found = _db.Users.FindById(id);
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
+        var found = await _db.Users.FindByIdAsync(id);
         
         // Assert
         Assert.NotNull(found);
@@ -36,41 +36,40 @@ public class DocumentCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Insert_With_Duplicate_Id_Throws()
+    public async Task Insert_With_Duplicate_Id_Throws()
     {
         var id = ObjectId.NewObjectId();
 
-        _db.Users.Insert(new User { Id = id, Name = "Alice", Age = 30 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Id = id, Name = "Alice", Age = 30 });
+        await _db.SaveChangesAsync();
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            _db.Users.Insert(new User { Id = id, Name = "Bob", Age = 31 }));
-
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await _db.Users.InsertAsync(new User { Id = id, Name = "Bob", Age = 31 }));
         Assert.Contains("Duplicate key violation", ex.Message);
-        Assert.Equal(1, _db.Users.Count());
+        Assert.Equal(1, await _db.Users.CountAsync());
     }
 
     [Fact]
-    public void FindById_Returns_Null_When_Not_Found()
+    public async Task FindById_Returns_Null_When_Not_Found()
     {
         // Act
-        var found = _db.Users.FindById(ObjectId.NewObjectId());
+        var found = await _db.Users.FindByIdAsync(ObjectId.NewObjectId());
         
         // Assert
         Assert.Null(found);
     }
 
     [Fact]
-    public void FindAll_Returns_All_Entities()
+    public async Task FindAll_Returns_All_Entities()
     {
         // Arrange
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+        await _db.SaveChangesAsync();
 
         // Act
-        var all = _db.Users.FindAll().ToList();
+        var all = (await _db.Users.FindAllAsync().ToListAsync());
         
         // Assert
         Assert.Equal(3, all.Count);
@@ -80,94 +79,92 @@ public class DocumentCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Update_Modifies_Entity()
+    public async Task Update_Modifies_Entity()
     {
         // Arrange
         var user = new User { Name = "Alice", Age = 30 };
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
 
         // Act
         user.Age = 31;
-        var updated = _db.Users.Update(user);
-        _db.SaveChanges();
+        var updated = await _db.Users.UpdateAsync(user);
+        await _db.SaveChangesAsync();
 
         // Assert
         Assert.True(updated);
         
-        var found = _db.Users.FindById(id);
+        var found = await _db.Users.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.Equal(31, found.Age);
     }
 
     [Fact]
-    public void Update_Returns_False_When_Not_Found()
+    public async Task Update_Returns_False_When_Not_Found()
     {
         // Arrange
         var user = new User { Id = ObjectId.NewObjectId(), Name = "Ghost", Age = 99 };
         
         // Act
-        var updated = _db.Users.Update(user);
-        _db.SaveChanges();
+        var updated = await _db.Users.UpdateAsync(user);
+        await _db.SaveChangesAsync();
         
         // Assert
         Assert.False(updated);
     }
 
     [Fact]
-    public void Delete_Removes_Entity()
+    public async Task Delete_Removes_Entity()
     {
         // Arrange
         var user = new User { Name = "Alice", Age = 30 };
-        var id = _db.Users.Insert(user);
-        _db.SaveChanges();
+        var id = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
         
         // Act
-        var deleted = _db.Users.Delete(id);
-        _db.SaveChanges();
-
+        var deleted = await _db.Users.DeleteAsync(id);
+        await _db.SaveChangesAsync();
         // Assert
         Assert.True(deleted);
-        Assert.Null(_db.Users.FindById(id));
+        Assert.Null(await _db.Users.FindByIdAsync(id));
     }
 
     [Fact]
-    public void Delete_Returns_False_When_Not_Found()
+    public async Task Delete_Returns_False_When_Not_Found()
     {
         // Act
-        var deleted = _db.Users.Delete(ObjectId.NewObjectId());
-        _db.SaveChanges();
-
+        var deleted = await _db.Users.DeleteAsync(ObjectId.NewObjectId());
+        await _db.SaveChangesAsync();
         // Assert
         Assert.False(deleted);
     }
 
     [Fact]
-    public void Count_Returns_Correct_Count()
+    public async Task Count_Returns_Correct_Count()
     {
         // Arrange
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
 
         // Act
-        var count = _db.Users.Count();
+        var count = await _db.Users.CountAsync();
         
         // Assert
         Assert.Equal(2, count);
     }
 
     [Fact]
-    public void Find_With_Predicate_Filters_Correctly()
+    public async Task Find_With_Predicate_Filters_Correctly()
     {
         // Arrange
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+        await _db.SaveChangesAsync();
 
         // Act
-        var over30 = _db.Users.Find(u => u.Age > 30).ToList();
+        var over30 = (await _db.Users.FindAsync(u => u.Age > 30).ToListAsync());
         
         // Assert
         Assert.Single(over30);
@@ -175,7 +172,7 @@ public class DocumentCollectionTests : IDisposable
     }
 
     [Fact]
-    public void InsertBulk_Inserts_Multiple_Entities()
+    public async Task InsertBulk_Inserts_Multiple_Entities()
     {
         // Arrange
         var users = new[]
@@ -186,29 +183,29 @@ public class DocumentCollectionTests : IDisposable
         };
         
         // Act
-        var count = _db.Users.InsertBulk(users);
-        _db.SaveChanges();
+        var count = await _db.Users.InsertBulkAsync(users);
+        await _db.SaveChangesAsync();
 
         // Assert
         Assert.Equal(3, count.Count);
-        Assert.Equal(3, _db.Users.Count());
+        Assert.Equal(3, await _db.Users.CountAsync());
     }
 
     [Fact]
-    public void Insert_With_SpecifiedId_RetainsId()
+    public async Task Insert_With_SpecifiedId_RetainsId()
     {
         // Arrange
         var id = ObjectId.NewObjectId();
         var user = new User { Id = id, Name = "SpecifiedID", Age = 40 };
 
         // Act
-        var insertedId = _db.Users.Insert(user);
-        _db.SaveChanges();
+        var insertedId = await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
 
         // Assert
         Assert.Equal(id, insertedId);
         
-        var found = _db.Users.FindById(id);
+        var found = await _db.Users.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.Equal(id, found.Id);
         Assert.Equal("SpecifiedID", found.Name);

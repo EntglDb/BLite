@@ -22,11 +22,11 @@ public class BsonExpressionEvaluatorTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"bee_tests_{Guid.NewGuid()}.db");
         _db = new TestDbContext(_dbPath);
 
-        _db.Users.Insert(new User { Name = "Alice",   Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob",     Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.Users.Insert(new User { Name = "Dave",    Age = 20 });
-        _db.SaveChanges();
+        _db.Users.InsertAsync(new User { Name = "Alice",   Age = 30 }).GetAwaiter().GetResult();
+        _db.Users.InsertAsync(new User { Name = "Bob",     Age = 25 }).GetAwaiter().GetResult();
+        _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 }).GetAwaiter().GetResult();
+        _db.Users.InsertAsync(new User { Name = "Dave",    Age = 20 }).GetAwaiter().GetResult();
+        _db.SaveChangesAsync().GetAwaiter().GetResult();
     }
 
     public void Dispose()

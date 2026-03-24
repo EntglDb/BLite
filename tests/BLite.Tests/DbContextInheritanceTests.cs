@@ -39,22 +39,22 @@ public class DbContextInheritanceTests : IDisposable
     }
 
     [Fact]
-    public void ExtendedContext_Can_Use_Parent_Collections()
+    public async Task ExtendedContext_Can_Use_Parent_Collections()
     {
         // Insert into parent collection
         var user = new User { Name = "TestUser", Age = 30 };
-        _db.Users.Insert(user);
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(user);
+        await _db.SaveChangesAsync();
 
         // Verify we can read it back
-        var retrieved = _db.Users.FindById(user.Id);
+        var retrieved = await _db.Users.FindByIdAsync(user.Id);
         Assert.NotNull(retrieved);
         Assert.Equal("TestUser", retrieved.Name);
         Assert.Equal(30, retrieved.Age);
     }
 
     [Fact]
-    public void ExtendedContext_Can_Use_Own_Collections()
+    public async Task ExtendedContext_Can_Use_Own_Collections()
     {
         // Insert into extended collection
         var entity = new ExtendedEntity 
@@ -63,22 +63,21 @@ public class DbContextInheritanceTests : IDisposable
             Description = "Test Extended Entity",
             CreatedAt = DateTime.UtcNow
         };
-        _db.ExtendedEntities.Insert(entity);
-        _db.SaveChanges();
+        await _db.ExtendedEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
         // Verify we can read it back
-        var retrieved = _db.ExtendedEntities.FindById(1);
+        var retrieved = await _db.ExtendedEntities.FindByIdAsync(1);
         Assert.NotNull(retrieved);
         Assert.Equal("Test Extended Entity", retrieved.Description);
     }
 
     [Fact]
-    public void ExtendedContext_Can_Use_Both_Parent_And_Own_Collections()
+    public async Task ExtendedContext_Can_Use_Both_Parent_And_Own_Collections()
     {
         // Insert into parent collection
         var person = new Person { Id = 100, Name = "John", Age = 25 };
-        _db.People.Insert(person);
-
+        await _db.People.InsertAsync(person);
         // Insert into extended collection
         var extended = new ExtendedEntity 
         { 
@@ -86,13 +85,13 @@ public class DbContextInheritanceTests : IDisposable
             Description = "Related to John",
             CreatedAt = DateTime.UtcNow
         };
-        _db.ExtendedEntities.Insert(extended);
+        await _db.ExtendedEntities.InsertAsync(extended);
         
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         // Verify both
-        var retrievedPerson = _db.People.FindById(100);
-        var retrievedExtended = _db.ExtendedEntities.FindById(200);
+        var retrievedPerson = await _db.People.FindByIdAsync(100);
+        var retrievedExtended = await _db.ExtendedEntities.FindByIdAsync(200);
 
         Assert.NotNull(retrievedPerson);
         Assert.Equal("John", retrievedPerson.Name);

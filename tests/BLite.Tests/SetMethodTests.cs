@@ -110,28 +110,28 @@ public class SetMethodTests : IDisposable
     }
 
     [Fact]
-    public void Set_CanPerformOperations()
+    public async Task Set_CanPerformOperations()
     {
         var users = _db.Set<User>();
 
         var user = new User { Name = "Alice", Age = 30 };
-        var id = users.Insert(user);
+        var id = await users.InsertAsync(user);
 
-        var found = users.FindById(id);
+        var found = await users.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.Equal("Alice", found.Name);
         Assert.Equal(30, found.Age);
     }
 
     [Fact]
-    public void Set_WithIntKey_CanPerformOperations()
+    public async Task Set_WithIntKey_CanPerformOperations()
     {
         var products = _db.Set<int, Product>();
 
         var product = new Product { Id = 1, Title = "Widget", Price = 9.99m };
-        products.Insert(product);
+        await products.InsertAsync(product);
 
-        var found = products.FindById(1);
+        var found = await products.FindByIdAsync(1);
         Assert.NotNull(found);
         Assert.Equal("Widget", found.Title);
         Assert.Equal(9.99m, found.Price);
@@ -201,27 +201,27 @@ public class SetMethodInheritanceTests : IDisposable
     }
 
     [Fact]
-    public void Set_OwnCollection_CanPerformOperations()
+    public async Task Set_OwnCollection_CanPerformOperations()
     {
         var entities = _db.Set<int, ExtendedEntity>();
 
         var entity = new ExtendedEntity { Id = 1, Description = "Test", CreatedAt = DateTime.UtcNow };
-        entities.Insert(entity);
+        await entities.InsertAsync(entity);
 
-        var found = entities.FindById(1);
+        var found = await entities.FindByIdAsync(1);
         Assert.NotNull(found);
         Assert.Equal("Test", found.Description);
     }
 
     [Fact]
-    public void Set_ParentCollection_CanPerformOperations()
+    public async Task Set_ParentCollection_CanPerformOperations()
     {
         var users = _db.Set<User>();
 
         var user = new User { Name = "Bob", Age = 25 };
-        var id = users.Insert(user);
+        var id = await users.InsertAsync(user);
 
-        var found = users.FindById(id);
+        var found = await users.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.Equal("Bob", found.Name);
     }

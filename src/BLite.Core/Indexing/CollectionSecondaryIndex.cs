@@ -426,7 +426,6 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     // ── Document reader (injected by DocumentCollection) ─────────────────────
     // Needed to resolve DocumentLocation → T inside Query / QueryAsync.
 
-    private Func<DocumentLocation, T?>? _docReader;
     private Func<DocumentLocation, CancellationToken, ValueTask<T?>>? _asyncDocReader;
 
     /// <summary>
@@ -434,30 +433,12 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// returning the index to the caller. Not set for indexes held internally.
     /// </summary>
     internal void SetDocumentReader(
-        Func<DocumentLocation, T?> sync,
         Func<DocumentLocation, CancellationToken, ValueTask<T?>> async)
     {
-        _docReader = sync;
         _asyncDocReader = async;
     }
 
     // ── ICollectionIndex query methods ────────────────────────────────────────
-
-    /// <inheritdoc cref="ICollectionIndex{TId,T}.Query"/>
-    public IEnumerable<T> Query(object? minKey = null, object? maxKey = null, bool ascending = true)
-    {
-        if (_docReader is null)
-            throw new InvalidOperationException(
-                "Document reader not available. Use collection.QueryIndex() instead, " +
-                "or obtain this index via collection.GetIndex() / CreateIndex().");
-
-        var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
-        foreach (var loc in Range(minKey, maxKey, direction))
-        {
-            var doc = _docReader(loc);
-            if (doc is not null) yield return doc;
-        }
-    }
 
     /// <inheritdoc cref="ICollectionIndex{TId,T}.QueryAsync"/>
     public async IAsyncEnumerable<T> QueryAsync(

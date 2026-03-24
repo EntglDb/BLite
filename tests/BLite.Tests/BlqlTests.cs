@@ -21,7 +21,7 @@ public class BlqlTests : IDisposable
         _engine = new BLiteEngine(_dbPath);
         _col = _engine.GetOrCreateCollection("items");
 
-        SeedData();
+        SeedData().GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -34,22 +34,22 @@ public class BlqlTests : IDisposable
 
     // ── Seed ───────────────────────────────────────────────────────────────
 
-    private void SeedData()
+    private async Task SeedData()
     {
         // 10 documents to exercise all query scenarios
-        Insert("Alice",   30, "active",  "admin",    "alice@example.com", new DateTime(2024, 1, 10));
-        Insert("Bob",     25, "inactive","user",     null,                 new DateTime(2024, 2, 5));
-        Insert("Charlie", 35, "active",  "mod",      "charlie@x.com",     new DateTime(2024, 3, 1));
-        Insert("Diana",   28, "active",  "user",     "diana@x.com",       new DateTime(2024, 4, 15));
-        Insert("Eve",     22, "banned",  "user",     "eve@x.com",         new DateTime(2024, 5, 20));
-        Insert("Frank",   40, "active",  "admin",    "frank@x.com",       new DateTime(2024, 6, 10));
-        Insert("Grace",   18, "active",  "user",     "grace@x.com",       new DateTime(2024, 7, 7));
-        Insert("Hank",    55, "inactive","superadmin","hank@x.com",       new DateTime(2024, 8, 1));
-        Insert("Iris",    31, "active",  "mod",      "iris@x.com",        new DateTime(2024, 9, 9));
-        Insert("Jack",    19, "active",  "user",     "jack@x.com",        new DateTime(2024, 10, 3));
+        await Insert("Alice",   30, "active",  "admin",    "alice@example.com", new DateTime(2024, 1, 10));
+        await Insert("Bob",     25, "inactive","user",     null,                 new DateTime(2024, 2, 5));
+        await Insert("Charlie", 35, "active",  "mod",      "charlie@x.com",     new DateTime(2024, 3, 1));
+        await Insert("Diana",   28, "active",  "user",     "diana@x.com",       new DateTime(2024, 4, 15));
+        await Insert("Eve",     22, "banned",  "user",     "eve@x.com",         new DateTime(2024, 5, 20));
+        await Insert("Frank",   40, "active",  "admin",    "frank@x.com",       new DateTime(2024, 6, 10));
+        await Insert("Grace",   18, "active",  "user",     "grace@x.com",       new DateTime(2024, 7, 7));
+        await Insert("Hank",    55, "inactive","superadmin","hank@x.com",       new DateTime(2024, 8, 1));
+        await Insert("Iris",    31, "active",  "mod",      "iris@x.com",        new DateTime(2024, 9, 9));
+        await Insert("Jack",    19, "active",  "user",     "jack@x.com",        new DateTime(2024, 10, 3));
     }
 
-    private void Insert(string name, int age, string status, string role, string? email, DateTime createdAt)
+    private async Task Insert(string name, int age, string status, string role, string? email, DateTime createdAt)
     {
         // Register all possible field names up-front in the key map
         var doc = _col.CreateDocument(
@@ -63,7 +63,7 @@ public class BlqlTests : IDisposable
                  .AddDateTime("createdAt", createdAt);
                 if (email != null) b.AddString("email", email);
             });
-        _col.Insert(doc);
+        await _col.InsertAsync(doc);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

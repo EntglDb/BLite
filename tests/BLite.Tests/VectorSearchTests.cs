@@ -1,4 +1,5 @@
 using BLite.Core;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -18,7 +19,7 @@ public class VectorSearchTests
     // ── diagnostics (isolate LINQ vs HNSW) ──────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_DirectApi_BypassLinq()
+    public async Task Test_VectorSearch_DirectApi_BypassLinq()
     {
         // Calls DocumentCollection.VectorSearch() directly, no LINQ expression pipeline.
         // If this returns 3 but the LINQ-based tests return 1, the bug is in the LINQ stack.
@@ -28,11 +29,11 @@ public class VectorSearchTests
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "B", Embedding = [0.0f, 1.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "C", Embedding = [0.0f, 0.0f, 1.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "B", Embedding = [0.0f, 1.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "C", Embedding = [0.0f, 0.0f, 1.0f] });
 
-            var results = db.VectorItems.VectorSearch("idx_vector", [1.0f, 1.0f, 1.0f], 3).ToList();
+            var results = await db.VectorItems.VectorSearchAsync("idx_vector", [1.0f, 1.0f, 1.0f], 3).ToListAsync();
             Assert.Equal(3, results.Count);
         }
 
@@ -40,7 +41,7 @@ public class VectorSearchTests
     }
 
     [Fact]
-    public void Test_VectorSearch_FullScan_AllItemsPresent()
+    public async Task Test_VectorSearch_FullScan_AllItemsPresent()
     {
         // Full scan (no index) — verifies all 3 items were actually inserted.
         string dbPath = TempDb();
@@ -48,11 +49,11 @@ public class VectorSearchTests
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "B", Embedding = [0.0f, 1.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "C", Embedding = [0.0f, 0.0f, 1.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "B", Embedding = [0.0f, 1.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "C", Embedding = [0.0f, 0.0f, 1.0f] });
 
-            var all = db.VectorItems.AsQueryable().ToList();
+            var all = await db.VectorItems.AsQueryable().ToListAsync();
             Assert.Equal(3, all.Count);
         }
 
@@ -62,18 +63,18 @@ public class VectorSearchTests
     // ── basic ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_Basic()
+    public async Task Test_VectorSearch_Basic()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "Near", Embedding = [1.0f, 1.0f, 1.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "Far",  Embedding = [10.0f, 10.0f, 10.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Near", Embedding = [1.0f, 1.0f, 1.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Far", Embedding = [10.0f, 10.0f, 10.0f] });
 
             var query = new[] { 0.9f, 0.9f, 0.9f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToListAsync();
 
             Assert.Single(results);
             Assert.Equal("Near", results[0].Title);
@@ -85,7 +86,7 @@ public class VectorSearchTests
     // ── edge: empty index ────────────────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_EmptyIndex_ReturnsEmpty()
+    public async Task Test_VectorSearch_EmptyIndex_ReturnsEmpty()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -93,7 +94,7 @@ public class VectorSearchTests
         using (var db = new TestDbContext(dbPath))
         {
             var query = new[] { 1.0f, 1.0f, 1.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 5)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 5)).ToListAsync();
 
             Assert.Empty(results);
         }
@@ -104,24 +105,24 @@ public class VectorSearchTests
     // ── edge: single node ────────────────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_SingleNode_SearchReturnsIt()
+    public async Task Test_VectorSearch_SingleNode_SearchReturnsIt()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "Only", Embedding = [3.0f, 3.0f, 3.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Only", Embedding = [3.0f, 3.0f, 3.0f] });
 
             var query = new[] { 0.0f, 0.0f, 0.0f };
 
             // k=1 — normal case
-            var r1 = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToList();
+            var r1 = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToListAsync();
             Assert.Single(r1);
             Assert.Equal("Only", r1[0].Title);
 
             // k larger than total count — no crash, still returns the one item
-            var rN = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 100)).ToList();
+            var rN = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 100)).ToListAsync();
             Assert.Single(rN);
         }
 
@@ -131,19 +132,19 @@ public class VectorSearchTests
     // ── edge: k > count ──────────────────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_K_GreaterThanCount_ReturnsAll()
+    public async Task Test_VectorSearch_K_GreaterThanCount_ReturnsAll()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "B", Embedding = [0.0f, 1.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "C", Embedding = [0.0f, 0.0f, 1.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "B", Embedding = [0.0f, 1.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "C", Embedding = [0.0f, 0.0f, 1.0f] });
 
             var query = new[] { 1.0f, 1.0f, 1.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 100)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 100)).ToListAsync();
 
             // Must not throw, and must return all 3 items
             Assert.Equal(3, results.Count);
@@ -155,19 +156,19 @@ public class VectorSearchTests
     // ── exact match is nearest ───────────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_ExactMatchVector_IsFirstResult()
+    public async Task Test_VectorSearch_ExactMatchVector_IsFirstResult()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "Exact", Embedding = [5.0f, 5.0f, 5.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "Near",  Embedding = [4.9f, 4.9f, 4.9f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "Far",   Embedding = [0.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Exact", Embedding = [5.0f, 5.0f, 5.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Near",  Embedding = [4.9f, 4.9f, 4.9f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Far",   Embedding = [0.0f, 0.0f, 0.0f] });
 
             var query = new[] { 5.0f, 5.0f, 5.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 3)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 3)).ToListAsync();
 
             Assert.Equal(3, results.Count);
             // The item with distance 0 must be ranked first
@@ -180,7 +181,7 @@ public class VectorSearchTests
     // ── results ordered nearest-first ────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_Results_OrderedByDistance_NearestFirst()
+    public async Task Test_VectorSearch_Results_OrderedByDistance_NearestFirst()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -188,13 +189,13 @@ public class VectorSearchTests
         using (var db = new TestDbContext(dbPath))
         {
             // Items placed at L2 distances 1, 2, 3, 4 from origin
-            db.VectorItems.Insert(new VectorEntity { Title = "D1", Embedding = [1.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "D2", Embedding = [2.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "D3", Embedding = [3.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "D4", Embedding = [4.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "D1", Embedding = [1.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "D2", Embedding = [2.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "D3", Embedding = [3.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "D4", Embedding = [4.0f, 0.0f, 0.0f] });
 
             var query = new[] { 0.0f, 0.0f, 0.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 4)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 4)).ToListAsync();
 
             Assert.Equal(4, results.Count);
             // The nearest node must come first
@@ -212,7 +213,7 @@ public class VectorSearchTests
     // → inserting a 5th node triggers the page-chain extension fixed by AllocateNode.
 
     [Fact]
-    public void Test_VectorSearch_PageOverflow_FirstSpillToSecondPage()
+    public async Task Test_VectorSearch_PageOverflow_FirstSpillToSecondPage()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -220,12 +221,11 @@ public class VectorSearchTests
         using (var db = new TestDbContext(dbPath))
         {
             for (int i = 0; i < 5; i++)
-                db.VectorItems.Insert(new VectorEntity { Title = $"N{i}", Embedding = [(float)i, 0.0f, 0.0f] });
+                await db.VectorItems.InsertAsync(new VectorEntity { Title = $"N{i}", Embedding = [(float)i, 0.0f, 0.0f] });
 
             // Query at the 5th item (the one that lives on the 2nd page)
             var query = new[] { 4.0f, 0.0f, 0.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToList();
-
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToListAsync();
             Assert.Single(results);
             Assert.Equal("N4", results[0].Title);
         }
@@ -236,7 +236,7 @@ public class VectorSearchTests
     // ── multi-page chain: 20 nodes across 5 pages ────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_MultiPageChain_RecallCorrect()
+    public async Task Test_VectorSearch_MultiPageChain_RecallCorrect()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -244,12 +244,11 @@ public class VectorSearchTests
         using (var db = new TestDbContext(dbPath))
         {
             for (int i = 0; i < 20; i++)
-                db.VectorItems.Insert(new VectorEntity { Title = $"N{i}", Embedding = [(float)i, 0.0f, 0.0f] });
+                await db.VectorItems.InsertAsync(new VectorEntity { Title = $"N{i}", Embedding = [(float)i, 0.0f, 0.0f] });
 
             // Query at N15: top result must be N15 or an immediate neighbour
             var query = new[] { 15.0f, 0.0f, 0.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 5)).ToList();
-
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 5)).ToListAsync();
             Assert.True(results.Count > 0);
             Assert.True(results.Count <= 5);
             // Nearest must be one of the closest nodes on the number line
@@ -262,7 +261,7 @@ public class VectorSearchTests
     // ── persistence: index survives db close / reopen ────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_Persistence_CloseReopenSearchCorrect()
+    public async Task Test_VectorSearch_Persistence_CloseReopenSearchCorrect()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -270,19 +269,19 @@ public class VectorSearchTests
         // Insert 5 items (2 pages required), commit, then close db
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "B", Embedding = [2.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "C", Embedding = [3.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "D", Embedding = [4.0f, 0.0f, 0.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "E", Embedding = [5.0f, 0.0f, 0.0f] });
-            db.SaveChanges();
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "A", Embedding = [1.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "B", Embedding = [2.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "C", Embedding = [3.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "D", Embedding = [4.0f, 0.0f, 0.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "E", Embedding = [5.0f, 0.0f, 0.0f] });
+            await db.SaveChangesAsync();
         }
 
         // Reopen and verify we can still find the expected nearest
         using (var db = new TestDbContext(dbPath))
         {
             var query = new[] { 5.0f, 0.0f, 0.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 1)).ToListAsync();
 
             Assert.Single(results);
             Assert.Equal("E", results[0].Title);
@@ -294,19 +293,19 @@ public class VectorSearchTests
     // ── duplicate vectors: both must appear in results ───────────────────────
 
     [Fact]
-    public void Test_VectorSearch_DuplicateVectors_BothReturned()
+    public async Task Test_VectorSearch_DuplicateVectors_BothReturned()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
 
         using (var db = new TestDbContext(dbPath))
         {
-            db.VectorItems.Insert(new VectorEntity { Title = "Twin1", Embedding = [1.0f, 1.0f, 1.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "Twin2", Embedding = [1.0f, 1.0f, 1.0f] });
-            db.VectorItems.Insert(new VectorEntity { Title = "Other", Embedding = [9.0f, 9.0f, 9.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Twin1", Embedding = [1.0f, 1.0f, 1.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Twin2", Embedding = [1.0f, 1.0f, 1.0f] });
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "Other", Embedding = [9.0f, 9.0f, 9.0f] });
 
             var query = new[] { 1.0f, 1.0f, 1.0f };
-            var results = db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 2)).ToList();
+            var results = await db.VectorItems.AsQueryable().Where(x => x.Embedding.VectorSearch(query, 2)).ToListAsync();
 
             Assert.Equal(2, results.Count);
             var titles = results.Select(r => r.Title).ToHashSet();
@@ -320,7 +319,7 @@ public class VectorSearchTests
     // ── dimension mismatch throws ────────────────────────────────────────────
 
     [Fact]
-    public void Test_VectorSearch_DimensionMismatch_Throws()
+    public async Task Test_VectorSearch_DimensionMismatch_Throws()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -328,8 +327,8 @@ public class VectorSearchTests
         using (var db = new TestDbContext(dbPath))
         {
             // The index expects dim=3; passing a 5-element vector must throw
-            Assert.Throws<ArgumentException>(() =>
-                db.VectorItems.Insert(new VectorEntity { Title = "Bad", Embedding = [1.0f, 2.0f, 3.0f, 4.0f, 5.0f] }));
+            await Assert.ThrowsAsync<ArgumentException>(async () =>
+                await db.VectorItems.InsertAsync(new VectorEntity { Title = "Bad", Embedding = [1.0f, 2.0f, 3.0f, 4.0f, 5.0f] }));
         }
 
         Cleanup(dbPath);
@@ -342,7 +341,7 @@ public class VectorSearchTests
     // level assignment produces a graph topology that traps the greedy search. Investigate
     // whether raising EfConstruction / efSearch or seeding the RNG fixes the recall.
     [Fact(Skip = "Flaky: HNSW top-1 recall not guaranteed on small datasets — see TODO above")]
-    public void Test_VectorSearch_BruteForceRecall_Top1()
+    public async Task Test_VectorSearch_BruteForceRecall_Top1()
     {
         string dbPath = TempDb();
         Cleanup(dbPath);
@@ -363,7 +362,7 @@ public class VectorSearchTests
         using (var db = new TestDbContext(dbPath))
         {
             foreach (var (title, vec) in items)
-                db.VectorItems.Insert(new VectorEntity { Title = title, Embedding = vec });
+                await db.VectorItems.InsertAsync(new VectorEntity { Title = title, Embedding = vec });
 
             // Test 3 different queries
             float[][] queries =
@@ -381,9 +380,9 @@ public class VectorSearchTests
                     .First().title;
 
                 // HNSW top-1
-                var hnswResults = db.VectorItems.AsQueryable()
+                var hnswResults = await db.VectorItems.AsQueryable()
                     .Where(x => x.Embedding.VectorSearch(query, 1))
-                    .ToList();
+                    .ToListAsync();
 
                 Assert.Single(hnswResults);
                 Assert.Equal(bruteForceNearest, hnswResults[0].Title);

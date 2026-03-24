@@ -139,15 +139,15 @@ public class InsertBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
-    public void BLite_Insert_Single() => _ctx!.CustomerOrders.Insert(_singleOrder!);
+    public async Task BLite_Insert_Single() => await _ctx!.CustomerOrders.InsertAsync(_singleOrder!);
 
     [Benchmark(Description = "BLite BSON – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
-    public void BLiteBson_Insert_Single() => _bsonCol!.Insert(_bsonSingleDoc!);
+    public async Task BLiteBson_Insert_Single() => await _bsonCol!.InsertAsync(_bsonSingleDoc!);
 
     [Benchmark(Description = "BLite Server – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
-    public void BLiteServer_Insert_Single() => _serverCtx!.CustomerOrders.Insert(_singleOrder!);
+    public async Task BLiteServer_Insert_Single() => await _serverCtx!.CustomerOrders.InsertAsync(_singleOrder!);
 
     [Benchmark(Description = "LiteDB – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
@@ -167,15 +167,15 @@ public class InsertBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
-    public void BLite_Insert_Batch() => _ctx!.CustomerOrders.InsertBulk(_batchData);
+    public async Task BLite_Insert_Batch() => await _ctx!.CustomerOrders.InsertBulkAsync(_batchData);
 
     [Benchmark(Description = "BLite BSON – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
-    public void BLiteBson_Insert_Batch() => _bsonCol!.InsertBulk(_bsonBatchDocs);
+    public async Task BLiteBson_Insert_Batch() => await _bsonCol!.InsertBulkAsync(_bsonBatchDocs);
 
     [Benchmark(Description = "BLite Server – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
-    public void BLiteServer_Insert_Batch() => _serverCtx!.CustomerOrders.InsertBulk(_batchData);
+    public async Task BLiteServer_Insert_Batch() => await _serverCtx!.CustomerOrders.InsertBulkAsync(_batchData);
 
     [Benchmark(Description = "LiteDB – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]

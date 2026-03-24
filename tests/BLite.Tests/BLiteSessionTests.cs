@@ -81,40 +81,39 @@ public class BLiteSessionTests : IDisposable
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void BeginTransaction_TwoSessions_HaveIndependentTransactionIds()
+    public async Task BeginTransaction_TwoSessions_HaveIndependentTransactionIds()
     {
         using var s1 = _engine.OpenSession();
         using var s2 = _engine.OpenSession();
 
-        var t1 = s1.BeginTransaction();
-        var t2 = s2.BeginTransaction();
+        var t1 = await s1.BeginTransactionAsync();
+        var t2 = await s2.BeginTransactionAsync();
 
         Assert.NotEqual(t1.TransactionId, t2.TransactionId);
     }
 
     [Fact]
-    public void CommittingOneSession_DoesNotAffectOtherSessionsTransaction()
+    public async Task CommittingOneSession_DoesNotAffectOtherSessionsTransaction()
     {
         using var s1 = _engine.OpenSession();
         using var s2 = _engine.OpenSession();
 
-        s1.BeginTransaction();
-        s2.BeginTransaction();
+        await s1.BeginTransactionAsync();
+        await s2.BeginTransactionAsync();
 
         // Commit session 1 — session 2's transaction must remain active
-        s1.Commit();
-
+        await s1.CommitAsync();
         Assert.NotNull(s2.CurrentTransaction);
     }
 
     [Fact]
-    public void RollingBackOneSession_DoesNotAffectOtherSessions()
+    public async Task RollingBackOneSession_DoesNotAffectOtherSessions()
     {
         using var s1 = _engine.OpenSession();
         using var s2 = _engine.OpenSession();
 
-        s1.BeginTransaction();
-        var t2 = s2.BeginTransaction();
+        await s1.BeginTransactionAsync();
+        var t2 = await s2.BeginTransactionAsync();
 
         s1.Rollback();
 
@@ -122,11 +121,11 @@ public class BLiteSessionTests : IDisposable
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 3. CRUD via sessions — Insert / FindById / Update / Delete
+    // 3. CRUD via sessions — Insert / FindById / UpdateAsync / Delete
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Insert_AndFindById_RoundTrip()
+    public async Task Insert_AndFindById_RoundTrip()
     {
         using var session = _engine.OpenSession();
 
@@ -134,51 +133,51 @@ public class BLiteSessionTests : IDisposable
             .AddString("name", "Alice")
             .AddInt32("value", 42));
 
-        var id = session.Insert("users", doc);
-        var found = session.FindById("users", id);
+        var id = await session.InsertAsync("users", doc);
+        var found = await session.FindByIdAsync("users", id);
 
         Assert.NotNull(found);
     }
 
     [Fact]
-    public void Update_PersistsChange()
+    public async Task Update_PersistsChange()
     {
         using var session = _engine.OpenSession();
 
         var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "Bob"));
-        var id = session.Insert("persons", doc);
+        var id = await session.InsertAsync("persons", doc);
 
         var updated = _engine.CreateDocument(["name"], b => b.AddString("name", "Robert"));
-        var result = session.Update("persons", id, updated);
+        var result = await session.UpdateAsync("persons", id, updated);
 
         Assert.True(result);
     }
 
     [Fact]
-    public void Delete_RemovesDocument()
+    public async Task Delete_RemovesDocument()
     {
         using var session = _engine.OpenSession();
 
         var doc = _engine.CreateDocument(["tag"], b => b.AddString("tag", "temp"));
-        var id = session.Insert("tags", doc);
+        var id = await session.InsertAsync("tags", doc);
 
-        var deleted = session.Delete("tags", id);
+        var deleted = await session.DeleteAsync("tags", id);
         Assert.True(deleted);
 
-        var found = session.FindById("tags", id);
+        var found = await session.FindByIdAsync("tags", id);
         Assert.Null(found);
     }
 
     [Fact]
-    public void FindAll_ReturnsInsertedDocuments()
+    public async Task FindAll_ReturnsInsertedDocuments()
     {
         using var session = _engine.OpenSession();
 
-        session.Insert("items", _engine.CreateDocument(["x"], b => b.AddInt32("x", 1)));
-        session.Insert("items", _engine.CreateDocument(["x"], b => b.AddInt32("x", 2)));
-        session.Insert("items", _engine.CreateDocument(["x"], b => b.AddInt32("x", 3)));
+        await session.InsertAsync("items", _engine.CreateDocument(["x"], b => b.AddInt32("x", 1)));
+        await session.InsertAsync("items", _engine.CreateDocument(["x"], b => b.AddInt32("x", 2)));
+        await session.InsertAsync("items", _engine.CreateDocument(["x"], b => b.AddInt32("x", 3)));
 
-        var all = session.FindAll("items").ToList();
+        var all = (await session.FindAllAsync("items").ToListAsync());
         Assert.Equal(3, all.Count);
     }
 
@@ -187,13 +186,13 @@ public class BLiteSessionTests : IDisposable
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void TwoSessions_WriteToSameCollection_BothCommit()
+    public async Task TwoSessions_WriteToSameCollection_BothCommit()
     {
         using var s1 = _engine.OpenSession();
         using var s2 = _engine.OpenSession();
 
-        var id1 = s1.Insert("messages", _engine.CreateDocument(["author"], b => b.AddString("author", "Alice")));
-        var id2 = s2.Insert("messages", _engine.CreateDocument(["author"], b => b.AddString("author", "Bob")));
+        var id1 = await s1.InsertAsync("messages", _engine.CreateDocument(["author"], b => b.AddString("author", "Alice")));
+        var id2 = await s2.InsertAsync("messages", _engine.CreateDocument(["author"], b => b.AddString("author", "Bob")));
 
         // Both sessions should have committed successfully
         Assert.False(id1.IsEmpty);
@@ -202,15 +201,14 @@ public class BLiteSessionTests : IDisposable
     }
 
     [Fact]
-    public void WrittenBySessionA_VisibleToSessionBAfterCommit()
+    public async Task WrittenBySessionA_VisibleToSessionBAfterCommit()
     {
         using var s1 = _engine.OpenSession();
 
-        var id = s1.Insert("notes", _engine.CreateDocument(["msg"], b => b.AddString("msg", "hello")));
-
+        var id = await s1.InsertAsync("notes", _engine.CreateDocument(["msg"], b => b.AddString("msg", "hello")));
         // Open s2 after s1 has already committed
         using var s2 = _engine.OpenSession();
-        var found = s2.FindById("notes", id);
+        var found = await s2.FindByIdAsync("notes", id);
 
         Assert.NotNull(found);
     }
@@ -243,35 +241,35 @@ public class BLiteSessionTests : IDisposable
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void ManualTransaction_RollbackPreventsVisibility()
+    public async Task ManualTransaction_RollbackPreventsVisibility()
     {
         using var session = _engine.OpenSession();
         using var reader = _engine.OpenSession();
 
         var col = session.GetOrCreateCollection("kv");
-        session.BeginTransaction();
+        await session.BeginTransactionAsync();
         var doc = _engine.CreateDocument(["k"], b => b.AddInt32("k", 99));
-        var id = col.Insert(doc);
+        var id = await col.InsertAsync(doc);
         session.Rollback();
 
         // After rollback the document must not be visible from another session
-        var found = reader.FindById("kv", id);
+        var found = await reader.FindByIdAsync("kv", id);
         Assert.Null(found);
     }
 
     [Fact]
-    public void ManualTransaction_CommitMakesChangesVisible()
+    public async Task ManualTransaction_CommitMakesChangesVisible()
     {
         using var writer = _engine.OpenSession();
         using var reader = _engine.OpenSession();
 
         var col = writer.GetOrCreateCollection("shared");
-        writer.BeginTransaction();
+        await writer.BeginTransactionAsync();
         var doc = _engine.CreateDocument(["v"], b => b.AddInt32("v", 7));
-        var id = col.Insert(doc);
-        writer.Commit();
+        var id = await col.InsertAsync(doc);
+        await writer.CommitAsync();
 
-        var found = reader.FindById("shared", id);
+        var found = await reader.FindByIdAsync("shared", id);
         Assert.NotNull(found);
     }
 
@@ -280,7 +278,7 @@ public class BLiteSessionTests : IDisposable
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void InsertBulk_AndFindAll_ReturnCorrectCount()
+    public async Task InsertBulk_AndFindAll_ReturnCorrectCount()
     {
         using var session = _engine.OpenSession();
 
@@ -288,10 +286,10 @@ public class BLiteSessionTests : IDisposable
             .Select(i => _engine.CreateDocument(["i"], b => b.AddInt32("i", i)))
             .ToList();
 
-        var ids = session.InsertBulk("bulk_coll", docs);
+        var ids = await session.InsertBulkAsync("bulk_coll", docs);
 
         Assert.Equal(20, ids.Count);
-        Assert.Equal(20, session.FindAll("bulk_coll").Count());
+        Assert.Equal(20, (await session.FindAllAsync("bulk_coll").ToListAsync()).Count);
     }
 
     [Fact]
@@ -313,7 +311,7 @@ public class BLiteSessionTests : IDisposable
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void ServerModeEngine_SessionInsertAndRead_Works()
+    public async Task ServerModeEngine_SessionInsertAndRead_Works()
     {
         var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"blite_srv_{Guid.NewGuid()}");
         System.IO.Directory.CreateDirectory(dir);
@@ -327,13 +325,13 @@ public class BLiteSessionTests : IDisposable
             using var s1 = engine.OpenSession();
             using var s2 = engine.OpenSession();
 
-            var id1 = s1.Insert("events",
+            var id1 = await s1.InsertAsync("events",
                 engine.CreateDocument(["payload"], b => b.AddString("payload", "event-1")));
-            var id2 = s2.Insert("events",
+            var id2 = await s2.InsertAsync("events",
                 engine.CreateDocument(["payload"], b => b.AddString("payload", "event-2")));
 
-            var found1 = s2.FindById("events", id1);
-            var found2 = s1.FindById("events", id2);
+            var found1 = await s2.FindByIdAsync("events", id1);
+            var found2 = await s1.FindByIdAsync("events", id2);
 
             Assert.NotNull(found1);
             Assert.NotNull(found2);

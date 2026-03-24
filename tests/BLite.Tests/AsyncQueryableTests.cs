@@ -23,11 +23,11 @@ public class AsyncQueryableTests : IDisposable
         if (File.Exists(wal)) File.Delete(wal);
     }
 
-    private TestDbContext CreateAndSeed(int count = 10, int idOffset = 0)
+    private async Task<TestDbContext> CreateAndSeed(int count = 10, int idOffset = 0)
     {
         var db = new TestDbContext(_dbPath);
         for (int i = 1; i <= count; i++)
-            db.AsyncDocs.Insert(new AsyncDoc { Id = i + idOffset, Name = $"Doc{i}" });
+            await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = i + idOffset, Name = $"Doc{i}" });
         return db;
     }
 
@@ -36,7 +36,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task AwaitForeach_OnAsQueryable_YieldsAllDocuments()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         var results = new List<AsyncDoc>();
         await foreach (var doc in (IAsyncEnumerable<AsyncDoc>)db.AsyncDocs.AsQueryable())
@@ -48,7 +48,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task AwaitForeach_OnFilteredQueryable_YieldsOnlyMatches()
     {
-        using var db = CreateAndSeed(10);
+        using var db = await CreateAndSeed(10);
 
         var results = new List<AsyncDoc>();
         await foreach (var doc in (IAsyncEnumerable<AsyncDoc>)db.AsyncDocs.AsQueryable().Where(d => d.Id > 5 + 0))
@@ -63,7 +63,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task ToListAsync_ReturnsAllDocuments()
     {
-        using var db = CreateAndSeed(7);
+        using var db = await CreateAndSeed(7);
 
         var list = await db.AsyncDocs.AsQueryable().ToListAsync();
 
@@ -73,7 +73,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task ToListAsync_WithWhere_ReturnsFilteredDocuments()
     {
-        using var db = CreateAndSeed(10);
+        using var db = await CreateAndSeed(10);
 
         var list = await db.AsyncDocs.AsQueryable()
             .Where(d => d.Name == "Doc3")
@@ -86,7 +86,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task ToArrayAsync_ReturnsArray()
     {
-        using var db = CreateAndSeed(4);
+        using var db = await CreateAndSeed(4);
 
         var arr = await db.AsyncDocs.AsQueryable().ToArrayAsync();
 
@@ -98,7 +98,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task FirstOrDefaultAsync_ReturnsFirstDocument()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         var doc = await db.AsyncDocs.AsQueryable()
             .OrderBy(d => d.Id)
@@ -111,7 +111,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task FirstOrDefaultAsync_WithPredicate_ReturnsMatchingDocument()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         var doc = await db.AsyncDocs.AsQueryable()
             .FirstOrDefaultAsync(d => d.Name == "Doc4");
@@ -123,7 +123,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task FirstOrDefaultAsync_ReturnsNull_WhenNoMatch()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         var doc = await db.AsyncDocs.AsQueryable()
             .FirstOrDefaultAsync(d => d.Name == "NonExistent");
@@ -136,7 +136,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task SingleOrDefaultAsync_WithPredicate_ReturnsUniqueDocument()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         var doc = await db.AsyncDocs.AsQueryable()
             .Where(d => d.Id == 3)
@@ -149,7 +149,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task SingleOrDefaultAsync_Throws_WhenMoreThanOne()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await db.AsyncDocs.AsQueryable().SingleOrDefaultAsync());
@@ -160,7 +160,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task CountAsync_ReturnsCorrectCount()
     {
-        using var db = CreateAndSeed(8);
+        using var db = await CreateAndSeed(8);
 
         var count = await db.AsyncDocs.AsQueryable().CountAsync();
 
@@ -170,7 +170,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task CountAsync_WithPredicate_ReturnsFilteredCount()
     {
-        using var db = CreateAndSeed(10);
+        using var db = await CreateAndSeed(10);
 
         var count = await db.AsyncDocs.AsQueryable()
             .CountAsync(d => d.Id <= 5);
@@ -183,7 +183,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task AnyAsync_ReturnsTrueWhenDocumentsExist()
     {
-        using var db = CreateAndSeed(3);
+        using var db = await CreateAndSeed(3);
 
         Assert.True(await db.AsyncDocs.AsQueryable().AnyAsync());
     }
@@ -199,7 +199,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task AnyAsync_WithPredicate_ReturnsTrueOnMatch()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         Assert.True(await db.AsyncDocs.AsQueryable().AnyAsync(d => d.Name == "Doc2"));
         Assert.False(await db.AsyncDocs.AsQueryable().AnyAsync(d => d.Name == "Ghost"));
@@ -210,7 +210,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task AllAsync_ReturnsTrueWhenAllMatch()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         Assert.True(await db.AsyncDocs.AsQueryable().AllAsync(d => d.Id > 0));
     }
@@ -218,7 +218,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task AllAsync_ReturnsFalseWhenSomeDoNotMatch()
     {
-        using var db = CreateAndSeed(5);
+        using var db = await CreateAndSeed(5);
 
         Assert.False(await db.AsyncDocs.AsQueryable().AllAsync(d => d.Id == 1));
     }
@@ -228,7 +228,7 @@ public class AsyncQueryableTests : IDisposable
     [Fact]
     public async Task ToListAsync_WithCancelledToken_ThrowsOperationCanceled()
     {
-        using var db = CreateAndSeed(10);
+        using var db = await CreateAndSeed(10);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 

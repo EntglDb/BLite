@@ -13,21 +13,21 @@ public class DbContextTests : IDisposable
     }
 
     [Fact]
-    public void DbContext_BasicLifecycle_Works()
+    public async Task DbContext_BasicLifecycle_Works()
     {
         using var db = new TestDbContext(_dbPath);
         
         var user = new User { Name = "Alice", Age = 30 };
-        var id = db.Users.Insert(user);
+        var id = await db.Users.InsertAsync(user);
         
-        var found = db.Users.FindById(id);
+        var found = await db.Users.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.Equal("Alice", found.Name);
         Assert.Equal(30, found.Age);
     }
 
     [Fact]
-    public void DbContext_MultipleOperations_Work()
+    public async Task DbContext_MultipleOperations_Work()
     {
         using var db = new TestDbContext(_dbPath);
         
@@ -35,39 +35,40 @@ public class DbContextTests : IDisposable
         var alice = new User { Name = "Alice", Age = 30 };
         var bob = new User { Name = "Bob", Age = 25 };
         
-        var id1 = db.Users.Insert(alice);
-        var id2 = db.Users.Insert(bob);
+        var id1 = await db.Users.InsertAsync(alice);
+        var id2 = await db.Users.InsertAsync(bob);
+        await db.SaveChangesAsync();
         
         // FindAll
-        var all = db.Users.FindAll().ToList();
+        var all = (await db.Users.FindAllAsync().ToListAsync());
         Assert.Equal(2, all.Count);
         
-        // Update
+        // UpdateAsync
         alice.Age = 31;
-        Assert.True(db.Users.Update(alice));
+        Assert.True(await db.Users.UpdateAsync(alice));
         
-        var updated = db.Users.FindById(id1);
+        var updated = await db.Users.FindByIdAsync(id1);
         Assert.Equal(31, updated!.Age);
         
         // Delete
-        Assert.True(db.Users.Delete(id2));
-        Assert.Equal(1, db.Users.Count());
+        Assert.True(await db.Users.DeleteAsync(id2));
+        Assert.Equal(1, await db.Users.CountAsync());
     }
 
     [Fact]
-    public void DbContext_Dispose_ReleasesResources()
+    public async Task DbContext_Dispose_ReleasesResources()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"test_dbcontext_reopen_{Guid.NewGuid()}.db");
         var totalUsers = 0;
         // First context - insert and dispose (auto-checkpoint)
         using (var db = new TestDbContext(_dbPath))
         {
-            db.Users.Insert(new User { Name = "Test", Age = 20 });
-            db.SaveChanges(); // Explicitly save changes to ensure data is in WAL
-            var beforeCheckpointTotalUsers = db.Users.FindAll().Count();
+            await db.Users.InsertAsync(new User { Name = "Test", Age = 20 });
+            await db.SaveChangesAsync(); // Explicitly save changes to ensure data is in WAL
+            var beforeCheckpointTotalUsers = (await db.Users.FindAllAsync().ToListAsync()).Count;
             db.ForceCheckpoint(); // Force checkpoint to ensure data is persisted to main file
-            totalUsers = db.Users.FindAll().Count();
-            var countedUsers = db.Users.Count();
+            totalUsers = (await db.Users.FindAllAsync().ToListAsync()).Count;
+            var countedUsers = (await db.Users.CountAsync());
             Assert.Equal(beforeCheckpointTotalUsers, totalUsers);
         } // Dispose → Commit → ForceCheckpoint → Write to PageFile
         
@@ -75,8 +76,8 @@ public class DbContextTests : IDisposable
         using var db2 = new TestDbContext(_dbPath);
         
         Assert.Equal(1, totalUsers);
-        Assert.Equal(totalUsers, db2.Users.FindAll().Count());
-        Assert.Equal(totalUsers, db2.Users.Count());
+        Assert.Equal(totalUsers, (await db2.Users.FindAllAsync().ToListAsync()).Count);
+        Assert.Equal(totalUsers, await db2.Users.CountAsync());
     }
     private static string ComputeFileHash(string path)
     {
@@ -86,14 +87,14 @@ public class DbContextTests : IDisposable
     }
 
     [Fact]
-    public void DatabaseFile_SizeAndContent_ChangeAfterInsert()
+    public async Task DatabaseFile_SizeAndContent_ChangeAfterInsert()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"test_dbfile_{Guid.NewGuid()}.db");
 
         // 1. Crea e chiudi database vuoto
         using (var db = new TestDbContext(dbPath))
         {
-            db.Users.Insert(new User { Name = "Pippo", Age = 42 });
+            await db.Users.InsertAsync(new User { Name = "Pippo", Age = 42 });
         }
         var initialSize = new FileInfo(dbPath).Length;
         var initialHash = ComputeFileHash(dbPath);
@@ -101,7 +102,7 @@ public class DbContextTests : IDisposable
         // 2. Riapri, inserisci, chiudi
         using (var db = new TestDbContext(dbPath))
         {
-            db.Users.Insert(new User { Name = "Test", Age = 42 });
+            await db.Users.InsertAsync(new User { Name = "Test", Age = 42 });
             db.ForceCheckpoint(); // Forza persistenza
         }
         var afterInsertSize = new FileInfo(dbPath).Length;
@@ -113,10 +114,10 @@ public class DbContextTests : IDisposable
     }
 
     [Fact]
-    public void DbContext_AutoDerivesWalPath()
+    public async Task DbContext_AutoDerivesWalPath()
     {
         using var db = new TestDbContext(_dbPath);
-        db.Users.Insert(new User { Name = "Test", Age = 20 });
+        await db.Users.InsertAsync(new User { Name = "Test", Age = 20 });
         
         var walPath = Path.ChangeExtension(_dbPath, ".wal");
         Assert.True(File.Exists(walPath));

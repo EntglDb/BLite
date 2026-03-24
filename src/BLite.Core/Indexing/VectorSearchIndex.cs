@@ -127,7 +127,7 @@ public sealed class VectorSearchIndex
             currentPoint = GreedySearch(currentPoint, vector, l, transaction);
         }
 
-        // 7. Update entry point if new node is higher
+        // 7. UpdateAsync entry point if new node is higher
         if (targetLevel > entryPoint.MaxLevel)
         {
             UpdateEntryPoint(newNode, transaction);

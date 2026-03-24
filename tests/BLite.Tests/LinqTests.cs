@@ -1,3 +1,4 @@
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests
@@ -17,12 +18,12 @@ namespace BLite.Tests
             _db = new TestDbContext(_testFile);
 
             // Seed Data
-            _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-            _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-            _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-            _db.Users.Insert(new User { Name = "Dave", Age = 20 });
-            _db.Users.Insert(new User { Name = "Eve", Age = 40 });
-            _db.SaveChanges();
+            _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 }).GetAwaiter().GetResult();
+            _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 }).GetAwaiter().GetResult();
+            _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 }).GetAwaiter().GetResult();
+            _db.Users.InsertAsync(new User { Name = "Dave", Age = 20 }).GetAwaiter().GetResult();
+            _db.Users.InsertAsync(new User { Name = "Eve", Age = 40 }).GetAwaiter().GetResult();
+            _db.SaveChangesAsync().GetAwaiter().GetResult();
         }
 
         public void Dispose()
@@ -34,19 +35,19 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Where_FiltersDocuments()
+        public async Task Where_FiltersDocuments()
         {
             var query = _db.Users.AsQueryable().Where(x => x.Age > 28);
-            var results = query.ToList();
+            var results = await query.ToListAsync();
 
             Assert.Equal(3, results.Count); // Alice(30), Charlie(35), Eve(40)
             Assert.DoesNotContain(results, d => d.Name == "Bob");
         }
 
         [Fact]
-        public void OrderBy_SortsDocuments()
+        public async Task OrderBy_SortsDocuments()
         {
-            var results = _db.Users.AsQueryable().OrderBy(x => x.Age).ToList();
+            var results = await _db.Users.AsQueryable().OrderBy(x => x.Age).ToListAsync();
 
             Assert.Equal(5, results.Count);
             Assert.Equal("Dave", results[0].Name); // 20
@@ -55,13 +56,13 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void SkipTake_Pagination()
+        public async Task SkipTake_Pagination()
         {
-            var results = _db.Users.AsQueryable()
+            var results = await _db.Users.AsQueryable()
                 .OrderBy(x => x.Age)
                 .Skip(1)
                 .Take(2)
-                .ToList();
+                .ToListAsync();
 
             Assert.Equal(2, results.Count);
             Assert.Equal("Bob", results[0].Name); // 25 (Skipped Dave)
@@ -69,57 +70,57 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Select_Projections()
+        public async Task Select_Projections()
         {
-            var names = _db.Users.AsQueryable()
+            var names = await _db.Users.AsQueryable()
                 .Where(x => x.Age < 30)
                 .OrderBy(x => x.Age)
                 .Select(x => x.Name)
-                .ToList();
+                .ToListAsync();
 
             Assert.Equal(2, names.Count);
             Assert.Equal("Dave", names[0]);
             Assert.Equal("Bob", names[1]);
         }
         [Fact]
-        public void IndexedWhere_UsedIndex()
+        public async Task IndexedWhere_UsedIndex()
         {
             // Create index on Age
-            _db.Users.EnsureIndex(x => x.Age, "idx_age", false);
+            await _db.Users.EnsureIndexAsync(x => x.Age, "idx_age", false);
 
             var query = _db.Users.AsQueryable().Where(x => x.Age > 25);
-            var results = query.ToList();
+            var results = await query.ToListAsync();
 
             Assert.Equal(3, results.Count); // Alice(30), Charlie(35), Eve(40)
             Assert.DoesNotContain(results, d => d.Name == "Bob"); // Age 25 (filtered out by strict >)
             Assert.DoesNotContain(results, d => d.Name == "Dave"); // Age 20
         }
         [Fact]
-        public void StartsWith_UsedIndex()
+        public async Task StartsWith_UsedIndex()
         {
             // Create index on Name
-            _db.Users.EnsureIndex(x => x.Name!, "idx_name", false);
+            await _db.Users.EnsureIndexAsync(x => x.Name!, "idx_name", false);
              
              // StartsWith "Cha" -> Should find "Charlie"
              var query = _db.Users.AsQueryable().Where(x => x.Name!.StartsWith("Cha"));
-             var results = query.ToList();
+             var results = await query.ToListAsync();
              
              Assert.Single(results);
              Assert.Equal("Charlie", results[0].Name);
         }
 
         [Fact]
-        public void Between_UsedIndex()
+        public async Task Between_UsedIndex()
         {
             // Create index on Age
-            _db.Users.EnsureIndex(x => x.Age, "idx_age_between", false);
+            await _db.Users.EnsureIndexAsync(x => x.Age, "idx_age_between", false);
              
              // Age >= 22 && Age <= 32
              // Alice(30), Bob(25) -> Should be found.
              // Dave(20), Charlie(35), Eve(40) -> excluded.
              
              var query = _db.Users.AsQueryable().Where(x => x.Age >= 22 && x.Age <= 32);
-             var results = query.ToList();
+             var results = await query.ToListAsync();
              
              Assert.Equal(2, results.Count);
              Assert.Contains(results, x => x.Name == "Alice");

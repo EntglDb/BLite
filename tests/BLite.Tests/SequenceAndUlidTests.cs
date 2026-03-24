@@ -25,14 +25,14 @@ public class SequenceAndUlidTests : IDisposable
     // ── int sequence ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void Int_AutoIncrement_Generates_Sequential_Ids()
+    public async Task Int_AutoIncrement_Generates_Sequential_Ids()
     {
         using var db = new TestDbContext(_dbPath);
 
-        var id1 = db.IntEntities.Insert(new IntEntity { Name = "A" });
-        var id2 = db.IntEntities.Insert(new IntEntity { Name = "B" });
-        var id3 = db.IntEntities.Insert(new IntEntity { Name = "C" });
-        db.SaveChanges();
+        var id1 = await db.IntEntities.InsertAsync(new IntEntity { Name = "A" });
+        var id2 = await db.IntEntities.InsertAsync(new IntEntity { Name = "B" });
+        var id3 = await db.IntEntities.InsertAsync(new IntEntity { Name = "C" });
+        await db.SaveChangesAsync();
 
         Assert.Equal(1, id1);
         Assert.Equal(2, id2);
@@ -40,47 +40,47 @@ public class SequenceAndUlidTests : IDisposable
     }
 
     [Fact]
-    public void Int_AutoIncrement_Ids_Are_Stored_On_Entity()
+    public async Task Int_AutoIncrement_Ids_Are_Stored_On_Entity()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new IntEntity { Name = "Auto" };
-        db.IntEntities.Insert(entity);
-        db.SaveChanges();
+        await db.IntEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
         Assert.Equal(1, entity.Id);
     }
 
     [Fact]
-    public void Int_Explicit_Id_Is_Not_Overwritten()
+    public async Task Int_Explicit_Id_Is_Not_Overwritten()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new IntEntity { Id = 42, Name = "Manual" };
-        var id = db.IntEntities.Insert(entity);
-        db.SaveChanges();
+        var id = await db.IntEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
         Assert.Equal(42, id);
-        var found = db.IntEntities.FindById(42);
+        var found = await db.IntEntities.FindByIdAsync(42);
         Assert.NotNull(found);
         Assert.Equal("Manual", found.Name);
     }
 
     [Fact]
-    public void Int_Sequence_Persists_Across_DbContext_Reopens()
+    public async Task Int_Sequence_Persists_Across_DbContext_Reopens()
     {
         using (var db = new TestDbContext(_dbPath))
         {
-            db.IntEntities.Insert(new IntEntity { Name = "First" });
-            db.IntEntities.Insert(new IntEntity { Name = "Second" });
-            db.SaveChanges();
+            await db.IntEntities.InsertAsync(new IntEntity { Name = "First" });
+            await db.IntEntities.InsertAsync(new IntEntity { Name = "Second" });
+            await db.SaveChangesAsync();
         }
 
         // Reopen the same database file
         using (var db2 = new TestDbContext(_dbPath))
         {
-            var id3 = db2.IntEntities.Insert(new IntEntity { Name = "Third" });
-            db2.SaveChanges();
+            var id3 = await db2.IntEntities.InsertAsync(new IntEntity { Name = "Third" });
+            await db2.SaveChangesAsync();
 
             // Counter should continue from 3, not restart at 1
             Assert.Equal(3, id3);
@@ -90,26 +90,26 @@ public class SequenceAndUlidTests : IDisposable
     // ── long sequence ────────────────────────────────────────────────────────
 
     [Fact]
-    public void Long_AutoIncrement_Generates_Sequential_Ids()
+    public async Task Long_AutoIncrement_Generates_Sequential_Ids()
     {
         using var db = new TestDbContext(_dbPath);
 
-        var id1 = db.LongEntities.Insert(new LongEntity { Name = "X" });
-        var id2 = db.LongEntities.Insert(new LongEntity { Name = "Y" });
-        db.SaveChanges();
+        var id1 = await db.LongEntities.InsertAsync(new LongEntity { Name = "X" });
+        var id2 = await db.LongEntities.InsertAsync(new LongEntity { Name = "Y" });
+        await db.SaveChangesAsync();
 
         Assert.Equal(1L, id1);
         Assert.Equal(2L, id2);
     }
 
     [Fact]
-    public void Long_Explicit_Id_Is_Not_Overwritten()
+    public async Task Long_Explicit_Id_Is_Not_Overwritten()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new LongEntity { Id = 999L, Name = "Manual" };
-        var id = db.LongEntities.Insert(entity);
-        db.SaveChanges();
+        var id = await db.LongEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
         Assert.Equal(999L, id);
     }
@@ -117,14 +117,14 @@ public class SequenceAndUlidTests : IDisposable
     // ── string ULID ──────────────────────────────────────────────────────────
 
     [Fact]
-    public void String_AutoGenerate_Produces_Valid_Ulid()
+    public async Task String_AutoGenerate_Produces_Valid_Ulid()
     {
         using var db = new TestDbContext(_dbPath);
 
         // Id = null! triggers auto-generation
         var entity = new StringEntity { Id = null!, Value = "test" };
-        var id = db.StringEntities.Insert(entity);
-        db.SaveChanges();
+        var id = await db.StringEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
         Assert.NotNull(id);
         // ULID string is always 26 characters (Crockford base32)
@@ -132,14 +132,14 @@ public class SequenceAndUlidTests : IDisposable
     }
 
     [Fact]
-    public void String_AutoGenerate_Produces_Unique_Ids()
+    public async Task String_AutoGenerate_Produces_Unique_Ids()
     {
         using var db = new TestDbContext(_dbPath);
 
-        var id1 = db.StringEntities.Insert(new StringEntity { Id = null!, Value = "a" });
-        var id2 = db.StringEntities.Insert(new StringEntity { Id = null!, Value = "b" });
-        var id3 = db.StringEntities.Insert(new StringEntity { Id = null!, Value = "c" });
-        db.SaveChanges();
+        var id1 = await db.StringEntities.InsertAsync(new StringEntity { Id = null!, Value = "a" });
+        var id2 = await db.StringEntities.InsertAsync(new StringEntity { Id = null!, Value = "b" });
+        var id3 = await db.StringEntities.InsertAsync(new StringEntity { Id = null!, Value = "c" });
+        await db.SaveChangesAsync();
 
         Assert.NotEqual(id1, id2);
         Assert.NotEqual(id2, id3);
@@ -147,49 +147,48 @@ public class SequenceAndUlidTests : IDisposable
     }
 
     [Fact]
-    public void String_AutoGenerate_Ids_Are_Lexicographically_Sortable()
+    public async Task String_AutoGenerate_Ids_Are_Lexicographically_Sortable()
     {
         using var db = new TestDbContext(_dbPath);
 
         var ids = new List<string>();
         for (int i = 0; i < 5; i++)
         {
-            ids.Add(db.StringEntities.Insert(new StringEntity { Id = null!, Value = $"item_{i}" }));
+            ids.Add(await db.StringEntities.InsertAsync(new StringEntity { Id = null!, Value = $"item_{i}" }));
             // ULIDs are only guaranteed to be time-ordered across distinct milliseconds
             Thread.Sleep(2);
         }
-        db.SaveChanges();
-
+        await db.SaveChangesAsync();
         // ULIDs generated in monotonic time order must already be sorted
         var sorted = ids.OrderBy(x => x).ToList();
         Assert.Equal(ids, sorted);
     }
 
     [Fact]
-    public void String_Explicit_Id_Is_Not_Overwritten()
+    public async Task String_Explicit_Id_Is_Not_Overwritten()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new StringEntity { Id = "my-custom-key", Value = "explicit" };
-        var id = db.StringEntities.Insert(entity);
-        db.SaveChanges();
+        var id = await db.StringEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
         Assert.Equal("my-custom-key", id);
-        var found = db.StringEntities.FindById("my-custom-key");
+        var found = await db.StringEntities.FindByIdAsync("my-custom-key");
         Assert.NotNull(found);
         Assert.Equal("explicit", found.Value);
     }
 
     [Fact]
-    public void String_AutoGenerator_Entity_Round_Trips_Via_FindById()
+    public async Task String_AutoGenerator_Entity_Round_Trips_Via_FindById()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new StringEntity { Id = null!, Value = "round-trip" };
-        var id = db.StringEntities.Insert(entity);
-        db.SaveChanges();
+        var id = await db.StringEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
-        var found = db.StringEntities.FindById(id);
+        var found = await db.StringEntities.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.Equal(id, found.Id);
         Assert.Equal("round-trip", found.Value);

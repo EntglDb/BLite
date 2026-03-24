@@ -31,7 +31,7 @@ public sealed partial class StorageEngine
         
         if (timestamp == 0) timestamp = DateTime.UtcNow.Ticks;
 
-        // 2. Prepare BSON data
+        // 2. PrepareAsync BSON data
         var bsonData = document.RawData;
 
         // 3. Find/Allocate TimeSeries Page
@@ -57,7 +57,7 @@ public sealed partial class StorageEngine
             var header = PageHeader.ReadFrom(buffer);
             int currentWritePos = PageSize - header.FreeBytes;
             
-            if (TimeSeriesPage.TryInsert(buffer, bsonData, timestamp))
+            if (TimeSeriesPage.TryInsert(buffer, bsonData.Span, timestamp))
             {
                 WritePageImmediate(lastPageId, buffer);
                 slotIndex = (ushort)currentWritePos;
@@ -73,7 +73,7 @@ public sealed partial class StorageEngine
                 WritePageImmediate(lastPageId, buffer);
                 
                 TimeSeriesPage.Initialize(buffer, newPageId);
-                TimeSeriesPage.TryInsert(buffer, bsonData, timestamp);
+                TimeSeriesPage.TryInsert(buffer, bsonData.Span, timestamp);
                 WritePageImmediate(newPageId, buffer);
                 lastPageId = newPageId;
                 slotIndex = (ushort)TimeSeriesPage.DataOffset;
@@ -82,7 +82,7 @@ public sealed partial class StorageEngine
             lastPageId = header.NextPageId;
         }
 
-        // 5. Update Metadata Counters
+        // 5. UpdateAsync Metadata Counters
         meta.InsertedSinceLastPruning++;
         bool shouldPrune = meta.InsertedSinceLastPruning >= MaxInsertedBeforePrune ||
                           (DateTime.UtcNow.Ticks - meta.LastPruningTimestamp) >= MinPruneInterval.Ticks;
@@ -105,7 +105,7 @@ public sealed partial class StorageEngine
     /// <summary>
     /// Walks the TimeSeries page chain and frees all pages whose LastTimestamp is older than
     /// the collection's RetentionPolicyMs.  Called internally on insert threshold and publicly
-    /// via <c>DynamicCollection.ForcePrune()</c> for testing.
+    /// via <c>DynamicCollection.ForcePruneAsync()</c> for testing.
     /// NOTE (v1): does not clean up stale BTree primary-index entries for removed pages.
     /// </summary>
     public void PruneTimeSeries(CollectionMetadata meta, ITransaction transaction)

@@ -19,7 +19,7 @@ public sealed partial class StorageEngine
     //   • _commitLock is held only by the writer, for the duration of the batch
     //     write + flush — not by every individual caller for the full round trip.
     //   • BeginTransaction no longer competes with an in-flight flush.
-    //   • The sync CommitTransaction(ulong) path and checkpoint operations still
+    //   • The sync CommitTransactionAsync(ulong) path and checkpoint operations still
     //     use _commitLock normally and are fully compatible.
     // -------------------------------------------------------------------------
 

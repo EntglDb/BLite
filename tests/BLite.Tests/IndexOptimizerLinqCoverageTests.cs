@@ -2,6 +2,7 @@ using System.Linq;
 using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Indexing;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -21,7 +22,7 @@ public class IndexOptimizerLinqCoverageTests : IDisposable
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"idx_linq_{Guid.NewGuid()}.db");
         _db = new TestDbContext(_dbPath);
-        SeedData();
+        SeedData().GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -36,28 +37,28 @@ public class IndexOptimizerLinqCoverageTests : IDisposable
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
-    private void SeedData()
+    private async Task SeedData()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.Users.Insert(new User { Name = "Diana", Age = 28 });
-        _db.Users.Insert(new User { Name = "Eve", Age = 22 });
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+        await _db.Users.InsertAsync(new User { Name = "Diana", Age = 28 });
+        await _db.Users.InsertAsync(new User { Name = "Eve", Age = 22 });
 
-        _db.Products.Insert(new Product { Id = 1, Title = "Widget", Price = 9.99m });
-        _db.Products.Insert(new Product { Id = 2, Title = "Gadget", Price = 19.99m });
-        _db.Products.Insert(new Product { Id = 3, Title = "Thingy", Price = 4.99m });
-        _db.Products.Insert(new Product { Id = 4, Title = "Doohickey", Price = 29.99m });
-        _db.Products.Insert(new Product { Id = 5, Title = "Whatchamacallit", Price = 14.99m });
+        await _db.Products.InsertAsync(new Product { Id = 1, Title = "Widget", Price = 9.99m });
+        await _db.Products.InsertAsync(new Product { Id = 2, Title = "Gadget", Price = 19.99m });
+        await _db.Products.InsertAsync(new Product { Id = 3, Title = "Thingy", Price = 4.99m });
+        await _db.Products.InsertAsync(new Product { Id = 4, Title = "Doohickey", Price = 29.99m });
+        await _db.Products.InsertAsync(new Product { Id = 5, Title = "Whatchamacallit", Price = 14.99m });
 
         // People collection has an index on Age (configured in TestDbContext)
-        _db.People.Insert(new Person { Id = 1, Name = "P1", Age = 30 });
-        _db.People.Insert(new Person { Id = 2, Name = "P2", Age = 25 });
-        _db.People.Insert(new Person { Id = 3, Name = "P3", Age = 40 });
-        _db.People.Insert(new Person { Id = 4, Name = "P4", Age = 20 });
-        _db.People.Insert(new Person { Id = 5, Name = "P5", Age = 35 });
+        await _db.People.InsertAsync(new Person { Id = 1, Name = "P1", Age = 30 });
+        await _db.People.InsertAsync(new Person { Id = 2, Name = "P2", Age = 25 });
+        await _db.People.InsertAsync(new Person { Id = 3, Name = "P3", Age = 40 });
+        await _db.People.InsertAsync(new Person { Id = 4, Name = "P4", Age = 20 });
+        await _db.People.InsertAsync(new Person { Id = 5, Name = "P5", Age = 35 });
 
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -417,29 +418,29 @@ public class IndexOptimizerLinqCoverageTests : IDisposable
     // ══════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void Linq_IntEntity_Count()
+    public async Task Linq_IntEntity_Count()
     {
-        _db.IntEntities.Insert(new IntEntity { Id = 1, Name = "A" });
-        _db.IntEntities.Insert(new IntEntity { Id = 2, Name = "B" });
+        await _db.IntEntities.InsertAsync(new IntEntity { Id = 1, Name = "A" });
+        await _db.IntEntities.InsertAsync(new IntEntity { Id = 2, Name = "B" });
         Assert.Equal(2, _db.IntEntities.AsQueryable().Count());
     }
 
     [Fact]
-    public void Linq_LongEntity_SelectField()
+    public async Task Linq_LongEntity_SelectField()
     {
-        _db.LongEntities.Insert(new LongEntity { Id = 1, Name = "X" });
-        _db.LongEntities.Insert(new LongEntity { Id = 2, Name = "Y" });
-        _db.SaveChanges();
-        var results = _db.LongEntities.AsQueryable().ToList();
+        await _db.LongEntities.InsertAsync(new LongEntity { Id = 1, Name = "X" });
+        await _db.LongEntities.InsertAsync(new LongEntity { Id = 2, Name = "Y" });
+        await _db.SaveChangesAsync();
+        var results = await _db.LongEntities.AsQueryable().ToListAsync();
         Assert.Equal(2, results.Count);
         Assert.Contains(results, r => r.Name == "X");
     }
 
     [Fact]
-    public void Linq_LongEntity_SelectId()
+    public async Task Linq_LongEntity_SelectId()
     {
-        _db.LongEntities.Insert(new LongEntity { Id = 100, Name = "Z" });
-        var ids = _db.LongEntities.AsQueryable().Select(x => x.Id).ToList();
+        await _db.LongEntities.InsertAsync(new LongEntity { Id = 100, Name = "Z" });
+        var ids = await _db.LongEntities.AsQueryable().Select(x => x.Id).ToListAsync();
         Assert.Contains(100L, ids);
     }
 }

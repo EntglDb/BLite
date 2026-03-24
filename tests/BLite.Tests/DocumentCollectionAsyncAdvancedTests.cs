@@ -41,10 +41,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     public async Task ScanAsync_WithPredicate_ReturnsMatchingDocuments()
     {
         // Arrange
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+        await _db.SaveChangesAsync();
 
         // Act: Find users older than 28
         var results = new List<User>();
@@ -65,9 +65,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange
         for (int i = 0; i < 1000; i++)
         {
-            _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+            await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<User>();
@@ -102,9 +102,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     public async Task ScanAsync_NoMatches_ReturnsEmpty()
     {
         // Arrange
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
 
         // Act: Find users older than 50
         var results = new List<User>();
@@ -125,10 +125,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     public async Task ScanAsync_WithProjection_ReturnsProjectedResults()
     {
         // Arrange
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+        await _db.SaveChangesAsync();
 
         // Act: Project to names only
         var names = new List<string>();
@@ -164,9 +164,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange
         for (int i = 0; i < 500; i++)
         {
-            _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+            await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<string>();
@@ -226,10 +226,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         };
 
         foreach (var p in people)
-            _db.People.Insert(p);
+            await _db.People.InsertAsync(p);
         
-        _db.People.CreateIndex<int>(x => x.Age, "idx_age_async_range");
-        _db.SaveChanges();
+        await _db.People.CreateIndexAsync(x => x.Age, "idx_age_async_range");
+        await _db.SaveChangesAsync();
 
         // Act: Query age between 28 and 37
         var results = new List<Person>();
@@ -249,10 +249,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     {
         // Arrange
         for (int i = 0; i < 5; i++)
-            _db.People.Insert(new Person { Name = $"Person_{i}", Age = 20 + i });
+            await _db.People.InsertAsync(new Person { Name = $"Person_{i}", Age = 20 + i });
         
-        _db.People.CreateIndex<int>(x => x.Age, "idx_age_desc");
-        _db.SaveChanges();
+        await _db.People.CreateIndexAsync(x => x.Age, "idx_age_desc");
+        await _db.SaveChangesAsync();
 
         // Act
         var results = new List<Person>();
@@ -275,10 +275,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     {
         // Arrange
         for (int i = 0; i < 100; i++)
-            _db.People.Insert(new Person { Name = $"Person_{i}", Age = i });
+            await _db.People.InsertAsync(new Person { Name = $"Person_{i}", Age = i });
         
-        _db.People.CreateIndex<int>(x => x.Age, "idx_age_cancel");
-        _db.SaveChanges();
+        await _db.People.CreateIndexAsync(x => x.Age, "idx_age_cancel");
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<Person>();
@@ -315,10 +315,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     public async Task VectorSearchAsync_FindsNearestVectors()
     {
         // Arrange
-        _db.VectorItems.Insert(new VectorEntity { Title = "Very Close", Embedding = [1.0f, 1.0f, 1.0f] });
-        _db.VectorItems.Insert(new VectorEntity { Title = "Close", Embedding = [1.1f, 1.1f, 1.1f] });
-        _db.VectorItems.Insert(new VectorEntity { Title = "Far", Embedding = [10.0f, 10.0f, 10.0f] });
-        _db.SaveChanges();
+        await _db.VectorItems.InsertAsync(new VectorEntity { Title = "Very Close", Embedding = [1.0f, 1.0f, 1.0f] });
+        await _db.VectorItems.InsertAsync(new VectorEntity { Title = "Close", Embedding = [1.1f, 1.1f, 1.1f] });
+        await _db.VectorItems.InsertAsync(new VectorEntity { Title = "Far", Embedding = [10.0f, 10.0f, 10.0f] });
+        await _db.SaveChangesAsync();
 
         // Act: Search for vectors similar to [1.0, 1.0, 1.0]
         var query = new[] { 1.0f, 1.0f, 1.0f };
@@ -344,9 +344,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
             var embedding = new float[3];
             for (int d = 0; d < 3; d++)
                 embedding[d] = i + d * 0.1f;
-            _db.VectorItems.Insert(new VectorEntity { Title = $"Vector_{i}", Embedding = embedding });
+            await _db.VectorItems.InsertAsync(new VectorEntity { Title = $"Vector_{i}", Embedding = embedding });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<VectorEntity>();
@@ -383,10 +383,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     public async Task NearAsync_FindsDocumentsWithinRadius()
     {
         // Arrange: Create geo entities at known locations
-        _db.GeoItems.Insert(new GeoEntity { Name = "Center", Location = (40.7128, -74.0060) }); // NYC
-        _db.GeoItems.Insert(new GeoEntity { Name = "Nearby", Location = (40.7200, -74.0100) }); // ~1 km away
-        _db.GeoItems.Insert(new GeoEntity { Name = "Far", Location = (34.0522, -118.2437) }); // LA
-        _db.SaveChanges();
+        await _db.GeoItems.InsertAsync(new GeoEntity { Name = "Center", Location = (40.7128, -74.0060) }); // NYC
+        await _db.GeoItems.InsertAsync(new GeoEntity { Name = "Nearby", Location = (40.7200, -74.0100) }); // ~1 km away
+        await _db.GeoItems.InsertAsync(new GeoEntity { Name = "Far", Location = (34.0522, -118.2437) }); // LA
+        await _db.SaveChangesAsync();
 
         // Act: Find locations within 50 km of NYC
         var results = new List<GeoEntity>();
@@ -409,13 +409,13 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange
         for (int i = 0; i < 10; i++)
         {
-            _db.GeoItems.Insert(new GeoEntity
+            await _db.GeoItems.InsertAsync(new GeoEntity
             {
                 Name = $"Location_{i}",
                 Location = (40.0 + i * 0.1, -74.0 + i * 0.1)
             });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<GeoEntity>();
@@ -451,10 +451,10 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
     public async Task WithinAsync_FindsDocumentsInBoundingBox()
     {
         // Arrange
-        _db.GeoItems.Insert(new GeoEntity { Name = "Inside1", Location = (40.7, -74.0) });
-        _db.GeoItems.Insert(new GeoEntity { Name = "Inside2", Location = (40.8, -74.1) });
-        _db.GeoItems.Insert(new GeoEntity { Name = "Outside", Location = (34.0522, -118.2437) });
-        _db.SaveChanges();
+        await _db.GeoItems.InsertAsync(new GeoEntity { Name = "Inside1", Location = (40.7, -74.0) });
+        await _db.GeoItems.InsertAsync(new GeoEntity { Name = "Inside2", Location = (40.8, -74.1) });
+        await _db.GeoItems.InsertAsync(new GeoEntity { Name = "Outside", Location = (34.0522, -118.2437) });
+        await _db.SaveChangesAsync();
 
         // Act: Query bounding box around NYC area
         var results = new List<GeoEntity>();
@@ -478,13 +478,13 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange
         for (int i = 0; i < 20; i++)
         {
-            _db.GeoItems.Insert(new GeoEntity
+            await _db.GeoItems.InsertAsync(new GeoEntity
             {
                 Name = $"Point_{i}",
                 Location = (40.0 + i * 0.01, -74.0 + i * 0.01)
             });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<GeoEntity>();
@@ -525,9 +525,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange
         for (int i = 0; i < 100; i++)
         {
-            _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+            await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         // Act: Find users with Age >= 50 using parallel scan
         var results = new List<User>();
@@ -549,9 +549,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange: Insert enough documents to test parallelism
         for (int i = 0; i < 200; i++)
         {
-            _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+            await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         // Act: Parallel scan with degree 2 should work correctly
         var results = new List<User>();
@@ -572,9 +572,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         // Arrange
         for (int i = 0; i < 2000; i++)
         {
-            _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+            await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         var cts = new CancellationTokenSource();
         var results = new List<User>();
@@ -609,9 +609,9 @@ public class DocumentCollectionAsyncAdvancedTests : IAsyncLifetime
         int docCount = 50;
         for (int i = 0; i < docCount; i++)
         {
-            _db.Users.Insert(new User { Name = $"User_{i}", Age = i });
+            await _db.Users.InsertAsync(new User { Name = $"User_{i}", Age = i });
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
         // Act: Scan all with no filter
         var results = new List<User>();

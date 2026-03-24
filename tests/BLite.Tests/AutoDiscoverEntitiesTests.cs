@@ -31,14 +31,14 @@ public class AutoDiscoverEntitiesTests : IDisposable
     }
 
     [Fact]
-    public void Can_Insert_And_Query_Without_OnModelCreating()
+    public async Task Can_Insert_And_Query_Without_OnModelCreating()
     {
         using var db = new MinimalDbContext(DbPath);
 
         // This replicates the Quick-Start scenario from the README
-        db.Users.Insert(new User { Name = "Alice" });
-        db.Users.Insert(new User { Name = "Bob" });
-        db.SaveChanges();
+        await db.Users.InsertAsync(new User { Name = "Alice" });
+        await db.Users.InsertAsync(new User { Name = "Bob" });
+        await db.SaveChangesAsync();
 
         var results = db.Users.AsQueryable()
             .Where(u => u.Name.StartsWith("A"))

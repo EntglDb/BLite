@@ -30,22 +30,22 @@ public class CrossPathTests : IDisposable
     #region Write with DbContext, Read with BLiteEngine
 
     [Fact]
-    public void Read_Users_Written_By_DbContext()
+    public async Task Read_Users_Written_By_DbContext()
     {
         // Arrange: write data with typed path
         using (var db = new TestDbContext(_dbPath))
         {
-            db.Users.Insert(new User { Name = "Alice", Age = 30 });
-            db.Users.Insert(new User { Name = "Bob", Age = 25 });
-            db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-            db.SaveChanges();
+            await db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+            await db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+            await db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         // Act: read data with dynamic path
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("users");
-        var docs = col.FindAll().ToList();
+        var docs = (await col.FindAllAsync().ToListAsync());
 
         // Assert
         Assert.Equal(3, docs.Count);
@@ -59,20 +59,20 @@ public class CrossPathTests : IDisposable
     }
 
     [Fact]
-    public void Read_User_Fields_Match_Typed_Entity()
+    public async Task Read_User_Fields_Match_Typed_Entity()
     {
         ObjectId aliceId;
 
         using (var db = new TestDbContext(_dbPath))
         {
-            aliceId = db.Users.Insert(new User { Name = "Alice", Age = 30 });
-            db.SaveChanges();
+            aliceId = await db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("users");
-        var doc = col.FindById((BsonId)aliceId);
+        var doc = await col.FindByIdAsync((BsonId)aliceId);
 
         Assert.NotNull(doc);
 
@@ -88,20 +88,20 @@ public class CrossPathTests : IDisposable
     }
 
     [Fact]
-    public void Read_User_Fields_Via_BsonValue()
+    public async Task Read_User_Fields_Via_BsonValue()
     {
         ObjectId bobId;
 
         using (var db = new TestDbContext(_dbPath))
         {
-            bobId = db.Users.Insert(new User { Name = "Bob", Age = 25 });
-            db.SaveChanges();
+            bobId = await db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("users");
-        var doc = col.FindById((BsonId)bobId)!;
+        var doc = await col.FindByIdAsync((BsonId)bobId);
 
         // Verify via EnumerateFields + BsonValue
         var fields = doc.EnumerateFields();
@@ -117,20 +117,20 @@ public class CrossPathTests : IDisposable
     }
 
     [Fact]
-    public void Read_User_TryGetId_Returns_BsonId()
+    public async Task Read_User_TryGetId_Returns_BsonId()
     {
         ObjectId insertedId;
 
         using (var db = new TestDbContext(_dbPath))
         {
-            insertedId = db.Users.Insert(new User { Name = "Eve", Age = 28 });
-            db.SaveChanges();
+            insertedId = await db.Users.InsertAsync(new User { Name = "Eve", Age = 28 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("users");
-        var doc = col.FindById((BsonId)insertedId)!;
+        var doc = await col.FindByIdAsync((BsonId)insertedId);
 
         Assert.True(doc.TryGetId(out var bsonId));
         Assert.Equal(BsonIdType.ObjectId, bsonId.Type);
@@ -142,14 +142,14 @@ public class CrossPathTests : IDisposable
     #region Int32 Key (Person)
 
     [Fact]
-    public void Read_Persons_With_Int32_Key()
+    public async Task Read_Persons_With_Int32_Key()
     {
         using (var db = new TestDbContext(_dbPath))
         {
-            db.People.Insert(new Person { Id = 1, Name = "Mario", Age = 40 });
-            db.People.Insert(new Person { Id = 2, Name = "Luigi", Age = 38 });
-            db.People.Insert(new Person { Id = 3, Name = "Peach", Age = 35 });
-            db.SaveChanges();
+            await db.People.InsertAsync(new Person { Id = 1, Name = "Mario", Age = 40 });
+            await db.People.InsertAsync(new Person { Id = 2, Name = "Luigi", Age = 38 });
+            await db.People.InsertAsync(new Person { Id = 3, Name = "Peach", Age = 35 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
@@ -157,7 +157,7 @@ public class CrossPathTests : IDisposable
         var col = engine.GetOrCreateCollection("people_collection", BsonIdType.Int32);
 
         // Find by int id
-        var mario = col.FindById((BsonId)1);
+        var mario = await col.FindByIdAsync((BsonId)1);
         Assert.NotNull(mario);
         Assert.True(mario.TryGetString("name", out var name));
         Assert.Equal("Mario", name);
@@ -165,23 +165,23 @@ public class CrossPathTests : IDisposable
         Assert.Equal(40, age);
 
         // Count
-        Assert.Equal(3, col.Count());
+        Assert.Equal(3, await col.CountAsync());
     }
 
     [Fact]
-    public void FindAll_Persons_Returns_All_Typed_Entities()
+    public async Task FindAll_Persons_Returns_All_Typed_Entities()
     {
         using (var db = new TestDbContext(_dbPath))
         {
             for (int i = 1; i <= 10; i++)
-                db.People.Insert(new Person { Id = i, Name = $"Person{i}", Age = 20 + i });
-            db.SaveChanges();
+                await db.People.InsertAsync(new Person { Id = i, Name = $"Person{i}", Age = 20 + i });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("people_collection", BsonIdType.Int32);
-        var all = col.FindAll().ToList();
+        var all = await col.FindAllAsync().ToListAsync();
 
         Assert.Equal(10, all.Count);
 
@@ -202,20 +202,20 @@ public class CrossPathTests : IDisposable
     #region Products (Int32 + Decimal)
 
     [Fact]
-    public void Read_Products_With_Decimal_Price()
+    public async Task Read_Products_With_Decimal_Price()
     {
         using (var db = new TestDbContext(_dbPath))
         {
-            db.Products.Insert(new Product { Id = 1, Title = "Widget", Price = 19.99m });
-            db.Products.Insert(new Product { Id = 2, Title = "Gadget", Price = 49.95m });
-            db.SaveChanges();
+            await db.Products.InsertAsync(new Product { Id = 1, Title = "Widget", Price = 19.99m });
+            await db.Products.InsertAsync(new Product { Id = 2, Title = "Gadget", Price = 49.95m });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("products_collection", BsonIdType.Int32);
 
-        var widget = col.FindById((BsonId)1);
+        var widget = await col.FindByIdAsync((BsonId)1);
         Assert.NotNull(widget);
         Assert.True(widget.TryGetString("title", out var title));
         Assert.Equal("Widget", title);
@@ -231,20 +231,20 @@ public class CrossPathTests : IDisposable
     #region String Key
 
     [Fact]
-    public void Read_StringEntity_With_String_Key()
+    public async Task Read_StringEntity_With_String_Key()
     {
         using (var db = new TestDbContext(_dbPath))
         {
-            db.StringEntities.Insert(new StringEntity { Id = "key-1", Value = "hello" });
-            db.StringEntities.Insert(new StringEntity { Id = "key-2", Value = "world" });
-            db.SaveChanges();
+            await db.StringEntities.InsertAsync(new StringEntity { Id = "key-1", Value = "hello" });
+            await db.StringEntities.InsertAsync(new StringEntity { Id = "key-2", Value = "world" });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("stringentitys", BsonIdType.String);
 
-        var doc1 = col.FindById((BsonId)"key-1");
+        var doc1 = await col.FindByIdAsync((BsonId)"key-1");
         Assert.NotNull(doc1);
         Assert.True(doc1.TryGetString("value", out var val));
         Assert.Equal("hello", val);
@@ -255,23 +255,23 @@ public class CrossPathTests : IDisposable
     #region Guid Key
 
     [Fact]
-    public void Read_GuidEntity_With_Guid_Key()
+    public async Task Read_GuidEntity_With_Guid_Key()
     {
         var guid1 = Guid.NewGuid();
         var guid2 = Guid.NewGuid();
 
         using (var db = new TestDbContext(_dbPath))
         {
-            db.GuidEntities.Insert(new GuidEntity { Id = guid1, Name = "First" });
-            db.GuidEntities.Insert(new GuidEntity { Id = guid2, Name = "Second" });
-            db.SaveChanges();
+            await db.GuidEntities.InsertAsync(new GuidEntity { Id = guid1, Name = "First" });
+            await db.GuidEntities.InsertAsync(new GuidEntity { Id = guid2, Name = "Second" });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("guidentitys", BsonIdType.Guid);
 
-        var doc = col.FindById((BsonId)guid1);
+        var doc = await col.FindByIdAsync((BsonId)guid1);
         Assert.NotNull(doc);
         Assert.True(doc.TryGetString("name", out var name));
         Assert.Equal("First", name);
@@ -282,13 +282,13 @@ public class CrossPathTests : IDisposable
     #region Complex Nested Entity
 
     [Fact]
-    public void Read_ComplexUser_Nested_Fields()
+    public async Task Read_ComplexUser_Nested_Fields()
     {
         ObjectId complexUserId;
 
         using (var db = new TestDbContext(_dbPath))
         {
-            complexUserId = db.ComplexUsers.Insert(new ComplexUser
+            complexUserId = await db.ComplexUsers.InsertAsync(new ComplexUser
             {
                 Name = "ComplexAlice",
                 MainAddress = new Address
@@ -298,14 +298,14 @@ public class CrossPathTests : IDisposable
                 },
                 Tags = ["dotnet", "csharp", "blite"]
             });
-            db.SaveChanges();
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("complex_users");
 
-        var doc = col.FindById((BsonId)complexUserId);
+        var doc = await col.FindByIdAsync((BsonId)complexUserId);
         Assert.NotNull(doc);
 
         Assert.True(doc.TryGetString("name", out var name));
@@ -325,7 +325,7 @@ public class CrossPathTests : IDisposable
     #region Bidirectional: Write with Engine, Read with DbContext
 
     [Fact]
-    public void Write_With_Engine_Read_With_DbContext()
+    public async Task Write_With_Engine_Read_With_DbContext()
     {
         // Phase 1: Write with BLiteEngine using Person's schema (Int32 _id, name, age)
         using (var engine = new BLiteEngine(_dbPath))
@@ -335,20 +335,20 @@ public class CrossPathTests : IDisposable
                 .AddId((BsonId)100)
                 .AddString("name", "DynamicPerson")
                 .AddInt32("age", 50));
-            col.Insert(doc);
-            engine.Commit();
+            await col.InsertAsync(doc);
+            await engine.CommitAsync();
         }
 
         // Phase 2: Read with TestDbContext
         using var db = new TestDbContext(_dbPath);
-        var person = db.People.FindById(100);
+        var person = await db.People.FindByIdAsync(100);
         Assert.NotNull(person);
         Assert.Equal("DynamicPerson", person.Name);
         Assert.Equal(50, person.Age);
     }
 
     [Fact]
-    public void Write_Users_With_Engine_Read_With_DbContext()
+    public async Task Write_Users_With_Engine_Read_With_DbContext()
     {
         var objectId = ObjectId.NewObjectId();
 
@@ -360,13 +360,13 @@ public class CrossPathTests : IDisposable
                 .AddId((BsonId)objectId)
                 .AddString("name", "EngineUser")
                 .AddInt32("age", 33));
-            col.Insert(doc);
-            engine.Commit();
+            await col.InsertAsync(doc);
+            await engine.CommitAsync();
         }
 
         // Phase 2: Read with TestDbContext
         using var db = new TestDbContext(_dbPath);
-        var user = db.Users.FindById(objectId);
+        var user = await db.Users.FindByIdAsync(objectId);
         Assert.NotNull(user);
         Assert.Equal("EngineUser", user.Name);
         Assert.Equal(33, user.Age);
@@ -377,14 +377,14 @@ public class CrossPathTests : IDisposable
     #region Mixed Operations: Both Paths on Same DB
 
     [Fact]
-    public void DbContext_And_Engine_Share_Storage()
+    public async Task DbContext_And_Engine_Share_Storage()
     {
         // Phase 1: Write persons 1 and 2 with the typed path, then close
         using (var db = new TestDbContext(_dbPath))
         {
-            db.People.Insert(new Person { Id = 1, Name = "Typed1", Age = 20 });
-            db.People.Insert(new Person { Id = 2, Name = "Typed2", Age = 30 });
-            db.SaveChanges();
+            await db.People.InsertAsync(new Person { Id = 1, Name = "Typed1", Age = 20 });
+            await db.People.InsertAsync(new Person { Id = 2, Name = "Typed2", Age = 30 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
@@ -396,25 +396,25 @@ public class CrossPathTests : IDisposable
                 .AddId((BsonId)3)
                 .AddString("name", "Dynamic3")
                 .AddInt32("age", 40));
-            col.Insert(doc);
-            engine.Commit();
+            await col.InsertAsync(doc);
+            await engine.CommitAsync();
         }
 
         // Phase 3: Re-open with BLiteEngine and verify all 3 are there
         using (var engine = new BLiteEngine(_dbPath))
         {
             var col = engine.GetOrCreateCollection("people_collection", BsonIdType.Int32);
-            var allDynamic = col.FindAll().ToList();
+            var allDynamic = await col.FindAllAsync().ToListAsync();
             Assert.Equal(3, allDynamic.Count);
         }
 
         // Phase 4: Re-open with typed path and verify person 3 (written by engine) is readable
         using (var db = new TestDbContext(_dbPath))
         {
-            var allTyped = db.People.FindAll().ToList();
+            var allTyped = await db.People.FindAllAsync().ToListAsync();
             Assert.Equal(3, allTyped.Count);
 
-            var person3 = db.People.FindById(3);
+            var person3 = await db.People.FindByIdAsync(3);
             Assert.NotNull(person3);
             Assert.Equal("Dynamic3", person3.Name);
             Assert.Equal(40, person3.Age);
@@ -426,14 +426,14 @@ public class CrossPathTests : IDisposable
     #region Count Consistency
 
     [Fact]
-    public void Count_Matches_Between_Paths()
+    public async Task Count_Matches_Between_Paths()
     {
         // Phase 1: Write 20 persons with typed path, then close
         using (var db = new TestDbContext(_dbPath))
         {
             for (int i = 1; i <= 20; i++)
-                db.People.Insert(new Person { Id = i, Name = $"P{i}", Age = i + 20 });
-            db.SaveChanges();
+                await db.People.InsertAsync(new Person { Id = i, Name = $"P{i}", Age = i + 20 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
@@ -442,14 +442,14 @@ public class CrossPathTests : IDisposable
         using (var engine = new BLiteEngine(_dbPath))
         {
             var col = engine.GetOrCreateCollection("people_collection", BsonIdType.Int32);
-            dynamicCount = col.Count();
+            dynamicCount = await col.CountAsync();
         }
 
         // Phase 3: Read count with typed path
         int typedCount;
         using (var db = new TestDbContext(_dbPath))
         {
-            typedCount = db.People.Count();
+            typedCount = await db.People.CountAsync();
         }
 
         Assert.Equal(20, dynamicCount);
@@ -461,14 +461,14 @@ public class CrossPathTests : IDisposable
     #region Diagnostics
 
     [Fact]
-    public void Diagnostic_RawStorage_AfterTypedWrite()
+    public async Task Diagnostic_RawStorage_AfterTypedWrite()
     {
         // Write via typed path
         int personId;
         using (var db = new TestDbContext(_dbPath))
         {
-            personId = db.People.Insert(new Person { Id = 42, Name = "Diag", Age = 99 });
-            db.SaveChanges();
+            personId = await db.People.InsertAsync(new Person { Id = 42, Name = "Diag", Age = 99 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 
@@ -496,15 +496,15 @@ public class CrossPathTests : IDisposable
     }
 
     [Fact]
-    public void GetAllCollectionsMetadata_ReturnsAllWrittenCollections()
+    public async Task GetAllCollectionsMetadata_ReturnsAllWrittenCollections()
     {
         // Arrange: scrive dati su più collezioni via typed path
         using (var db = new TestDbContext(_dbPath))
         {
-            db.People.Insert(new Person { Id = 1, Name = "Alice", Age = 30 });
-            db.Products.Insert(new Product { Id = 1, Title = "Widget", Price = 9.99m });
-            db.Users.Insert(new User { Name = "Bob", Age = 25 });
-            db.SaveChanges();
+            await db.People.InsertAsync(new Person { Id = 1, Name = "Alice", Age = 30 });
+            await db.Products.InsertAsync(new Product { Id = 1, Title = "Widget", Price = 9.99m });
+            await db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+            await db.SaveChangesAsync();
             db.ForceCheckpoint();
         }
 

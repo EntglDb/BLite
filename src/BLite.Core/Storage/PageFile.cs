@@ -383,6 +383,11 @@ public sealed class PageFile : IDisposable
         var offset = (long)pageId * _config.PageSize;
         using var accessor = _mappedFile!.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write);
         accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+        // FlushViewOfFile is required to guarantee that writes made through the
+        // memory-mapped view are visible to subsequent ReadFile / RandomAccess.ReadAsync
+        // calls on the same handle. Without it, the OS does not guarantee coherency
+        // between the mapped-view pages and the buffered-file-I/O view.
+        accessor.Flush();
     }
 
     // ── Grow-file helper ───────────────────────────────────────────────────
@@ -460,13 +465,19 @@ public sealed class PageFile : IDisposable
         // netstandard2.1: FileStream.Seek+Read shares the same stream position as
         // EnsureCapacityCore's SetLength. Use a synchronous read under the shared
         // _rwLock read lock so it is excluded by any concurrent write-lock resize path.
+        // Additionally, lock _fileStream itself to serialize concurrent readers:
+        // multiple threads holding _rwLock in read mode would otherwise race on
+        // Seek+Read (FileStream is NOT thread-safe for concurrent positional access).
         cancellationToken.ThrowIfCancellationRequested();
         int bytesRead;
         _rwLock.EnterReadLock();
         try
         {
-            _fileStream.Seek(offset, SeekOrigin.Begin);
-            bytesRead = _fileStream.Read(slice.Span);
+            lock (_fileStream!)
+            {
+                _fileStream.Seek(offset, SeekOrigin.Begin);
+                bytesRead = _fileStream.Read(slice.Span);
+            }
         }
         finally
         {
@@ -553,7 +564,7 @@ public sealed class PageFile : IDisposable
                 // The new head is what the recycled page pointed to
                 _firstFreePageId = header.NextPageId;
                 
-                // Update file header (Page 0) to point to new head
+                // UpdateAsync file header (Page 0) to point to new head
                 UpdateFileHeaderFreePtrCore(_firstFreePageId);
                 
                 return recycledPageId;
@@ -602,10 +613,10 @@ public sealed class PageFile : IDisposable
             // 2. Write the freed page (file already large enough, no growth needed)
             WritePageCore(pageId, buffer);
             
-            // 3. Update head to point to this page
+            // 3. UpdateAsync head to point to this page
             _firstFreePageId = pageId;
             
-            // 4. Update file header (Page 0)
+            // 4. UpdateAsync file header (Page 0)
             UpdateFileHeaderFreePtrCore(_firstFreePageId);
         }
         finally
@@ -622,7 +633,7 @@ public sealed class PageFile : IDisposable
         ReadPageCore(0, buffer);
         var header = PageHeader.ReadFrom(buffer);
         
-        // Update NextPageId (which we use as FirstFreePageId)
+        // UpdateAsync NextPageId (which we use as FirstFreePageId)
         header.NextPageId = newHead;
         
         // Write back

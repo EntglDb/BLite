@@ -181,16 +181,16 @@ public class SchemaPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void Document_Contains_Schema_Version_Field()
+    public async Task Document_Contains_Schema_Version_Field()
     {
         var mapper = new BLite_Shared_PersonMapper();
         using (var coll = _db.People)
         {
             var person = new Person { Name = "John" };
-            var id = coll.Insert(person);
-            _db.SaveChanges();
+            var id = await coll.InsertAsync(person);
+            await _db.SaveChangesAsync();
 
-            Assert.Equal(1, coll.Count());
+            Assert.Equal(1, await coll.CountAsync());
             Assert.NotNull(coll.CurrentSchemaVersion);
             Assert.Equal(1, coll.CurrentSchemaVersion!.Value.Version);
 

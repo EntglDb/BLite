@@ -143,31 +143,15 @@ public sealed class BlqlQuery
     /// </summary>
     public IEnumerable<BsonDocument> AsEnumerable()
     {
-        var filterRef = _filter;
-        var documents = _collection.Find(doc => filterRef.Matches(doc));
-
-        // Sorting requires full materialization
-        if (_sort != null)
+        return Task.Run(async () =>
         {
-            var list = new List<BsonDocument>(documents);
-            list.Sort(new ComparisonComparer<BsonDocument>(_sort.ToComparison()));
-            documents = list;
-        }
-
-        int skipped = 0;
-        int taken = 0;
-
-        foreach (var doc in documents)
-        {
-            if (skipped < _skip) { skipped++; continue; }
-            if (_take.HasValue && taken >= _take.Value) yield break;
-
-            yield return _projection.IsIdentity
-                ? doc
-                : _collection.ProjectDocument(doc, _projection);
-
-            taken++;
-        }
+            var result = new List<BsonDocument>();
+            await foreach(var item in AsAsyncEnumerable())
+            {
+                result.Add(item);
+            }
+            return result;
+        }).GetAwaiter().GetResult();
     }
 
     /// <summary>Executes the query and returns all results as a <see cref="List{T}"/>.</summary>
@@ -181,8 +165,14 @@ public sealed class BlqlQuery
     /// <summary>Returns the count of documents matching the filter (ignores skip/take).</summary>
     public int Count()
     {
+        return CountAsync().GetAwaiter().GetResult();
+    }
+
+    public async Task<int> CountAsync(CancellationToken cancellationToken = default)
+    {
+        //TODO: collection must have a count method
         int count = 0;
-        foreach (var doc in _collection.FindAll())
+        await foreach (var doc in _collection.FindAllAsync(cancellationToken))
             if (_filter.Matches(doc)) count++;
         return count;
     }
@@ -190,7 +180,13 @@ public sealed class BlqlQuery
     /// <summary>Returns the first matching document, or <c>null</c> if none.</summary>
     public BsonDocument? FirstOrDefault()
     {
-        foreach (var doc in _collection.Find(d => _filter.Matches(d)))
+        return FirstOrDefaultAsync().GetAwaiter().GetResult();
+    }
+
+    public async Task<BsonDocument?> FirstOrDefaultAsync(CancellationToken cancellationToken = default)
+    {
+        //TODO: first or default must be optimized
+        await foreach (var doc in _collection.FindAsync(d => _filter.Matches(d), cancellationToken))
         {
             return _projection.IsIdentity
                 ? doc
@@ -206,16 +202,29 @@ public sealed class BlqlQuery
             ?? throw new InvalidOperationException("Sequence contains no matching documents.");
     }
 
+    public async Task<BsonDocument> FirstAsync(CancellationToken cancellationToken = default)
+    {
+        return (await FirstOrDefaultAsync(cancellationToken))
+            ?? throw new InvalidOperationException("Sequence contains no matching documents.");
+    }
+
     /// <summary>Returns true if any document matches the filter.</summary>
     public bool Any()
     {
-        foreach (var doc in _collection.FindAll())
+        return AnyAsync().GetAwaiter().GetResult();
+    }
+
+    public async Task<bool> AnyAsync(CancellationToken cancellationToken = default)
+    {
+        await foreach (var doc in _collection.FindAllAsync(cancellationToken))
             if (_filter.Matches(doc)) return true;
         return false;
     }
 
     /// <summary>Returns true if no document matches the filter.</summary>
     public bool None() => !Any();
+
+    public async Task<bool> NoneAsync(CancellationToken cancellationToken = default) => !await AnyAsync(cancellationToken);
 
     /// <summary>Executes the query asynchronously and yields documents via async enumerable.</summary>
     public async IAsyncEnumerable<BsonDocument> AsAsyncEnumerable(
@@ -225,12 +234,25 @@ public sealed class BlqlQuery
 
         if (_sort != null)
         {
-            // Sort requires full materialization — run synchronously in one shot
-            var all = ToList();
+            // Sort requires full materialization — fetch directly to avoid circular call via ToList()
+            var all = new List<BsonDocument>();
+            await foreach (var doc in _collection.FindAsync(d => filterRef.Matches(d), ct).ConfigureAwait(false))
+                all.Add(doc);
+
+            all.Sort(new ComparisonComparer<BsonDocument>(_sort.ToComparison()));
+
+            int sk = 0;
+            int tk = 0;
             foreach (var doc in all)
             {
                 ct.ThrowIfCancellationRequested();
-                yield return doc;
+                if (sk < _skip) { sk++; continue; }
+                if (_take.HasValue && tk >= _take.Value) yield break;
+
+                yield return _projection.IsIdentity
+                    ? doc
+                    : _collection.ProjectDocument(doc, _projection);
+                tk++;
             }
             yield break;
         }

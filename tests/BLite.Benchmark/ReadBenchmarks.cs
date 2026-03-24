@@ -1,5 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using BLite.Core.Query;
 using BLite.Core.Storage;
 using BLite.Shared;
 using BLite.Tests;
@@ -41,7 +42,7 @@ public class ReadBenchmarks
     private string _targetId = null!;
 
     [GlobalSetup]
-    public void Setup()
+    public async Task Setup()
     {
         var temp = AppContext.BaseDirectory;
         var id   = Guid.NewGuid().ToString("N");
@@ -65,12 +66,12 @@ public class ReadBenchmarks
 
         // 1. BLite
         _ctx = new TestDbContext(_docDbPath);
-        _ctx.CustomerOrders.InsertBulk(orders);
+        await _ctx.CustomerOrders.InsertBulkAsync(orders);
 
         // 2. BLite Server (multi-file)
         InsertBenchmarks.DeleteServerDb(_docDbServerPath);
         _serverCtx = new TestDbContext(_docDbServerPath, PageFileConfig.Server(_docDbServerPath));
-        _serverCtx.CustomerOrders.InsertBulk(orders);
+        await _serverCtx.CustomerOrders.InsertBulkAsync(orders);
 
         // 3. SQLite + JSON
         using var conn = new SqliteConnection(_sqliteConnString);
@@ -139,11 +140,11 @@ public class ReadBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – FindById")]
     [BenchmarkCategory("FindById")]
-    public CustomerOrder? BLite_FindById() => _ctx.CustomerOrders.FindById(_targetId);
+    public async Task<CustomerOrder?> BLite_FindById() => await _ctx.CustomerOrders.FindByIdAsync(_targetId);
 
     [Benchmark(Description = "BLite Server – FindById")]
     [BenchmarkCategory("FindById")]
-    public CustomerOrder? BLiteServer_FindById() => _serverCtx.CustomerOrders.FindById(_targetId);
+    public async Task<CustomerOrder?> BLiteServer_FindById() => await _serverCtx.CustomerOrders.FindByIdAsync(_targetId);
 
     [Benchmark(Description = "LiteDB – FindById")]
     [BenchmarkCategory("FindById")]
@@ -165,13 +166,13 @@ public class ReadBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Scan by Status")]
     [BenchmarkCategory("Scan")]
-    public List<CustomerOrder> BLite_Scan()
-        => _ctx.CustomerOrders.Find(x => x.Status == ScanStatus).ToList();
+    public async Task<List<CustomerOrder>> BLite_Scan()
+        => await _ctx.CustomerOrders.AsQueryable().Where(x => x.Status == ScanStatus).ToListAsync();
 
     [Benchmark(Description = "BLite Server – Scan by Status")]
     [BenchmarkCategory("Scan")]
-    public List<CustomerOrder> BLiteServer_Scan()
-        => _serverCtx.CustomerOrders.Find(x => x.Status == ScanStatus).ToList();
+    public async Task<List<CustomerOrder>> BLiteServer_Scan()
+        => await _serverCtx.CustomerOrders.AsQueryable().Where(x => x.Status == ScanStatus).ToListAsync();
 
     [Benchmark(Description = "LiteDB – Scan by Status")]
     [BenchmarkCategory("Scan")]

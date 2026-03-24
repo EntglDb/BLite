@@ -599,17 +599,17 @@ public sealed class BTreeIndex
         // Create new node for right half
         var newNodeId = CreateNode(isLeaf: true, transactionId);
 
-        // Update original node (left)
+        // UpdateAsync original node (left)
         // Next -> RightNode
         // Prev -> Original Prev (remains same)
         WriteLeafNode(nodePageId, leftEntries, newNodeId, header.PrevLeafPageId, transactionId);
 
-        // Update new node (right) 
+        // UpdateAsync new node (right) 
         // Next -> Original Next
         // Prev -> LeftNode
         WriteLeafNode(newNodeId, rightEntries, header.NextLeafPageId, nodePageId, transactionId);
 
-        // Update Original Next Node's Prev pointer to point to New Node
+        // UpdateAsync Original Next Node's Prev pointer to point to New Node
         if (header.NextLeafPageId != 0)
         {
             UpdatePrevPointer(header.NextLeafPageId, newNodeId, transactionId);
@@ -652,10 +652,10 @@ public sealed class BTreeIndex
         // Create new internal node
         var newNodeId = CreateNode(isLeaf: false, transactionId);
 
-        // Update left node
+        // UpdateAsync left node
         WriteInternalNode(nodePageId, p0, leftEntries, transactionId);
 
-        // Update right node
+        // UpdateAsync right node
         WriteInternalNode(newNodeId, rightP0, rightEntries, transactionId);
 
         // Insert promoted key into parent
@@ -976,7 +976,7 @@ public sealed class BTreeIndex
             // Remove entry
             entries.RemoveAt(entryIndex);
 
-            // Update leaf
+            // UpdateAsync leaf
             WriteLeafNode(leafPageId, entries, header.NextLeafPageId, header.PrevLeafPageId, txnId);
 
             // Check for underflow (min 50% fill)
@@ -1628,12 +1628,12 @@ public sealed class BTreeIndex
                 // Merge: Append Right to Left
                 leftEntries.AddRange(rightEntries);
 
-                // Update Left
+                // UpdateAsync Left
                 // Next -> Right.Next
                 // Prev -> Left.Prev (unchanged)
                 WriteLeafNode(leftNodeId, leftEntries, rightHeader.NextLeafPageId, leftHeader.PrevLeafPageId, transactionId);
 
-                // Update Right.Next's Prev pointer to point to Left (since Right is gone)
+                // UpdateAsync Right.Next's Prev pointer to point to Left (since Right is gone)
                 if (rightHeader.NextLeafPageId != 0)
                 {
                     UpdatePrevPointer(rightHeader.NextLeafPageId, leftNodeId, transactionId);
@@ -1656,7 +1656,7 @@ public sealed class BTreeIndex
                 // Add all Right entries
                 leftEntries.AddRange(rightEntries);
 
-                // Update Left Node
+                // UpdateAsync Left Node
                 WriteInternalNode(leftNodeId, leftP0, leftEntries, transactionId);
             }
         }

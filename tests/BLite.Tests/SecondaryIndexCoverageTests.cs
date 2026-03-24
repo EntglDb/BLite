@@ -46,21 +46,21 @@ public class SecondaryIndexCoverageTests : IDisposable
     // ══════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void CreateIndex_StringField_Works()
+    public async Task CreateIndex_StringField_Works()
     {
-        SeedItems(10);
-        _col.CreateIndex("name", "idx_name");
+        await SeedItems(10);
+        await _col.CreateIndexAsync("name", "idx_name");
         var indexes = _col.ListIndexes();
         Assert.Contains("idx_name", indexes);
     }
 
     [Fact]
-    public void QueryIndex_RangeSearch_ReturnsCorrectResults()
+    public async Task QueryIndex_RangeSearch_ReturnsCorrectResults()
     {
-        SeedItems(20);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(20);
+        await _col.CreateIndexAsync("value", "idx_value");
 
-        var results = _col.QueryIndex("idx_value", 5, 10).ToList();
+        var results = await _col.QueryIndexAsync("idx_value", 5, 10).ToListAsync();
         Assert.True(results.Count >= 5);
         foreach (var doc in results)
         {
@@ -70,65 +70,65 @@ public class SecondaryIndexCoverageTests : IDisposable
     }
 
     [Fact]
-    public void QueryIndex_ExactMatch_ReturnsOne()
+    public async Task QueryIndex_ExactMatch_ReturnsOne()
     {
-        SeedItems(10);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(10);
+        await _col.CreateIndexAsync("value", "idx_value");
 
-        var results = _col.QueryIndex("idx_value", 7, 7).ToList();
+        var results = await _col.QueryIndexAsync("idx_value", 7, 7).ToListAsync();
         Assert.Single(results);
         results[0].TryGetInt32("value", out var val);
         Assert.Equal(7, val);
     }
 
     [Fact]
-    public void QueryIndex_UnboundedMin_Works()
+    public async Task QueryIndex_UnboundedMin_Works()
     {
-        SeedItems(10);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(10);
+        await _col.CreateIndexAsync("value", "idx_value");
 
-        var results = _col.QueryIndex("idx_value", null, 3).ToList();
+        var results = await _col.QueryIndexAsync("idx_value", null, 3).ToListAsync();
         Assert.True(results.Count >= 3);
     }
 
     [Fact]
-    public void QueryIndex_UnboundedMax_Works()
+    public async Task QueryIndex_UnboundedMax_Works()
     {
-        SeedItems(10);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(10);
+        await _col.CreateIndexAsync("value", "idx_value");
 
-        var results = _col.QueryIndex("idx_value", 7, null).ToList();
+        var results = await _col.QueryIndexAsync("idx_value", 7, null).ToListAsync();
         Assert.True(results.Count >= 3);
     }
 
     [Fact]
-    public void QueryIndex_FullRange_ReturnsAll()
+    public async Task QueryIndex_FullRange_ReturnsAll()
     {
-        SeedItems(10);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(10);
+        await _col.CreateIndexAsync("value", "idx_value");
 
-        var results = _col.QueryIndex("idx_value", null, null).ToList();
+        var results = await _col.QueryIndexAsync("idx_value", null, null).ToListAsync();
         Assert.Equal(10, results.Count);
     }
 
     [Fact]
-    public void QueryIndex_NonExistentIndex_Throws()
+    public async Task QueryIndex_NonExistentIndex_Throws()
     {
-        Assert.Throws<ArgumentException>(() =>
-            _col.QueryIndex("nonexistent", null, null).ToList());
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await _col.QueryIndexAsync("nonexistent", null, null).ToListAsync());
     }
 
     [Fact]
-    public void DropIndex_Existing_ReturnsTrue()
+    public async Task DropIndex_Existing_ReturnsTrue()
     {
-        SeedItems(5);
-        _col.CreateIndex("name", "idx_name");
+        await SeedItems(5);
+        await _col.CreateIndexAsync("name", "idx_name");
         Assert.True(_col.DropIndex("idx_name"));
         Assert.DoesNotContain("idx_name", _col.ListIndexes());
     }
 
     [Fact]
-    public void DropIndex_NonExistent_ReturnsFalse()
+    public async Task DropIndex_NonExistent_ReturnsFalse()
     {
         Assert.False(_col.DropIndex("nonexistent"));
     }
@@ -140,12 +140,11 @@ public class SecondaryIndexCoverageTests : IDisposable
     }
 
     [Fact]
-    public void ListIndexes_Multiple_ReturnsAll()
+    public async Task ListIndexes_Multiple_ReturnsAll()
     {
-        SeedItems(5);
-        _col.CreateIndex("name", "idx_name");
-        _col.CreateIndex("value", "idx_value");
-
+        await SeedItems(5);
+        await _col.CreateIndexAsync("name", "idx_name");
+        await _col.CreateIndexAsync("value", "idx_value");
         var indexes = _col.ListIndexes();
         Assert.Equal(2, indexes.Count);
         Assert.Contains("idx_name", indexes);
@@ -153,11 +152,11 @@ public class SecondaryIndexCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Index_SurvivesReopen()
+    public async Task Index_SurvivesReopen()
     {
-        SeedItems(5);
-        _col.CreateIndex("value", "idx_value");
-        _engine.Commit();
+        await SeedItems(5);
+        await _col.CreateIndexAsync("value", "idx_value");
+        await _engine.CommitAsync();
         _engine.Dispose();
 
         using var engine2 = new BLiteEngine(_dbPath);
@@ -165,63 +164,62 @@ public class SecondaryIndexCoverageTests : IDisposable
         var indexes = col2.ListIndexes();
         Assert.Contains("idx_value", indexes);
 
-        var results = col2.QueryIndex("idx_value", 2, 4).ToList();
+        var results = await col2.QueryIndexAsync("idx_value", 2, 4).ToListAsync();
         Assert.True(results.Count >= 2);
     }
 
     [Fact]
-    public void Index_UpdatesWhenDocumentUpdated()
+    public async Task Index_UpdatesWhenDocumentUpdated()
     {
-        SeedItems(5);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(5);
+        await _col.CreateIndexAsync("value", "idx_value");
 
         // Find and update document with value=3
-        var doc = _col.QueryIndex("idx_value", 3, 3).First();
+        var doc = (await _col.QueryIndexAsync("idx_value", 3, 3).ToListAsync()).First();
         doc.TryGetId(out var id);
 
         var newDoc = _col.CreateDocument(["_id", "name", "value"], b =>
             b.AddString("name", "updated").AddInt32("value", 99));
-        _col.Update(id, newDoc);
+        await _col.UpdateAsync(id, newDoc);
 
         // Old value should no longer be found
-        var oldResults = _col.QueryIndex("idx_value", 3, 3).ToList();
+        var oldResults = (await _col.QueryIndexAsync("idx_value", 3, 3).ToListAsync());
         Assert.Empty(oldResults);
 
         // New value should be found
-        var newResults = _col.QueryIndex("idx_value", 99, 99).ToList();
+        var newResults = (await _col.QueryIndexAsync("idx_value", 99, 99).ToListAsync());
         Assert.Single(newResults);
     }
 
     [Fact]
-    public void Index_UpdatesWhenDocumentDeleted()
+    public async Task Index_UpdatesWhenDocumentDeleted()
     {
-        SeedItems(5);
-        _col.CreateIndex("value", "idx_value");
+        await SeedItems(5);
+        await _col.CreateIndexAsync("value", "idx_value");
 
-        var doc = _col.QueryIndex("idx_value", 2, 2).First();
+        var doc = (await _col.QueryIndexAsync("idx_value", 2, 2).ToListAsync()).First();
         doc.TryGetId(out var id);
-        _col.Delete(id);
-
-        var results = _col.QueryIndex("idx_value", 2, 2).ToList();
+        await _col.DeleteAsync(id);
+        var results = (await _col.QueryIndexAsync("idx_value", 2, 2).ToListAsync());
         Assert.Empty(results);
     }
 
     [Fact]
-    public void Index_UniqueConstraint_PreventsDuplicates()
+    public async Task Index_UniqueConstraint_PreventsDuplicates()
     {
-        _col.CreateIndex("email", "idx_email", unique: true);
+        await _col.CreateIndexAsync("email", "idx_email", unique: true);
 
         var doc1 = _col.CreateDocument(["_id", "email"], b => b.AddString("email", "a@b.com"));
-        _col.Insert(doc1);
+        await _col.InsertAsync(doc1);
 
         var doc2 = _col.CreateDocument(["_id", "email"], b => b.AddString("email", "a@b.com"));
-        Assert.ThrowsAny<Exception>(() => _col.Insert(doc2));
+        await Assert.ThrowsAnyAsync<Exception>(async () => await _col.InsertAsync(doc2));
     }
 
     [Fact]
-    public void Index_StringField_QueryAfterBulkInsert()
+    public async Task Index_StringField_QueryAfterBulkInsert()
     {
-        _col.CreateIndex("category", "idx_cat");
+        await _col.CreateIndexAsync("category", "idx_cat");
 
         var docs = new List<BsonDocument>();
         for (int i = 0; i < 50; i++)
@@ -230,50 +228,50 @@ public class SecondaryIndexCoverageTests : IDisposable
             docs.Add(_col.CreateDocument(["_id", "category", "val"], b =>
                 b.AddString("category", cat).AddInt32("val", i)));
         }
-        _col.InsertBulk(docs);
+        
+        await _col.InsertBulkAsync(docs);
 
-        var a = _col.QueryIndex("idx_cat", "A", "A").ToList();
-        var b = _col.QueryIndex("idx_cat", "B", "B").ToList();
-        var c = _col.QueryIndex("idx_cat", "C", "C").ToList();
-
+        var a = (await _col.QueryIndexAsync("idx_cat", "A", "A").ToListAsync());
+        var b = (await _col.QueryIndexAsync("idx_cat", "B", "B").ToListAsync());
+        var c = (await _col.QueryIndexAsync("idx_cat", "C", "C").ToListAsync());
         Assert.Equal(17, a.Count); // ceil(50/3)
         Assert.Equal(17, b.Count);
         Assert.Equal(16, c.Count);
     }
 
     [Fact]
-    public void Index_Int64Field_Works()
+    public async Task Index_Int64Field_Works()
     {
-        _col.CreateIndex("score", "idx_score");
+        await _col.CreateIndexAsync("score", "idx_score");
 
         for (int i = 0; i < 10; i++)
         {
             var doc = _col.CreateDocument(["_id", "score"], b =>
                 b.AddInt64("score", (long)i * 1000));
-            _col.Insert(doc);
+            await _col.InsertAsync(doc);
         }
 
-        var results = _col.QueryIndex("idx_score", 3000L, 7000L).ToList();
+        var results = (await _col.QueryIndexAsync("idx_score", 3000L, 7000L).ToListAsync());
         Assert.Equal(5, results.Count);
     }
 
     [Fact]
-    public void Index_DateTimeField_Works()
+    public async Task Index_DateTimeField_Works()
     {
-        _col.CreateIndex("date", "idx_date");
+        await _col.CreateIndexAsync("date", "idx_date");
 
         var baseDate = new DateTime(2024, 1, 1);
         for (int i = 0; i < 10; i++)
         {
             var doc = _col.CreateDocument(["_id", "date"], b =>
                 b.AddDateTime("date", baseDate.AddDays(i)));
-            _col.Insert(doc);
+            await _col.InsertAsync(doc);
         }
 
         // DateTime is not supported by QueryIndex — verify data via FindAll + index existence
         var indexes = _col.ListIndexes();
         Assert.Contains("idx_date", indexes);
-        Assert.Equal(10, _col.FindAll().Count());
+        Assert.Equal(10, (await _col.FindAllAsync().ToListAsync()).Count);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -281,52 +279,52 @@ public class SecondaryIndexCoverageTests : IDisposable
     // ══════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void SpatialIndex_CreateAndNear()
+    public async Task SpatialIndex_CreateAndNear()
     {
         var col = _engine.GetOrCreateCollection("places");
-        col.CreateSpatialIndex("location", "idx_loc");
+        await col.CreateSpatialIndexAsync("location", "idx_loc");
 
         // Insert some locations
-        InsertLocation(col, "Rome", 41.9028, 12.4964);
-        InsertLocation(col, "Milan", 45.4642, 9.1900);
-        InsertLocation(col, "Naples", 40.8518, 14.2681);
-        InsertLocation(col, "London", 51.5074, -0.1278);
+        await InsertLocation(col, "Rome", 41.9028, 12.4964);
+        await InsertLocation(col, "Milan", 45.4642, 9.1900);
+        await InsertLocation(col, "Naples", 40.8518, 14.2681);
+        await InsertLocation(col, "London", 51.5074, -0.1278);
 
         // Search near Rome within 300km → should find Rome and Naples
-        var results = col.Near("idx_loc", (41.9028, 12.4964), 300).ToList();
+        var results = await col.NearAsync("idx_loc", (41.9028, 12.4964), 300).ToListAsync();
         Assert.True(results.Count >= 1); // At least Rome itself
     }
 
     [Fact]
-    public void SpatialIndex_Within()
+    public async Task SpatialIndex_Within()
     {
         var col = _engine.GetOrCreateCollection("places2");
-        col.CreateSpatialIndex("location", "idx_loc2");
+        await col.CreateSpatialIndexAsync("location", "idx_loc2");
 
-        InsertLocation(col, "Rome", 41.9028, 12.4964);
-        InsertLocation(col, "Milan", 45.4642, 9.1900);
-        InsertLocation(col, "London", 51.5074, -0.1278);
+        await InsertLocation(col, "Rome", 41.9028, 12.4964);
+        await InsertLocation(col, "Milan", 45.4642, 9.1900);
+        await InsertLocation(col, "London", 51.5074, -0.1278);
 
         // Search within Italian boundaries
-        var results = col.Within("idx_loc2", (36.0, 6.0), (47.0, 19.0)).ToList();
+        var results = await col.WithinAsync("idx_loc2", (36.0, 6.0), (47.0, 19.0)).ToListAsync();
         Assert.True(results.Count >= 2); // Rome, Milan
     }
 
     [Fact]
-    public void SpatialIndex_QueryOnWrongIndexType_Throws()
+    public async Task SpatialIndex_QueryOnWrongIndexType_Throws()
     {
-        SeedItems(5);
-        _col.CreateIndex("name", "idx_name");
+        await SeedItems(5);
+        await _col.CreateIndexAsync("name", "idx_name");
 
-        Assert.Throws<ArgumentException>(() =>
-            _col.Near("idx_name", (0, 0), 100).ToList());
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await _col.NearAsync("idx_name", (0, 0), 100).ToListAsync());
     }
 
     [Fact]
-    public void SpatialIndex_NonExistentIndex_Throws()
+    public async Task SpatialIndex_NonExistentIndex_Throws()
     {
-        Assert.Throws<ArgumentException>(() =>
-            _col.Near("nonexistent", (0, 0), 100).ToList());
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await _col.NearAsync("nonexistent", (0, 0), 100).ToListAsync());
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -334,60 +332,63 @@ public class SecondaryIndexCoverageTests : IDisposable
     // ══════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void Insert_Null_Throws()
+    public async Task Insert_Null_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => _col.Insert(null!));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () => await _col.InsertAsync(null!));
     }
 
     [Fact]
-    public void Update_Null_Throws()
+    public async Task Update_Null_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() =>
-            _col.Update(new BsonId(ObjectId.NewObjectId()), null!));
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await _col.UpdateAsync(new BsonId(ObjectId.NewObjectId()), null!));
     }
 
     [Fact]
-    public void Delete_NonExistent_ReturnsFalse()
+    public async Task Delete_NonExistent_ReturnsFalse()
     {
         var id = new BsonId(ObjectId.NewObjectId());
-        Assert.False(_col.Delete(id));
+        Assert.False(await _col.DeleteAsync(id));
     }
 
     [Fact]
-    public void FindById_NonExistent_ReturnsNull()
+    public async Task FindById_NonExistent_ReturnsNull()
     {
         var id = new BsonId(ObjectId.NewObjectId());
-        Assert.Null(_col.FindById(id));
+        Assert.Null(await _col.FindByIdAsync(id));
     }
 
     [Fact]
-    public void FindAll_Empty_ReturnsEmpty()
+    public async Task FindAll_Empty_ReturnsEmpty()
     {
-        Assert.Empty(_col.FindAll().ToList());
+        Assert.Empty(await _col.FindAllAsync().ToListAsync());
     }
 
     [Fact]
-    public void Find_WithPredicate_FiltersCorrectly()
+    public async Task Find_WithPredicate_FiltersCorrectly()
     {
-        SeedItems(10);
-        var results = _col.Find(d =>
+        await SeedItems(10);
+        var results = await _col.FindAsync(d =>
         {
             d.TryGetInt32("value", out var v);
             return v > 7;
-        }).ToList();
+        }).ToListAsync();
         Assert.Equal(2, results.Count); // 8, 9
     }
 
     [Fact]
-    public void Find_NullPredicate_Throws()
+    public async Task Find_NullPredicate_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => _col.Find(null!).ToList());
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+        {
+            await _col.FindAsync(null!).ToListAsync();
+        });
     }
 
     [Fact]
     public async Task FindAsync_WithPredicate_FiltersCorrectly()
     {
-        SeedItems(10);
+        await SeedItems(10);
         var results = new List<BsonDocument>();
         await foreach (var doc in _col.FindAsync(d =>
         {
@@ -410,26 +411,28 @@ public class SecondaryIndexCoverageTests : IDisposable
     }
 
     [Fact]
-    public void InsertBulk_EmptyList_NoError()
+    public async Task InsertBulk_EmptyList_NoError()
     {
-        _col.InsertBulk(new List<BsonDocument>());
-        Assert.Empty(_col.FindAll().ToList());
+        await _col.InsertBulkAsync(new List<BsonDocument>());
+        var results = await _col.FindAllAsync().ToListAsync();
+        Assert.Empty(results);
     }
 
     [Fact]
-    public void InsertBulk_ManyDocuments_AllPersisted()
+    public async Task InsertBulk_ManyDocuments_AllPersisted()
     {
         var docs = Enumerable.Range(0, 100).Select(i =>
             _col.CreateDocument(["_id", "val"], b => b.AddInt32("val", i))).ToList();
-        _col.InsertBulk(docs);
-        Assert.Equal(100, _col.FindAll().Count());
+        await _col.InsertBulkAsync(docs);
+        var results = await _col.FindAllAsync().ToListAsync();
+        Assert.Equal(100, results.Count);
     }
 
     [Fact]
-    public void UpdateBulk_UpdatesMultiple()
+    public async Task UpdateBulk_UpdatesMultiple()
     {
-        SeedItems(5);
-        var allDocs = _col.FindAll().ToList();
+        await SeedItems(5);
+        var allDocs = (await _col.FindAllAsync().ToListAsync());
         var updates = new List<(BsonId, BsonDocument)>();
 
         foreach (var doc in allDocs)
@@ -440,9 +443,10 @@ public class SecondaryIndexCoverageTests : IDisposable
             updates.Add((id, newDoc));
         }
 
-        _col.UpdateBulk(updates);
+        await _col.UpdateBulkAsync(updates);
 
-        foreach (var doc in _col.FindAll())
+        var updatedDocs = await _col.FindAllAsync().ToListAsync();
+        foreach (var doc in updatedDocs)    
         {
             doc.TryGetString("name", out var name);
             Assert.Equal("updated", name);
@@ -450,27 +454,29 @@ public class SecondaryIndexCoverageTests : IDisposable
     }
 
     [Fact]
-    public void DeleteBulk_DeletesMultiple()
+    public async Task DeleteBulk_DeletesMultiple()
     {
-        SeedItems(5);
-        var ids = _col.FindAll().Select(d => { d.TryGetId(out var id); return id; }).ToList();
-        _col.DeleteBulk(ids.Take(3));
-        Assert.Equal(2, _col.FindAll().Count());
+        await SeedItems(5);
+        var ids = (await _col.FindAllAsync().ToListAsync()).Select(d => { d.TryGetId(out var id); return id; }).ToList();
+        await _col.DeleteBulkAsync(ids.Take(3));
+        var remaining = await _col.FindAllAsync().ToListAsync();
+        Assert.Equal(2, remaining.Count);
     }
 
     [Fact]
-    public void Count_ReturnsCorrectCount()
+    public async Task Count_ReturnsCorrectCount()
     {
-        SeedItems(7);
-        Assert.Equal(7, _col.Count());
+        await SeedItems(7);
+        var count = await _col.CountAsync();
+        Assert.Equal(7, count);
     }
 
     [Fact]
-    public void Scan_ReturnsAll()
+    public async Task Scan_ReturnsAll()
     {
-        SeedItems(5);
+        await SeedItems(5);
         var count = 0;
-        foreach (var doc in _col.Scan(reader => true))
+        await foreach (var doc in _col.ScanAsync(reader => true))
             count++;
         Assert.Equal(5, count);
     }
@@ -489,7 +495,7 @@ public class SecondaryIndexCoverageTests : IDisposable
     public async Task FindByIdAsync_Works()
     {
         var doc = _col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 42));
-        var id = _col.Insert(doc);
+        var id = await _col.InsertAsync(doc);
         var found = await _col.FindByIdAsync(id);
         Assert.NotNull(found);
         found!.TryGetInt32("x", out var x);
@@ -500,7 +506,7 @@ public class SecondaryIndexCoverageTests : IDisposable
     public async Task UpdateAsync_Works()
     {
         var doc = _col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1));
-        var id = _col.Insert(doc);
+        var id = await _col.InsertAsync(doc);
         var newDoc = _col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 2));
         var updated = await _col.UpdateAsync(id, newDoc);
         Assert.True(updated);
@@ -510,7 +516,7 @@ public class SecondaryIndexCoverageTests : IDisposable
     public async Task DeleteAsync_Works()
     {
         var doc = _col.CreateDocument(["_id", "x"], b => b.AddInt32("x", 1));
-        var id = _col.Insert(doc);
+        var id = await _col.InsertAsync(doc);
         var deleted = await _col.DeleteAsync(id);
         Assert.True(deleted);
         Assert.Null(await _col.FindByIdAsync(id));
@@ -530,7 +536,7 @@ public class SecondaryIndexCoverageTests : IDisposable
     }
 
     [Fact]
-    public void TimeSeries_InsertAndQuery()
+    public async Task TimeSeries_InsertAndQuery()
     {
         var col = _engine.GetOrCreateCollection("ts_insert");
         col.SetTimeSeries("ts", TimeSpan.FromDays(365));
@@ -539,33 +545,33 @@ public class SecondaryIndexCoverageTests : IDisposable
         {
             var doc = col.CreateDocument(["_id", "ts", "val"], b =>
                 b.AddDateTime("ts", DateTime.UtcNow.AddMinutes(-i)).AddInt32("val", i));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
 
-        Assert.Equal(5, col.FindAll().Count());
+        Assert.Equal(5, (await col.FindAllAsync().ToListAsync()).Count);
     }
 
     // ══════════════════════════════════════════════════════════════════════
     //  Helpers
     // ══════════════════════════════════════════════════════════════════════
 
-    private void SeedItems(int count)
+    private async Task SeedItems(int count)
     {
         for (int i = 0; i < count; i++)
         {
             var doc = _col.CreateDocument(["_id", "name", "value"], b =>
                 b.AddString("name", $"item_{i:D3}").AddInt32("value", i));
-            _col.Insert(doc);
+            await _col.InsertAsync(doc);
         }
     }
 
-    private static void InsertLocation(DynamicCollection col, string name, double lat, double lon)
+    private static async Task InsertLocation(DynamicCollection col, string name, double lat, double lon)
     {
         var doc = col.CreateDocument(["_id", "name", "location"], b =>
         {
             b.AddString("name", name);
             b.AddCoordinates("location", (lat, lon));
         });
-        col.Insert(doc);
+        await col.InsertAsync(doc);
     }
 }

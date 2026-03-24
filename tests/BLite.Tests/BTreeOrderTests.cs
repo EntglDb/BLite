@@ -47,7 +47,7 @@ public class BTreeOrderTests : IDisposable
         // Insert in descending order
         foreach (var v in new[] { 50, 10, 40, 20, 30 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<int>())
@@ -63,7 +63,7 @@ public class BTreeOrderTests : IDisposable
         // Insert 1–10 in shuffled order
         foreach (var v in new[] { 7, 3, 9, 1, 5, 2, 8, 4, 6, 10 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.Create(3), IndexKey.Create(7), IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<int>())
@@ -78,7 +78,7 @@ public class BTreeOrderTests : IDisposable
         var (index, txnId) = CreateIndex();
         foreach (var v in new[] { 30, 10, 20 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var results = index.Equal(IndexKey.Create(10), txnId).ToList();
         Assert.Single(results);
@@ -92,7 +92,7 @@ public class BTreeOrderTests : IDisposable
         // Insert smallest key last → previously would be at wrong position in leaf
         foreach (var v in new[] { 50, 40, 30, 20, 10 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var results = index.Equal(IndexKey.Create(10), txnId).ToList();
         Assert.Single(results);
@@ -109,7 +109,7 @@ public class BTreeOrderTests : IDisposable
         var words = new[] { "Seattle", "Portland", "Seattle", "Portland", "Seattle" };
         for (uint i = 0; i < words.Length; i++)
             index.Insert(IndexKey.Create(words[i]), new DocumentLocation(i + 1, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         // Portland < Seattle lexicographically — previously returned 0 results
         var portland = index.Range(IndexKey.Create("Portland"), IndexKey.Create("Portland"),
@@ -128,7 +128,7 @@ public class BTreeOrderTests : IDisposable
         var words = new[] { "Mango", "Apple", "Cherry", "Banana", "Date" };
         for (uint i = 0; i < (uint)words.Length; i++)
             index.Insert(IndexKey.Create(words[i]), new DocumentLocation(i + 1, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<string>())
@@ -144,7 +144,7 @@ public class BTreeOrderTests : IDisposable
         var words = new[] { "Mango", "Apple", "Cherry" };
         for (uint i = 0; i < (uint)words.Length; i++)
             index.Insert(IndexKey.Create(words[i]), new DocumentLocation(i + 1, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Backward, txnId)
                         .Select(e => e.Key.As<string>())
@@ -162,7 +162,7 @@ public class BTreeOrderTests : IDisposable
         // Same key value, different document locations
         for (uint slot = 0; slot < 5; slot++)
             index.Insert(IndexKey.Create("duplicate"), new DocumentLocation(slot + 1, (ushort)slot), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var results = index.Range(IndexKey.Create("duplicate"), IndexKey.Create("duplicate"),
                                   IndexDirection.Forward, txnId).ToList();
@@ -177,7 +177,7 @@ public class BTreeOrderTests : IDisposable
         var items = new (int key, uint page)[] { (2, 10), (3, 30), (2, 20), (1, 1), (2, 25) };
         foreach (var (key, page) in items)
             index.Insert(IndexKey.Create(key), new DocumentLocation(page, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var all = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                        .Select(e => e.Key.As<int>())
@@ -202,7 +202,7 @@ public class BTreeOrderTests : IDisposable
 
         foreach (var v in values)
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<int>())
@@ -228,7 +228,7 @@ public class BTreeOrderTests : IDisposable
 
         foreach (var v in values)
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         // Every key must be findable
         foreach (var v in values)
@@ -250,7 +250,7 @@ public class BTreeOrderTests : IDisposable
         var values = new[] { 1, 255, 256, 257, 1000, 65535, 65536, 100_000 };
         foreach (var v in values)
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<int>())
@@ -270,7 +270,7 @@ public class BTreeOrderTests : IDisposable
 
         foreach (var v in values)
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<int>())
@@ -289,7 +289,7 @@ public class BTreeOrderTests : IDisposable
         var values = new[] { -1000, -255, -1, 0, 1, 255, 1000 };
         foreach (var v in values)
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)(v + 1001), 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var keys = index.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
                         .Select(e => e.Key.As<int>())

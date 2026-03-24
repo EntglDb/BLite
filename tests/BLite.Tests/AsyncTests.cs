@@ -25,19 +25,19 @@ public class AsyncTests : IDisposable
         {
             using (var txn = await db.BeginTransactionAsync())
             {
-                db.AsyncDocs.Insert(new AsyncDoc { Id = 1, Name = "Async1" });
-                db.AsyncDocs.Insert(new AsyncDoc { Id = 2, Name = "Async2" });
+                await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 1, Name = "Async1" });
+                await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 2, Name = "Async2" });
                 await db.SaveChangesAsync();
             }
         }
 
         // Verify with new storage engine instance
         using var db2 = new TestDbContext(_dbPath);
-        var doc1 = db2.AsyncDocs.FindById(1);
+        var doc1 = await db2.AsyncDocs.FindByIdAsync(1);
         Assert.NotNull(doc1);
         Assert.Equal("Async1", doc1.Name);
 
-        var doc2 = db2.AsyncDocs.FindById(2);
+        var doc2 = await db2.AsyncDocs.FindByIdAsync(2);
         Assert.NotNull(doc2);
         Assert.Equal("Async2", doc2.Name);
     }
@@ -48,10 +48,10 @@ public class AsyncTests : IDisposable
         using var db = new TestDbContext(_dbPath);
         using (var txn = await db.BeginTransactionAsync())
         {
-            db.AsyncDocs.Insert(new AsyncDoc { Id = 3, Name = "RollbackMe" });
+            await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 3, Name = "RollbackMe" });
         }
 
-        var doc = db.AsyncDocs.FindById(3);
+        var doc = await db.AsyncDocs.FindByIdAsync(3);
         Assert.Null(doc);
     }
     
@@ -65,7 +65,7 @@ public class AsyncTests : IDisposable
         
         Assert.Equal(100, ids.Count);
         
-        var doc50 = db.AsyncDocs.FindById(5050);
+        var doc50 = await db.AsyncDocs.FindByIdAsync(5050);
         Assert.NotNull(doc50);
         Assert.Equal("Bulk50", doc50.Name);
     }
@@ -78,7 +78,7 @@ public class AsyncTests : IDisposable
         var docs = Enumerable.Range(1, 100).Select(i => new AsyncDoc { Id = i + 6000, Name = $"Original{i}" }).ToList();
         await db.AsyncDocs.InsertBulkAsync(docs);
         
-        // 2. Update all docs
+        // 2. UpdateAsync all docs
         foreach (var doc in docs)
         {
             doc.Name = $"Updated{doc.Id - 6000}";
@@ -89,7 +89,7 @@ public class AsyncTests : IDisposable
         Assert.Equal(100, count);
         
         // 3. Verify updates
-        var doc50 = db.AsyncDocs.FindById(6050);
+        var doc50 = await db.AsyncDocs.FindByIdAsync(6050);
         Assert.NotNull(doc50);
         Assert.Equal("Updated50", doc50.Name);
     }
@@ -115,7 +115,7 @@ public class AsyncTests : IDisposable
         await db.SaveChangesAsync();
 
         // Verify count
-        var count = db.AsyncDocs.Scan((BsonReaderPredicate)(_ => true)).Count();
+        var count = await db.AsyncDocs.ScanAsync((BsonReaderPredicate)(_ => true)).CountAsync();
         Assert.Equal(threadCount * docsPerThread, count);
     }
 }

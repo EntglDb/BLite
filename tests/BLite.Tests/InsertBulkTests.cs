@@ -19,7 +19,7 @@ public class InsertBulkTests : IDisposable
     }
 
     [Fact]
-    public void InsertBulk_PersistsData_ImmediatelyVisible()
+    public async Task InsertBulk_PersistsData_ImmediatelyVisible()
     {
         var users = new List<User>();
         for (int i = 0; i < 50; i++)
@@ -27,16 +27,16 @@ public class InsertBulkTests : IDisposable
             users.Add(new User { Id = BLite.Bson.ObjectId.NewObjectId(), Name = $"User {i}", Age = 20 });
         }
 
-        _db.Users.InsertBulk(users);
-        _db.SaveChanges();
+        await _db.Users.InsertBulkAsync(users);
+        await _db.SaveChangesAsync();
 
-        var insertedUsers = _db.Users.FindAll().ToList();
+        var insertedUsers = await _db.Users.FindAllAsync().ToListAsync();
 
         Assert.Equal(50, insertedUsers.Count);
     }
     
     [Fact]
-    public void InsertBulk_SpanningMultiplePages_PersistsCorrectly()
+    public async Task InsertBulk_SpanningMultiplePages_PersistsCorrectly()
     {
         // 16KB page. User ~50 bytes. 400 users -> ~20KB -> 2 pages.
         var users = new List<User>();
@@ -45,9 +45,9 @@ public class InsertBulkTests : IDisposable
             users.Add(new User { Id = BLite.Bson.ObjectId.NewObjectId(), Name = $"User {i} with some long padding text to ensure we fill space {new string('x', 50)}", Age = 20 });
         }
 
-        _db.Users.InsertBulk(users);
-        _db.SaveChanges();
+        await _db.Users.InsertBulkAsync(users);
+        await _db.SaveChangesAsync();
 
-        Assert.Equal(400, _db.Users.Count());
+        Assert.Equal(400, await _db.Users.CountAsync());
     }
 }

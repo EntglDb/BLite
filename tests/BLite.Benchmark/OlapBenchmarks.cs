@@ -1,5 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using BLite.Core.Query;
 using BLite.Shared;
 using BLite.Tests;
 using Couchbase.Lite;
@@ -55,7 +56,7 @@ public class OlapBenchmarks
     // ── setup / cleanup ──────────────────────────────────────────────
 
     [GlobalSetup]
-    public void Setup()
+    public async Task Setup()
     {
         var temp = AppContext.BaseDirectory;
         var id   = Guid.NewGuid().ToString("N");
@@ -78,10 +79,10 @@ public class OlapBenchmarks
 
         // 1. BLite
         _ctx = new TestDbContext(_docDbPath);
-        _ctx.CustomerOrders.InsertBulk(orders);
+        await _ctx.CustomerOrders.InsertBulkAsync(orders);
         // Create secondary indexes so optimized LINQ paths can exploit them
-        _ctx.CustomerOrders.EnsureIndex(o => o.Total);
-        _ctx.CustomerOrders.EnsureIndex(o => o.Status);
+        await _ctx.CustomerOrders.EnsureIndexAsync(o => o.Total);
+        await _ctx.CustomerOrders.EnsureIndexAsync(o => o.Status);
 
         // 2. SQLite + JSON  (also store Total as real column for OLAP queries)
         using var conn = new SqliteConnection(_sqliteConnStr);
@@ -175,14 +176,18 @@ public class OlapBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Aggregate SUM/AVG/COUNT")]
     [BenchmarkCategory("Aggregate")]
-    public AggResult BLite_Aggregate()
+    public async Task<AggResult> BLite_Aggregate()
     {
-        // Sum and Average use the BSON field-projection scan fast path:
-        // only the Total bytes are read from each page — T is never instantiated.
-        var q = _ctx.CustomerOrders.AsQueryable();
-        decimal sum   = q.Sum(o => o.Total);
-        decimal avg   = q.Average(o => o.Total);
-        int     count = _ctx.CustomerOrders.Count();   // primary BTree key scan
+        // ScanPairsAsync uses the BSON field-projection path:
+        // only the Total bytes are read per document — T is never instantiated.
+        decimal sum = 0m;
+        int count = 0;
+        await foreach (var pair in _ctx.CustomerOrders.ScanPairsAsync(o => o.Total, o => o.Total))
+        {
+            sum += pair.Value;
+            count++;
+        }
+        decimal avg = count > 0 ? sum / count : 0m;
         return new(sum, avg, count);
     }
 
@@ -236,15 +241,15 @@ public class OlapBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – GroupBy Status")]
     [BenchmarkCategory("GroupBy")]
-    public List<GroupRow> BLite_GroupBy()
+    public async Task<List<GroupRow>> BLite_GroupBy()
         // Single-pass BSON two-field scan: only Status (string) and Total (decimal)
         // are read per document — no full CustomerOrder instantiation.
         // GroupBy/Count/Sum then run on small (string, decimal) value tuples in memory.
-        => _ctx.CustomerOrders
-               .ScanPairs(o => o.Status, o => o.Total)
+        => await _ctx.CustomerOrders
+               .ScanPairsAsync(o => o.Status, o => o.Total)
                .GroupBy(p => p.Key)
                .Select(g => new GroupRow(g.Key, g.Count(), g.Sum(p => p.Value)))
-               .ToList();
+               .ToListAsync();
 
     [Benchmark(Description = "LiteDB – GroupBy Status")]
     [BenchmarkCategory("GroupBy")]
@@ -297,12 +302,12 @@ public class OlapBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Range Total > threshold")]
     [BenchmarkCategory("RangeFilter")]
-    public List<CustomerOrder> BLite_Range()
+    public async Task<List<CustomerOrder>> BLite_Range()
         // AsQueryable() + WHERE lets IndexOptimizer use the Total BTree index for a
         // range scan, returning only the matching ~25 % of documents.
-        => _ctx.CustomerOrders.AsQueryable()
+        => await _ctx.CustomerOrders.AsQueryable()
                .Where(o => o.Total > RangeThreshold)
-               .ToList();
+               .ToListAsync();
 
     [Benchmark(Description = "LiteDB – Range Total > threshold")]
     [BenchmarkCategory("RangeFilter")]
@@ -352,13 +357,13 @@ public class OlapBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite – Top-10 by Total")]
     [BenchmarkCategory("TopN")]
-    public List<CustomerOrder> BLite_TopN()
+    public async Task<List<CustomerOrder>> BLite_TopN()
         // TryOptimizeOrderBy detects the indexed Total field and performs a BTree
         // backward scan, fetching only the top N documents without sorting in RAM.
-        => _ctx.CustomerOrders.AsQueryable()
+        => await _ctx.CustomerOrders.AsQueryable()
                .OrderByDescending(o => o.Total)
                .Take(TopN)
-               .ToList();
+               .ToListAsync();
 
     [Benchmark(Description = "LiteDB – Top-10 by Total")]
     [BenchmarkCategory("TopN")]

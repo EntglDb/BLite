@@ -165,11 +165,11 @@ internal static class KvPage
         slot[SlotOffFlags]    = hasExpiry ? FlagHasExpiry : (byte)0;
         BinaryPrimitives.WriteUInt32LittleEndian(slot[SlotOffValueLen..], (uint)value.Length);
 
-        // Update counters
+        // UpdateAsync counters
         BinaryPrimitives.WriteUInt16LittleEndian(page[EntryCountOff..],   (ushort)(count + 1));
         BinaryPrimitives.WriteUInt16LittleEndian(page[FreeSpaceEndOff..], dataOffset);
 
-        // Update FreeBytes in header
+        // UpdateAsync FreeBytes in header
         var hdr = PageHeader.ReadFrom(page);
         hdr.FreeBytes = (ushort)Math.Max(0, hdr.FreeBytes - needed);
         hdr.WriteTo(page);

@@ -26,7 +26,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     #region Inheritance Tests
 
     [Fact]
-    public void DerivedEntity_InheritsId_FromBaseClass()
+    public async Task DerivedEntity_InheritsId_FromBaseClass()
     {
         // Arrange
         var entity = new DerivedEntity
@@ -37,9 +37,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         };
 
         // Act
-        var id = _db.DerivedEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.DerivedEntities.FindById(id);
+        var id = await _db.DerivedEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.DerivedEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -50,7 +50,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void DerivedEntity_Update_WorksWithInheritedId()
+    public async Task DerivedEntity_Update_WorksWithInheritedId()
     {
         // Arrange
         var entity = new DerivedEntity
@@ -59,18 +59,18 @@ public class SourceGeneratorFeaturesTests : IDisposable
             Description = "Original Description",
             CreatedAt = DateTime.UtcNow
         };
-        var id = _db.DerivedEntities.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.DerivedEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
         // Act
-        var retrieved = _db.DerivedEntities.FindById(id);
+        var retrieved = await _db.DerivedEntities.FindByIdAsync(id);
         Assert.NotNull(retrieved);
         retrieved.Name = "Updated";
         retrieved.Description = "Updated Description";
-        _db.DerivedEntities.Update(retrieved);
-        _db.SaveChanges();
+        await _db.DerivedEntities.UpdateAsync(retrieved);
+        await _db.SaveChangesAsync();
 
-        var updated = _db.DerivedEntities.FindById(id);
+        var updated = await _db.DerivedEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(updated);
@@ -80,7 +80,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void DerivedEntity_Query_WorksWithInheritedProperties()
+    public async Task DerivedEntity_Query_WorksWithInheritedProperties()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -88,13 +88,13 @@ public class SourceGeneratorFeaturesTests : IDisposable
         var entity2 = new DerivedEntity { Name = "Entity2", CreatedAt = now.AddDays(-1) };
         var entity3 = new DerivedEntity { Name = "Entity3", CreatedAt = now };
 
-        _db.DerivedEntities.Insert(entity1);
-        _db.DerivedEntities.Insert(entity2);
-        _db.DerivedEntities.Insert(entity3);
-        _db.SaveChanges();
+        await _db.DerivedEntities.InsertAsync(entity1);
+        await _db.DerivedEntities.InsertAsync(entity2);
+        await _db.DerivedEntities.InsertAsync(entity3);
+        await _db.SaveChangesAsync();
 
         // Act - Query using inherited property
-        var recent = _db.DerivedEntities.Find(e => e.CreatedAt >= now.AddDays(-1.5)).ToList();
+        var recent = await _db.DerivedEntities.FindAsync(e => e.CreatedAt >= now.AddDays(-1.5)).ToListAsync();
 
         // Assert
         Assert.Equal(2, recent.Count);
@@ -107,7 +107,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     #region Computed Properties Tests
 
     [Fact]
-    public void ComputedProperties_AreNotSerialized()
+    public async Task ComputedProperties_AreNotSerialized()
     {
         // Arrange
         var entity = new EntityWithComputedProperties
@@ -118,9 +118,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         };
 
         // Act
-        var id = _db.ComputedPropertyEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.ComputedPropertyEntities.FindById(id);
+        var id = await _db.ComputedPropertyEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.ComputedPropertyEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -135,7 +135,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void ComputedProperties_UpdateDoesNotBreak()
+    public async Task ComputedProperties_UpdateDoesNotBreak()
     {
         // Arrange
         var entity = new EntityWithComputedProperties
@@ -144,18 +144,18 @@ public class SourceGeneratorFeaturesTests : IDisposable
             LastName = "Smith",
             BirthYear = 1985
         };
-        var id = _db.ComputedPropertyEntities.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.ComputedPropertyEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
-        // Act - Update stored properties
-        var retrieved = _db.ComputedPropertyEntities.FindById(id);
+        // Act - UpdateAsync stored properties
+        var retrieved = await _db.ComputedPropertyEntities.FindByIdAsync(id);
         Assert.NotNull(retrieved);
         retrieved.FirstName = "Janet";
         retrieved.BirthYear = 1986;
-        _db.ComputedPropertyEntities.Update(retrieved);
-        _db.SaveChanges();
+        await _db.ComputedPropertyEntities.UpdateAsync(retrieved);
+        await _db.SaveChangesAsync();
 
-        var updated = _db.ComputedPropertyEntities.FindById(id);
+        var updated = await _db.ComputedPropertyEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(updated);
@@ -170,7 +170,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     #region Advanced Collections Tests
 
     [Fact]
-    public void HashSet_SerializesAndDeserializes()
+    public async Task HashSet_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -182,9 +182,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.Tags.Add("tag3");
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -197,7 +197,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void ISet_SerializesAndDeserializes()
+    public async Task ISet_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -210,9 +210,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.Numbers.Add(10); // Duplicate - should be ignored by set
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -225,7 +225,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void LinkedList_SerializesAndDeserializes()
+    public async Task LinkedList_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -237,9 +237,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.History.AddLast("third");
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -253,7 +253,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void Queue_SerializesAndDeserializes()
+    public async Task Queue_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -265,9 +265,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.PendingItems.Enqueue("item3");
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -280,7 +280,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void Stack_SerializesAndDeserializes()
+    public async Task Stack_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -292,9 +292,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.UndoStack.Push("action3");
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -307,7 +307,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void HashSet_WithNestedObjects_SerializesAndDeserializes()
+    public async Task HashSet_WithNestedObjects_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -318,9 +318,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.Addresses.Add(new Address { Street = "456 Oak Ave", City = new City { Name = "LA", ZipCode = "90001" } });
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -334,7 +334,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void ISet_WithNestedObjects_SerializesAndDeserializes()
+    public async Task ISet_WithNestedObjects_SerializesAndDeserializes()
     {
         // Arrange
         var entity = new EntityWithAdvancedCollections
@@ -346,9 +346,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.FavoriteCities.Add(new City { Name = "London", ZipCode = "SW1A" });
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -363,7 +363,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void AdvancedCollections_AllTypesInSingleEntity()
+    public async Task AdvancedCollections_AllTypesInSingleEntity()
     {
         // Arrange - Test all collection types at once
         var entity = new EntityWithAdvancedCollections
@@ -390,9 +390,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         entity.FavoriteCities.Add(new City { Name = "City1" });
 
         // Act
-        var id = _db.AdvancedCollectionEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.AdvancedCollectionEntities.FindById(id);
+        var id = await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.AdvancedCollectionEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -411,15 +411,15 @@ public class SourceGeneratorFeaturesTests : IDisposable
     #region Private Setters Tests
 
     [Fact]
-    public void EntityWithPrivateSetters_CanBeDeserialized()
+    public async Task EntityWithPrivateSetters_CanBeDeserialized()
     {
         // Arrange
         var entity = EntityWithPrivateSetters.Create("John Doe", 30);
 
         // Act
-        var id = _db.PrivateSetterEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.PrivateSetterEntities.FindById(id);
+        var id = await _db.PrivateSetterEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.PrivateSetterEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -429,21 +429,20 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void EntityWithPrivateSetters_Update_Works()
+    public async Task EntityWithPrivateSetters_Update_Works()
     {
         // Arrange
         var entity1 = EntityWithPrivateSetters.Create("Alice", 25);
-        var id1 = _db.PrivateSetterEntities.Insert(entity1);
+        var id1 = await _db.PrivateSetterEntities.InsertAsync(entity1);
         
         var entity2 = EntityWithPrivateSetters.Create("Bob", 35);
         entity2.GetType().GetProperty("Id")!.SetValue(entity2, id1); // Force same Id
         
-        _db.PrivateSetterEntities.Update(entity2);
-        _db.SaveChanges();
+        await _db.PrivateSetterEntities.UpdateAsync(entity2);
+        await _db.SaveChangesAsync();
 
         // Act
-        var retrieved = _db.PrivateSetterEntities.FindById(id1);
-
+        var retrieved = await _db.PrivateSetterEntities.FindByIdAsync(id1);
         // Assert
         Assert.NotNull(retrieved);
         Assert.Equal(id1, retrieved.Id);
@@ -452,20 +451,20 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void EntityWithPrivateSetters_Query_Works()
+    public async Task EntityWithPrivateSetters_Query_Works()
     {
         // Arrange
         var entity1 = EntityWithPrivateSetters.Create("Charlie", 20);
         var entity2 = EntityWithPrivateSetters.Create("Diana", 30);
         var entity3 = EntityWithPrivateSetters.Create("Eve", 40);
 
-        _db.PrivateSetterEntities.Insert(entity1);
-        _db.PrivateSetterEntities.Insert(entity2);
-        _db.PrivateSetterEntities.Insert(entity3);
-        _db.SaveChanges();
+        await _db.PrivateSetterEntities.InsertAsync(entity1);
+        await _db.PrivateSetterEntities.InsertAsync(entity2);
+        await _db.PrivateSetterEntities.InsertAsync(entity3);
+        await _db.SaveChangesAsync();
 
         // Act
-        var adults = _db.PrivateSetterEntities.Find(e => e.Age >= 30).ToList();
+        var adults = await _db.PrivateSetterEntities.FindAsync(e => e.Age >= 30).ToListAsync();
 
         // Assert
         Assert.Equal(2, adults.Count);
@@ -478,7 +477,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     #region Init-Only Setters Tests
 
     [Fact]
-    public void EntityWithInitSetters_CanBeDeserialized()
+    public async Task EntityWithInitSetters_CanBeDeserialized()
     {
         // Arrange
         var entity = new EntityWithInitSetters
@@ -490,9 +489,9 @@ public class SourceGeneratorFeaturesTests : IDisposable
         };
 
         // Act
-        var id = _db.InitSetterEntities.Insert(entity);
-        _db.SaveChanges();
-        var retrieved = _db.InitSetterEntities.FindById(id);
+        var id = await _db.InitSetterEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.InitSetterEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(retrieved);
@@ -502,20 +501,20 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void EntityWithInitSetters_Query_Works()
+    public async Task EntityWithInitSetters_Query_Works()
     {
         // Arrange
         var entity1 = new EntityWithInitSetters { Id = ObjectId.NewObjectId(), Name = "Alpha", Age = 20, CreatedAt = DateTime.UtcNow };
         var entity2 = new EntityWithInitSetters { Id = ObjectId.NewObjectId(), Name = "Beta", Age = 30, CreatedAt = DateTime.UtcNow };
         var entity3 = new EntityWithInitSetters { Id = ObjectId.NewObjectId(), Name = "Gamma", Age = 40, CreatedAt = DateTime.UtcNow };
 
-        _db.InitSetterEntities.Insert(entity1);
-        _db.InitSetterEntities.Insert(entity2);
-        _db.InitSetterEntities.Insert(entity3);
-        _db.SaveChanges();
+        await _db.InitSetterEntities.InsertAsync(entity1);
+        await _db.InitSetterEntities.InsertAsync(entity2);
+        await _db.InitSetterEntities.InsertAsync(entity3);
+        await _db.SaveChangesAsync();
 
         // Act
-        var results = _db.InitSetterEntities.Find(e => e.Age > 25).ToList();
+        var results = await _db.InitSetterEntities.FindAsync(e => e.Age > 25).ToListAsync();
 
         // Assert
         Assert.Equal(2, results.Count);
@@ -524,19 +523,19 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void EntityWithInitIdAndNullables_NullProperties_RoundTrip()
+    public async Task EntityWithInitIdAndNullables_NullProperties_RoundTrip()
     {
         // Regression test: entities with an init-only Id and nullable value-type properties
         // must deserialize null as null, not as the default value (0).
         var withNulls = new EntityWithInitIdAndNullables { Id = ObjectId.NewObjectId(), Name = "Alice" };
         var withValues = new EntityWithInitIdAndNullables { Id = ObjectId.NewObjectId(), Name = "Bob", Age = 30, Weight = 70.5m };
 
-        var idAlice = _db.InitIdNullableEntities.Insert(withNulls);
-        var idBob = _db.InitIdNullableEntities.Insert(withValues);
-        _db.SaveChanges();
+        var idAlice = await _db.InitIdNullableEntities.InsertAsync(withNulls);
+        var idBob = await _db.InitIdNullableEntities.InsertAsync(withValues);
+        await _db.SaveChangesAsync();
 
-        var alice = _db.InitIdNullableEntities.FindById(idAlice);
-        var bob = _db.InitIdNullableEntities.FindById(idBob);
+        var alice = await _db.InitIdNullableEntities.FindByIdAsync(idAlice);
+        var bob = await _db.InitIdNullableEntities.FindByIdAsync(idBob);
 
         Assert.NotNull(alice);
         Assert.Null(alice.Age);
@@ -552,7 +551,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     #region DDD Private Backing Field Tests
 
     [Fact]
-    public void DddAggregate_WithPrivateBackingField_CanPersistAndReload()
+    public async Task DddAggregate_WithPrivateBackingField_CanPersistAndReload()
     {
         var agg = DddAggregate.Create("Invoice #1");
         agg.AddItem("Widget", 3);
@@ -560,10 +559,10 @@ public class SourceGeneratorFeaturesTests : IDisposable
         agg.AddTag("urgent");
         agg.AddTag("b2b");
 
-        _db.DddAggregates.Insert(agg);
-        _db.SaveChanges();
+        await _db.DddAggregates.InsertAsync(agg);
+        await _db.SaveChangesAsync();
 
-        var loaded = _db.DddAggregates.FindById(agg.Id);
+        var loaded = await _db.DddAggregates.FindByIdAsync(agg.Id);
 
         Assert.NotNull(loaded);
         Assert.Equal("Invoice #1", loaded.Title);
@@ -576,13 +575,12 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void DddAggregate_EmptyCollections_RoundTrip()
+    public async Task DddAggregate_EmptyCollections_RoundTrip()
     {
         var agg = DddAggregate.Create("Empty Invoice");
-        _db.DddAggregates.Insert(agg);
-        _db.SaveChanges();
-
-        var loaded = _db.DddAggregates.FindById(agg.Id);
+        await _db.DddAggregates.InsertAsync(agg);
+        await _db.SaveChangesAsync();
+        var loaded = await _db.DddAggregates.FindByIdAsync(agg.Id);
 
         Assert.NotNull(loaded);
         Assert.Equal("Empty Invoice", loaded.Title);
@@ -591,7 +589,7 @@ public class SourceGeneratorFeaturesTests : IDisposable
     }
 
     [Fact]
-    public void DddAggregate_MultipleDocuments_FindAll_Works()
+    public async Task DddAggregate_MultipleDocuments_FindAll_Works()
     {
         var agg1 = DddAggregate.Create("Order A");
         agg1.AddItem("X", 10);
@@ -600,11 +598,11 @@ public class SourceGeneratorFeaturesTests : IDisposable
         agg2.AddItem("Y", 5);
         agg2.AddItem("Z", 2);
 
-        _db.DddAggregates.Insert(agg1);
-        _db.DddAggregates.Insert(agg2);
-        _db.SaveChanges();
+        await _db.DddAggregates.InsertAsync(agg1);
+        await _db.DddAggregates.InsertAsync(agg2);
+        await _db.SaveChangesAsync();
 
-        var all = _db.DddAggregates.FindAll().ToList();
+        var all = (await _db.DddAggregates.FindAllAsync().ToListAsync());
 
         Assert.Equal(2, all.Count);
         var a = all.Single(x => x.Title == "Order A");

@@ -1,3 +1,4 @@
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests
@@ -31,7 +32,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void MockCounter_Insert_And_FindById_Works()
+        public async Task MockCounter_Insert_And_FindById_Works()
         {
             using var db = new TestDbContext(DbPath);
             
@@ -42,10 +43,10 @@ namespace BLite.Tests
             };
             
             // Insert should work with string Id
-            db.MockCounters.Insert(counter);
+            await db.MockCounters.InsertAsync(counter);
             
             // FindById should retrieve the entity
-            var stored = db.MockCounters.FindById("test-id-123");
+            var stored = await db.MockCounters.FindByIdAsync("test-id-123");
             Assert.NotNull(stored);
             Assert.Equal("test-id-123", stored.Id);
             Assert.Equal("TestCounter", stored.Name);
@@ -53,7 +54,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void MockCounter_Update_Works()
+        public async Task MockCounter_Update_Works()
         {
             using var db = new TestDbContext(DbPath);
             
@@ -63,22 +64,22 @@ namespace BLite.Tests
                 Value = 10
             };
             
-            db.MockCounters.Insert(counter);
+            await db.MockCounters.InsertAsync(counter);
             
-            // Update the entity
+            // UpdateAsync the entity
             counter.Name = "Updated";
             counter.Value = 20;
-            db.MockCounters.Update(counter);
+            await db.MockCounters.UpdateAsync(counter);
             
             // Verify update
-            var updated = db.MockCounters.FindById("update-test");
+            var updated = await db.MockCounters.FindByIdAsync("update-test");
             Assert.NotNull(updated);
             Assert.Equal("Updated", updated.Name);
             Assert.Equal(20, updated.Value);
         }
 
         [Fact]
-        public void MockCounter_Delete_Works()
+        public async Task MockCounter_Delete_Works()
         {
             using var db = new TestDbContext(DbPath);
             
@@ -88,41 +89,41 @@ namespace BLite.Tests
                 Value = 99
             };
             
-            db.MockCounters.Insert(counter);
-            Assert.NotNull(db.MockCounters.FindById("delete-test"));
+            await db.MockCounters.InsertAsync(counter);
+            Assert.NotNull(await db.MockCounters.FindByIdAsync("delete-test"));
             
             // Delete the entity
-            db.MockCounters.Delete("delete-test");
+            await db.MockCounters.DeleteAsync("delete-test");
             
             // Verify deletion
-            var deleted = db.MockCounters.FindById("delete-test");
+            var deleted = await db.MockCounters.FindByIdAsync("delete-test");
             Assert.Null(deleted);
         }
 
         [Fact]
-        public void MockCounter_Query_Works()
+        public async Task MockCounter_Query_Works()
         {
             using var db = new TestDbContext(DbPath);
             
-            db.MockCounters.Insert(new MockCounter("q1") { Name = "First", Value = 100 });
-            db.MockCounters.Insert(new MockCounter("q2") { Name = "Second", Value = 200 });
-            db.MockCounters.Insert(new MockCounter("q3") { Name = "Third", Value = 150 });
+            await db.MockCounters.InsertAsync(new MockCounter("q1") { Name = "First", Value = 100 });
+            await db.MockCounters.InsertAsync(new MockCounter("q2") { Name = "Second", Value = 200 });
+            await db.MockCounters.InsertAsync(new MockCounter("q3") { Name = "Third", Value = 150 });
             
             // Query all
-            var all = db.MockCounters.AsQueryable().ToList();
+            var all = await db.MockCounters.AsQueryable().ToListAsync();
             Assert.Equal(3, all.Count);
             
             // Query with condition
-            var highValues = db.MockCounters.AsQueryable()
+            var highValues = await db.MockCounters.AsQueryable()
                 .Where(c => c.Value > 150)
-                .ToList();
+                .ToListAsync();
             
             Assert.Single(highValues);
             Assert.Equal("Second", highValues[0].Name);
         }
 
         [Fact]
-        public void MockCounter_InheritedId_IsStoredCorrectly()
+        public async Task MockCounter_InheritedId_IsStoredCorrectly()
         {
             using var db = new TestDbContext(DbPath);
             
@@ -133,9 +134,9 @@ namespace BLite.Tests
                 Value = 777
             };
             
-            db.MockCounters.Insert(counter);
+            await db.MockCounters.InsertAsync(counter);
             
-            var stored = db.MockCounters.FindById("inherited-id-test");
+            var stored = await db.MockCounters.FindByIdAsync("inherited-id-test");
             Assert.NotNull(stored);
             
             // Verify the Id is correctly stored and retrieved through inheritance

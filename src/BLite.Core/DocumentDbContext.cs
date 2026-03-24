@@ -293,7 +293,7 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
             
             if (CurrentTransaction != null)
                 return CurrentTransaction; // Return existing active transaction
-            CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            CurrentTransaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
             return CurrentTransaction;
         }
         finally
@@ -303,32 +303,11 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         }
     }
 
-    public ITransaction GetCurrentTransactionOrStart()
-    {
-        return BeginTransaction();
-    }
-
     public async Task<ITransaction> GetCurrentTransactionOrStartAsync()
     {
         return await BeginTransactionAsync();
     }
 
-    public void SaveChanges()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(DocumentDbContext));
-        if (CurrentTransaction != null)
-        {
-            try
-            {
-                CurrentTransaction.Commit();
-            }
-            finally
-            {
-                CurrentTransaction = null;
-            }
-        }
-    }
     public async Task SaveChangesAsync(CancellationToken ct = default)
     {
         if (_disposed)

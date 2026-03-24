@@ -32,7 +32,7 @@ public sealed class BsonDocument
     /// <summary>
     /// Gets the raw BSON bytes
     /// </summary>
-    public ReadOnlySpan<byte> RawData => _rawData.Span;
+    public ReadOnlyMemory<byte> RawData => _rawData;
 
     /// <summary>
     /// Gets the document size in bytes
@@ -426,7 +426,7 @@ public sealed class BsonDocumentBuilder
         _position += writer.Position;
 
         // Embed raw nested document bytes (includes size + fields + 0x00 end marker)
-        rawBytes.CopyTo(_buffer.AsSpan(_position));
+        rawBytes.Span.CopyTo(_buffer.AsSpan(_position));
         _position += rawBytes.Length;
 
         return this;

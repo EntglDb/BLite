@@ -56,7 +56,7 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void ScalarProperties_RoundTrip()
+    public async Task ScalarProperties_RoundTrip()
     {
         var original = BuildSample(
             name       : "Bob",
@@ -66,10 +66,10 @@ public class PrivateConstructorEntityTests : IDisposable
             createdAt  : new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             externalId : Guid.Parse("00000000-0000-0000-0000-000000000001"));
 
-        var id = _db.FullyPrivateEntities.Insert(original);
-        _db.SaveChanges();
+        var id = await _db.FullyPrivateEntities.InsertAsync(original);
+        await _db.SaveChangesAsync();
 
-        var retrieved = _db.FullyPrivateEntities.FindById(id);
+        var retrieved = await _db.FullyPrivateEntities.FindByIdAsync(id);
 
         Assert.NotNull(retrieved);
         Assert.Equal(id,        retrieved.Id);
@@ -86,13 +86,12 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void NestedObject_WithPrivateSetters_RoundTrip()
+    public async Task NestedObject_WithPrivateSetters_RoundTrip()
     {
         var entity = BuildSample();
-        var id = _db.FullyPrivateEntities.Insert(entity);
-        _db.SaveChanges();
-
-        var retrieved = _db.FullyPrivateEntities.FindById(id);
+        var id = await _db.FullyPrivateEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.FullyPrivateEntities.FindByIdAsync(id);
 
         Assert.NotNull(retrieved);
         Assert.NotNull(retrieved.HomeAddress);
@@ -107,13 +106,12 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void NestedCollection_WithPrivateSetters_RoundTrip()
+    public async Task NestedCollection_WithPrivateSetters_RoundTrip()
     {
         var entity = BuildSample();
-        var id = _db.FullyPrivateEntities.Insert(entity);
-        _db.SaveChanges();
-
-        var retrieved = _db.FullyPrivateEntities.FindById(id);
+        var id = await _db.FullyPrivateEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.FullyPrivateEntities.FindByIdAsync(id);
 
         Assert.NotNull(retrieved);
         Assert.NotNull(retrieved.Tags);
@@ -127,13 +125,12 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void PrimitiveCollection_RoundTrip()
+    public async Task PrimitiveCollection_RoundTrip()
     {
         var entity = BuildSample();
-        var id = _db.FullyPrivateEntities.Insert(entity);
-        _db.SaveChanges();
-
-        var retrieved = _db.FullyPrivateEntities.FindById(id);
+        var id = await _db.FullyPrivateEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var retrieved = await _db.FullyPrivateEntities.FindByIdAsync(id);
 
         Assert.NotNull(retrieved);
         Assert.NotNull(retrieved.Notes);
@@ -147,7 +144,7 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void AllProperties_FullRoundTrip()
+    public async Task AllProperties_FullRoundTrip()
     {
         var createdAt  = new DateTime(2025, 3, 9, 12, 0, 0, DateTimeKind.Utc);
         var externalId = Guid.NewGuid();
@@ -161,10 +158,10 @@ public class PrivateConstructorEntityTests : IDisposable
         entity.AddNote("note B");
         entity.AddNote("note C");
 
-        var id = _db.FullyPrivateEntities.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.FullyPrivateEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
-        var r = _db.FullyPrivateEntities.FindById(id);
+        var r = await _db.FullyPrivateEntities.FindByIdAsync(id);
 
         Assert.NotNull(r);
 
@@ -203,7 +200,7 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void Query_ByScalarProperty_Works()
+    public async Task Query_ByScalarProperty_Works()
     {
         // All three entities are fully populated (tags, notes, nested address)
         // so that the Find() result exercises complete deserialization, not just
@@ -225,12 +222,12 @@ public class PrivateConstructorEntityTests : IDisposable
         e3.AddTag(PrivateTag.Create("role", "admin"));
         e3.AddNote("frank note");
 
-        _db.FullyPrivateEntities.Insert(e1);
-        _db.FullyPrivateEntities.Insert(e2);
-        _db.FullyPrivateEntities.Insert(e3);
-        _db.SaveChanges();
+        await _db.FullyPrivateEntities.InsertAsync(e1);
+        await _db.FullyPrivateEntities.InsertAsync(e2);
+        await _db.FullyPrivateEntities.InsertAsync(e3);
+        await _db.SaveChangesAsync();
 
-        var adults = _db.FullyPrivateEntities.Find(x => x.Age >= 35).ToList();
+        var adults = await _db.FullyPrivateEntities.FindAsync(x => x.Age >= 35).ToListAsync();
 
         Assert.Equal(2, adults.Count);
 
@@ -281,16 +278,16 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void EmptyCollections_RoundTrip()
+    public async Task EmptyCollections_RoundTrip()
     {
         var addr   = PrivateAddress.Create("Empty St", "EmptyCity", "XX", 0);
         var entity = FullyPrivateEntity.Create("NoTags", 1, true, 0m, DateTime.UtcNow, Guid.NewGuid(), addr);
         // no tags, no notes added
 
-        var id = _db.FullyPrivateEntities.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.FullyPrivateEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
-        var retrieved = _db.FullyPrivateEntities.FindById(id);
+        var retrieved = await _db.FullyPrivateEntities.FindByIdAsync(id);
 
         Assert.NotNull(retrieved);
         Assert.NotNull(retrieved.Tags);
@@ -304,7 +301,7 @@ public class PrivateConstructorEntityTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void MultipleDocuments_FindAll_Works()
+    public async Task MultipleDocuments_FindAll_Works()
     {
         var addr = PrivateAddress.Create("X", "Y", "Z", 1);
 
@@ -312,12 +309,11 @@ public class PrivateConstructorEntityTests : IDisposable
         {
             var e = FullyPrivateEntity.Create($"Entity{i}", i * 10, i % 2 == 0, i * 1.5m, DateTime.UtcNow, Guid.NewGuid(), addr);
             e.AddTag(PrivateTag.Create("index", i.ToString()));
-            _db.FullyPrivateEntities.Insert(e);
+            await _db.FullyPrivateEntities.InsertAsync(e);
         }
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
-        var all = _db.FullyPrivateEntities.FindAll().ToList();
-
+        var all = (await _db.FullyPrivateEntities.FindAllAsync().ToListAsync());
         Assert.Equal(5, all.Count);
         for (var i = 1; i <= 5; i++)
         {

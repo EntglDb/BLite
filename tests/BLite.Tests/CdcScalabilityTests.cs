@@ -13,7 +13,7 @@ public class CdcScalabilityTests : IDisposable
         _db = new TestDbContext(_dbPath);
     }
 
-    [Fact(Skip = "Flaky timing test - run manually when needed")]
+    [Fact]
     public async Task Test_Cdc_1000_Subscribers_Receive_Events()
     {
         const int SubscriberCount = 1000;
@@ -32,9 +32,9 @@ public class CdcScalabilityTests : IDisposable
         }
 
         // 2. Perform some writes
-        _db.People.Insert(new Person { Id = 1, Name = "John", Age = 30 });
-        _db.People.Insert(new Person { Id = 2, Name = "Jane", Age = 25 });
-        _db.SaveChanges();
+        await _db.People.InsertAsync(new Person { Id = 1, Name = "John", Age = 30 });
+        await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane", Age = 25 });
+        await _db.SaveChangesAsync();
 
         // 3. Wait for events to propagate
         await Task.Delay(1000);
@@ -48,7 +48,7 @@ public class CdcScalabilityTests : IDisposable
         foreach (var sub in subscriptions) sub.Dispose();
     }
 
-    [Fact(Skip="Performance test - run manually when needed")]
+    [Fact]
     public async Task Test_Cdc_Slow_Subscriber_Does_Not_Block_Others()
     {
         var fastEventCount = 0;
@@ -69,8 +69,8 @@ public class CdcScalabilityTests : IDisposable
         });
 
         // 3. Perform a write
-        _db.People.Insert(new Person { Id = 1, Name = "John", Age = 30 });
-        _db.SaveChanges();
+        await _db.People.InsertAsync(new Person { Id = 1, Name = "John", Age = 30 });
+        await _db.SaveChangesAsync();
 
         // 4. Verification: Fast subscriber should receive it immediately
         await Task.Delay(200);
@@ -78,8 +78,8 @@ public class CdcScalabilityTests : IDisposable
         Assert.Equal(1, slowEventCount); // Started but not finished or blocking others
 
         // 5. Perform another write
-        _db.People.Insert(new Person { Id = 2, Name = "Jane", Age = 25 });
-        _db.SaveChanges();
+        await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane", Age = 25 });
+        await _db.SaveChangesAsync();
 
         // 6. Verification: Fast subscriber should receive second event while slow one is still busy
         await Task.Delay(200);

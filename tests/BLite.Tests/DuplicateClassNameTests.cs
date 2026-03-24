@@ -30,7 +30,7 @@ public class DuplicateClassNameTests : IDisposable
     }
 
     [Fact]
-    public void Insert_And_Retrieve_ModuleA_Widget()
+    public async Task Insert_And_Retrieve_ModuleA_Widget()
     {
         var widget = new ModuleA.Widget
         {
@@ -39,10 +39,10 @@ public class DuplicateClassNameTests : IDisposable
             Label = new ModuleA.Tag { Key = "color", Value = "red" }
         };
 
-        _db.ModuleAWidgets.Insert(widget);
-        _db.SaveChanges();
+        await _db.ModuleAWidgets.InsertAsync(widget);
+        await _db.SaveChangesAsync();
 
-        var result = _db.ModuleAWidgets.FindById(1);
+        var result = await _db.ModuleAWidgets.FindByIdAsync(1);
         Assert.NotNull(result);
         Assert.Equal("ModuleA Widget", result.Name);
         Assert.Equal("color", result.Label.Key);
@@ -50,7 +50,7 @@ public class DuplicateClassNameTests : IDisposable
     }
 
     [Fact]
-    public void Insert_And_Retrieve_ModuleB_Widget()
+    public async Task Insert_And_Retrieve_ModuleB_Widget()
     {
         var widget = new ModuleB.Widget
         {
@@ -59,10 +59,10 @@ public class DuplicateClassNameTests : IDisposable
             Category = new ModuleB.Tag { Name = "electronics", Priority = 5 }
         };
 
-        _db.ModuleBWidgets.Insert(widget);
-        _db.SaveChanges();
+        await _db.ModuleBWidgets.InsertAsync(widget);
+        await _db.SaveChangesAsync();
 
-        var result = _db.ModuleBWidgets.FindById(1);
+        var result = await _db.ModuleBWidgets.FindByIdAsync(1);
         Assert.NotNull(result);
         Assert.Equal("ModuleB Widget", result.Title);
         Assert.Equal("electronics", result.Category.Name);
@@ -70,19 +70,19 @@ public class DuplicateClassNameTests : IDisposable
     }
 
     [Fact]
-    public void Both_Collections_Are_Independent()
+    public async Task Both_Collections_Are_Independent()
     {
         // Insert into both collections
         var widgetA = new ModuleA.Widget { Id = 42, Name = "A-Widget" };
         var widgetB = new ModuleB.Widget { Id = 42, Title = "B-Widget" };
 
-        _db.ModuleAWidgets.Insert(widgetA);
-        _db.ModuleBWidgets.Insert(widgetB);
-        _db.SaveChanges();
+        await _db.ModuleAWidgets.InsertAsync(widgetA);
+        await _db.ModuleBWidgets.InsertAsync(widgetB);
+        await _db.SaveChangesAsync();
 
         // Ensure each collection stores and retrieves its own type
-        var resultA = _db.ModuleAWidgets.FindById(42);
-        var resultB = _db.ModuleBWidgets.FindById(42);
+        var resultA = await _db.ModuleAWidgets.FindByIdAsync(42);
+        var resultB = await _db.ModuleBWidgets.FindByIdAsync(42);
 
         Assert.NotNull(resultA);
         Assert.NotNull(resultB);
@@ -90,12 +90,12 @@ public class DuplicateClassNameTests : IDisposable
         Assert.Equal("B-Widget", resultB.Title);
 
         // Verify collections are truly independent (different collection names)
-        Assert.Equal(1, _db.ModuleAWidgets.Count());
-        Assert.Equal(1, _db.ModuleBWidgets.Count());
+        Assert.Equal(1, await _db.ModuleAWidgets.CountAsync());
+        Assert.Equal(1, await _db.ModuleBWidgets.CountAsync());
     }
 
     [Fact]
-    public void Nested_Types_With_Duplicate_Names_Serialize_Correctly()
+    public async Task Nested_Types_With_Duplicate_Names_Serialize_Correctly()
     {
         var widgetA = new ModuleA.Widget
         {
@@ -110,12 +110,12 @@ public class DuplicateClassNameTests : IDisposable
             Category = new ModuleB.Tag { Name = "category-1", Priority = 10 }
         };
 
-        _db.ModuleAWidgets.Insert(widgetA);
-        _db.ModuleBWidgets.Insert(widgetB);
-        _db.SaveChanges();
+        await _db.ModuleAWidgets.InsertAsync(widgetA);
+        await _db.ModuleBWidgets.InsertAsync(widgetB);
+        await _db.SaveChangesAsync();
 
-        var resultA = _db.ModuleAWidgets.FindById(1);
-        var resultB = _db.ModuleBWidgets.FindById(1);
+        var resultA = await _db.ModuleAWidgets.FindByIdAsync(1);
+        var resultB = await _db.ModuleBWidgets.FindByIdAsync(1);
 
         Assert.NotNull(resultA);
         Assert.NotNull(resultB);
@@ -133,17 +133,17 @@ public class DuplicateClassNameTests : IDisposable
     ///                 "Module.A_Gadget" → "Module_A__GadgetMapper"
     /// </summary>
     [Fact]
-    public void Underscore_In_TypeName_Does_Not_Cause_Mapper_Name_Collision()
+    public async Task Underscore_In_TypeName_Does_Not_Cause_Mapper_Name_Collision()
     {
         var gadget1 = new Module_A.Gadget { Id = 1, Model = "Gadget-1" };
         var gadget2 = new Module.A_Gadget { Id = 1, Variant = "Variant-1" };
 
-        _db.Module_AGadgets.Insert(gadget1);
-        _db.ModuleAGadgets.Insert(gadget2);
-        _db.SaveChanges();
+        await _db.Module_AGadgets.InsertAsync(gadget1);
+        await _db.ModuleAGadgets.InsertAsync(gadget2);
+        await _db.SaveChangesAsync();
 
-        var result1 = _db.Module_AGadgets.FindById(1);
-        var result2 = _db.ModuleAGadgets.FindById(1);
+        var result1 = await _db.Module_AGadgets.FindByIdAsync(1);
+        var result2 = await _db.ModuleAGadgets.FindByIdAsync(1);
 
         Assert.NotNull(result1);
         Assert.NotNull(result2);

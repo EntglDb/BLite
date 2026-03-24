@@ -35,7 +35,7 @@ public class NestedObjectWithIdTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Insert_And_FindById_Preserves_Nested_Id_Field()
+    public async Task Insert_And_FindById_Preserves_Nested_Id_Field()
     {
         // Arrange
         var entity = new PersonWithContact
@@ -45,9 +45,9 @@ public class NestedObjectWithIdTests : IDisposable
         };
 
         // Act
-        var id = _db.PeopleWithContacts.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.PeopleWithContacts.FindById(id);
+        var id = await _db.PeopleWithContacts.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.PeopleWithContacts.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(found);
@@ -59,7 +59,7 @@ public class NestedObjectWithIdTests : IDisposable
     }
 
     [Fact]
-    public void Nested_Id_Zero_RoundTrips_Without_Corruption()
+    public async Task Nested_Id_Zero_RoundTrips_Without_Corruption()
     {
         // A nested Id of 0 must survive the round-trip unchanged.
         var entity = new PersonWithContact
@@ -68,9 +68,9 @@ public class NestedObjectWithIdTests : IDisposable
             MainContact = new ContactInfo { Id = 0, Email = "luigi@example.com", Phone = "" }
         };
 
-        var id = _db.PeopleWithContacts.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.PeopleWithContacts.FindById(id);
+        var id = await _db.PeopleWithContacts.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.PeopleWithContacts.FindByIdAsync(id);
 
         Assert.NotNull(found?.MainContact);
         Assert.Equal(0, found.MainContact.Id);
@@ -78,7 +78,7 @@ public class NestedObjectWithIdTests : IDisposable
     }
 
     [Fact]
-    public void Null_Nested_Contact_RoundTrips()
+    public async Task Null_Nested_Contact_RoundTrips()
     {
         var entity = new PersonWithContact
         {
@@ -86,9 +86,9 @@ public class NestedObjectWithIdTests : IDisposable
             MainContact = null
         };
 
-        var id = _db.PeopleWithContacts.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.PeopleWithContacts.FindById(id);
+        var id = await _db.PeopleWithContacts.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.PeopleWithContacts.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal("Peach", found.Name);
@@ -100,7 +100,7 @@ public class NestedObjectWithIdTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Collection_Of_NestedObjects_With_Id_RoundTrips()
+    public async Task Collection_Of_NestedObjects_With_Id_RoundTrips()
     {
         var entity = new PersonWithContact
         {
@@ -113,9 +113,9 @@ public class NestedObjectWithIdTests : IDisposable
             }
         };
 
-        var id = _db.PeopleWithContacts.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.PeopleWithContacts.FindById(id);
+        var id = await _db.PeopleWithContacts.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.PeopleWithContacts.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(3, found.Contacts.Count);
@@ -125,11 +125,11 @@ public class NestedObjectWithIdTests : IDisposable
     }
 
     // ------------------------------------------------------------------
-    // Update
+    // UpdateAsync
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Update_Nested_Id_Persists()
+    public async Task Update_Nested_Id_Persists()
     {
         var entity = new PersonWithContact
         {
@@ -137,16 +137,16 @@ public class NestedObjectWithIdTests : IDisposable
             MainContact = new ContactInfo { Id = 10, Email = "old@example.com", Phone = "000" }
         };
 
-        var id = _db.PeopleWithContacts.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.PeopleWithContacts.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
-        var loaded = _db.PeopleWithContacts.FindById(id)!;
+        var loaded = await _db.PeopleWithContacts.FindByIdAsync(id)!;
         loaded.MainContact!.Id = 99;
         loaded.MainContact.Email = "new@example.com";
-        _db.PeopleWithContacts.Update(loaded);
-        _db.SaveChanges();
+        await _db.PeopleWithContacts.UpdateAsync(loaded);
+        await _db.SaveChangesAsync();
 
-        var updated = _db.PeopleWithContacts.FindById(id);
+        var updated = await _db.PeopleWithContacts.FindByIdAsync(id);
         Assert.NotNull(updated?.MainContact);
         Assert.Equal(99, updated.MainContact.Id);
         Assert.Equal("new@example.com", updated.MainContact.Email);
@@ -157,22 +157,22 @@ public class NestedObjectWithIdTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Multiple_Documents_Nested_Ids_Do_Not_Interfere()
+    public async Task Multiple_Documents_Nested_Ids_Do_Not_Interfere()
     {
-        var id1 = _db.PeopleWithContacts.Insert(new PersonWithContact
+        var id1 = await _db.PeopleWithContacts.InsertAsync(new PersonWithContact
         {
             Name = "Alice",
             MainContact = new ContactInfo { Id = 100, Email = "alice@example.com", Phone = "1" }
         });
-        var id2 = _db.PeopleWithContacts.Insert(new PersonWithContact
+        var id2 = await _db.PeopleWithContacts.InsertAsync(new PersonWithContact
         {
             Name = "Bob",
             MainContact = new ContactInfo { Id = 200, Email = "bob@example.com", Phone = "2" }
         });
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
-        var a = _db.PeopleWithContacts.FindById(id1);
-        var b = _db.PeopleWithContacts.FindById(id2);
+        var a = await _db.PeopleWithContacts.FindByIdAsync(id1);
+        var b = await _db.PeopleWithContacts.FindByIdAsync(id2);
 
         Assert.Equal(100, a?.MainContact?.Id);
         Assert.Equal(200, b?.MainContact?.Id);

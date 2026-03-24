@@ -17,7 +17,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Collections_Are_Initialized_By_Generator()
+        public async Task Collections_Are_Initialized_By_Generator()
         {
             using var db = new TestDbContext(DbPath);
             
@@ -25,8 +25,8 @@ namespace BLite.Tests
             Assert.NotNull(db.AutoInitEntities);
             
             // Verify we can use it
-            db.AutoInitEntities.Insert(new AutoInitEntity { Id = 1, Name = "Test" });
-            var stored = db.AutoInitEntities.FindById(1);
+            await db.AutoInitEntities.InsertAsync(new AutoInitEntity { Id = 1, Name = "Test" });
+            var stored = await db.AutoInitEntities.FindByIdAsync(1);
             Assert.NotNull(stored);
             Assert.Equal("Test", stored.Name);
         }

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Indexing;
@@ -26,9 +27,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         _engine     = engine;
         _collection = engine.GetOrCreateCollection(name);
 
-        RefreshMetadata();
-        RefreshIndexes();
-        LoadPage();
+        Task.Run(async () => { await RefreshMetadata(); RefreshIndexes(); await LoadPage(); });
     }
 
     // ── Metadata ──────────────────────────────────────────────────────────────
@@ -249,10 +248,10 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
 
     // ── Commands ──────────────────────────────────────────────────────────────
     [RelayCommand]
-    private void PrevPage() { CurrentPage--; LoadPage(); }
+    private async Task PrevPage() { CurrentPage--; await LoadPage(); }
 
     [RelayCommand]
-    private void NextPage() { CurrentPage++; LoadPage(); }
+    private async Task NextPage() { CurrentPage++; await LoadPage(); }
 
     [RelayCommand]
     private void RunBlqlQuery()
@@ -321,7 +320,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SaveTimeSeries()
+    private async Task SaveTimeSeries()
     {
         TsMessage = "";
         TsIsError = false;
@@ -335,7 +334,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         {
             var ttlField = TsTtlFieldName.Trim();
             _collection.SetTimeSeries(ttlField, TimeSpan.FromDays(TsRetentionDays));
-            _engine.Commit();
+            await _engine.CommitAsync();
             IsTimeSeries = true;
             var fieldLabel = string.IsNullOrEmpty(ttlField) ? "insertion time" : $"field '{ttlField}'";
             TsMessage = $"TimeSeries enabled. Timestamp: {fieldLabel}. Retention: {TsRetentionDays:0.##} day(s).";
@@ -348,16 +347,16 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ForcePrune()
+    private async Task ForcePrune()
     {
         TsMessage = "";
         TsIsError = false;
         try
         {
-            _collection.ForcePrune();
-            _engine.Commit();
-            RefreshMetadata();
-            LoadPage();
+            await _collection.ForcePruneAsync();
+            await _engine.CommitAsync();
+            await RefreshMetadata();
+            await LoadPage();
             TsMessage = "Pruning completed.";
         }
         catch (Exception ex)
@@ -368,7 +367,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void CreateIndex()
+    private async Task CreateIndex()
     {
         IndexMessage = "";
         IndexIsError = false;
@@ -391,18 +390,18 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
                     "DotProduct" => VectorMetric.DotProduct,
                     _            => VectorMetric.Cosine
                 };
-                _collection.CreateVectorIndex(field, NewIndexDimensions, metric, name);
+                await _collection.CreateVectorIndexAsync(field, NewIndexDimensions, metric, name);
             }
             else if (IsSpatialIndexType)
             {
-                _collection.CreateSpatialIndex(field, name);
+                await _collection.CreateSpatialIndexAsync(field, name);
             }
             else
             {
-                _collection.CreateIndex(field, name, IsNewIndexUnique);
+                await _collection.CreateIndexAsync(field, name, IsNewIndexUnique);
             }
 
-            _engine.Commit();
+            await _engine.CommitAsync();
 
             NewIndexField    = "";
             NewIndexName     = "";
@@ -418,7 +417,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void DropIndex(string? indexName)
+    private async Task DropIndex(string? indexName)
     {
         if (string.IsNullOrEmpty(indexName)) return;
         IndexMessage = "";
@@ -426,7 +425,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         try
         {
             var ok = _collection.DropIndex(indexName);
-            _engine.Commit();
+            await _engine.CommitAsync();
             RefreshIndexes();
             IndexMessage = ok ? $"Index '{indexName}' dropped." : $"Index '{indexName}' not found.";
             IndexIsError = !ok;
@@ -439,7 +438,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void OpenRow(DocumentRowViewModel? row)
+    private async Task OpenRow(DocumentRowViewModel? row)
     {
         if (row is null) return;
         if (SelectedRow == row) { CloseEditor(); return; }
@@ -449,7 +448,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         EditorIsError  = false;
         SelectedRow    = row;
 
-        var doc = _collection.FindById(row.BsonId);
+        var doc = await _collection.FindByIdAsync(row.BsonId);
         EditorJson = doc is not null ? BsonJsonConverter.ToJson(doc) : "{ }";
     }
 
@@ -474,7 +473,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SaveDocument()
+    private async Task SaveDocument()
     {
         EditorMessage = "";
         EditorIsError = false;
@@ -486,21 +485,21 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
 
             if (IsInsertMode)
             {
-                _collection.Insert(doc);
-                _engine.Commit();
+                await _collection.InsertAsync(doc);
+                await _engine.CommitAsync();
                 EditorMessage = "Document inserted.";
                 CloseEditor();
             }
             else if (SelectedRow is not null)
             {
-                var ok = _collection.Update(SelectedRow.BsonId, doc);
-                _engine.Commit();
+                var ok = await _collection.UpdateAsync(SelectedRow.BsonId, doc);
+                await _engine.CommitAsync();
                 EditorMessage = ok ? "Saved." : "Document not found.";
                 EditorIsError = !ok;
             }
 
-            RefreshMetadata();
-            LoadPage();
+            await RefreshMetadata();
+            await LoadPage();
         }
         catch (Exception ex)
         {
@@ -510,18 +509,18 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void DeleteDocument(DocumentRowViewModel? row)
+    private async Task DeleteDocument(DocumentRowViewModel? row)
     {
         if (row is null) return;
         EditorMessage = "";
         EditorIsError = false;
         try
         {
-            _collection.Delete(row.BsonId);
-            _engine.Commit();
+            await _collection.DeleteAsync(row.BsonId);
+            await _engine.CommitAsync();
             if (SelectedRow == row) CloseEditor();
-            RefreshMetadata();
-            LoadPage();
+            await RefreshMetadata();
+            await LoadPage();
         }
         catch (Exception ex)
         {
@@ -570,11 +569,12 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void InferSchema()
+    private async Task InferSchema()
     {
         try
         {
-            var docs = _collection.FindAll().Take(20).ToList();
+            var docs = new List<BsonDocument>();
+            await foreach (var d in _collection.FindAllAsync()) { docs.Add(d); if (docs.Count >= 20) break; }
             if (docs.Count == 0)
             {
                 SchemaMessage = "No documents found to infer schema.";
@@ -623,13 +623,13 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SaveSchema()
+    private async Task SaveSchema()
     {
         SchemaMessage = "";
         SchemaIsError = false;
         try
         {
-            // Update BSON Schema
+            // UpdateAsync BSON Schema
             if (SchemaFields.Count > 0)
             {
                 var bsonSchema = new BsonSchema { Title = Name, Version = 1 };
@@ -646,7 +646,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
                 HasSchema = true;
             }
 
-            // Update Vector Source config
+            // UpdateAsync Vector Source config
             var config = new BLite.Core.Storage.VectorSourceConfig
             {
                 Separator = VectorSourceSeparator ?? " "
@@ -662,7 +662,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
             }
             _collection.SetVectorSource(config);
 
-            _engine.Commit();
+            await _engine.CommitAsync();
             SchemaMessage = "Schema saved.";
         }
         catch (Exception ex)
@@ -673,9 +673,9 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
-    private void RefreshMetadata()
+    private async Task RefreshMetadata()
     {
-        DocumentCount = _collection.Count();
+        DocumentCount = await _collection.CountAsync();
         TotalPages    = Math.Max(1, (DocumentCount + PageSize - 1) / PageSize);
         if (CurrentPage >= TotalPages) CurrentPage = Math.Max(0, TotalPages - 1);
         RefreshSchema();
@@ -742,13 +742,20 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
         OnPropertyChanged(nameof(HasNoIndexes));
     }
 
-    private void LoadPage()
+    private async Task LoadPage()
     {
         Documents.Clear();
 
-        var rows = _collection.FindAll()
-            .Skip(CurrentPage * PageSize)
-            .Take(PageSize);
+        var rows = new List<BsonDocument>();
+        int skip = CurrentPage * PageSize;
+        int take = PageSize;
+        int index = 0;
+        await foreach (var doc in _collection.FindAllAsync())
+        {
+            if (index++ < skip) continue;
+            rows.Add(doc);
+            if (rows.Count >= take) break;
+        }
 
         foreach (var doc in rows)
         {

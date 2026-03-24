@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -35,7 +36,7 @@ public class SelfReferencingCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Insert_SelfReferencing_Entity_With_Empty_Children_Succeeds()
+    public async Task Insert_SelfReferencing_Entity_With_Empty_Children_Succeeds()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -46,16 +47,16 @@ public class SelfReferencingCollectionTests : IDisposable
             Value = 100
         };
 
-        db.TreeNodes.Insert(root);
+        await db.TreeNodes.InsertAsync(root);
 
-        var retrieved = db.TreeNodes.FindById(root.Id);
+        var retrieved = await db.TreeNodes.FindByIdAsync(root.Id);
         Assert.NotNull(retrieved);
         Assert.Equal("Root", retrieved.Name);
         Assert.Empty(retrieved.Children);
     }
 
     [Fact]
-    public void Insert_SelfReferencing_Entity_With_Nested_Children_Succeeds()
+    public async Task Insert_SelfReferencing_Entity_With_Nested_Children_Succeeds()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -81,9 +82,9 @@ public class SelfReferencingCollectionTests : IDisposable
             Children = new List<TreeNode> { child1, child2 }
         };
 
-        db.TreeNodes.Insert(root);
+        await db.TreeNodes.InsertAsync(root);
 
-        var retrieved = db.TreeNodes.FindById(root.Id);
+        var retrieved = await db.TreeNodes.FindByIdAsync(root.Id);
         Assert.NotNull(retrieved);
         Assert.Equal("Root", retrieved.Name);
         Assert.Equal(2, retrieved.Children.Count);
@@ -92,7 +93,7 @@ public class SelfReferencingCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Insert_SelfReferencing_Entity_With_Deeply_Nested_Children_Succeeds()
+    public async Task Insert_SelfReferencing_Entity_With_Deeply_Nested_Children_Succeeds()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -119,9 +120,9 @@ public class SelfReferencingCollectionTests : IDisposable
             Children = new List<TreeNode> { child }
         };
 
-        db.TreeNodes.Insert(root);
+        await db.TreeNodes.InsertAsync(root);
 
-        var retrieved = db.TreeNodes.FindById(root.Id);
+        var retrieved = await db.TreeNodes.FindByIdAsync(root.Id);
         Assert.NotNull(retrieved);
         Assert.Equal("Root", retrieved.Name);
         Assert.Single(retrieved.Children);
@@ -131,7 +132,7 @@ public class SelfReferencingCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Update_SelfReferencing_Entity_Preserves_Children()
+    public async Task Update_SelfReferencing_Entity_Preserves_Children()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -150,13 +151,12 @@ public class SelfReferencingCollectionTests : IDisposable
             Children = new List<TreeNode> { child }
         };
 
-        db.TreeNodes.Insert(root);
+        await db.TreeNodes.InsertAsync(root);
 
-        // Update root value
+        // UpdateAsync root value
         root.Value = 200;
-        db.TreeNodes.Update(root);
-
-        var retrieved = db.TreeNodes.FindById(root.Id);
+        await db.TreeNodes.UpdateAsync(root);
+        var retrieved = await db.TreeNodes.FindByIdAsync(root.Id);
         Assert.NotNull(retrieved);
         Assert.Equal(200, retrieved.Value);
         Assert.Single(retrieved.Children);
@@ -164,7 +164,7 @@ public class SelfReferencingCollectionTests : IDisposable
     }
 
     [Fact]
-    public void Query_SelfReferencing_Entity_Works()
+    public async Task Query_SelfReferencing_Entity_Works()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -183,12 +183,12 @@ public class SelfReferencingCollectionTests : IDisposable
             Children = new List<TreeNode> { new TreeNode { Id = ObjectId.NewObjectId(), Name = "Child", Value = 50 } }
         };
 
-        db.TreeNodes.Insert(node1);
-        db.TreeNodes.Insert(node2);
+        await db.TreeNodes.InsertAsync(node1);
+        await db.TreeNodes.InsertAsync(node2);
 
-        var results = db.TreeNodes.AsQueryable()
+        var results = await db.TreeNodes.AsQueryable()
             .Where(n => n.Value >= 100)
-            .ToList();
+            .ToListAsync();
 
         Assert.Equal(2, results.Count);
     }

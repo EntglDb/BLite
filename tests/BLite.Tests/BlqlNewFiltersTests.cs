@@ -26,7 +26,7 @@ public class BlqlNewFiltersTests : IDisposable
         _engine = new BLiteEngine(_dbPath);
         _col = _engine.GetOrCreateCollection("items");
 
-        SeedData();
+        SeedData().GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -39,35 +39,35 @@ public class BlqlNewFiltersTests : IDisposable
 
     // ── Seed ───────────────────────────────────────────────────────────────
 
-    private void SeedData()
+    private async Task SeedData()
     {
         // doc1: Alice — tags=["urgent","reviewed"], scores=[85,92,78], qty=12
-        InsertWithArrays("Alice", 30, "alice@gmail.com",
+        await InsertWithArrays("Alice", 30, "alice@gmail.com",
             ["urgent", "reviewed"], [85, 92, 78], 12,
             41.9028, 12.4964);   // Rome
 
         // doc2: Bob — tags=["pending"], scores=[60,55], qty=7
-        InsertWithArrays("Bob", 25, "bob@outlook.com",
+        await InsertWithArrays("Bob", 25, "bob@outlook.com",
             ["pending"], [60, 55], 7,
             48.8566, 2.3522);    // Paris
 
         // doc3: Charlie — tags=["urgent","closed"], scores=[90,88,95], qty=20
-        InsertWithArrays("Charlie", 35, "charlie@gmail.com",
+        await InsertWithArrays("Charlie", 35, "charlie@gmail.com",
             ["urgent", "closed"], [90, 88, 95], 20,
             51.5074, -0.1278);   // London
 
         // doc4: Diana — tags=["reviewed","pending","urgent"], scores=[70], qty=4
-        InsertWithArrays("Diana", 28, "diana@yahoo.com",
+        await InsertWithArrays("Diana", 28, "diana@yahoo.com",
             ["reviewed", "pending", "urgent"], [70], 4,
             40.7128, -74.0060);  // New York
 
         // doc5: Eve — tags=[], scores=[100], qty=15
-        InsertWithArrays("Eve", 22, "eve@gmail.com",
+        await InsertWithArrays("Eve", 22, "eve@gmail.com",
             [], [100], 15,
             35.6762, 139.6503);  // Tokyo
     }
 
-    private void InsertWithArrays(string name, int age, string email,
+    private async Task InsertWithArrays(string name, int age, string email,
         string[] tags, int[] scores, int qty,
         double lat, double lon)
     {
@@ -86,7 +86,7 @@ public class BlqlNewFiltersTests : IDisposable
                  .AddInt32("qty", qty)
                  .AddCoordinates("location", (lat, lon));
             });
-        _col.Insert(doc);
+        await _col.InsertAsync(doc);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

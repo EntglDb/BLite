@@ -1,3 +1,4 @@
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -32,7 +33,7 @@ public class EmbeddedIndexTests : IDisposable
     }
 
     [Fact]
-    public void Insert_With_Valid_Nested_Property_Succeeds()
+    public async Task Insert_With_Valid_Nested_Property_Succeeds()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -47,15 +48,15 @@ public class EmbeddedIndexTests : IDisposable
             }
         };
 
-        db.PeopleWithEmbeddedAddress.Insert(person);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person);
 
-        var retrieved = db.PeopleWithEmbeddedAddress.FindById(1);
+        var retrieved = await db.PeopleWithEmbeddedAddress.FindByIdAsync(1);
         Assert.NotNull(retrieved);
         Assert.Equal("Seattle", retrieved.MainAddress?.City?.Name);
     }
 
     [Fact]
-    public void Insert_With_Null_Intermediate_Skips_Index()
+    public async Task Insert_With_Null_Intermediate_Skips_Index()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -71,19 +72,19 @@ public class EmbeddedIndexTests : IDisposable
         };
 
         // Both should insert successfully without throwing NullReferenceException
-        db.PeopleWithEmbeddedAddress.Insert(person1);
-        db.PeopleWithEmbeddedAddress.Insert(person2);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person1);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person2);
 
-        Assert.Equal(2, db.PeopleWithEmbeddedAddress.Count());
+        Assert.Equal(2, await db.PeopleWithEmbeddedAddress.CountAsync());
     }
 
     [Fact]
-    public void Query_On_Nested_Property_Uses_Index()
+    public async Task Query_On_Nested_Property_Uses_Index()
     {
         using var db = new TestDbContext(_dbPath);
 
         // Insert test data
-        db.PeopleWithEmbeddedAddress.Insert(new PersonWithEmbeddedAddress
+        await db.PeopleWithEmbeddedAddress.InsertAsync(new PersonWithEmbeddedAddress
         {
             Id = 1,
             Name = "Alice",
@@ -93,7 +94,7 @@ public class EmbeddedIndexTests : IDisposable
             }
         });
 
-        db.PeopleWithEmbeddedAddress.Insert(new PersonWithEmbeddedAddress
+        await db.PeopleWithEmbeddedAddress.InsertAsync(new PersonWithEmbeddedAddress
         {
             Id = 2,
             Name = "Bob",
@@ -103,7 +104,7 @@ public class EmbeddedIndexTests : IDisposable
             }
         });
 
-        db.PeopleWithEmbeddedAddress.Insert(new PersonWithEmbeddedAddress
+        await db.PeopleWithEmbeddedAddress.InsertAsync(new PersonWithEmbeddedAddress
         {
             Id = 3,
             Name = "Charlie",
@@ -120,7 +121,7 @@ public class EmbeddedIndexTests : IDisposable
     }
 
     [Fact]
-    public void Update_Nested_Property_Updates_Index()
+    public async Task Update_Nested_Property_Updates_Index()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -134,30 +135,29 @@ public class EmbeddedIndexTests : IDisposable
             }
         };
 
-        db.PeopleWithEmbeddedAddress.Insert(person);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person);
 
-        // Update nested city
+        // UpdateAsync nested city
         person.MainAddress.City.Name = "Portland";
-        db.PeopleWithEmbeddedAddress.Update(person);
-
+        await db.PeopleWithEmbeddedAddress.UpdateAsync(person);
         // Query with new value should find it
-        var results = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var results = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.MainAddress!.City.Name == "Portland")
-            .ToList();
+            .ToListAsync();
 
         Assert.Single(results);
         Assert.Equal("Alice", results[0].Name);
 
         // Query with old value should return empty
-        var oldResults = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var oldResults = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.MainAddress!.City.Name == "Seattle")
-            .ToList();
+            .ToListAsync();
 
         Assert.Empty(oldResults);
     }
 
     [Fact]
-    public void Update_From_NonNull_To_Null_Removes_From_Index()
+    public async Task Update_From_NonNull_To_Null_Removes_From_Index()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -171,27 +171,26 @@ public class EmbeddedIndexTests : IDisposable
             }
         };
 
-        db.PeopleWithEmbeddedAddress.Insert(person);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person);
 
         // Set MainAddress to null
         person.MainAddress = null;
-        db.PeopleWithEmbeddedAddress.Update(person);
-
+        await db.PeopleWithEmbeddedAddress.UpdateAsync(person);
         // Should still retrieve by Id
-        var retrieved = db.PeopleWithEmbeddedAddress.FindById(1);
+        var retrieved = await db.PeopleWithEmbeddedAddress.FindByIdAsync(1);
         Assert.NotNull(retrieved);
         Assert.Null(retrieved.MainAddress);
 
         // Query on nested property should return empty (index entry removed)
-        var results = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var results = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.MainAddress!.City.Name == "Seattle")
-            .ToList();
+            .ToListAsync();
 
         Assert.Empty(results);
     }
 
     [Fact]
-    public void Delete_With_Nested_Property_Removes_From_Index()
+    public async Task Delete_With_Nested_Property_Removes_From_Index()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -205,26 +204,25 @@ public class EmbeddedIndexTests : IDisposable
             }
         };
 
-        db.PeopleWithEmbeddedAddress.Insert(person);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person);
         
         // Verify it's queryable
-        var beforeDelete = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var beforeDelete = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.MainAddress!.City.Name == "Seattle")
-            .ToList();
+            .ToListAsync();
         Assert.Single(beforeDelete);
 
         // Delete
-        db.PeopleWithEmbeddedAddress.Delete(1);
-
+        await db.PeopleWithEmbeddedAddress.DeleteAsync(1);
         // Should not be found in index
-        var afterDelete = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var afterDelete = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.MainAddress!.City.Name == "Seattle")
-            .ToList();
+            .ToListAsync();
         Assert.Empty(afterDelete);
     }
 
     [Fact]
-    public void Multiple_Nested_Indexes_Work_Independently()
+    public async Task Multiple_Nested_Indexes_Work_Independently()
     {
         using var db = new TestDbContext(_dbPath);
 
@@ -242,18 +240,18 @@ public class EmbeddedIndexTests : IDisposable
             }
         };
 
-        db.PeopleWithEmbeddedAddress.Insert(person);
+        await db.PeopleWithEmbeddedAddress.InsertAsync(person);
 
         // Query on MainAddress index
-        var mainResults = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var mainResults = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.MainAddress!.City.Name == "Seattle")
-            .ToList();
+            .ToListAsync();
         Assert.Single(mainResults);
 
         // Query on BillingAddress index
-        var billingResults = db.PeopleWithEmbeddedAddress.AsQueryable()
+        var billingResults = await db.PeopleWithEmbeddedAddress.AsQueryable()
             .Where(p => p.BillingAddress!.City.Name == "Portland")
-            .ToList();
+            .ToListAsync();
         Assert.Single(billingResults);
     }
 }

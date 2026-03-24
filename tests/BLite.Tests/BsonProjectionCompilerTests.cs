@@ -122,13 +122,13 @@ public class BsonProjectionCompilerTests : IDisposable
     // ─── Integration: LINQ projections via DocumentCollection ────────────────
 
     [Fact]
-    public void Projection_SingleStringField_ReturnsCorrectValues()
+    public async Task Projection_SingleStringField_ReturnsCorrectValues()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
 
-        var names = _db.Users.AsQueryable().Select(x => x.Name).ToList();
+        var names = await _db.Users.AsQueryable().Select(x => x.Name).ToListAsync();
 
         Assert.Equal(2, names.Count);
         Assert.Contains("Alice", names);
@@ -136,13 +136,12 @@ public class BsonProjectionCompilerTests : IDisposable
     }
 
     [Fact]
-    public void Projection_SingleIntField_ReturnsCorrectValues()
+    public async Task Projection_SingleIntField_ReturnsCorrectValues()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.SaveChanges();
-
-        var ages = _db.Users.AsQueryable().Select(x => x.Age).ToList();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.SaveChangesAsync();
+        var ages = await _db.Users.AsQueryable().Select(x => x.Age).ToListAsync();
 
         Assert.Equal(2, ages.Count);
         Assert.Contains(30, ages);
@@ -150,13 +149,13 @@ public class BsonProjectionCompilerTests : IDisposable
     }
 
     [Fact]
-    public void Projection_DecimalField_ReturnsCorrectValues()
+    public async Task Projection_DecimalField_ReturnsCorrectValues()
     {
-        _db.Products.Insert(new Product { Id = 1, Title = "Widget", Price = 9.99m });
-        _db.Products.Insert(new Product { Id = 2, Title = "Gadget", Price = 24.50m });
-        _db.SaveChanges();
+        await _db.Products.InsertAsync(new Product { Id = 1, Title = "Widget", Price = 9.99m });
+        await _db.Products.InsertAsync(new Product { Id = 2, Title = "Gadget", Price = 24.50m });
+        await _db.SaveChangesAsync();
 
-        var prices = _db.Products.AsQueryable().Select(x => x.Price).ToList();
+        var prices = await _db.Products.AsQueryable().Select(x => x.Price).ToListAsync();
 
         Assert.Equal(2, prices.Count);
         Assert.Contains(9.99m, prices);
@@ -164,32 +163,31 @@ public class BsonProjectionCompilerTests : IDisposable
     }
 
     [Fact]
-    public void Projection_MultipleFields_AnonymousType_ReturnsCorrectValues()
+    public async Task Projection_MultipleFields_AnonymousType_ReturnsCorrectValues()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.SaveChangesAsync();
 
-        var results = _db.Users.AsQueryable()
+        var results = await _db.Users.AsQueryable()
             .Select(x => new { x.Name, x.Age })
-            .ToList();
-
+            .ToListAsync();
         Assert.Single(results);
         Assert.Equal("Alice", results[0].Name);
         Assert.Equal(30, results[0].Age);
     }
 
     [Fact]
-    public void Projection_WithWherePredicate_FiltersAndProjects()
+    public async Task Projection_WithWherePredicate_FiltersAndProjects()
     {
-        _db.Users.Insert(new User { Name = "Alice", Age = 30 });
-        _db.Users.Insert(new User { Name = "Bob", Age = 25 });
-        _db.Users.Insert(new User { Name = "Charlie", Age = 35 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+        await _db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        await _db.Users.InsertAsync(new User { Name = "Charlie", Age = 35 });
+        await _db.SaveChangesAsync();
 
-        var names = _db.Users.AsQueryable()
+        var names = await _db.Users.AsQueryable()
             .Where(x => x.Age > 28)
             .Select(x => x.Name)
-            .ToList();
+            .ToListAsync();
 
         Assert.Equal(2, names.Count);
         Assert.Contains("Alice", names);
@@ -198,29 +196,29 @@ public class BsonProjectionCompilerTests : IDisposable
     }
 
     [Fact]
-    public void Projection_NullableStringField_WithNonNullValue_ReturnsValue()
+    public async Task Projection_NullableStringField_WithNonNullValue_ReturnsValue()
     {
-        _db.IntEntities.Insert(new IntEntity { Id = 1, Name = "hello" });
-        _db.SaveChanges();
+        await _db.IntEntities.InsertAsync(new IntEntity { Id = 1, Name = "hello" });
+        await _db.SaveChangesAsync();
 
-        var names = _db.IntEntities.AsQueryable().Select(x => x.Name).ToList();
+        var names = await _db.IntEntities.AsQueryable().Select(x => x.Name).ToListAsync();
 
         Assert.Single(names);
         Assert.Equal("hello", names[0]);
     }
 
     [Fact]
-    public void Projection_OrderByAndSelect_PreservesOrder()
+    public async Task Projection_OrderByAndSelect_PreservesOrder()
     {
-        _db.Users.Insert(new User { Name = "Zara", Age = 5 });
-        _db.Users.Insert(new User { Name = "Aiden", Age = 10 });
-        _db.Users.Insert(new User { Name = "Mia", Age = 7 });
-        _db.SaveChanges();
+        await _db.Users.InsertAsync(new User { Name = "Zara", Age = 5 });
+        await _db.Users.InsertAsync(new User { Name = "Aiden", Age = 10 });
+        await _db.Users.InsertAsync(new User { Name = "Mia", Age = 7 });
+        await _db.SaveChangesAsync();
 
-        var names = _db.Users.AsQueryable()
+        var names = await _db.Users.AsQueryable()
             .OrderBy(x => x.Name)
             .Select(x => x.Name)
-            .ToList();
+            .ToListAsync();
 
         Assert.Equal(3, names.Count);
         Assert.Equal("Aiden", names[0]);
@@ -229,29 +227,28 @@ public class BsonProjectionCompilerTests : IDisposable
     }
 
     [Fact]
-    public void Projection_LongField_ReturnsCorrectValue()
+    public async Task Projection_LongField_ReturnsCorrectValue()
     {
-        _db.LongEntities.Insert(new LongEntity { Id = 1_000_000_000L, Name = "longval" });
-        _db.SaveChanges();
+        await _db.LongEntities.InsertAsync(new LongEntity { Id = 1_000_000_000L, Name = "longval" });
+        await _db.SaveChangesAsync();
 
-        var ids = _db.LongEntities.AsQueryable().Select(x => x.Id).ToList();
+        var ids = await _db.LongEntities.AsQueryable().Select(x => x.Id).ToListAsync();
 
         Assert.Single(ids);
         Assert.Equal(1_000_000_000L, ids[0]);
     }
 
     [Fact]
-    public void Projection_SelectWithTake_ReturnsOnlyTakenItems()
+    public async Task Projection_SelectWithTake_ReturnsOnlyTakenItems()
     {
         for (int i = 0; i < 5; i++)
-            _db.Users.Insert(new User { Name = $"User{i}", Age = i * 10 });
-        _db.SaveChanges();
-
-        var names = _db.Users.AsQueryable()
+            await _db.Users.InsertAsync(new User { Name = $"User{i}", Age = i * 10 });
+        await _db.SaveChangesAsync();
+        var names = await _db.Users.AsQueryable()
             .OrderBy(x => x.Age)
             .Take(2)
             .Select(x => x.Name)
-            .ToList();
+            .ToListAsync();
 
         Assert.Equal(2, names.Count);
         Assert.Equal("User0", names[0]);

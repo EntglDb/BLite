@@ -58,7 +58,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var ex = Record.Exception(() => index.Insert(key, loc, txnId));
         Assert.Null(ex);
 
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class BTreeIndexAdditionalTests : IDisposable
 
         index.Insert(IndexKey.Create(10), new DocumentLocation(1, 0), txnId);
         index.Insert(IndexKey.Create(20), new DocumentLocation(2, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         index.TryFind(IndexKey.Create(10), out var loc1, txnId);
         index.TryFind(IndexKey.Create(20), out var loc2, txnId);
@@ -97,7 +97,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30, 40, 50 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var key = IndexKey.Create(30);
         var result = index.LessThan(key, orEqual: true, txnId).ToList();
@@ -114,7 +114,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var key = IndexKey.Create(20);
         var strict = index.LessThan(key, orEqual: false, txnId).ToList();
@@ -132,7 +132,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30, 40, 50 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var result = index.Between(
             IndexKey.Create(20), IndexKey.Create(40),
@@ -149,7 +149,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30, 40, 50 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var result = index.Between(
             IndexKey.Create(20), IndexKey.Create(40),
@@ -167,7 +167,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30, 40, 50 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var result = index.Between(
             IndexKey.Create(20), IndexKey.Create(40),
@@ -191,7 +191,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         for (int i = 1; i <= 101; i++)
             index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
 
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         // Callback must have been invoked at least once
         Assert.NotNull(capturedNewRoot);
@@ -209,7 +209,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         for (int i = 1; i <= 10; i++)
             index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
 
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         Assert.False(callbackInvoked);
     }
@@ -220,7 +220,7 @@ public class BTreeIndexAdditionalTests : IDisposable
     public void RootPageId_NonZeroAfterConstruction()
     {
         var (index, txnId) = CreateBTreeIndex();
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         Assert.True(index.RootPageId > 0);
     }
@@ -233,7 +233,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var result = index.GreaterThan(IndexKey.Create(20), orEqual: false, txnId).ToList();
 
@@ -247,7 +247,7 @@ public class BTreeIndexAdditionalTests : IDisposable
         var (index, txnId) = CreateBTreeIndex();
         foreach (var v in new[] { 10, 20, 30 })
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var result = index.GreaterThan(IndexKey.Create(20), orEqual: true, txnId).ToList();
 

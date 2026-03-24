@@ -21,11 +21,11 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             .GetMethod(nameof(BsonProjectionCompiler.TryCompile),
                        BindingFlags.Static | BindingFlags.Public)!;
 
-    // DocumentCollection<TId,T>.Scan<TResult>(Func<BsonSpanReader, TResult?>) — generic overload.
+    // DocumentCollection<TId,T>.ScanAsync<TResult>(BsonReaderProjector<TResult>, CancellationToken) — generic overload.
     private static readonly MethodInfo s_scanProjectorMethod =
         typeof(DocumentCollection<TId, T>)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Single(m => m.Name == "Scan" && m.IsGenericMethodDefinition);
+            .Single(m => m.Name == "ScanAsync" && m.IsGenericMethodDefinition);
 
     // ── Per-projection-type MakeGenericMethod cache (Fase 3) ─────────────────
     // Keyed on TProj. Avoids calling MakeGenericMethod on every query execution.
@@ -61,9 +61,9 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
                 .GetMethod(nameof(CreateQueryTyped), BindingFlags.NonPublic | BindingFlags.Instance)!
                 .MakeGenericMethod(t);
             var providerParam = Expression.Parameter(typeof(BTreeQueryProvider<TId, T>), "p");
-            var exprParam     = Expression.Parameter(typeof(Expression), "e");
-            var callExpr      = Expression.Call(providerParam, method, exprParam);
-            var castResult    = Expression.Convert(callExpr, typeof(IQueryable));
+            var exprParam = Expression.Parameter(typeof(Expression), "e");
+            var callExpr = Expression.Call(providerParam, method, exprParam);
+            var castResult = Expression.Convert(callExpr, typeof(IQueryable));
             return Expression.Lambda<Func<BTreeQueryProvider<TId, T>, Expression, IQueryable>>(
                 castResult, providerParam, exprParam).Compile();
         });
@@ -94,6 +94,11 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
     public TResult Execute<TResult>(Expression expression)
     {
+        return ExecuteAsync<TResult>(expression, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    private async Task<TResult> ExecuteAsync<TResult>(Expression expression, CancellationToken cancellationToken)
+    {
         // 1. Parse the LINQ expression tree into a flat QueryModel.
         var visitor = new BTreeExpressionVisitor();
         visitor.Visit(expression);
@@ -103,8 +108,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         // Uses the primary BTree key scan (O(n) key reads, zero document reads).
         if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators)
         {
-            var count = _collection.Count();
-            if (typeof(TResult) == typeof(int))  return (TResult)(object)count;
+            var count = await _collection.CountAsync();
+            if (typeof(TResult) == typeof(int)) return (TResult)(object)count;
             if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)count;
         }
 
@@ -133,7 +138,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         }
 
         // 2. Data fetching — index / BSON-scan / full scan.
-        IEnumerable<T> sourceData;
+        IEnumerable<T> sourceData = Array.Empty<T>();
         bool whereAlreadyApplied = false;
 
         var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes(), _converterRegistry);
@@ -141,23 +146,43 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         {
             if (indexOpt.IsVectorSearch)
             {
-                sourceData = _collection.VectorSearch(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K);
+                await foreach (var item in _collection.VectorSearchAsync(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K, ct: cancellationToken))
+                {
+                    sourceData = sourceData.Append(item);
+                }
             }
             else if (indexOpt.IsSpatialSearch)
             {
-                sourceData = indexOpt.SpatialType == SpatialQueryType.Near
-                    ? _collection.Near(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm)
-                    : _collection.Within(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax);
+                if (indexOpt.SpatialType == SpatialQueryType.Near)
+                {
+                    await foreach (var item in _collection.NearAsync(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm, cancellationToken))
+                    {
+                        sourceData = sourceData.Append(item);
+                    }
+                }
+                else
+                {
+                    await foreach (var item in _collection.WithinAsync(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax, cancellationToken))
+                    {
+                        sourceData = sourceData.Append(item);
+                    }
+                }
             }
             else
             {
-                sourceData = _collection.QueryIndex(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue);
+                await foreach (var item in _collection.QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue))
+                {
+                    sourceData = sourceData.Append(item);
+                }
             }
         }
         else if (model.WhereClause != null &&
                  BsonExpressionEvaluator.TryCompile<T>(model.WhereClause, _converterRegistry) is { } bsonPred)
         {
-            sourceData = _collection.Scan(bsonPred);
+            await foreach (var item in _collection.ScanAsync(bsonPred))
+            {
+                sourceData = sourceData.Append(item);
+            }
             whereAlreadyApplied = true;
         }
         else
@@ -171,15 +196,24 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
                 if (orderOpt is not null)
                 {
                     bool ascending = !model.OrderDescending;
-                    var topN = _collection.QueryIndex(orderOpt.IndexName, null, null, ascending)
-                                          .Take(model.Take.Value);
+                    IEnumerable<T> topN = Array.Empty<T>();
+                    var taker = 0;
+                    await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending))
+                    {
+                        topN = topN.Append(item);
+                        if (++taker >= model.Take.Value) break;
+                    }
+
                     if (model.SelectClause != null)
                         return ProjectEnumerable<TResult>(topN, model.SelectClause);
                     return TerminalReturn<TResult>(topN);
                 }
             }
 
-            sourceData = _collection.FindAll();
+            await foreach (var item in _collection.FindAllAsync())
+            {
+                sourceData = sourceData.Append(item);
+            }
         }
 
         // ── Complex-operator fallback ──────────────────────────────────────────
@@ -281,13 +315,13 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
     private static TResult TerminalReturn<TResult>(IEnumerable<T> data)
     {
         if (typeof(TResult) == typeof(IEnumerable<T>)) return (TResult)data;
-        if (typeof(TResult) == typeof(List<T>))        return (TResult)(object)data.ToList();
-        if (typeof(TResult) == typeof(T[]))            return (TResult)(object)data.ToArray();
-        if (typeof(TResult) == typeof(T))              return (TResult)(object)data.First();
-        if (typeof(TResult) == typeof(int))            return (TResult)(object)data.Count();
-        if (typeof(TResult) == typeof(long))           return (TResult)(object)(long)data.Count();
-        if (typeof(TResult) == typeof(bool))           return (TResult)(object)data.Any();
-        if (typeof(TResult) == typeof(object))         return (TResult)(object)(data.ToList());
+        if (typeof(TResult) == typeof(List<T>)) return (TResult)(object)data.ToList();
+        if (typeof(TResult) == typeof(T[])) return (TResult)(object)data.ToArray();
+        if (typeof(TResult) == typeof(T)) return (TResult)(object)data.First();
+        if (typeof(TResult) == typeof(int)) return (TResult)(object)data.Count();
+        if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)data.Count();
+        if (typeof(TResult) == typeof(bool)) return (TResult)(object)data.Any();
+        if (typeof(TResult) == typeof(object)) return (TResult)(object)(data.ToList());
 
         // Unknown terminal: materialise and attempt a cast — handles e.g. First<SubType>.
         var list = data.ToList();
@@ -297,7 +331,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         throw new NotSupportedException(
             $"BLite query pipeline: unsupported terminal result type '{typeof(TResult)}'.");
     }
-    
+
     // ─── BSON-level aggregate push-down ──────────────────────────────────────
 
     /// <summary>
@@ -318,7 +352,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
         // Only numeric types are supported; others fall through to EnumerableRewriter.
         if (fieldType != typeof(decimal) && fieldType != typeof(double) &&
-            fieldType != typeof(float)   && fieldType != typeof(int)    &&
+            fieldType != typeof(float) && fieldType != typeof(int) &&
             fieldType != typeof(long))
             return false;
 
@@ -383,8 +417,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             {
                 long sum = 0;
                 foreach (var v in typed) sum += v;
-                if (typeof(TResult) == typeof(long))   { result = (TResult)(object)sum;        return true; }
-                if (typeof(TResult) == typeof(int))    { result = (TResult)(object)(int)sum;   return true; }
+                if (typeof(TResult) == typeof(long)) { result = (TResult)(object)sum; return true; }
+                if (typeof(TResult) == typeof(int)) { result = (TResult)(object)(int)sum; return true; }
             }
             else
             {

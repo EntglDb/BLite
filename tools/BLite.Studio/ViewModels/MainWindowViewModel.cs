@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Reflection;
+using System.Threading.Tasks;
 using Avalonia.Platform;
 using BLite.Core;
 using BLite.Core.Storage;
@@ -186,15 +187,15 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // ── Commands ──────────────────────────────────────────────────────────────
     [RelayCommand(CanExecute = nameof(CanOpen))]
-    private void OpenDatabase()
+    private async Task OpenDatabase()
     {
-        TryOpen(DatabasePath, (int)SelectedPreset, IsReadOnly);
+        await TryOpen(DatabasePath, (int)SelectedPreset, IsReadOnly);
     }
 
     private bool CanOpen() => !string.IsNullOrWhiteSpace(DatabasePath);
 
     [RelayCommand]
-    private void OpenRecent(RecentConnectionViewModel recent)
+    private async Task OpenRecent(RecentConnectionViewModel recent)
     {
         // Pre-fill form fields with the stored settings
         DatabasePath   = recent.FilePath;
@@ -202,13 +203,13 @@ public partial class MainWindowViewModel : ViewModelBase
         IsReadOnly     = recent.IsReadOnly;
         IsReadWrite    = !recent.IsReadOnly;
 
-        TryOpen(recent.FilePath, recent.PresetValue, recent.IsReadOnly);
+        await TryOpen(recent.FilePath, recent.PresetValue, recent.IsReadOnly);
     }
 
     [RelayCommand]
-    private void RemoveRecent(RecentConnectionViewModel recent)
+    private async Task RemoveRecent(RecentConnectionViewModel recent)
     {
-        _history.Remove(recent.Id);
+        await _history.Remove(recent.Id);
         RecentConnections.Remove(recent);
         RecentCount = RecentConnections.Count;
     }
@@ -228,7 +229,7 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
-    private void TryOpen(string path, int presetValue, bool readOnly)
+    private async Task TryOpen(string path, int presetValue, bool readOnly)
     {
         try
         {
@@ -257,7 +258,7 @@ public partial class MainWindowViewModel : ViewModelBase
             };
 
             // Persist to history
-            _history.AddOrUpdate(path, (int)SelectedPreset, readOnly, IsMultiFile);
+            await _history.AddOrUpdate(path, (int)SelectedPreset, readOnly, IsMultiFile);
             LoadRecentConnections();
 
             OpenDatabaseName = Path.GetFileName(path);

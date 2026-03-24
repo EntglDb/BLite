@@ -1,4 +1,5 @@
 using BLite.Core;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -33,7 +34,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Insert_And_FindById_Preserves_Enum_Values()
+    public async Task Insert_And_FindById_Preserves_Enum_Values()
     {
         // Arrange
         var entity = new EnumEntity
@@ -50,9 +51,9 @@ public class EnumSerializationTests : IDisposable
         };
 
         // Act
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         // Assert
         Assert.NotNull(found);
@@ -70,7 +71,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Nullable_Enum_Null_RoundTrips()
+    public async Task Nullable_Enum_Null_RoundTrips()
     {
         var entity = new EnumEntity
         {
@@ -83,9 +84,9 @@ public class EnumSerializationTests : IDisposable
             Label = "nullable-null"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Null(found.Status);
@@ -93,7 +94,7 @@ public class EnumSerializationTests : IDisposable
     }
 
     [Fact]
-    public void Nullable_Enum_With_Value_RoundTrips()
+    public async Task Nullable_Enum_With_Value_RoundTrips()
     {
         var entity = new EnumEntity
         {
@@ -106,9 +107,9 @@ public class EnumSerializationTests : IDisposable
             Label = "nullable-set"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(OrderStatus.Cancelled, found.Status);
@@ -120,7 +121,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Byte_Underlying_Enum_RoundTrips()
+    public async Task Byte_Underlying_Enum_RoundTrips()
     {
         var entity = new EnumEntity
         {
@@ -131,16 +132,16 @@ public class EnumSerializationTests : IDisposable
             Label = "byte-enum"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(Priority.Critical, found.Priority);
     }
 
     [Fact]
-    public void Long_Underlying_Enum_RoundTrips()
+    public async Task Long_Underlying_Enum_RoundTrips()
     {
         var entity = new EnumEntity
         {
@@ -151,9 +152,9 @@ public class EnumSerializationTests : IDisposable
             Label = "long-enum"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(AuditAction.Archived, found.LastAction);
@@ -164,7 +165,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Flags_Enum_Preserves_Combined_Value()
+    public async Task Flags_Enum_Preserves_Combined_Value()
     {
         var entity = new EnumEntity
         {
@@ -175,9 +176,9 @@ public class EnumSerializationTests : IDisposable
             Label = "flags"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(Permissions.All, found.Permissions);
@@ -188,7 +189,7 @@ public class EnumSerializationTests : IDisposable
     }
 
     [Fact]
-    public void Flags_Enum_Custom_Combination_RoundTrips()
+    public async Task Flags_Enum_Custom_Combination_RoundTrips()
     {
         var combo = Permissions.Read | Permissions.Execute;
 
@@ -201,9 +202,9 @@ public class EnumSerializationTests : IDisposable
             Label = "flags-custom"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(combo, found.Permissions);
@@ -217,7 +218,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void List_Of_Enums_RoundTrips()
+    public async Task List_Of_Enums_RoundTrips()
     {
         var roles = new List<UserRole> { UserRole.Guest, UserRole.User, UserRole.Admin };
 
@@ -231,9 +232,9 @@ public class EnumSerializationTests : IDisposable
             Label = "list-enum"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(3, found.AssignableRoles.Count);
@@ -243,7 +244,7 @@ public class EnumSerializationTests : IDisposable
     }
 
     [Fact]
-    public void Array_Of_Enums_RoundTrips()
+    public async Task Array_Of_Enums_RoundTrips()
     {
         var history = new[]
         {
@@ -263,9 +264,9 @@ public class EnumSerializationTests : IDisposable
             Label = "array-enum"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(4, found.StatusHistory.Length);
@@ -276,7 +277,7 @@ public class EnumSerializationTests : IDisposable
     }
 
     [Fact]
-    public void Empty_Enum_Collection_RoundTrips()
+    public async Task Empty_Enum_Collection_RoundTrips()
     {
         var entity = new EnumEntity
         {
@@ -289,9 +290,9 @@ public class EnumSerializationTests : IDisposable
             Label = "empty-collections"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Empty(found.AssignableRoles);
@@ -299,11 +300,11 @@ public class EnumSerializationTests : IDisposable
     }
 
     // ------------------------------------------------------------------
-    // Update enum values
+    // UpdateAsync enum values
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Update_Enum_Values_Persists()
+    public async Task Update_Enum_Values_Persists()
     {
         var entity = new EnumEntity
         {
@@ -315,8 +316,8 @@ public class EnumSerializationTests : IDisposable
             Label = "update-test"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
 
         // Mutate every enum field
         entity.Role = UserRole.Moderator;
@@ -328,10 +329,10 @@ public class EnumSerializationTests : IDisposable
         entity.AssignableRoles = new List<UserRole> { UserRole.Admin };
         entity.StatusHistory = new[] { OrderStatus.Cancelled };
 
-        _db.EnumEntities.Update(entity);
-        _db.SaveChanges();
+        await _db.EnumEntities.UpdateAsync(entity);
+        await _db.SaveChangesAsync();
 
-        var found = _db.EnumEntities.FindById(id);
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(UserRole.Moderator, found.Role);
@@ -351,7 +352,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Negative_Enum_Value_RoundTrips()
+    public async Task Negative_Enum_Value_RoundTrips()
     {
         var entity = new EnumEntity
         {
@@ -363,9 +364,9 @@ public class EnumSerializationTests : IDisposable
             Label = "negative"
         };
 
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
-        var found = _db.EnumEntities.FindById(id);
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+        var found = await _db.EnumEntities.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal(OrderStatus.Cancelled, found.Status);
@@ -377,7 +378,7 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void CrossPath_Enum_Written_By_DbContext_ReadBack_By_Engine()
+    public async Task CrossPath_Enum_Written_By_DbContext_ReadBack_By_Engine()
     {
         // Write with typed path
         var entity = new EnumEntity
@@ -391,15 +392,15 @@ public class EnumSerializationTests : IDisposable
             StatusHistory = new[] { OrderStatus.Pending, OrderStatus.Shipped },
             Label = "cross-path"
         };
-        var id = _db.EnumEntities.Insert(entity);
-        _db.SaveChanges();
+        var id = await _db.EnumEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
         _db.ForceCheckpoint();
         _db.Dispose();
 
         // Read with dynamic path
         using var engine = new BLiteEngine(_dbPath);
         var col = engine.GetOrCreateCollection("enum_entities");
-        var docs = col.FindAll().ToList();
+        var docs = await col.FindAllAsync().ToListAsync();
 
         Assert.Single(docs);
         var doc = docs[0];
@@ -429,9 +430,9 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void FindAll_Returns_Multiple_Enum_Entities()
+    public async Task FindAll_Returns_Multiple_Enum_Entities()
     {
-        _db.EnumEntities.Insert(new EnumEntity
+        await _db.EnumEntities.InsertAsync(new EnumEntity
         {
             Role = UserRole.Guest,
             Priority = Priority.Low,
@@ -439,7 +440,7 @@ public class EnumSerializationTests : IDisposable
             Permissions = Permissions.None,
             Label = "first"
         });
-        _db.EnumEntities.Insert(new EnumEntity
+        await _db.EnumEntities.InsertAsync(new EnumEntity
         {
             Role = UserRole.Admin,
             Priority = Priority.Critical,
@@ -447,9 +448,9 @@ public class EnumSerializationTests : IDisposable
             Permissions = Permissions.All,
             Label = "second"
         });
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
-        var all = _db.EnumEntities.FindAll().ToList();
+        var all = (await _db.EnumEntities.FindAllAsync().ToListAsync());
 
         Assert.Equal(2, all.Count);
         Assert.Contains(all, e => e.Role == UserRole.Guest && e.Label == "first");
@@ -461,9 +462,9 @@ public class EnumSerializationTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Linq_Where_On_Enum_Property()
+    public async Task Linq_Where_On_Enum_Property()
     {
-        _db.EnumEntities.Insert(new EnumEntity
+        await _db.EnumEntities.InsertAsync(new EnumEntity
         {
             Role = UserRole.Guest,
             Priority = Priority.Normal,
@@ -471,7 +472,7 @@ public class EnumSerializationTests : IDisposable
             Permissions = Permissions.None,
             Label = "guest"
         });
-        _db.EnumEntities.Insert(new EnumEntity
+        await _db.EnumEntities.InsertAsync(new EnumEntity
         {
             Role = UserRole.Admin,
             Priority = Priority.High,
@@ -479,12 +480,12 @@ public class EnumSerializationTests : IDisposable
             Permissions = Permissions.All,
             Label = "admin"
         });
-        _db.SaveChanges();
+        await _db.SaveChangesAsync();
 
-        var admins = _db.EnumEntities
+        var admins = await _db.EnumEntities
             .AsQueryable()
             .Where(e => e.Role == UserRole.Admin)
-            .ToList();
+            .ToListAsync();
 
         Assert.Single(admins);
         Assert.Equal("admin", admins[0].Label);

@@ -45,7 +45,7 @@ public sealed class StorageEngineNetStandardTests : IDisposable
         Assert.Equal(0xCA, destination.Span[0]);
         Assert.Equal(0xFE, destination.Span[1]);
 
-        engine.RollbackTransaction(txn);
+        await engine.RollbackTransactionAsync(txn);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public sealed class StorageEngineNetStandardTests : IDisposable
         engine.WritePage(pageId, txn.TransactionId, pageData);
 
         // Commit moves WAL cache → WAL index
-        engine.CommitTransaction(txn);
+        await engine.CommitTransactionAsync(txn);
 
         var destination = new Memory<byte>(new byte[engine.PageSize]);
         // The ValueTask from WAL-index path (netstandard2.1: returns `default`)

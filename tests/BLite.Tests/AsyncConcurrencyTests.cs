@@ -114,7 +114,7 @@ public class AsyncConcurrencyTests : IDisposable
 
         Assert.NotEqual(0xFF, outsideBuf[0]);
 
-        _storage.RollbackTransaction(txn);
+        _storage.RollbackTransactionAsync(txn);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class AsyncConcurrencyTests : IDisposable
         var written = new byte[_storage.PageSize];
         written[0] = 0xCC;
         _storage.WritePage(pageId, txn.TransactionId, written);
-        _storage.CommitTransaction(txn);
+        await _storage.CommitTransactionAsync(txn);
 
         // After commit the data must land in _walIndex and be readable
         var buf = new byte[_storage.PageSize];
@@ -153,8 +153,8 @@ public class AsyncConcurrencyTests : IDisposable
 
         Assert.NotEqual(0xBB, buf[0]);
 
-        _storage.RollbackTransaction(txn1);
-        _storage.RollbackTransaction(txn2);
+        _storage.RollbackTransactionAsync(txn1);
+        _storage.RollbackTransactionAsync(txn2);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -177,7 +177,7 @@ public class AsyncConcurrencyTests : IDisposable
 
         Assert.Equal(0xDD, buf[0]);
 
-        _storage.RollbackTransaction(txn);
+        _storage.RollbackTransactionAsync(txn);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -251,7 +251,7 @@ public class AsyncConcurrencyTests : IDisposable
         var txnId = _storage.BeginTransaction().TransactionId;
         for (int i = 1; i <= 50; i++)
             index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         // Launch 10 concurrent full-range scans
         const int concurrentReaders = 10;
@@ -277,7 +277,7 @@ public class AsyncConcurrencyTests : IDisposable
         var txnId = _storage.BeginTransaction().TransactionId;
         for (int i = 1; i <= 20; i++)
             index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         // 20 concurrent lookups for existing keys
         var tasks = Enumerable.Range(1, 20).Select(async i =>
@@ -316,7 +316,7 @@ public class AsyncConcurrencyTests : IDisposable
             var written = new byte[_storage.PageSize];
             written[0] = value;
             _storage.WritePage(pageId, txn.TransactionId, written);
-            _storage.CommitTransaction(txn);
+            await _storage.CommitTransactionAsync(txn);
 
             var buf = new byte[_storage.PageSize];
             await _storage.ReadPageAsync(pageId, null, buf.AsMemory());
@@ -340,7 +340,7 @@ public class AsyncConcurrencyTests : IDisposable
             var written = new byte[_storage.PageSize];
             written[0] = (byte)i;
             _storage.WritePage(pageId, txn.TransactionId, written);
-            _storage.CommitTransaction(txn);
+            await _storage.CommitTransactionAsync(txn);
         }
 
         // All concurrent readers must see the last committed value (writeCount)
@@ -408,13 +408,13 @@ public class AsyncConcurrencyTests : IDisposable
         var asyncPageIds = Enumerable.Range(0, asyncCount).Select(_ => _storage.AllocatePage()).ToArray();
 
         // Sync commits run on thread-pool threads (concurrent with async commits)
-        var syncTasks = Enumerable.Range(0, syncCount).Select(i => Task.Run(() =>
+        var syncTasks = Enumerable.Range(0, syncCount).Select(i => Task.Run(async () =>
         {
             var txn  = _storage.BeginTransaction();
             var data = new byte[_storage.PageSize];
             data[0] = (byte)(0xA0 + i);
             _storage.WritePage(syncPageIds[i], txn.TransactionId, data);
-            _storage.CommitTransaction(txn); // sync path → _commitLock
+            await _storage.CommitTransactionAsync(txn); // sync path → _commitLock
         })).ToArray();
 
         // Async commits compete with the sync commits via the group commit writer

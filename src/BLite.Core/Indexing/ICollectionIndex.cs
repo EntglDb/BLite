@@ -11,7 +11,7 @@ namespace BLite.Core.Indexing;
 ///
 /// <para>
 /// Range queries and vector search are exposed directly on the handle so that
-/// callers can hold a single reference after <c>CreateIndex</c> /
+/// callers can hold a single reference after <c>CreateIndexAsync</c> /
 /// <c>EnsureIndex</c> and query through it without going back to the collection.
 /// </para>
 /// </summary>
@@ -35,12 +35,6 @@ public interface ICollectionIndex<TId, T> where T : class
     VectorMetric Metric { get; }
 
     // ── BTree range query ─────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Scans the index for documents whose key falls in [<paramref name="minKey"/>, <paramref name="maxKey"/>].
-    /// Either bound can be <c>null</c> for an open range.
-    /// </summary>
-    IEnumerable<T> Query(object? minKey = null, object? maxKey = null, bool ascending = true);
 
     /// <inheritdoc cref="Query"/>
     IAsyncEnumerable<T> QueryAsync(

@@ -79,26 +79,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         ThrowIfDisposed();
         if (CurrentTransaction != null)
             return CurrentTransaction;
-        CurrentTransaction = await _storage.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct)
-            .ConfigureAwait(false);
+        CurrentTransaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         return CurrentTransaction!;
-    }
-
-    /// <summary>
-    /// Commits the active transaction, persisting all changes made in this session.
-    /// </summary>
-    public void Commit()
-    {
-        ThrowIfDisposed();
-        // Flush index root-page IDs into collection metadata before committing,
-        // so vector/spatial indexes survive a reopen.
-        foreach (var lazy in _collections.Values)
-            lazy.Value.PersistIndexMetadata();
-        if (CurrentTransaction != null)
-        {
-            try { CurrentTransaction.Commit(); }
-            finally { CurrentTransaction = null; }
-        }
     }
 
     /// <summary>
@@ -111,7 +93,7 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
             lazy.Value.PersistIndexMetadata();
         if (CurrentTransaction != null)
         {
-            try { await CurrentTransaction.CommitAsync(ct).ConfigureAwait(false); }
+            try { await CurrentTransaction.CommitAsync(ct); }
             finally { CurrentTransaction = null; }
         }
     }
@@ -124,7 +106,7 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         ThrowIfDisposed();
         if (CurrentTransaction != null)
         {
-            try { CurrentTransaction.Rollback(); }
+            try { CurrentTransaction.RollbackAsync(); }
             finally { CurrentTransaction = null; }
         }
     }
@@ -132,8 +114,6 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     // ─────────────────────────────────────────────────────────────────────────
     // ITransactionHolder
     // ─────────────────────────────────────────────────────────────────────────
-
-    ITransaction ITransactionHolder.GetCurrentTransactionOrStart() => BeginTransaction();
 
     Task<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync()
         => BeginTransactionAsync();
@@ -173,14 +153,6 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>Inserts a document and commits immediately.</summary>
-    public BsonId Insert(string collectionName, BsonDocument document)
-    {
-        ThrowIfDisposed();
-        var col = GetOrCreateCollection(collectionName);
-        var id = col.Insert(document);
-        Commit();
-        return id;
-    }
 
     /// <summary>Inserts a document and commits asynchronously.</summary>
     public async ValueTask<BsonId> InsertAsync(
@@ -188,19 +160,9 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var id = col.Insert(document);
-        await CommitAsync(ct).ConfigureAwait(false);
+        var id = await col.InsertAsync(document, ct);
+        await CommitAsync(ct);
         return id;
-    }
-
-    /// <summary>Inserts multiple documents and commits immediately.</summary>
-    public List<BsonId> InsertBulk(string collectionName, IEnumerable<BsonDocument> documents)
-    {
-        ThrowIfDisposed();
-        var col = GetOrCreateCollection(collectionName);
-        var ids = col.InsertBulk(documents);
-        Commit();
-        return ids;
     }
 
     /// <summary>Inserts multiple documents and commits asynchronously.</summary>
@@ -209,16 +171,9 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var ids = await col.InsertBulkAsync(documents, ct).ConfigureAwait(false);
-        await CommitAsync(ct).ConfigureAwait(false);
+        var ids = await col.InsertBulkAsync(documents, ct);
+        await CommitAsync(ct);
         return ids;
-    }
-
-    /// <summary>Finds a document by ID.</summary>
-    public BsonDocument? FindById(string collectionName, BsonId id)
-    {
-        ThrowIfDisposed();
-        return GetOrCreateCollection(collectionName).FindById(id);
     }
 
     /// <summary>Finds a document by ID asynchronously.</summary>
@@ -229,27 +184,12 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         return GetOrCreateCollection(collectionName).FindByIdAsync(id, ct);
     }
 
-    /// <summary>Returns all documents in the named collection.</summary>
-    public IEnumerable<BsonDocument> FindAll(string collectionName)
-    {
-        ThrowIfDisposed();
-        return GetOrCreateCollection(collectionName).FindAll();
-    }
-
     /// <summary>Asynchronously streams all documents in the named collection.</summary>
     public IAsyncEnumerable<BsonDocument> FindAllAsync(
         string collectionName, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         return GetOrCreateCollection(collectionName).FindAllAsync(ct);
-    }
-
-    /// <summary>Returns documents matching the predicate.</summary>
-    public IEnumerable<BsonDocument> Find(
-        string collectionName, Func<BsonDocument, bool> predicate)
-    {
-        ThrowIfDisposed();
-        return GetOrCreateCollection(collectionName).Find(predicate);
     }
 
     /// <summary>Asynchronously yields documents matching the predicate.</summary>
@@ -260,36 +200,15 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         return GetOrCreateCollection(collectionName).FindAsync(predicate, ct);
     }
 
-    /// <summary>Updates a document and commits immediately.</summary>
-    public bool Update(string collectionName, BsonId id, BsonDocument document)
-    {
-        ThrowIfDisposed();
-        var col = GetOrCreateCollection(collectionName);
-        var result = col.Update(id, document);
-        Commit();
-        return result;
-    }
-
     /// <summary>Updates a document and commits asynchronously.</summary>
     public async ValueTask<bool> UpdateAsync(
         string collectionName, BsonId id, BsonDocument document, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var result = col.Update(id, document);
-        await CommitAsync(ct).ConfigureAwait(false);
+        var result = await col.UpdateAsync(id, document, ct);
+        await CommitAsync(ct);
         return result;
-    }
-
-    /// <summary>Updates multiple documents and commits immediately.</summary>
-    public int UpdateBulk(
-        string collectionName, IEnumerable<(BsonId Id, BsonDocument Document)> updates)
-    {
-        ThrowIfDisposed();
-        var col = GetOrCreateCollection(collectionName);
-        var count = col.UpdateBulk(updates);
-        Commit();
-        return count;
     }
 
     /// <summary>Updates multiple documents and commits asynchronously.</summary>
@@ -300,19 +219,9 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var count = await col.UpdateBulkAsync(updates, ct).ConfigureAwait(false);
-        await CommitAsync(ct).ConfigureAwait(false);
+        var count = await col.UpdateBulkAsync(updates, ct);
+        await CommitAsync(ct);
         return count;
-    }
-
-    /// <summary>Deletes a document and commits immediately.</summary>
-    public bool Delete(string collectionName, BsonId id)
-    {
-        ThrowIfDisposed();
-        var col = GetOrCreateCollection(collectionName);
-        var result = col.Delete(id);
-        Commit();
-        return result;
     }
 
     /// <summary>Deletes a document and commits asynchronously.</summary>
@@ -321,19 +230,9 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var result = col.Delete(id);
-        await CommitAsync(ct).ConfigureAwait(false);
+        var result = await col.DeleteAsync(id, ct);
+        await CommitAsync(ct);
         return result;
-    }
-
-    /// <summary>Deletes multiple documents and commits immediately.</summary>
-    public int DeleteBulk(string collectionName, IEnumerable<BsonId> ids)
-    {
-        ThrowIfDisposed();
-        var col = GetOrCreateCollection(collectionName);
-        var count = col.DeleteBulk(ids);
-        Commit();
-        return count;
     }
 
     /// <summary>Deletes multiple documents and commits asynchronously.</summary>
@@ -342,8 +241,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var count = await col.DeleteBulkAsync(ids, ct).ConfigureAwait(false);
-        await CommitAsync(ct).ConfigureAwait(false);
+        var count = await col.DeleteBulkAsync(ids, ct);
+        await CommitAsync(ct);
         return count;
     }
 
@@ -369,7 +268,7 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
         // Roll back any uncommitted transaction so the engine's WAL stays clean.
         if (_currentTransaction?.State == TransactionState.Active)
         {
-            try { _currentTransaction.Rollback(); }
+            try { _currentTransaction.RollbackAsync(); }
             catch { /* best-effort */ }
         }
         _currentTransaction = null;

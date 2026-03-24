@@ -28,14 +28,14 @@ try
         Age = 30
     };
     
-    var id = db.Users.Insert(largeUser);
-    db.SaveChanges();
+    var id = await db.Users.InsertAsync(largeUser);
+    await db.SaveChangesAsync();
     Console.WriteLine($"  ✅ Inserted large doc: {id}");
     Console.WriteLine($"  Name length: {largeUser.Name.Length} bytes (requires overflow)");
     
     // Test 2: Retrieve large document
     Console.WriteLine("\nTest 2: Retrieve large document");
-    var found = db.Users.FindById(id);
+    var found = await db.Users.FindByIdAsync(id);
     
     if (found != null && found.Name?.Length == 20_000)
     {
@@ -53,15 +53,15 @@ try
     var small2 = new User { Name = "Charlie", Age = 35 };
     var large2 = new User { Name = new string('Y', 16_000), Age = 40 };
     
-    var id1 = db.Users.Insert(small1);
-    var id2 = db.Users.Insert(small2);
-    var id3 = db.Users.Insert(large2);
-    db.SaveChanges();
+    var id1 = await db.Users.InsertAsync(small1);
+    var id2 = await db.Users.InsertAsync(small2);
+    var id3 = await db.Users.InsertAsync(large2);
+    await db.SaveChangesAsync();
 
     Console.WriteLine("  ✅ Inserted: Bob (small), Charlie (small), Dave (30KB large)");
     
     // Test 4: Count
-    var count = db.Users.Count();
+    var count = await db.Users.CountAsync();
     Console.WriteLine($"\nTest 4: Count = {count} (expected 4)");
     if (count == 4)
         Console.WriteLine("  ✅ Count correct!");
@@ -71,7 +71,7 @@ try
     // Test 5: FindAll
     Console.WriteLine("\nTest 5: FindAll (iterate all docs)");
     int foundCount = 0;
-    foreach (var u in db.Users.FindAll())
+    await foreach (var u in db.Users.FindAllAsync())
     {
         foundCount++;
         Console.WriteLine($"  - Name[{u.Name.Length} chars], Age {u.Age}");
@@ -80,11 +80,11 @@ try
     
     // Test 6: Delete large document
     Console.WriteLine("\nTest 6: Delete large document");
-    var deleted = db.Users.Delete(id);
+    var deleted = await db.Users.DeleteAsync(id);
     if (deleted)
     {
-        Console.WriteLine("  ✅ Deleted large doc");
-        var stillExists = db.Users.FindById(id);
+        Console.WriteLine("  \u2705 Deleted large doc");
+        var stillExists = await db.Users.FindByIdAsync(id);
         if (stillExists == null)
             Console.WriteLine("  ✅ Confirmed deletion (not found)");
         else
@@ -99,8 +99,8 @@ try
         Name = new string('Z', 20_000), 
         Age = 99
     };
-    var newId = db.Users.Insert(recycledUser);
-    db.SaveChanges();
+    var newId = await db.Users.InsertAsync(recycledUser);
+    await db.SaveChangesAsync();
     
     // We can't easily check page ID without exposing it. 
     // But we can check if the file size grew? Or just trust the logging if we added logging.

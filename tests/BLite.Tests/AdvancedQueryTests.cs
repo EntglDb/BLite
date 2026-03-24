@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests
@@ -14,12 +15,12 @@ namespace BLite.Tests
             _db = new TestDbContext(_dbPath);
 
             // Seed Data
-            _db.TestDocuments.Insert(new TestDocument { Category = "A", Amount = 10, Name = "Item1" });
-            _db.TestDocuments.Insert(new TestDocument { Category = "A", Amount = 20, Name = "Item2" });
-            _db.TestDocuments.Insert(new TestDocument { Category = "B", Amount = 30, Name = "Item3" });
-            _db.TestDocuments.Insert(new TestDocument { Category = "B", Amount = 40, Name = "Item4" });
-            _db.TestDocuments.Insert(new TestDocument { Category = "C", Amount = 50, Name = "Item5" });
-            _db.SaveChanges();
+            _db.TestDocuments.InsertAsync(new TestDocument { Category = "A", Amount = 10, Name = "Item1" }).GetAwaiter().GetResult();
+            _db.TestDocuments.InsertAsync(new TestDocument { Category = "A", Amount = 20, Name = "Item2" }).GetAwaiter().GetResult();
+            _db.TestDocuments.InsertAsync(new TestDocument { Category = "B", Amount = 30, Name = "Item3" }).GetAwaiter().GetResult();
+            _db.TestDocuments.InsertAsync(new TestDocument { Category = "B", Amount = 40, Name = "Item4" }).GetAwaiter().GetResult();
+            _db.TestDocuments.InsertAsync(new TestDocument { Category = "C", Amount = 50, Name = "Item5" }).GetAwaiter().GetResult();
+            _db.SaveChangesAsync().GetAwaiter().GetResult();
         }
 
         public void Dispose()
@@ -91,20 +92,20 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Join_Works_InMemory()
+        public async Task Join_Works_InMemory()
         {
             // Create a second collection for joining
-            _db.OrderDocuments.Insert(new OrderDocument { ItemName = "Item1", Quantity = 5 });
-            _db.OrderDocuments.Insert(new OrderDocument { ItemName = "Item3", Quantity = 2 });
-            _db.SaveChanges();
+            await _db.OrderDocuments.InsertAsync(new OrderDocument { ItemName = "Item1", Quantity = 5 });
+            await _db.OrderDocuments.InsertAsync(new OrderDocument { ItemName = "Item3", Quantity = 2 });
+            await _db.SaveChangesAsync();
 
-            var query = _db.TestDocuments.AsQueryable()
+            var query = await _db.TestDocuments.AsQueryable()
                 .Join(_db.OrderDocuments.AsQueryable(),
                     doc => doc.Name,
                     order => order.ItemName,
                     (doc, order) => new { doc.Name, doc.Category, order.Quantity })
                 .OrderBy(x => x.Name)
-                .ToList();
+                .ToListAsync();
 
             Assert.Equal(2, query.Count);
 
@@ -119,7 +120,7 @@ namespace BLite.Tests
 
 
         [Fact]
-        public void Select_Project_Nested_Object()
+        public async Task Select_Project_Nested_Object()
         {
             var doc = new ComplexDocument
             {
@@ -132,12 +133,12 @@ namespace BLite.Tests
                     new OrderItem { Name = "Mouse", Price = 50 }
                 }
             };
-            _db.ComplexDocuments.Insert(doc);
-            _db.SaveChanges();
+            await _db.ComplexDocuments.InsertAsync(doc);
+            await _db.SaveChangesAsync();
 
-            var query = _db.ComplexDocuments.AsQueryable()
+            var query = await _db.ComplexDocuments.AsQueryable()
                 .Select(x => x.ShippingAddress)
-                .ToList();
+                .ToListAsync();
 
             Assert.Single(query);
             Assert.Equal("New York", query[0].City.Name);
@@ -145,7 +146,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Select_Project_Nested_Field()
+        public async Task Select_Project_Nested_Field()
         {
             var doc = new ComplexDocument
             {
@@ -153,19 +154,19 @@ namespace BLite.Tests
                 Title = "Order1",
                 ShippingAddress = new Address { City = new City { Name = "New York" }, Street = "5th Ave" }
             };
-            _db.ComplexDocuments.Insert(doc);
-            _db.SaveChanges();
+            await _db.ComplexDocuments.InsertAsync(doc);
+            await _db.SaveChangesAsync();
 
-            var cities = _db.ComplexDocuments.AsQueryable()
+            var cities = await _db.ComplexDocuments.AsQueryable()
                 .Select(x => x.ShippingAddress.City.Name)
-                .ToList();
+                .ToListAsync();
 
             Assert.Single(cities);
             Assert.Equal("New York", cities[0]);
         }
 
         [Fact]
-        public void Select_Anonymous_Complex()
+        public async Task Select_Anonymous_Complex()
         {
             BLite.Tests.TestDbContext_TestDbContext_Mappers.BLite_Shared_CityMapper cityMapper = new BLite.Tests.TestDbContext_TestDbContext_Mappers.BLite_Shared_CityMapper();
             var doc = new ComplexDocument
@@ -176,12 +177,12 @@ namespace BLite.Tests
             };
 
 
-            _db.ComplexDocuments.Insert(doc);
-            _db.SaveChanges();
+            await _db.ComplexDocuments.InsertAsync(doc);
+            await _db.SaveChangesAsync();
 
-            var result = _db.ComplexDocuments.AsQueryable()
+            var result = await _db.ComplexDocuments.AsQueryable()
                 .Select(x => new { x.Title, x.ShippingAddress.City })
-                .ToList();
+                .ToListAsync();
 
             Assert.Single(result);
             Assert.Equal("Order1", result[0].Title);
@@ -189,14 +190,14 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Where_And_Select_Push_Down_Works()
+        public async Task Where_And_Select_Push_Down_Works()
         {
             // WHERE + SELECT: both predicates must be evaluated in a single BSON-level pass.
             // Only scalar fields — push-down should fire and return filtered projections.
-            var result = _db.TestDocuments.AsQueryable()
+            var result = await _db.TestDocuments.AsQueryable()
                 .Where(x => x.Category == "A")
                 .Select(x => new { x.Name, x.Amount })
-                .ToList();
+                .ToListAsync();
 
             Assert.Equal(2, result.Count);
             Assert.Contains(result, r => r.Name == "Item1" && r.Amount == 10);
@@ -204,7 +205,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Select_Project_Nested_Array_Of_Objects()
+        public async Task Select_Project_Nested_Array_Of_Objects()
         {
             var doc = new ComplexDocument
             {
@@ -218,12 +219,11 @@ namespace BLite.Tests
                     new OrderItem { Name = "Keyboard", Price = 75 }
                 }
             };
-            _db.ComplexDocuments.Insert(doc);
-            _db.SaveChanges();
+            await _db.ComplexDocuments.InsertAsync(doc);
+            await _db.SaveChangesAsync();
 
             // Retrieve the full document and verify Items array
-            var retrieved = _db.ComplexDocuments.FindAll().First();
-
+            var retrieved = (await _db.ComplexDocuments.FindAllAsync().ToListAsync()).First();
             Assert.Equal("Order with Items", retrieved.Title);
             Assert.Equal("Los Angeles", retrieved.ShippingAddress.City.Name);
             Assert.Equal("Hollywood Blvd", retrieved.ShippingAddress.Street);

@@ -30,7 +30,7 @@ public class TypedTimeSeriesTests : IDisposable
     // ─── Configuration ────────────────────────────────────────────────────────
 
     [Fact]
-    public void HasTimeSeries_PersistsIsTimeSeriesFlag_ToStorage()
+    public async Task HasTimeSeries_PersistsIsTimeSeriesFlag_ToStorage()
     {
         // Metadata is written by DocumentDbContext during CreateCollection.
         // Verify it survives a full restart.
@@ -38,15 +38,15 @@ public class TypedTimeSeriesTests : IDisposable
         using var reopened = new TestDbContext(_dbPath);
 
         // If metadata wasn't persisted the collection would throw on insert
-        var ex = Record.Exception(() =>
+        var ex = await Record.ExceptionAsync(async () =>
         {
-            reopened.SensorReadings.Insert(new SensorReading
+            await reopened.SensorReadings.InsertAsync(new SensorReading
             {
                 SensorId = "s1",
                 Value = 1.0,
                 Timestamp = DateTime.UtcNow
             });
-            reopened.SaveChanges();
+            await reopened.SaveChangesAsync();
         });
 
         Assert.Null(ex);
@@ -55,12 +55,12 @@ public class TypedTimeSeriesTests : IDisposable
     // ─── Insert + FindAll ────────────────────────────────────────────────────
 
     [Fact]
-    public void Insert_Single_FindAll_ReturnsOneDocument()
+    public async Task Insert_Single_FindAll_ReturnsOneDocument()
     {
-        _db.SensorReadings.Insert(new SensorReading { SensorId = "s1", Value = 42.5, Timestamp = DateTime.UtcNow });
-        _db.SaveChanges();
+        await _db.SensorReadings.InsertAsync(new SensorReading { SensorId = "s1", Value = 42.5, Timestamp = DateTime.UtcNow });
+        await _db.SaveChangesAsync();
 
-        var results = _db.SensorReadings.FindAll().ToList();
+        var results = (await _db.SensorReadings.FindAllAsync().ToListAsync());
 
         Assert.Single(results);
         Assert.Equal("s1", results[0].SensorId);
@@ -68,25 +68,24 @@ public class TypedTimeSeriesTests : IDisposable
     }
 
     [Fact]
-    public void Insert_Multiple_FindAll_ReturnsAll()
+    public async Task Insert_Multiple_FindAll_ReturnsAll()
     {
         const int count = 10;
         for (int i = 0; i < count; i++)
-            _db.SensorReadings.Insert(new SensorReading { SensorId = $"s{i}", Value = i, Timestamp = DateTime.UtcNow.AddSeconds(-i) });
-        _db.SaveChanges();
+            await _db.SensorReadings.InsertAsync(new SensorReading { SensorId = $"s{i}", Value = i, Timestamp = DateTime.UtcNow.AddSeconds(-i) });
+        await _db.SaveChangesAsync();
 
-        var results = _db.SensorReadings.FindAll().ToList();
+        var results = (await _db.SensorReadings.FindAllAsync().ToListAsync());
         Assert.Equal(count, results.Count);
     }
 
     [Fact]
-    public void Insert_FindById_ReturnsCorrectDocument()
+    public async Task Insert_FindById_ReturnsCorrectDocument()
     {
         var reading = new SensorReading { SensorId = "probe-X1", Value = 98.6, Timestamp = DateTime.UtcNow };
-        var id = _db.SensorReadings.Insert(reading);
-        _db.SaveChanges();
-
-        var found = _db.SensorReadings.FindById(id);
+        var id = await _db.SensorReadings.InsertAsync(reading);
+        await _db.SaveChangesAsync();
+        var found = await _db.SensorReadings.FindByIdAsync(id);
 
         Assert.NotNull(found);
         Assert.Equal("probe-X1", found!.SensorId);
@@ -94,13 +93,12 @@ public class TypedTimeSeriesTests : IDisposable
     }
 
     [Fact]
-    public void Insert_PreservesTimestampField()
+    public async Task Insert_PreservesTimestampField()
     {
         var ts = new DateTime(2025, 6, 15, 12, 0, 0, DateTimeKind.Utc);
-        _db.SensorReadings.Insert(new SensorReading { SensorId = "clock", Value = 0, Timestamp = ts });
-        _db.SaveChanges();
-
-        var found = _db.SensorReadings.FindAll().Single();
+        await _db.SensorReadings.InsertAsync(new SensorReading { SensorId = "clock", Value = 0, Timestamp = ts });
+        await _db.SaveChangesAsync();
+        var found = (await _db.SensorReadings.FindAllAsync().ToListAsync()).Single();
 
         Assert.Equal(ts, found.Timestamp);
     }
@@ -108,46 +106,46 @@ public class TypedTimeSeriesTests : IDisposable
     // ─── Pruning ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public void ForcePrune_AllExpired_FindAll_ReturnsEmpty()
+    public async Task ForcePrune_AllExpired_FindAll_ReturnsEmpty()
     {
         var retention = TimeSpan.FromDays(7);
         var expiredTs = DateTime.UtcNow.Subtract(retention).AddDays(-1); // 1 day beyond retention
 
         for (int i = 0; i < 5; i++)
-            _db.SensorReadings.Insert(new SensorReading { SensorId = $"old-{i}", Value = i, Timestamp = expiredTs });
-        _db.SaveChanges();
+            await _db.SensorReadings.InsertAsync(new SensorReading { SensorId = $"old-{i}", Value = i, Timestamp = expiredTs });
+        await _db.SaveChangesAsync();
 
-        Assert.Equal(5, _db.SensorReadings.Count());
+        Assert.Equal(5, await _db.SensorReadings.CountAsync());
 
-        _db.SensorReadings.ForcePrune();
+        await _db.SensorReadings.ForcePruneAsync();
 
         // Stale index entries pointing to freed pages are silently skipped (v1 known behaviour).
-        Assert.Empty(_db.SensorReadings.FindAll());
+        Assert.Empty(await _db.SensorReadings.FindAllAsync().ToListAsync());
     }
 
     [Fact]
-    public void ForcePrune_RecentDocuments_NotRemoved()
+    public async Task ForcePrune_RecentDocuments_NotRemoved()
     {
-        _db.SensorReadings.Insert(new SensorReading { SensorId = "recent", Value = 1, Timestamp = DateTime.UtcNow });
-        _db.SaveChanges();
+        await _db.SensorReadings.InsertAsync(new SensorReading { SensorId = "recent", Value = 1, Timestamp = DateTime.UtcNow });
+        await _db.SaveChangesAsync();
 
-        _db.SensorReadings.ForcePrune();
+        await _db.SensorReadings.ForcePruneAsync();
 
         // The page holds a recent document, so it must not be freed.
-        Assert.Single(_db.SensorReadings.FindAll());
+        Assert.Single(await _db.SensorReadings.FindAllAsync().ToListAsync());
     }
 
     // ─── Persistence across restart ──────────────────────────────────────────
 
     [Fact]
-    public void InsertedDocuments_SurviveDbRestart()
+    public async Task InsertedDocuments_SurviveDbRestart()
     {
-        _db.SensorReadings.Insert(new SensorReading { SensorId = "restart-test", Value = 3.14, Timestamp = DateTime.UtcNow });
-        _db.SaveChanges();
+        await _db.SensorReadings.InsertAsync(new SensorReading { SensorId = "restart-test", Value = 3.14, Timestamp = DateTime.UtcNow });
+        await _db.SaveChangesAsync();
         _db.Dispose();
 
         using var reopened = new TestDbContext(_dbPath);
-        var results = reopened.SensorReadings.FindAll().ToList();
+        var results = await reopened.SensorReadings.FindAllAsync().ToListAsync();
 
         Assert.Single(results);
         Assert.Equal("restart-test", results[0].SensorId);

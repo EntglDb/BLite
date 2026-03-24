@@ -52,11 +52,11 @@ public class ConcurrencyBenchmarks
     [Params(1, 2, 4, 8)]
     public int ThreadCount { get; set; }
 
-    private string        _serverPath     = null!;
-    private TestDbContext _serverCtx      = null!;
+    private string _serverPath = null!;
+    private TestDbContext _serverCtx = null!;
 
     // IDs seeded — used by read / mixed tasks
-    private BsonId[] _readIdsServer  = null!;
+    private BsonId[] _readIdsServer = null!;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -64,13 +64,13 @@ public class ConcurrencyBenchmarks
     public void GlobalSetup()
     {
         var temp = AppContext.BaseDirectory;
-        var id   = Guid.NewGuid().ToString("N");
+        var id = Guid.NewGuid().ToString("N");
 
-        _serverPath  = Path.Combine(temp, $"ccbench_srv_{id}.db");
+        _serverPath = Path.Combine(temp, $"ccbench_srv_{id}.db");
 
-        _serverCtx  = new TestDbContext(_serverPath, PageFileConfig.Server(_serverPath));
+        _serverCtx = new TestDbContext(_serverPath, PageFileConfig.Server(_serverPath));
 
-        _readIdsServer  = Seed(_serverCtx);
+        _readIdsServer = Seed(_serverCtx).GetAwaiter().GetResult();
     }
 
     [GlobalCleanup]
@@ -83,14 +83,14 @@ public class ConcurrencyBenchmarks
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>Seeds <see cref="SeedDocs"/> documents and returns their IDs.</summary>
-    private static BsonId[] Seed(TestDbContext ctx)
+    private static async Task<BsonId[]> Seed(TestDbContext ctx)
     {
         using var session = ctx.OpenSession();
         var col = session.GetOrCreateCollection(CollectionName);
         var ids = new BsonId[SeedDocs];
         for (int i = 0; i < SeedDocs; i++)
-            ids[i] = col.Insert(col.CreateDocument(["v"], b => b.AddInt32("v", i)));
-        session.Commit();
+            ids[i] = await col.InsertAsync(col.CreateDocument(["v"], b => b.AddInt32("v", i)));
+        await session.CommitAsync();
         return ids;
     }
 
@@ -98,59 +98,59 @@ public class ConcurrencyBenchmarks
 
     [Benchmark(Description = "Server – Concurrent Insert")]
     [BenchmarkCategory("Concurrency_Insert")]
-    public void Server_Insert() => RunInsert(_serverCtx);
+    public async Task Server_Insert() => await RunInsert(_serverCtx);
 
     [Benchmark(Description = "Server – Concurrent Read")]
     [BenchmarkCategory("Concurrency_Read")]
-    public void Server_Read() => RunRead(_serverCtx, _readIdsServer);
+    public async Task Server_Read() => await RunRead(_serverCtx, _readIdsServer);
 
     [Benchmark(Description = "Server – Concurrent Mixed")]
     [BenchmarkCategory("Concurrency_Mixed")]
-    public void Server_Mixed() => RunMixed(_serverCtx, _readIdsServer);
+    public async Task Server_Mixed() => await RunMixed(_serverCtx, _readIdsServer);
 
     // ── Workload runners ──────────────────────────────────────────────────────
 
-    private void RunInsert(TestDbContext ctx)
+    private async Task RunInsert(TestDbContext ctx)
     {
-        var tasks = Enumerable.Range(0, ThreadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, ThreadCount).Select(t => Task.Run(async () =>
         {
             using var session = ctx.OpenSession();
             var col = session.GetOrCreateCollection(CollectionName);
             for (int i = 0; i < OpsPerTask; i++)
-                col.Insert(col.CreateDocument(["v"], b => b.AddInt32("v", t * OpsPerTask + i)));
-            session.Commit();
+                await col.InsertAsync(col.CreateDocument(["v"], b => b.AddInt32("v", t * OpsPerTask + i)));
+            await session.CommitAsync();
         })).ToArray();
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
     }
 
-    private void RunRead(TestDbContext ctx, BsonId[] ids)
+    private async Task RunRead(TestDbContext ctx, BsonId[] ids)
     {
-        var tasks = Enumerable.Range(0, ThreadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, ThreadCount).Select(t => Task.Run(async () =>
         {
             using var session = ctx.OpenSession();
             var col = session.GetOrCreateCollection(CollectionName);
             for (int i = 0; i < OpsPerTask; i++)
-                col.FindById(ids[(t * OpsPerTask + i) % ids.Length]);
+                await col.FindByIdAsync(ids[(t * OpsPerTask + i) % ids.Length]);
             // reads don't require a commit; Dispose() handles rollback of the read tx
         })).ToArray();
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
     }
 
-    private void RunMixed(TestDbContext ctx, BsonId[] ids)
+    private async Task RunMixed(TestDbContext ctx, BsonId[] ids)
     {
-        var tasks = Enumerable.Range(0, ThreadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, ThreadCount).Select(t => Task.Run(async() =>
         {
             using var session = ctx.OpenSession();
             var col = session.GetOrCreateCollection(CollectionName);
             for (int i = 0; i < OpsPerTask; i++)
             {
                 if (i % 2 == 0)
-                    col.Insert(col.CreateDocument(["v"], b => b.AddInt32("v", t * OpsPerTask + i)));
+                    await col.InsertAsync(col.CreateDocument(["v"], b => b.AddInt32("v", t * OpsPerTask + i)));
                 else
-                    col.FindById(ids[(t * OpsPerTask + i) % ids.Length]);
+                    await col.FindByIdAsync(ids[(t * OpsPerTask + i) % ids.Length]);
             }
-            session.Commit();
+            await session.CommitAsync();
         })).ToArray();
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
     }
 }

@@ -49,7 +49,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void CustomWalPath_DocumentsPersistedAfterRestart()
+    public async Task CustomWalPath_DocumentsPersistedAfterRestart()
     {
         var dbPath  = Path.Combine(_tempDir, "wal2.db");
         var walPath = Path.Combine(_tempDir, "wal", "wal2.wal");
@@ -59,9 +59,9 @@ public class MultiFileEndToEndTests : IDisposable
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("users");
-            col.Insert(MakeDoc(col, 1, "Alice", 30));
-            col.Insert(MakeDoc(col, 2, "Bob", 25));
-            engine.Commit();
+            await col.InsertAsync(MakeDoc(col, 1, "Alice", 30));
+            await col.InsertAsync(MakeDoc(col, 2, "Bob", 25));
+            await engine.CommitAsync();
         }
 
         Assert.True(File.Exists(walPath), "WAL should be at custom path");
@@ -70,13 +70,13 @@ public class MultiFileEndToEndTests : IDisposable
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col  = engine.GetOrCreateCollection("users");
-            var docs = col.FindAll().ToList();
+            var docs = (await col.FindAllAsync().ToListAsync());
             Assert.Equal(2, docs.Count);
         }
     }
 
     [Fact]
-    public void CustomWalPath_WalRecovery_RestoresUncommittedData()
+    public async Task CustomWalPath_WalRecovery_RestoresUncommittedData()
     {
         var dbPath  = Path.Combine(_tempDir, "walrec.db");
         var walPath = Path.Combine(_tempDir, "wal", "walrec.wal");
@@ -88,21 +88,21 @@ public class MultiFileEndToEndTests : IDisposable
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("items");
-            id1 = col.Insert(MakeDoc(col, 1, "Item1", 10));
-            id2 = col.Insert(MakeDoc(col, 2, "Item2", 20));
-            engine.Commit();
-            // Deliberate: no Checkpoint here — WAL holds the data
+            id1 = await col.InsertAsync(MakeDoc(col, 1, "Item1", 10));
+            id2 = await col.InsertAsync(MakeDoc(col, 2, "Item2", 20));
+            await engine.CommitAsync();
+            // Deliberate: no CheckpointAsync here — WAL holds the data
         }
 
         // Restart — engine must replay the WAL to recover
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col  = engine.GetOrCreateCollection("items");
-            var all  = col.FindAll().ToList();
+            var all  = (await col.FindAllAsync().ToListAsync());
             Assert.Equal(2, all.Count);
 
-            var found1 = col.FindById(id1);
-            var found2 = col.FindById(id2);
+            var found1 = await col.FindByIdAsync(id1);
+            var found2 = await col.FindByIdAsync(id2);
             Assert.NotNull(found1);
             Assert.NotNull(found2);
 
@@ -118,7 +118,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void SeparateIndexFile_BTreeIndex_QueryReturnsCorrectResults()
+    public async Task SeparateIndexFile_BTreeIndex_QueryReturnsCorrectResults()
     {
         var dbPath  = Path.Combine(_tempDir, "idx.db");
         var idxPath = Path.Combine(_tempDir, "idx.idx");
@@ -128,17 +128,17 @@ public class MultiFileEndToEndTests : IDisposable
         var col = engine.GetOrCreateCollection("people", BsonIdType.Int32);
 
         for (int i = 1; i <= 20; i++)
-            col.Insert(MakeDoc(col, i, $"User{i}", 20 + i));
+            await col.InsertAsync(MakeDoc(col, i, $"User{i}", 20 + i));
 
-        engine.Commit();
+        await engine.CommitAsync();
 
-        col.CreateIndex("age", "idx_age");
+        await col.CreateIndexAsync("age", "idx_age");
 
         Assert.True(File.Exists(idxPath), "Index file should be created");
         Assert.True(new FileInfo(idxPath).Length > 0, "Index file should not be empty");
 
         // Query age between 25 and 30 (inclusive) — pages are in the .idx file
-        var results = col.QueryIndex("idx_age", 25, 30).ToList();
+        var results = await col.QueryIndexAsync("idx_age", 25, 30).ToListAsync();
         Assert.Equal(6, results.Count);
         foreach (var r in results)
         {
@@ -148,7 +148,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void SeparateIndexFile_IndexQueryWorksAfterRestart()
+    public async Task SeparateIndexFile_IndexQueryWorksAfterRestart()
     {
         var dbPath  = Path.Combine(_tempDir, "idxr.db");
         var idxPath = Path.Combine(_tempDir, "idxr.idx");
@@ -159,17 +159,17 @@ public class MultiFileEndToEndTests : IDisposable
         {
             var col = engine.GetOrCreateCollection("products", BsonIdType.Int32);
             for (int i = 1; i <= 10; i++)
-                col.Insert(MakeDoc(col, i, $"Prod{i}", 100 + i));
-            engine.Commit();
-            col.CreateIndex("age", "idx_price");
-            engine.Commit(); // commit B-tree entries written during index creation
+                await col.InsertAsync(MakeDoc(col, i, $"Prod{i}", 100 + i));
+            await engine.CommitAsync();
+            await col.CreateIndexAsync("age", "idx_price");
+            await engine.CommitAsync(); // commit B-tree entries written during index creation
         }
 
         // Second lifetime: index still usable
         using (var engine = new BLiteEngine(dbPath, config))
         {
-            var col     = engine.GetOrCreateCollection("products", BsonIdType.Int32);
-            var results = col.QueryIndex("idx_price", 105, 107).ToList();
+            var col = engine.GetOrCreateCollection("products", BsonIdType.Int32);
+            var results = await col.QueryIndexAsync("idx_price", 105, 107).ToListAsync();
             Assert.Equal(3, results.Count);
             foreach (var r in results)
             {
@@ -180,7 +180,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void SeparateIndexFile_MultipleCollectionsBothUseIndexFile()
+    public async Task SeparateIndexFile_MultipleCollectionsBothUseIndexFile()
     {
         var dbPath  = Path.Combine(_tempDir, "idxmc.db");
         var idxPath = Path.Combine(_tempDir, "idxmc.idx");
@@ -192,17 +192,17 @@ public class MultiFileEndToEndTests : IDisposable
 
         for (int i = 1; i <= 5; i++)
         {
-            colA.Insert(MakeDoc(colA, i, $"A{i}", 10 + i));
-            colB.Insert(MakeDoc(colB, i, $"B{i}", 50 + i));
+            await colA.InsertAsync(MakeDoc(colA, i, $"A{i}", 10 + i));
+            await colB.InsertAsync(MakeDoc(colB, i, $"B{i}", 50 + i));
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
-        colA.CreateIndex("age", "idx_age_a");
-        colB.CreateIndex("age", "idx_age_b");
+        await colA.CreateIndexAsync("age", "idx_age_a");
+        await colB.CreateIndexAsync("age", "idx_age_b");
 
         // Both indexes should be readable and routed to the index file
-        var ra = colA.QueryIndex("idx_age_a", 12, 14).ToList();
-        var rb = colB.QueryIndex("idx_age_b", 52, 54).ToList();
+        var ra = await colA.QueryIndexAsync("idx_age_a", 12, 14).ToListAsync();
+        var rb = await colB.QueryIndexAsync("idx_age_b", 52, 54).ToListAsync();
 
         Assert.Equal(3, ra.Count);
         Assert.Equal(3, rb.Count);
@@ -213,7 +213,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PerCollectionFiles_InsertAndFindById()
+    public async Task PerCollectionFiles_InsertAndFindById()
     {
         var dbPath  = Path.Combine(_tempDir, "coll.db");
         var collDir = Path.Combine(_tempDir, "coll_data");
@@ -222,10 +222,10 @@ public class MultiFileEndToEndTests : IDisposable
         using var engine = new BLiteEngine(dbPath, config);
         var col = engine.GetOrCreateCollection("users", BsonIdType.Int32);
 
-        var id = col.Insert(MakeDoc(col, 42, "Alice", 30));
-        engine.Commit();
+        var id = await col.InsertAsync(MakeDoc(col, 42, "Alice", 30));
+        await engine.CommitAsync();
 
-        var found = col.FindById(id);
+        var found = await col.FindByIdAsync(id);
         Assert.NotNull(found);
         Assert.True(found!.TryGetString("name", out var name));
         Assert.Equal("Alice", name);
@@ -236,7 +236,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void PerCollectionFiles_Update_ModifiesDocument()
+    public async Task PerCollectionFiles_Update_ModifiesDocument()
     {
         var dbPath  = Path.Combine(_tempDir, "collupd.db");
         var collDir = Path.Combine(_tempDir, "collupd_data");
@@ -245,24 +245,24 @@ public class MultiFileEndToEndTests : IDisposable
         using var engine = new BLiteEngine(dbPath, config);
         var col = engine.GetOrCreateCollection("users", BsonIdType.Int32);
 
-        col.Insert(MakeDoc(col, 1, "Alice", 30));
-        engine.Commit();
+        await col.InsertAsync(MakeDoc(col, 1, "Alice", 30));
+        await engine.CommitAsync();
 
         var updated = col.CreateDocument(["_id", "name", "age"], b => b
             .AddId((BsonId)1)
             .AddString("name", "Alicia")
             .AddInt32("age", 31));
-        Assert.True(col.Update((BsonId)1, updated));
-        engine.Commit();
+        Assert.True(await col.UpdateAsync((BsonId)1, updated));
+        await engine.CommitAsync();
 
-        var found = col.FindById((BsonId)1);
+        var found = await col.FindByIdAsync((BsonId)1);
         Assert.NotNull(found);
         Assert.True(found!.TryGetString("name", out var n));
         Assert.Equal("Alicia", n);
     }
 
     [Fact]
-    public void PerCollectionFiles_Delete_RemovesDocument()
+    public async Task PerCollectionFiles_Delete_RemovesDocument()
     {
         var dbPath  = Path.Combine(_tempDir, "colldel.db");
         var collDir = Path.Combine(_tempDir, "colldel_data");
@@ -271,16 +271,16 @@ public class MultiFileEndToEndTests : IDisposable
         using var engine = new BLiteEngine(dbPath, config);
         var col = engine.GetOrCreateCollection("orders", BsonIdType.Int32);
 
-        col.Insert(MakeDoc(col, 1, "Order1", 100));
-        col.Insert(MakeDoc(col, 2, "Order2", 200));
-        engine.Commit();
+        await col.InsertAsync(MakeDoc(col, 1, "Order1", 100));
+        await col.InsertAsync(MakeDoc(col, 2, "Order2", 200));
+        await engine.CommitAsync();
 
-        Assert.True(col.Delete((BsonId)1));
-        engine.Commit();
+        Assert.True(await col.DeleteAsync((BsonId)1));
+        await engine.CommitAsync();
 
-        Assert.Null(col.FindById((BsonId)1));
-        Assert.NotNull(col.FindById((BsonId)2));
-        Assert.Equal(1, col.Count());
+        Assert.Null(await col.FindByIdAsync((BsonId)1));
+        Assert.NotNull(await col.FindByIdAsync((BsonId)2));
+        Assert.Equal(1, await col.CountAsync());
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -288,7 +288,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PerCollectionFiles_FindAll_ReturnsAllDocuments()
+    public async Task PerCollectionFiles_FindAll_ReturnsAllDocuments()
     {
         var dbPath  = Path.Combine(_tempDir, "scan.db");
         var collDir = Path.Combine(_tempDir, "scan_data");
@@ -300,15 +300,15 @@ public class MultiFileEndToEndTests : IDisposable
         // Insert enough documents to span multiple pages
         const int docCount = 200;
         for (int i = 1; i <= docCount; i++)
-            col.Insert(MakeDoc(col, i, $"Doc{i}", i));
-        engine.Commit();
+            await col.InsertAsync(MakeDoc(col, i, $"Doc{i}", i));
+        await engine.CommitAsync();
 
-        var all = col.FindAll().ToList();
+        var all = (await col.FindAllAsync().ToListAsync());
         Assert.Equal(docCount, all.Count);
     }
 
     [Fact]
-    public void PerCollectionFiles_Scan_FindsAllMatchingDocuments()
+    public async Task PerCollectionFiles_Scan_FindsAllMatchingDocuments()
     {
         var dbPath  = Path.Combine(_tempDir, "scanp.db");
         var collDir = Path.Combine(_tempDir, "scanp_data");
@@ -319,16 +319,15 @@ public class MultiFileEndToEndTests : IDisposable
 
         const int total = 100;
         for (int i = 1; i <= total; i++)
-            col.Insert(MakeDoc(col, i, $"Item{i}", i % 10));  // age cycles 1-9, 0
-        engine.Commit();
+            await col.InsertAsync(MakeDoc(col, i, $"Item{i}", i % 10));  // age cycles 1-9, 0
+        await engine.CommitAsync();
 
         // Scan for age == 5 via Find(predicate)
-        var matched = col.Find(doc =>
+        var matched = await col.FindAsync(doc =>
         {
             doc.TryGetInt32("age", out var age);
             return age == 5;
-        }).ToList();
-
+        }).ToListAsync();
         Assert.Equal(10, matched.Count); // i=5,15,25,...,95
         foreach (var d in matched)
         {
@@ -342,7 +341,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PerCollectionFiles_MultipleCollections_DataIsolated()
+    public async Task PerCollectionFiles_MultipleCollections_DataIsolated()
     {
         var dbPath  = Path.Combine(_tempDir, "iso.db");
         var collDir = Path.Combine(_tempDir, "iso_data");
@@ -353,13 +352,13 @@ public class MultiFileEndToEndTests : IDisposable
         var orders = engine.GetOrCreateCollection("orders", BsonIdType.Int32);
 
         for (int i = 1; i <= 5; i++)
-            users.Insert(MakeDoc(users, i, $"User{i}", 20 + i));
+            await users.InsertAsync(MakeDoc(users, i, $"User{i}", 20 + i));
         for (int i = 1; i <= 3; i++)
-            orders.Insert(MakeDoc(orders, i, $"Order{i}", 100 * i));
-        engine.Commit();
+            await orders.InsertAsync(MakeDoc(orders, i, $"Order{i}", 100 * i));
+        await engine.CommitAsync();
 
-        Assert.Equal(5, users.Count());
-        Assert.Equal(3, orders.Count());
+        Assert.Equal(5, await users.CountAsync());
+        Assert.Equal(3, await orders.CountAsync());
 
         // Separate physical files must exist
         Assert.True(File.Exists(Path.Combine(collDir, "users.db")));
@@ -367,7 +366,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void PerCollectionFiles_DataPersistsAfterEngineRestart()
+    public async Task PerCollectionFiles_DataPersistsAfterEngineRestart()
     {
         var dbPath  = Path.Combine(_tempDir, "persist.db");
         var collDir = Path.Combine(_tempDir, "persist_data");
@@ -378,18 +377,18 @@ public class MultiFileEndToEndTests : IDisposable
         {
             var col = engine.GetOrCreateCollection("customers", BsonIdType.Int32);
             for (int i = 1; i <= 10; i++)
-                col.Insert(MakeDoc(col, i, $"Customer{i}", 30 + i));
-            engine.Commit();
+                await col.InsertAsync(MakeDoc(col, i, $"Customer{i}", 30 + i));
+            await engine.CommitAsync();
         }
 
         // Second lifetime — data must still be there
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("customers", BsonIdType.Int32);
-            var all = col.FindAll().ToList();
+            var all = await col.FindAllAsync().ToListAsync();
             Assert.Equal(10, all.Count);
 
-            var found = col.FindById((BsonId)7);
+            var found = await col.FindByIdAsync((BsonId)7);
             Assert.NotNull(found);
             Assert.True(found!.TryGetString("name", out var n));
             Assert.Equal("Customer7", n);
@@ -397,7 +396,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void PerCollectionFiles_DropCollection_CollectionNoLongerQueryable()
+    public async Task PerCollectionFiles_DropCollection_CollectionNoLongerQueryable()
     {
         var dbPath  = Path.Combine(_tempDir, "drop.db");
         var collDir = Path.Combine(_tempDir, "drop_data");
@@ -405,8 +404,8 @@ public class MultiFileEndToEndTests : IDisposable
 
         using var engine = new BLiteEngine(dbPath, config);
         var col = engine.GetOrCreateCollection("temp", BsonIdType.Int32);
-        col.Insert(MakeDoc(col, 1, "X", 1));
-        engine.Commit();
+        await col.InsertAsync(MakeDoc(col, 1, "X", 1));
+        await engine.CommitAsync();
 
         Assert.True(File.Exists(Path.Combine(collDir, "temp.db")),
             "Collection file must exist before drop");
@@ -416,7 +415,7 @@ public class MultiFileEndToEndTests : IDisposable
 
         // Re-opening gives an empty collection
         var reopened = engine.GetOrCreateCollection("temp", BsonIdType.Int32);
-        Assert.Equal(0, reopened.Count());
+        Assert.Equal(0, await reopened.CountAsync());
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -424,7 +423,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PerCollectionFiles_WalRecovery_RestoresDocumentsAfterRestart()
+    public async Task PerCollectionFiles_WalRecovery_RestoresDocumentsAfterRestart()
     {
         var dbPath  = Path.Combine(_tempDir, "walcoll.db");
         var collDir = Path.Combine(_tempDir, "walcoll_data");
@@ -435,21 +434,21 @@ public class MultiFileEndToEndTests : IDisposable
         {
             var col = engine.GetOrCreateCollection("invoices", BsonIdType.Int32);
             for (int i = 1; i <= 5; i++)
-                col.Insert(MakeDoc(col, i, $"Inv{i}", i * 10));
-            engine.Commit();
-            // No Checkpoint — WAL still contains these writes
+                await col.InsertAsync(MakeDoc(col, i, $"Inv{i}", i * 10));
+            await engine.CommitAsync();
+            // No CheckpointAsync — WAL still contains these writes
         }
 
         // Restart triggers WAL recovery; collection pages must be replayed to the right file
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("invoices", BsonIdType.Int32);
-            var all = col.FindAll().ToList();
+            var all = await col.FindAllAsync().ToListAsync();
             Assert.Equal(5, all.Count);
 
             for (int i = 1; i <= 5; i++)
             {
-                var doc = col.FindById((BsonId)i);
+                var doc = await col.FindByIdAsync((BsonId)i);
                 Assert.NotNull(doc);
                 Assert.True(doc!.TryGetString("name", out var n));
                 Assert.Equal($"Inv{i}", n);
@@ -462,7 +461,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void AllPhasesCombined_FullCrudPlusIndex_MultipleCollections()
+    public async Task AllPhasesCombined_FullCrudPlusIndex_MultipleCollections()
     {
         var dbPath  = Path.Combine(_tempDir, "all.db");
         var walPath = Path.Combine(_tempDir, "wal", "all.wal");
@@ -483,14 +482,14 @@ public class MultiFileEndToEndTests : IDisposable
             var orders = engine.GetOrCreateCollection("orders", BsonIdType.Int32);
 
             for (int i = 1; i <= 20; i++)
-                users.Insert(MakeDoc(users, i, $"User{i}", 18 + i));
+                await users.InsertAsync(MakeDoc(users, i, $"User{i}", 18 + i));
             for (int i = 1; i <= 10; i++)
-                orders.Insert(MakeDoc(orders, i, $"Order{i}", 100 + i));
-            engine.Commit();
+                await orders.InsertAsync(MakeDoc(orders, i, $"Order{i}", 100 + i));
+            await engine.CommitAsync();
 
             // Index on users.age — pages go to the index file
-            users.CreateIndex("age", "idx_users_age");
-            engine.Commit(); // commit B-tree entries written during index creation
+            await users.CreateIndexAsync("age", "idx_users_age");
+            await engine.CommitAsync(); // commit B-tree entries written during index creation
         }
 
         Assert.True(File.Exists(walPath), "WAL at custom path");
@@ -505,11 +504,11 @@ public class MultiFileEndToEndTests : IDisposable
             var orders = engine.GetOrCreateCollection("orders", BsonIdType.Int32);
 
             // FindAll covers per-collection pages
-            Assert.Equal(20, users.Count());
-            Assert.Equal(10, orders.Count());
+            Assert.Equal(20, await users.CountAsync());
+            Assert.Equal(10, await orders.CountAsync());
 
             // Index query on separate-index-file index
-            var over30 = users.QueryIndex("idx_users_age", 30, 40).ToList();
+            var over30 = await users.QueryIndexAsync("idx_users_age", 30, 40).ToListAsync();
             Assert.True(over30.Count > 0);
             foreach (var d in over30)
             {
@@ -518,10 +517,10 @@ public class MultiFileEndToEndTests : IDisposable
             }
 
             // CRUD on collection file
-            Assert.True(users.Delete((BsonId)5));
-            engine.Commit();
-            Assert.Null(users.FindById((BsonId)5));
-            Assert.Equal(19, users.Count());
+            Assert.True(await users.DeleteAsync((BsonId)5));
+            await engine.CommitAsync();
+            Assert.Null(await users.FindByIdAsync((BsonId)5));
+            Assert.Equal(19, await users.CountAsync());
         }
     }
 
@@ -530,7 +529,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void ServerConfig_FullCrudPlusIndexPersistsAcrossRestarts()
+    public async Task ServerConfig_FullCrudPlusIndexPersistsAcrossRestarts()
     {
         var dbPath = Path.Combine(_tempDir, "server_db", "myapp.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -549,21 +548,21 @@ public class MultiFileEndToEndTests : IDisposable
         {
             var col = engine.GetOrCreateCollection("catalog", BsonIdType.Int32);
             for (int i = 1; i <= 15; i++)
-                col.Insert(MakeDoc(col, i, $"Item{i}", 10 * i));
-            engine.Commit();
+                await col.InsertAsync(MakeDoc(col, i, $"Item{i}", 10 * i));
+            await engine.CommitAsync();
 
-            col.CreateIndex("age", "idx_price");
-            engine.Commit(); // commit B-tree entries written during index creation
+            await col.CreateIndexAsync("age", "idx_price");
+            await engine.CommitAsync(); // commit B-tree entries written during index creation
         }
 
         // ── Second lifetime — data and indexes survive restart ────────
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col  = engine.GetOrCreateCollection("catalog", BsonIdType.Int32);
-            var all  = col.FindAll().ToList();
+            var all  = await col.FindAllAsync().ToListAsync();
             Assert.Equal(15, all.Count);
 
-            var cheap = col.QueryIndex("idx_price", 10, 50).ToList();
+            var cheap = await col.QueryIndexAsync("idx_price", 10, 50).ToListAsync();
             Assert.Equal(5, cheap.Count); // items 1-5 (age = 10-50)
         }
     }
@@ -573,7 +572,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void IndexQuery_RangeOnSecondaryIndex_ReturnsCorrectSubset()
+    public async Task IndexQuery_RangeOnSecondaryIndex_ReturnsCorrectSubset()
     {
         var dbPath  = Path.Combine(_tempDir, "iq_range.db");
         var idxPath = Path.Combine(_tempDir, "iq_range.idx");
@@ -590,14 +589,13 @@ public class MultiFileEndToEndTests : IDisposable
                 .AddString("name", $"Product{i}")
                 .AddInt32("price", i * 10)
                 .AddBoolean("instock", i % 2 == 0));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
-        col.CreateIndex("price", "idx_price");
-        engine.Commit();
-
+        await engine.CommitAsync();
+        await col.CreateIndexAsync("price", "idx_price");
+        await engine.CommitAsync();
         // Range: price 100–200 (products 10–20, i.e. 11 items)
-        var range = col.QueryIndex("idx_price", 100, 200).ToList();
+        var range = await col.QueryIndexAsync("idx_price", 100, 200).ToListAsync();
         Assert.Equal(11, range.Count);
         foreach (var d in range)
         {
@@ -607,7 +605,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void IndexQuery_ExactMatch_FindsOnlyMatchingDocument()
+    public async Task IndexQuery_ExactMatch_FindsOnlyMatchingDocument()
     {
         var dbPath  = Path.Combine(_tempDir, "iq_exact.db");
         var idxPath = Path.Combine(_tempDir, "iq_exact.idx");
@@ -623,21 +621,20 @@ public class MultiFileEndToEndTests : IDisposable
                 .AddId((BsonId)i)
                 .AddString("name", $"User{i}")
                 .AddInt32("score", i * 5));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
-        col.CreateIndex("score", "idx_score");
-        engine.Commit();
-
+        await engine.CommitAsync();
+        await col.CreateIndexAsync("score", "idx_score");
+        await engine.CommitAsync();
         // Exact: score == 50 (only user 10)
-        var exact = col.QueryIndex("idx_score", 50, 50).ToList();
+        var exact = await col.QueryIndexAsync("idx_score", 50, 50).ToListAsync();
         Assert.Single(exact);
         Assert.True(exact[0].TryGetInt32("score", out var s));
         Assert.Equal(50, s);
     }
 
     [Fact]
-    public void IndexQuery_AfterEngineRestart_IndexStillWorks()
+    public async Task IndexQuery_AfterEngineRestart_IndexStillWorks()
     {
         var dbPath  = Path.Combine(_tempDir, "iq_restart.db");
         var idxPath = Path.Combine(_tempDir, "iq_restart.idx");
@@ -653,18 +650,18 @@ public class MultiFileEndToEndTests : IDisposable
                 var doc = col.CreateDocument(["_id", "total"], b => b
                     .AddId((BsonId)i)
                     .AddInt32("total", i * 100));
-                col.Insert(doc);
+                await col.InsertAsync(doc);
             }
-            engine.Commit();
-            col.CreateIndex("total", "idx_total");
-            engine.Commit();
+            await engine.CommitAsync();
+            await col.CreateIndexAsync("total", "idx_total");
+            await engine.CommitAsync();
         }
 
         // Second lifetime: index must still be queryable from the separate index file
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("orders", BsonIdType.Int32);
-            var results = col.QueryIndex("idx_total", 1000, 2000).ToList();
+            var results = await col.QueryIndexAsync("idx_total", 1000, 2000).ToListAsync();
             // totals 1000, 1100, ..., 2000 → items 10..20 → 11 results
             Assert.Equal(11, results.Count);
             foreach (var d in results)
@@ -680,7 +677,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void NonIndexedQuery_FindWithPredicate_ScansAllCollectionPages()
+    public async Task NonIndexedQuery_FindWithPredicate_ScansAllCollectionPages()
     {
         var dbPath  = Path.Combine(_tempDir, "ni_scan.db");
         var collDir = Path.Combine(_tempDir, "ni_scan_data");
@@ -696,17 +693,16 @@ public class MultiFileEndToEndTests : IDisposable
                 .AddId((BsonId)i)
                 .AddString("type", i % 3 == 0 ? "special" : "normal")
                 .AddInt32("value", i));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
         // 150/3 = 50 special entries — Find uses full scan (no index on "type")
-        var specials = col.Find(d =>
+        var specials = await col.FindAsync(d =>
         {
             d.TryGetString("type", out var t);
             return t == "special";
-        }).ToList();
-
+        }).ToListAsync();
         Assert.Equal(50, specials.Count);
         foreach (var d in specials)
         {
@@ -716,7 +712,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void NonIndexedQuery_BooleanField_FilterWorks()
+    public async Task NonIndexedQuery_BooleanField_FilterWorks()
     {
         var dbPath  = Path.Combine(_tempDir, "ni_bool.db");
         var collDir = Path.Combine(_tempDir, "ni_bool_data");
@@ -730,16 +726,15 @@ public class MultiFileEndToEndTests : IDisposable
             var doc = col.CreateDocument(["_id", "active"], b => b
                 .AddId((BsonId)i)
                 .AddBoolean("active", i % 4 == 0));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
-        var active = col.Find(d =>
+        var active = await col.FindAsync(d =>
         {
             if (!d.TryGetValue("active", out var v)) return false;
             return v.AsBoolean;
-        }).ToList();
-
+        }).ToListAsync();
         Assert.Equal(10, active.Count); // i = 4,8,12,...,40
     }
 
@@ -748,7 +743,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Materialization_AllFieldTypes_RoundTripCorrectly()
+    public async Task Materialization_AllFieldTypes_RoundTripCorrectly()
     {
         var dbPath  = Path.Combine(_tempDir, "mat.db");
         var idxPath = Path.Combine(_tempDir, "mat.idx");
@@ -770,15 +765,15 @@ public class MultiFileEndToEndTests : IDisposable
                     .AddDouble("dbl", 3.14159)
                     .AddBoolean("flag", true)
                     .AddDateTime("ts", now));
-            col.Insert(doc);
-            engine.Commit();
+            await col.InsertAsync(doc);
+            await engine.CommitAsync();
         }
 
         // Restart → read back and verify every field
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col   = engine.GetOrCreateCollection("typed", BsonIdType.Int32);
-            var found = col.FindById((BsonId)1);
+            var found = await col.FindByIdAsync((BsonId)1);
             Assert.NotNull(found);
 
             Assert.True(found!.TryGetString("sval", out var s));
@@ -806,7 +801,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void Materialization_NullAndMissingFields_HandledCorrectly()
+    public async Task Materialization_NullAndMissingFields_HandledCorrectly()
     {
         var dbPath  = Path.Combine(_tempDir, "mat_null.db");
         var collDir = Path.Combine(_tempDir, "mat_null_data");
@@ -820,10 +815,10 @@ public class MultiFileEndToEndTests : IDisposable
             .AddId((BsonId)1)
             .AddString("present", "yes")
             .AddNull("absent"));
-        col.Insert(doc);
-        engine.Commit();
+        await col.InsertAsync(doc);
+        await engine.CommitAsync();
 
-        var found = col.FindById((BsonId)1);
+        var found = await col.FindByIdAsync((BsonId)1);
         Assert.NotNull(found);
         Assert.True(found!.TryGetString("present", out var p));
         Assert.Equal("yes", p);
@@ -837,7 +832,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void Materialization_MultipleDocuments_EachFieldRoundTrips()
+    public async Task Materialization_MultipleDocuments_EachFieldRoundTrips()
     {
         var dbPath  = Path.Combine(_tempDir, "mat_multi.db");
         var idxPath = Path.Combine(_tempDir, "mat_multi.idx");
@@ -854,16 +849,16 @@ public class MultiFileEndToEndTests : IDisposable
                 .AddString("label", $"Record{i:D3}")
                 .AddInt32("count", i * 7)
                 .AddDouble("rate", i * 1.1));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
-        var all = col.FindAll().ToList();
+        var all = await col.FindAllAsync().ToListAsync();
         Assert.Equal(10, all.Count);
 
         for (int i = 1; i <= 10; i++)
         {
-            var d = col.FindById((BsonId)i);
+            var d = await col.FindByIdAsync((BsonId)i);
             Assert.NotNull(d);
             Assert.True(d!.TryGetString("label", out var lbl));
             Assert.Equal($"Record{i:D3}", lbl);
@@ -879,7 +874,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void TimeSeries_InsertAndFindAll_InMultiFileMode()
+    public async Task TimeSeries_InsertAndFindAll_InMultiFileMode()
     {
         var dbPath  = Path.Combine(_tempDir, "ts.db");
         var idxPath = Path.Combine(_tempDir, "ts.idx");
@@ -897,11 +892,11 @@ public class MultiFileEndToEndTests : IDisposable
                 .AddString("sensor", $"sensor_{i}")
                 .AddDateTime("ts", now.AddSeconds(-i))
                 .AddDouble("value", i * 0.5));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
-        var all = col.FindAll().ToList();
+        var all = await col.FindAllAsync().ToListAsync();
         Assert.Equal(10, all.Count);
 
         foreach (var d in all)
@@ -914,7 +909,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void TimeSeries_PersistsAcrossEngineRestart_InMultiFileMode()
+    public async Task TimeSeries_PersistsAcrossEngineRestart_InMultiFileMode()
     {
         var dbPath  = Path.Combine(_tempDir, "tsr.db");
         var idxPath = Path.Combine(_tempDir, "tsr.idx");
@@ -934,16 +929,16 @@ public class MultiFileEndToEndTests : IDisposable
                 var doc = col.CreateDocument(["sensor", "ts"], b => b
                     .AddString("sensor", $"s{i}")
                     .AddDateTime("ts", baseTime.AddSeconds(-i)));
-                col.Insert(doc);
+                await col.InsertAsync(doc);
             }
-            engine.Commit();
+            await engine.CommitAsync();
         }
 
         // Second lifetime — data must survive restart
         using (var engine = new BLiteEngine(dbPath, config))
         {
             var col = engine.GetOrCreateCollection("sensors");
-            var all = col.FindAll().ToList();
+            var all = await col.FindAllAsync().ToListAsync();
             Assert.Equal(5, all.Count);
 
             foreach (var d in all)
@@ -955,7 +950,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void TimeSeries_ForcePrune_RemovesExpiredDocs_InMultiFileMode()
+    public async Task TimeSeries_ForcePrune_RemovesExpiredDocs_InMultiFileMode()
     {
         var dbPath  = Path.Combine(_tempDir, "tsp.db");
         var collDir = Path.Combine(_tempDir, "tsp_data");
@@ -972,22 +967,21 @@ public class MultiFileEndToEndTests : IDisposable
             var expired = col.CreateDocument(["sensor", "ts"], b => b
                 .AddString("sensor", $"old_{i}")
                 .AddDateTime("ts", now.AddDays(-2)));
-            col.Insert(expired);
+            await col.InsertAsync(expired);
         }
         for (int i = 1; i <= 3; i++)
         {
             var fresh = col.CreateDocument(["sensor", "ts"], b => b
                 .AddString("sensor", $"new_{i}")
                 .AddDateTime("ts", now));
-            col.Insert(fresh);
+            await col.InsertAsync(fresh);
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
-        col.ForcePrune();
-
+        await col.ForcePruneAsync();
         // Pages where only old docs lived are freed; fresh docs remain visible
-        var remaining = col.FindAll().ToList();
-        // ForcePrune frees pages dominated by expired timestamps; exact count depends on page packing
+        var remaining = await col.FindAllAsync().ToListAsync();
+        // ForcePruneAsync frees pages dominated by expired timestamps; exact count depends on page packing
         // The fresh docs should all be present (they're on a separate page)
         var freshCount = remaining.Count(d => { d.TryGetString("sensor", out var s); return s?.StartsWith("new_") == true; });
         Assert.Equal(3, freshCount);
@@ -1077,7 +1071,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void KvStore_CoexistsWithDocumentCollections_NoInterference()
+    public async Task KvStore_CoexistsWithDocumentCollections_NoInterference()
     {
         var dbPath  = Path.Combine(_tempDir, "kvco.db");
         var walPath = Path.Combine(_tempDir, "wal", "kvco.wal");
@@ -1098,9 +1092,9 @@ public class MultiFileEndToEndTests : IDisposable
             var doc = col.CreateDocument(["_id", "text"], b => b
                 .AddId((BsonId)i)
                 .AddString("text", $"Doc{i}"));
-            col.Insert(doc);
+            await col.InsertAsync(doc);
         }
-        engine.Commit();
+        await engine.CommitAsync();
 
         // Both should be independently readable
         for (int i = 1; i <= 10; i++)
@@ -1110,10 +1104,10 @@ public class MultiFileEndToEndTests : IDisposable
             Assert.Equal($"value{i}", System.Text.Encoding.UTF8.GetString(val!));
         }
 
-        Assert.Equal(20, col.Count());
+        Assert.Equal(20, await col.CountAsync());
         for (int i = 1; i <= 20; i++)
         {
-            var d = col.FindById((BsonId)i);
+            var d = await col.FindByIdAsync((BsonId)i);
             Assert.NotNull(d);
             Assert.True(d!.TryGetString("text", out var t));
             Assert.Equal($"Doc{i}", t);
@@ -1125,7 +1119,7 @@ public class MultiFileEndToEndTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Overflow_LargeDocument_StoredAndRetrievedCorrectly_InCollectionFile()
+    public async Task Overflow_LargeDocument_StoredAndRetrievedCorrectly_InCollectionFile()
     {
         // DocumentCollection (typed path via TestDbContext) supports overflow.
         // We exercise this through BLiteEngine using a plain collection that has enough
@@ -1140,10 +1134,10 @@ public class MultiFileEndToEndTests : IDisposable
         {
             // 25KB payload → exceeds single page (16 KB default) → triggers overflow chain
             var largePayload = new string('X', 25 * 1024);
-            var id = dbCtx.Entries.Insert(new MultiFileEntry { Payload = largePayload, Tag = "overflow-test" });
-            dbCtx.SaveChanges();
+            var id = await dbCtx.Entries.InsertAsync(new MultiFileEntry { Payload = largePayload, Tag = "overflow-test" });
+            await dbCtx.SaveChangesAsync();
 
-            var found = dbCtx.Entries.FindById(id);
+            var found = await dbCtx.Entries.FindByIdAsync(id);
             Assert.NotNull(found);
             Assert.Equal(largePayload.Length, found!.Payload.Length);
             Assert.Equal("overflow-test", found.Tag);
@@ -1155,7 +1149,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void Overflow_LargeDocument_PersistsAcrossEngineRestart_InCollectionFile()
+    public async Task Overflow_LargeDocument_PersistsAcrossEngineRestart_InCollectionFile()
     {
         var dbPath  = Path.Combine(_tempDir, "ovfr.db");
         var collDir = Path.Combine(_tempDir, "ovfr_data");
@@ -1166,14 +1160,14 @@ public class MultiFileEndToEndTests : IDisposable
         // Write
         using (var dbCtx = new MultiFileTestDbContext(dbPath, config))
         {
-            dbCtx.Entries.Insert(new MultiFileEntry { Payload = largePayload, Tag = "restart-overflow" });
-            dbCtx.SaveChanges();
+            await dbCtx.Entries.InsertAsync(new MultiFileEntry { Payload = largePayload, Tag = "restart-overflow" });
+            await dbCtx.SaveChangesAsync();
         }
 
         // Read after restart
         using (var dbCtx = new MultiFileTestDbContext(dbPath, config))
         {
-            var all = dbCtx.Entries.FindAll().ToList();
+            var all = await dbCtx.Entries.FindAllAsync().ToListAsync();
             Assert.Single(all);
             Assert.Equal(largePayload.Length, all[0].Payload.Length);
             Assert.Equal("restart-overflow", all[0].Tag);
@@ -1181,7 +1175,7 @@ public class MultiFileEndToEndTests : IDisposable
     }
 
     [Fact]
-    public void Overflow_MixedSizeDocuments_AllRetrievableFromCollectionFile()
+    public async Task Overflow_MixedSizeDocuments_AllRetrievableFromCollectionFile()
     {
         var dbPath  = Path.Combine(_tempDir, "ovfmix.db");
         var idxPath = Path.Combine(_tempDir, "ovfmix.idx");
@@ -1200,13 +1194,13 @@ public class MultiFileEndToEndTests : IDisposable
             new() { Payload = "small3",                         Tag = "small" },
         };
 
-        var ids = dbCtx.Entries.InsertBulk(entries);
-        dbCtx.SaveChanges();
+        var ids = await dbCtx.Entries.InsertBulkAsync(entries);
+        await dbCtx.SaveChangesAsync();
 
         Assert.Equal(5, ids.Count);
 
         // Verify all round-trip correctly
-        var all = dbCtx.Entries.FindAll().ToList();
+        var all = await dbCtx.Entries.FindAllAsync().ToListAsync();
         Assert.Equal(5, all.Count);
 
         var smalls  = all.Where(e => e.Tag == "small").ToList();

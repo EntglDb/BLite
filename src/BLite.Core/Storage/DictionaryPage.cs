@@ -75,7 +75,7 @@ public struct DictionaryPage
             return false; // Page Full
         }
 
-        // 1. Prepare Data
+        // 1. PrepareAsync Data
         var insertionOffset = (ushort)(freeSpaceEnd - entrySize);
         page[insertionOffset] = (byte)keyByteCount; // Write Key Length
         Encoding.UTF8.GetBytes(key, page.Slice(insertionOffset + 1, keyByteCount)); // Write Key
@@ -97,11 +97,11 @@ public struct DictionaryPage
         // Write new offset
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(page.Slice(OffsetsStart + (insertIndex * 2)), insertionOffset);
 
-        // 3. Update Metadata
+        // 3. UpdateAsync Metadata
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(page.Slice(CountOffset), (ushort)(count + 1));
         System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(page.Slice(FreeSpaceEndOffset), insertionOffset);
         
-        // Update FreeBytes in header (approximate)
+        // UpdateAsync FreeBytes in header (approximate)
         var pageHeader = PageHeader.ReadFrom(page);
         pageHeader.FreeBytes = (ushort)(insertionOffset - (OffsetsStart + ((count + 1) * 2)));
         pageHeader.WriteTo(page);

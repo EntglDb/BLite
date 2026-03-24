@@ -32,7 +32,7 @@ public class AsyncReadTests : IDisposable
     public async Task DocumentCollection_FindByIdAsync_ReturnsInsertedDocument()
     {
         using var db = new TestDbContext(_dbPath);
-        db.AsyncDocs.Insert(new AsyncDoc { Id = 1, Name = "Alpha" });
+        await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 1, Name = "Alpha" });
 
         var doc = await db.AsyncDocs.FindByIdAsync(1);
 
@@ -55,7 +55,7 @@ public class AsyncReadTests : IDisposable
     {
         using var db = new TestDbContext(_dbPath);
         for (int i = 1; i <= 5; i++)
-            db.AsyncDocs.Insert(new AsyncDoc { Id = i + 100, Name = $"Doc{i}" });
+            await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = i + 100, Name = $"Doc{i}" });
 
         var results = new List<AsyncDoc>();
         await foreach (var doc in db.AsyncDocs.FindAllAsync())
@@ -83,7 +83,7 @@ public class AsyncReadTests : IDisposable
         using var db = new TestDbContext(_dbPath);
         using var txn = await db.BeginTransactionAsync();
 
-        db.AsyncDocs.Insert(new AsyncDoc { Id = 200, Name = "Uncommitted" });
+        await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 200, Name = "Uncommitted" });
 
         // Should still be visible in the same transaction scope (RYOW)
         var doc = await db.AsyncDocs.FindByIdAsync(200);
@@ -96,7 +96,7 @@ public class AsyncReadTests : IDisposable
     {
         using var db = new TestDbContext(_dbPath);
         for (int i = 1; i <= 20; i++)
-            db.AsyncDocs.Insert(new AsyncDoc { Id = i + 300, Name = $"CancelDoc{i}" });
+            await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = i + 300, Name = $"CancelDoc{i}" });
 
         // Pre-cancel so the first MoveNextAsync after the first yield throws immediately.
         using var cts = new CancellationTokenSource();
@@ -117,8 +117,8 @@ public class AsyncReadTests : IDisposable
     public async Task DynamicCollection_FindByIdAsync_ReturnsInsertedDocument()
     {
         using var engine = new BLiteEngine(_dbPath);
-        var id = engine.Insert("items", engine.CreateDocument(["name"], b => b.AddString("name", "Widget")));
-        engine.Commit();
+        var id = await engine.InsertAsync("items", engine.CreateDocument(["name"], b => b.AddString("name", "Widget")));
+        await engine.CommitAsync();
 
         var doc = await engine.FindByIdAsync("items", id);
 
@@ -131,8 +131,8 @@ public class AsyncReadTests : IDisposable
     public async Task DynamicCollection_FindByIdAsync_ReturnsNull_WhenMissing()
     {
         using var engine = new BLiteEngine(_dbPath);
-        engine.Insert("items", engine.CreateDocument(["name"], b => b.AddString("name", "X")));
-        engine.Commit();
+        await engine.InsertAsync("items", engine.CreateDocument(["name"], b => b.AddString("name", "X")));
+        await engine.CommitAsync();
 
         var doc = await engine.FindByIdAsync("items", new BsonId(ObjectId.NewObjectId()));
 
@@ -144,8 +144,8 @@ public class AsyncReadTests : IDisposable
     {
         using var engine = new BLiteEngine(_dbPath);
         for (int i = 1; i <= 4; i++)
-            engine.Insert("things", engine.CreateDocument(["n"], b => b.AddInt32("n", i)));
-        engine.Commit();
+            await engine.InsertAsync("things", engine.CreateDocument(["n"], b => b.AddInt32("n", i)));
+        await engine.CommitAsync();
 
         var results = new List<BsonDocument>();
         await foreach (var doc in engine.FindAllAsync("things"))

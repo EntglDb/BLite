@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -38,7 +39,7 @@ public class CircularReferenceTests : IDisposable
     // ========================================
 
     [Fact]
-    public void SelfReference_InsertAndQuery_ShouldWork()
+    public async Task SelfReference_InsertAndQuery_ShouldWork()
     {
         // Arrange: Create organizational hierarchy using ObjectId references
         var ceoId = ObjectId.NewObjectId();
@@ -83,13 +84,13 @@ public class CircularReferenceTests : IDisposable
         };
 
         // Act: Insert all employees
-        _context.Employees.Insert(ceo);
-        _context.Employees.Insert(manager1);
-        _context.Employees.Insert(manager2);
-        _context.Employees.Insert(developer);
+        await _context.Employees.InsertAsync(ceo);
+        await _context.Employees.InsertAsync(manager1);
+        await _context.Employees.InsertAsync(manager2);
+        await _context.Employees.InsertAsync(developer);
 
         // Assert: Query and verify
-        var queriedCeo = _context.Employees.FindById(ceoId);
+        var queriedCeo = await _context.Employees.FindByIdAsync(ceoId);
         Assert.NotNull(queriedCeo);
         Assert.Equal("Alice CEO", queriedCeo.Name);
         Assert.NotNull(queriedCeo.DirectReportIds);
@@ -98,7 +99,7 @@ public class CircularReferenceTests : IDisposable
         Assert.Contains(manager2Id, queriedCeo.DirectReportIds);
         
         // Query manager and verify direct reports
-        var queriedManager1 = _context.Employees.FindById(manager1Id);
+        var queriedManager1 = await _context.Employees.FindByIdAsync(manager1Id);
         Assert.NotNull(queriedManager1);
         Assert.Equal(ceoId, queriedManager1.ManagerId);
         Assert.NotNull(queriedManager1.DirectReportIds);
@@ -106,7 +107,7 @@ public class CircularReferenceTests : IDisposable
         Assert.Contains(developerId, queriedManager1.DirectReportIds);
         
         // Query developer and verify no direct reports
-        var queriedDeveloper = _context.Employees.FindById(developerId);
+        var queriedDeveloper = await _context.Employees.FindByIdAsync(developerId);
         Assert.NotNull(queriedDeveloper);
         Assert.Equal(manager1Id, queriedDeveloper.ManagerId);
         // Empty list is acceptable (same as null semantically - no direct reports)
@@ -114,7 +115,7 @@ public class CircularReferenceTests : IDisposable
     }
 
     [Fact]
-    public void SelfReference_UpdateDirectReports_ShouldPersist()
+    public async Task SelfReference_UpdateDirectReports_ShouldPersist()
     {
         // Arrange: Create manager with one direct report
         var managerId = ObjectId.NewObjectId();
@@ -145,16 +146,15 @@ public class CircularReferenceTests : IDisposable
             ManagerId = managerId
         };
 
-        _context.Employees.Insert(manager);
-        _context.Employees.Insert(employee1);
-        _context.Employees.Insert(employee2);
+        await _context.Employees.InsertAsync(manager);
+        await _context.Employees.InsertAsync(employee1);
+        await _context.Employees.InsertAsync(employee2);
 
         // Act: Add another direct report
         manager.DirectReportIds?.Add(employee2Id);
-        _context.Employees.Update(manager);
-
+        await _context.Employees.UpdateAsync(manager);
         // Assert: Verify update persisted
-        var queried = _context.Employees.FindById(managerId);
+        var queried = await _context.Employees.FindByIdAsync(managerId);
         Assert.NotNull(queried?.DirectReportIds);
         Assert.Equal(2, queried.DirectReportIds.Count);
         Assert.Contains(employee1Id, queried.DirectReportIds);
@@ -162,7 +162,7 @@ public class CircularReferenceTests : IDisposable
     }
 
     [Fact]
-    public void SelfReference_QueryByManagerId_ShouldWork()
+    public async Task SelfReference_QueryByManagerId_ShouldWork()
     {
         // Arrange: Create hierarchy
         var managerId = ObjectId.NewObjectId();
@@ -190,15 +190,15 @@ public class CircularReferenceTests : IDisposable
             ManagerId = managerId
         };
 
-        _context.Employees.Insert(manager);
-        _context.Employees.Insert(employee1);
-        _context.Employees.Insert(employee2);
+        await _context.Employees.InsertAsync(manager);
+        await _context.Employees.InsertAsync(employee1);
+        await _context.Employees.InsertAsync(employee2);
 
         // Act: Query all employees with specific manager
-        var subordinates = _context.Employees
+        var subordinates = await _context.Employees
             .AsQueryable()
             .Where(e => e.ManagerId == managerId)
-            .ToList();
+            .ToListAsync();
 
         // Assert: Should find both employees
         Assert.Equal(2, subordinates.Count);
@@ -212,7 +212,7 @@ public class CircularReferenceTests : IDisposable
     // ========================================
 
     [Fact]
-    public void NtoNReferencing_InsertAndQuery_ShouldWork()
+    public async Task NtoNReferencing_InsertAndQuery_ShouldWork()
     {
         // Arrange: Create categories and products with ObjectId references
         var categoryId1 = ObjectId.NewObjectId();
@@ -253,13 +253,13 @@ public class CircularReferenceTests : IDisposable
         };
 
         // Act: Insert all entities
-        _context.CategoryRefs.Insert(electronics);
-        _context.CategoryRefs.Insert(computers);
-        _context.ProductRefs.Insert(laptop);
-        _context.ProductRefs.Insert(phone);
+        await _context.CategoryRefs.InsertAsync(electronics);
+        await _context.CategoryRefs.InsertAsync(computers);
+        await _context.ProductRefs.InsertAsync(laptop);
+        await _context.ProductRefs.InsertAsync(phone);
 
         // Assert: Query and verify references
-        var queriedCategory = _context.CategoryRefs.FindById(categoryId1);
+        var queriedCategory = await _context.CategoryRefs.FindByIdAsync(categoryId1);
         Assert.NotNull(queriedCategory);
         Assert.Equal("Electronics", queriedCategory.Name);
         Assert.NotNull(queriedCategory.ProductIds);
@@ -267,7 +267,7 @@ public class CircularReferenceTests : IDisposable
         Assert.Contains(productId1, queriedCategory.ProductIds);
         Assert.Contains(productId2, queriedCategory.ProductIds);
 
-        var queriedProduct = _context.ProductRefs.FindById(productId1);
+        var queriedProduct = await _context.ProductRefs.FindByIdAsync(productId1);
         Assert.NotNull(queriedProduct);
         Assert.Equal("Laptop", queriedProduct.Name);
         Assert.NotNull(queriedProduct.CategoryIds);
@@ -277,7 +277,7 @@ public class CircularReferenceTests : IDisposable
     }
 
     [Fact]
-    public void NtoNReferencing_UpdateRelationships_ShouldPersist()
+    public async Task NtoNReferencing_UpdateRelationships_ShouldPersist()
     {
         // Arrange: Create category and product
         var categoryId = ObjectId.NewObjectId();
@@ -308,31 +308,30 @@ public class CircularReferenceTests : IDisposable
             CategoryIds = new List<ObjectId>()
         };
 
-        _context.CategoryRefs.Insert(category);
-        _context.ProductRefs.Insert(product1);
-        _context.ProductRefs.Insert(product2);
+        await _context.CategoryRefs.InsertAsync(category);
+        await _context.ProductRefs.InsertAsync(product1);
+        await _context.ProductRefs.InsertAsync(product2);
 
         // Act: Add product2 to category
         category.ProductIds?.Add(productId2);
-        _context.CategoryRefs.Update(category);
-
+        await _context.CategoryRefs.UpdateAsync(category);
         product2.CategoryIds?.Add(categoryId);
-        _context.ProductRefs.Update(product2);
+        await _context.ProductRefs.UpdateAsync(product2);
 
         // Assert: Verify relationships updated
-        var queriedCategory = _context.CategoryRefs.FindById(categoryId);
+        var queriedCategory = await _context.CategoryRefs.FindByIdAsync(categoryId);
         Assert.NotNull(queriedCategory?.ProductIds);
         Assert.Equal(2, queriedCategory.ProductIds.Count);
         Assert.Contains(productId2, queriedCategory.ProductIds);
 
-        var queriedProduct2 = _context.ProductRefs.FindById(productId2);
+        var queriedProduct2 = await _context.ProductRefs.FindByIdAsync(productId2);
         Assert.NotNull(queriedProduct2?.CategoryIds);
         Assert.Single(queriedProduct2.CategoryIds);
         Assert.Contains(categoryId, queriedProduct2.CategoryIds);
     }
 
     [Fact]
-    public void NtoNReferencing_DocumentSize_RemainSmall()
+    public async Task NtoNReferencing_DocumentSize_RemainSmall()
     {
         // Arrange: Create category referencing 100 products (only IDs)
         var categoryId = ObjectId.NewObjectId();
@@ -349,8 +348,8 @@ public class CircularReferenceTests : IDisposable
         };
 
         // Act: Insert and query
-        _context.CategoryRefs.Insert(category);
-        var queried = _context.CategoryRefs.FindById(categoryId);
+        await _context.CategoryRefs.InsertAsync(category);
+        var queried = await _context.CategoryRefs.FindByIdAsync(categoryId);
 
         // Assert: Document remains small (only ObjectIds, no embedding)
         Assert.NotNull(queried);
@@ -361,7 +360,7 @@ public class CircularReferenceTests : IDisposable
     }
 
     [Fact]
-    public void NtoNReferencing_QueryByProductId_ShouldWork()
+    public async Task NtoNReferencing_QueryByProductId_ShouldWork()
     {
         // Arrange: Create multiple categories referencing same product
         var productId = ObjectId.NewObjectId();
@@ -382,14 +381,14 @@ public class CircularReferenceTests : IDisposable
             ProductIds = new List<ObjectId> { productId }
         };
 
-        _context.CategoryRefs.Insert(category1);
-        _context.CategoryRefs.Insert(category2);
+        await _context.CategoryRefs.InsertAsync(category1);
+        await _context.CategoryRefs.InsertAsync(category2);
 
         // Act: Query all categories containing the product
-        var categoriesWithProduct = _context.CategoryRefs
+        var categoriesWithProduct =await _context.CategoryRefs
             .AsQueryable()
             .Where(c => c.ProductIds != null && c.ProductIds.Contains(productId))
-            .ToList();
+            .ToListAsync();
 
         // Assert: Should find both categories
         Assert.Equal(2, categoriesWithProduct.Count);

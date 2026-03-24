@@ -1,5 +1,6 @@
 using BLite.Bson;
 using BLite.Core.Indexing;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -53,10 +54,10 @@ public class EnumIndexTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void CreateIndex_On_Enum_Property_Does_Not_Throw()
+    public async Task CreateIndex_On_Enum_Property_Does_Not_Throw()
     {
         // Should not throw any exception
-        var idx = _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_create");
+        var idx = await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_create");
         Assert.NotNull(idx);
     }
 
@@ -65,26 +66,26 @@ public class EnumIndexTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Seek_By_Enum_Finds_Inserted_Document()
+    public async Task Seek_By_Enum_Finds_Inserted_Document()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_seek");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_seek");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest, "guest-doc"));
-        var adminId = _db.EnumEntities.Insert(MakeEntity(UserRole.Admin, "admin-doc"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.User, "user-doc"));
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest, "guest-doc"));
+        var adminId = await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin, "admin-doc"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.User, "user-doc"));
+        await _db.SaveChangesAsync();
 
         var location = idx.Seek(UserRole.Admin);
         Assert.True(location.HasValue, "Seek by enum value should find the document");
     }
 
     [Fact]
-    public void Seek_By_Enum_Returns_Null_For_Missing_Value()
+    public async Task Seek_By_Enum_Returns_Null_For_Missing_Value()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_seek_miss");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_seek_miss");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest, "guest-doc"));
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest, "guest-doc"));
+        await _db.SaveChangesAsync();
 
         // Admin was never inserted
         var location = idx.Seek(UserRole.Admin);
@@ -109,15 +110,15 @@ public class EnumIndexTests : IDisposable
     ///   Range(User=1, Admin=3) → finds User, Moderator, Admin → 3 results (correct).
     /// </summary>
     [Fact]
-    public void Range_On_Enum_Index_Uses_Numeric_Ordering()
+    public async Task Range_On_Enum_Index_Uses_Numeric_Ordering()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_range");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_range");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "guest"));     // 0
-        _db.EnumEntities.Insert(MakeEntity(UserRole.User,      "user"));      // 1
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "moderator")); // 2
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "admin"));     // 3
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest,     "guest"));     // 0
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.User,      "user"));      // 1
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Moderator, "moderator")); // 2
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin,     "admin"));     // 3
+        await _db.SaveChangesAsync();
 
         // Range [User=1 .. Admin=3] must return 3 documents (User, Moderator, Admin)
         var locations = idx.Range(UserRole.User, UserRole.Admin).ToList();
@@ -126,15 +127,15 @@ public class EnumIndexTests : IDisposable
     }
 
     [Fact]
-    public void Range_Single_Value_Returns_Exactly_One_Doc()
+    public async Task Range_Single_Value_Returns_Exactly_One_Doc()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_range_single");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_range_single");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest, "g1"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.User,  "u1"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.User,  "u2")); // second User
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin, "a1"));
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest, "g1"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.User,  "u1"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.User,  "u2")); // second User
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin, "a1"));
+        await _db.SaveChangesAsync();
 
         var locations = idx.Range(UserRole.User, UserRole.User).ToList();
         Assert.Equal(2, locations.Count); // both User documents
@@ -145,31 +146,30 @@ public class EnumIndexTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void CreateIndex_On_Byte_Enum_And_Seek_Works()
+    public async Task CreateIndex_On_Byte_Enum_And_Seek_Works()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Priority, "idx_priority");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>) await _db.EnumEntities.EnsureIndexAsync(e => e.Priority, "idx_priority");
 
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Low,      Label = "low" });
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.High,     Label = "high" });
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Critical, Label = "critical" });
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.Low,      Label = "low" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.High,     Label = "high" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.Critical, Label = "critical" });
+        await _db.SaveChangesAsync();
 
         var loc = idx.Seek(Priority.High);
         Assert.True(loc.HasValue);
     }
 
     [Fact]
-    public void Range_On_Byte_Enum_Uses_Numeric_Ordering()
+    public async Task Range_On_Byte_Enum_Uses_Numeric_Ordering()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.Priority, "idx_priority_range");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>) await _db.EnumEntities.EnsureIndexAsync(e => e.Priority, "idx_priority_range");
 
         // Priority: Low=0, Normal=1, High=2, Critical=3
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Low,      Label = "a" });
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Normal,   Label = "b" });
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.High,     Label = "c" });
-        _db.EnumEntities.Insert(new EnumEntity { Priority = Priority.Critical, Label = "d" });
-        _db.SaveChanges();
-
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.Low,      Label = "a" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.Normal,   Label = "b" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.High,     Label = "c" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { Priority = Priority.Critical, Label = "d" });
+        await _db.SaveChangesAsync();
         // Range [Normal=1 .. High=2] → 2 docs
         var locs = idx.Range(Priority.Normal, Priority.High).ToList();
         Assert.Equal(2, locs.Count);
@@ -180,17 +180,17 @@ public class EnumIndexTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void CreateIndex_On_Long_Enum_And_Range_Works()
+    public async Task CreateIndex_On_Long_Enum_And_Range_Works()
     {
-        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>)_db.EnumEntities.EnsureIndex(e => e.LastAction, "idx_last_action");
+        var idx = (CollectionSecondaryIndex<ObjectId, EnumEntity>) await _db.EnumEntities.EnsureIndexAsync(e => e.LastAction, "idx_last_action");
 
         // AuditAction: None=0, Created=1, Updated=2, Deleted=3, Archived=100
-        _db.EnumEntities.Insert(new EnumEntity { LastAction = AuditAction.None,     Label = "n" });
-        _db.EnumEntities.Insert(new EnumEntity { LastAction = AuditAction.Created,  Label = "c" });
-        _db.EnumEntities.Insert(new EnumEntity { LastAction = AuditAction.Updated,  Label = "u" });
-        _db.EnumEntities.Insert(new EnumEntity { LastAction = AuditAction.Deleted,  Label = "d" });
-        _db.EnumEntities.Insert(new EnumEntity { LastAction = AuditAction.Archived, Label = "a" });
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(new EnumEntity { LastAction = AuditAction.None,     Label = "n" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { LastAction = AuditAction.Created,  Label = "c" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { LastAction = AuditAction.Updated,  Label = "u" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { LastAction = AuditAction.Deleted,  Label = "d" });
+        await _db.EnumEntities.InsertAsync(new EnumEntity { LastAction = AuditAction.Archived, Label = "a" });
+        await _db.SaveChangesAsync();
 
         // Range [Created=1 .. Deleted=3] → 3 docs
         var locs = idx.Range(AuditAction.Created, AuditAction.Deleted).ToList();
@@ -207,10 +207,10 @@ public class EnumIndexTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void EnsureIndex_Called_Twice_Does_Not_Throw()
+    public async Task EnsureIndex_Called_Twice_Does_Not_Throw()
     {
-        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_idempotent");
-        var ex = Record.Exception(() => _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_idempotent"));
+        await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_idempotent");
+        var ex = await Record.ExceptionAsync(() => _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_idempotent"));
         Assert.Null(ex);
     }
 
@@ -223,19 +223,18 @@ public class EnumIndexTests : IDisposable
     /// and its deserialized Role property is correct.
     /// </summary>
     [Fact]
-    public void QueryIndex_Exact_Enum_Returns_Document_With_Correct_Role()
+    public async Task QueryIndex_Exact_Enum_Returns_Document_With_Correct_Role()
     {
-        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_query_exact");
+        await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_query_exact");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "guest"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "admin"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "moderator"));
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest,     "guest"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin,     "admin"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Moderator, "moderator"));
+        await _db.SaveChangesAsync();
 
-        var results = _db.EnumEntities
-            .QueryIndex("idx_role_query_exact", UserRole.Admin, UserRole.Admin)
-            .ToList();
-
+        var results = await _db.EnumEntities
+            .QueryIndexAsync("idx_role_query_exact", UserRole.Admin, UserRole.Admin)
+            .ToListAsync();
         Assert.Single(results);
         Assert.Equal(UserRole.Admin, results[0].Role);
         Assert.Equal("admin", results[0].Label);
@@ -246,20 +245,19 @@ public class EnumIndexTests : IDisposable
     /// [User=1 .. Admin=3], verifying both count and the actual Role values.
     /// </summary>
     [Fact]
-    public void QueryIndex_Range_Enum_Returns_Documents_With_Correct_Roles()
+    public async Task QueryIndex_Range_Enum_Returns_Documents_With_Correct_Roles()
     {
-        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_query_range");
+        await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_query_range");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "guest"));     // 0 – outside range
-        _db.EnumEntities.Insert(MakeEntity(UserRole.User,      "user"));      // 1
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "moderator")); // 2
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "admin"));     // 3
-        _db.SaveChanges();
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest,     "guest"));     // 0 – outside range
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.User,      "user"));      // 1
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Moderator, "moderator")); // 2
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin,     "admin"));     // 3
+        await _db.SaveChangesAsync();
 
-        var results = _db.EnumEntities
-            .QueryIndex("idx_role_query_range", UserRole.User, UserRole.Admin)
-            .ToList();
-
+        var results = await _db.EnumEntities
+            .QueryIndexAsync("idx_role_query_range", UserRole.User, UserRole.Admin)
+            .ToListAsync();
         Assert.Equal(3, results.Count);
         Assert.All(results, e => Assert.True(e.Role >= UserRole.User && e.Role <= UserRole.Admin));
         Assert.DoesNotContain(results, e => e.Role == UserRole.Guest);
@@ -270,21 +268,20 @@ public class EnumIndexTests : IDisposable
     /// property returns only the matching documents with the correct Role.
     /// </summary>
     [Fact]
-    public void AsQueryable_Where_On_Indexed_Enum_Returns_Correct_Documents()
+    public async Task AsQueryable_Where_On_Indexed_Enum_Returns_Correct_Documents()
     {
-        _db.EnumEntities.EnsureIndex(e => e.Role, "idx_role_linq");
+        await _db.EnumEntities.EnsureIndexAsync(e => e.Role, "idx_role_linq");
 
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Guest,     "g1"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.User,      "u1"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Moderator, "mod1"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "a1"));
-        _db.EnumEntities.Insert(MakeEntity(UserRole.Admin,     "a2")); // second Admin
-        _db.SaveChanges();
-
-        var results = _db.EnumEntities
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Guest,     "g1"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.User,      "u1"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Moderator, "mod1"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin,     "a1"));
+        await _db.EnumEntities.InsertAsync(MakeEntity(UserRole.Admin,     "a2")); // second Admin
+        await _db.SaveChangesAsync();
+        var results = await _db.EnumEntities
             .AsQueryable()
             .Where(e => e.Role == UserRole.Admin)
-            .ToList();
+            .ToListAsync();
 
         Assert.Equal(2, results.Count);
         Assert.All(results, e => Assert.Equal(UserRole.Admin, e.Role));

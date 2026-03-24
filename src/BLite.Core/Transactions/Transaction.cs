@@ -60,7 +60,7 @@ public sealed class Transaction : ITransaction
     /// <summary>
     /// Prepares the transaction for commit (2PC first phase)
     /// </summary>
-    public bool Prepare()
+    public async Task<bool> PrepareAsync()
     {
         if (_state != TransactionState.Active)
             return false;
@@ -68,32 +68,7 @@ public sealed class Transaction : ITransaction
         _state = TransactionState.Preparing;
         
         // StorageEngine handles WAL writes
-        return _storage.PrepareTransaction(_transactionId);
-    }
-
-    /// <summary>
-    /// Commits the transaction.
-    /// Writes to WAL for durability and moves data to committed buffer.
-    /// Pages remain in memory until CheckpointManager writes them to disk.
-    /// </summary>
-    public void Commit()
-    {
-        if (_state != TransactionState.Preparing && _state != TransactionState.Active)
-            throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
-        
-        // StorageEngine handles WAL writes and buffer management
-        _storage.CommitTransaction(_transactionId);
-
-        _state = TransactionState.Committed;
-
-        // Publish CDC events after successful commit
-        if (_pendingChanges.Count > 0 && _storage.Cdc != null)
-        {
-            foreach (var change in _pendingChanges)
-            {
-                _storage.Cdc.Publish(change);
-            }
-        }
+        return await _storage.PrepareTransactionAsync(_transactionId);
     }
 
     public async Task CommitAsync(CancellationToken ct = default)
@@ -117,32 +92,17 @@ public sealed class Transaction : ITransaction
     }
 
     /// <summary>
-    /// Marks the transaction as committed without writing to PageFile.
-    /// Used by TransactionManager with lazy checkpointing.
-    /// </summary>
-    internal void MarkCommitted()
-    {
-        if (_state != TransactionState.Preparing && _state != TransactionState.Active)
-            throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
-
-        // StorageEngine marks transaction as committed and moves to committed buffer
-        _storage.MarkTransactionCommitted(_transactionId);
-        
-        _state = TransactionState.Committed;
-    }
-
-    /// <summary>
     /// Rolls back the transaction (discards all writes)
     /// </summary>
     public event Action? OnRollback;
 
-    public void Rollback()
+    public async Task RollbackAsync()
     {
         if (_state == TransactionState.Committed)
             throw new InvalidOperationException("Cannot rollback committed transaction");
 
         _pendingChanges.Clear();
-        _storage.RollbackTransaction(_transactionId);
+        await _storage.RollbackTransactionAsync(_transactionId);
         _state = TransactionState.Aborted;
         
         OnRollback?.Invoke();
@@ -156,7 +116,7 @@ public sealed class Transaction : ITransaction
         if (_state == TransactionState.Active || _state == TransactionState.Preparing)
         {
             // Auto-rollback if not committed
-            Rollback();
+            RollbackAsync().GetAwaiter().GetResult();
         }
 
         _disposed = true;

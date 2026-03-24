@@ -96,37 +96,37 @@ public class BsonComparisonBenchmarks
 
     [Benchmark(Baseline = true, Description = "BLite Typed – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
-    public void Typed_Insert_Single() => _ctx!.CustomerOrders.Insert(_singleOrder!);
+    public async Task Typed_Insert_Single() => await _ctx!.CustomerOrders.InsertAsync(_singleOrder!);
 
     [Benchmark(Description = "BLite BSON – Single Insert")]
     [BenchmarkCategory("Insert_Single")]
-    public void Bson_Insert_Single() => _bsonCol!.Insert(_singleBsonDoc!);
+    public async Task Bson_Insert_Single() => await _bsonCol!.InsertAsync(_singleBsonDoc!);
 
     // ──── Batch Insert (1 000) ───────────────────────────────────────────────
 
     [Benchmark(Baseline = true, Description = "BLite Typed – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
-    public void Typed_Insert_Batch() => _ctx!.CustomerOrders.InsertBulk(_batchOrders);
+    public async Task Typed_Insert_Batch() => await _ctx!.CustomerOrders.InsertBulkAsync(_batchOrders);
 
     [Benchmark(Description = "BLite BSON – Batch Insert (1000)")]
     [BenchmarkCategory("Insert_Batch")]
-    public void Bson_Insert_Batch() => _bsonCol!.InsertBulk(_batchBsonDocs);
+    public async Task Bson_Insert_Batch() => await _bsonCol!.InsertBulkAsync(_batchBsonDocs);
 
     // ──── FindById ───────────────────────────────────────────────────────────
 
     [Benchmark(Baseline = true, Description = "BLite Typed – FindById")]
     [BenchmarkCategory("FindById")]
-    public CustomerOrder? Typed_FindById()
+    public async Task<CustomerOrder?> Typed_FindById()
     {
-        var id = _ctx!.CustomerOrders.Insert(_singleOrder!);
-        return _ctx!.CustomerOrders.FindById(id);
+        var id = await _ctx!.CustomerOrders.InsertAsync(_singleOrder!);
+        return await _ctx!.CustomerOrders.FindByIdAsync(id);
     }
 
     [Benchmark(Description = "BLite BSON – FindById")]
     [BenchmarkCategory("FindById")]
-    public BLite.Bson.BsonDocument? Bson_FindById()
+    public async Task<BLite.Bson.BsonDocument?> Bson_FindById()
     {
-        var id = _bsonCol!.Insert(_singleBsonDoc!);
-        return _bsonCol!.FindById(id);
+        var id = await _bsonCol!.InsertAsync(_singleBsonDoc!);
+        return await _bsonCol!.FindByIdAsync(id);
     }
 }

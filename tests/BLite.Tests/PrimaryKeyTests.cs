@@ -17,94 +17,94 @@ public class PrimaryKeyTests : IDisposable
     }
 
     [Fact]
-    public void Test_Int_PrimaryKey()
+    public async Task Test_Int_PrimaryKey()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new IntEntity { Id = 1, Name = "Test 1" };
-        db.IntEntities.Insert(entity);
-        db.SaveChanges();
+        await db.IntEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
-        var retrieved = db.IntEntities.FindById(1);
+        var retrieved = await db.IntEntities.FindByIdAsync(1);
         Assert.NotNull(retrieved);
         Assert.Equal(1, retrieved.Id);
         Assert.Equal("Test 1", retrieved.Name);
 
         entity.Name = "Updated";
-        db.IntEntities.Update(entity);
+        await db.IntEntities.UpdateAsync(entity);
 
-        retrieved = db.IntEntities.FindById(1);
+        retrieved = await db.IntEntities.FindByIdAsync(1);
         Assert.Equal("Updated", retrieved?.Name);
 
-        db.IntEntities.Delete(1);
-        Assert.Null(db.IntEntities.FindById(1));
+        await db.IntEntities.DeleteAsync(1);
+        Assert.Null(await db.IntEntities.FindByIdAsync(1));
     }
 
     [Fact]
-    public void Test_String_PrimaryKey()
+    public async Task Test_String_PrimaryKey()
     {
         using var db = new TestDbContext(_dbPath);
 
         var entity = new StringEntity { Id = "key1", Value = "Value 1" };
-        db.StringEntities.Insert(entity);
-        db.SaveChanges();
+        await db.StringEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
-        var retrieved = db.StringEntities.FindById("key1");
+        var retrieved = await db.StringEntities.FindByIdAsync("key1");
         Assert.NotNull(retrieved);
         Assert.Equal("key1", retrieved.Id);
         Assert.Equal("Value 1", retrieved.Value);
 
-        db.StringEntities.Delete("key1");
-        db.SaveChanges();
-        Assert.Null(db.StringEntities.FindById("key1"));
+        await db.StringEntities.DeleteAsync("key1");
+        await db.SaveChangesAsync();
+        Assert.Null(await db.StringEntities.FindByIdAsync("key1"));
     }
 
     [Fact]
-    public void Test_Guid_PrimaryKey()
+    public async Task Test_Guid_PrimaryKey()
     {
         using var db = new TestDbContext(_dbPath);
 
         var id = Guid.NewGuid();
         var entity = new GuidEntity { Id = id, Name = "Guid Test" };
-        db.GuidEntities.Insert(entity);
-        db.SaveChanges();
+        await db.GuidEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
-        var retrieved = db.GuidEntities.FindById(id);
+        var retrieved = await db.GuidEntities.FindByIdAsync(id);
         Assert.NotNull(retrieved);
         Assert.Equal(id, retrieved.Id);
 
-        db.GuidEntities.Delete(id);
-        db.SaveChanges();
-        Assert.Null(db.GuidEntities.FindById(id));
+        await db.GuidEntities.DeleteAsync(id);
+        await db.SaveChangesAsync();
+        Assert.Null(await db.GuidEntities.FindByIdAsync(id));
     }
 
     [Fact]
-    public void Test_String_PrimaryKey_With_Custom_Name()
+    public async Task Test_String_PrimaryKey_With_Custom_Name()
     {
         // Test entity with string key NOT named "Id" (named "Code" instead)
         using var db = new TestDbContext(_dbPath);
 
         var entity = new CustomKeyEntity { Code = "ABC123", Description = "Test Description" };
-        db.CustomKeyEntities.Insert(entity);
-        db.SaveChanges();
+        await db.CustomKeyEntities.InsertAsync(entity);
+        await db.SaveChangesAsync();
 
         // Verify retrieval works correctly
-        var retrieved = db.CustomKeyEntities.FindById("ABC123");
+        var retrieved = await db.CustomKeyEntities.FindByIdAsync("ABC123");
         Assert.NotNull(retrieved);
         Assert.Equal("ABC123", retrieved.Code);
         Assert.Equal("Test Description", retrieved.Description);
 
         // Verify update works
         entity.Description = "Updated Description";
-        db.CustomKeyEntities.Update(entity);
-        db.SaveChanges();
+        await db.CustomKeyEntities.UpdateAsync(entity);
+        await db.SaveChangesAsync();
 
-        retrieved = db.CustomKeyEntities.FindById("ABC123");
+        retrieved = await db.CustomKeyEntities.FindByIdAsync("ABC123");
         Assert.Equal("Updated Description", retrieved?.Description);
 
         // Verify delete works
-        db.CustomKeyEntities.Delete("ABC123");
-        db.SaveChanges();
-        Assert.Null(db.CustomKeyEntities.FindById("ABC123"));
+        await db.CustomKeyEntities.DeleteAsync("ABC123");
+        await db.SaveChangesAsync();
+        Assert.Null(await db.CustomKeyEntities.FindByIdAsync("ABC123"));
     }
 }

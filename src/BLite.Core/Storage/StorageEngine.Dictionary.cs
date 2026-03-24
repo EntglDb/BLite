@@ -47,7 +47,7 @@ public sealed partial class StorageEngine
                      DictionaryPage.Initialize(pageBuffer, _dictionaryRootPageId);
                      WritePageImmediate(_dictionaryRootPageId, pageBuffer);
                      
-                     // Update Header
+                     // UpdateAsync Header
                      header.DictionaryRootPageId = _dictionaryRootPageId;
                      header.WriteTo(headerBuffer);
                      WritePageImmediate(0, headerBuffer);
@@ -246,7 +246,7 @@ public sealed partial class StorageEngine
             // Write New Page
             WritePageImmediate(newPageId, newPageBuffer);
             
-            // Update Previous Page Link
+            // UpdateAsync Previous Page Link
             header.NextPageId = newPageId;
             header.WriteTo(pageBuffer);
             WritePageImmediate(pageId, pageBuffer);

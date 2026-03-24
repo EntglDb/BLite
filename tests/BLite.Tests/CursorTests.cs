@@ -29,7 +29,7 @@ public class CursorTests : IDisposable
         _index.Insert(IndexKey.Create(20), new DocumentLocation(2, 0), txnId);
         _index.Insert(IndexKey.Create(30), new DocumentLocation(3, 0), txnId);
         
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
     }
 
     [Fact]

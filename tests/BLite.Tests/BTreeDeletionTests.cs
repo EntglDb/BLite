@@ -45,7 +45,7 @@ public class BTreeDeletionTests : IDisposable
         var txnId = _storage.BeginTransaction().TransactionId;
         foreach (var v in values)
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
         return (index, txnId);
     }
 
@@ -223,7 +223,7 @@ public class BTreeDeletionTests : IDisposable
         var txnId = _storage.BeginTransaction().TransactionId;
         foreach (var v in Enumerable.Range(1, 101))
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         // Borrow first (brings both leaves to min=50)
         index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);

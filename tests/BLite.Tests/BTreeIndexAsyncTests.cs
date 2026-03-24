@@ -32,7 +32,7 @@ public class BTreeIndexAsyncTests : IDisposable
         var txnId = _storage.BeginTransaction().TransactionId;
         foreach (var key in Seeds)
             _index.Insert(IndexKey.Create(key), new DocumentLocation((uint)key, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -82,7 +82,7 @@ public class BTreeIndexAsyncTests : IDisposable
 
         Assert.NotEqual(0xAB, outsideBuf[0]);
 
-        _storage.RollbackTransaction(txn.TransactionId);
+        _storage.RollbackTransactionAsync(txn.TransactionId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -281,7 +281,7 @@ public class BTreeIndexAsyncTests : IDisposable
         strIndex.Insert(IndexKey.Create("alfred"),  new DocumentLocation(11, 0), txnId);
         strIndex.Insert(IndexKey.Create("bob"),     new DocumentLocation(12, 0), txnId);
         strIndex.Insert(IndexKey.Create("charlie"), new DocumentLocation(13, 0), txnId);
-        _storage.CommitTransaction(txnId);
+        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
         var entries = await strIndex.StartsWithAsync("al", 0).ToListAsync();
 

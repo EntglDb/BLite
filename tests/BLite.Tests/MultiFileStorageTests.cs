@@ -30,7 +30,7 @@ public class MultiFileStorageTests : IDisposable
     // ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void StorageEngine_WithCustomWalPath_CreatesWalAtSpecifiedLocation()
+    public async Task StorageEngine_WithCustomWalPath_CreatesWalAtSpecifiedLocation()
     {
         var dbPath = Path.Combine(_tempDir, "test.db");
         var customWalPath = Path.Combine(_tempDir, "custom_wal", "test.wal");
@@ -44,7 +44,7 @@ public class MultiFileStorageTests : IDisposable
             var pageId = engine.AllocatePage();
             var data = new byte[engine.PageSize];
             engine.WritePage(pageId, txn.TransactionId, data);
-            engine.CommitTransaction(txn);
+            await engine.CommitTransactionAsync(txn);
         }
 
         Assert.True(File.Exists(customWalPath), "WAL file should exist at the custom path");
@@ -53,7 +53,7 @@ public class MultiFileStorageTests : IDisposable
     }
 
     [Fact]
-    public void StorageEngine_WithDefaultConfig_WalIsAdjacentToDbFile()
+    public async Task StorageEngine_WithDefaultConfig_WalIsAdjacentToDbFile()
     {
         var dbPath = Path.Combine(_tempDir, "default.db");
 
@@ -63,7 +63,7 @@ public class MultiFileStorageTests : IDisposable
             var pageId = engine.AllocatePage();
             var data = new byte[engine.PageSize];
             engine.WritePage(pageId, txn.TransactionId, data);
-            engine.CommitTransaction(txn);
+            await engine.CommitTransactionAsync(txn);
         }
 
         var expectedWalPath = Path.ChangeExtension(dbPath, ".wal");
@@ -269,7 +269,7 @@ public class MultiFileStorageTests : IDisposable
         var dbPath = Path.Combine(dataDir, "mydb.db");
         var cfg = PageFileConfig.Server(dbPath);
 
-        Assert.Equal(PageFileConfig.Default.PageSize,        cfg.PageSize);
+        Assert.Equal(PageFileConfig.Default.PageSize, cfg.PageSize);
         Assert.Equal(PageFileConfig.Default.GrowthBlockSize, cfg.GrowthBlockSize);
         Assert.NotNull(cfg.WalPath);
         Assert.NotNull(cfg.IndexFilePath);
@@ -443,14 +443,14 @@ public class MultiFileStorageTests : IDisposable
 
         using var engine = new StorageEngine(dbPath, config);
 
-        var dataPageId   = engine.AllocatePage();
-        var indexPageId  = engine.AllocateIndexPage();
-        var collPageId   = engine.AllocateCollectionPage("orders");
+        var dataPageId = engine.AllocatePage();
+        var indexPageId = engine.AllocateIndexPage();
+        var collPageId = engine.AllocateCollectionPage("orders");
 
         // All three IDs must be distinct
-        Assert.True(dataPageId  != indexPageId,  "data and index pageIds must not collide");
-        Assert.True(dataPageId  != collPageId,   "data and collection pageIds must not collide");
-        Assert.True(indexPageId != collPageId,   "index and collection pageIds must not collide");
+        Assert.True(dataPageId != indexPageId, "data and index pageIds must not collide");
+        Assert.True(dataPageId != collPageId, "data and collection pageIds must not collide");
+        Assert.True(indexPageId != collPageId, "index and collection pageIds must not collide");
 
         // Write distinct sentinel bytes to each page
         var dataBuf = new byte[engine.PageSize];
@@ -488,10 +488,10 @@ public class MultiFileStorageTests : IDisposable
     [Fact]
     public void MultiFileRouting_IndexAndCollectionPagesReadableAfterRestart()
     {
-        var dbPath  = Path.Combine(_tempDir, "restart.db");
+        var dbPath = Path.Combine(_tempDir, "restart.db");
         var idxPath = Path.Combine(_tempDir, "restart.idx");
         var collDir = Path.Combine(_tempDir, "restart_coll");
-        var config  = PageFileConfig.Default with
+        var config = PageFileConfig.Default with
         {
             IndexFilePath = idxPath,
             CollectionDataDirectory = collDir
@@ -548,7 +548,7 @@ public class MultiFileStorageTests : IDisposable
         var dbPath = Path.Combine(_tempDir, "concur_main.db");
         using var engine = new StorageEngine(dbPath, PageFileConfig.Small);
 
-        const int pageCount  = 40;
+        const int pageCount = 40;
         const int readerCount = 20;
 
         var pageIds = new uint[pageCount];
@@ -591,7 +591,7 @@ public class MultiFileStorageTests : IDisposable
         for (int w = 0; w < 10; w++)
         {
             var idx = w % pageCount;
-            tasks.Add(Task.Run(() =>
+            tasks.Add(Task.Run(async () =>
             {
                 try
                 {
@@ -599,8 +599,8 @@ public class MultiFileStorageTests : IDisposable
                     var data = new byte[engine.PageSize];
                     data[0] = (byte)(idx + 1);
                     engine.WritePage(pageIds[idx], txn.TransactionId, data);
-                    engine.CommitTransaction(txn);
-                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
+                    await engine.CommitTransactionAsync(txn);
+                    await engine.CheckpointAsync(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
                 }
                 catch (Exception ex) { errors.Add(ex); }
             }));
@@ -613,9 +613,9 @@ public class MultiFileStorageTests : IDisposable
     [Fact]
     public async Task ConcurrentReadWrite_IndexFile_NoCrash()
     {
-        var dbPath  = Path.Combine(_tempDir, "concur_idx.db");
+        var dbPath = Path.Combine(_tempDir, "concur_idx.db");
         var idxPath = Path.Combine(_tempDir, "concur_idx.idx");
-        var config  = PageFileConfig.Small with { IndexFilePath = idxPath };
+        var config = PageFileConfig.Small with { IndexFilePath = idxPath };
 
         using var engine = new StorageEngine(dbPath, config);
 
@@ -633,7 +633,7 @@ public class MultiFileStorageTests : IDisposable
         engine.FlushPageFile();
 
         var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
-        var tasks  = new List<Task>();
+        var tasks = new List<Task>();
 
         for (int r = 0; r < 20; r++)
         {
@@ -653,7 +653,7 @@ public class MultiFileStorageTests : IDisposable
         for (int w = 0; w < 10; w++)
         {
             var idx = w % pageCount;
-            tasks.Add(Task.Run(() =>
+            tasks.Add(Task.Run(async () =>
             {
                 try
                 {
@@ -661,8 +661,8 @@ public class MultiFileStorageTests : IDisposable
                     var data = new byte[engine.PageSize];
                     data[0] = (byte)(idx + 1);
                     engine.WritePage(pageIds[idx], txn.TransactionId, data);
-                    engine.CommitTransaction(txn);
-                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
+                    await engine.CommitTransactionAsync(txn);
+                    await engine.CheckpointAsync(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
                 }
                 catch (Exception ex) { errors.Add(ex); }
             }));
@@ -675,9 +675,9 @@ public class MultiFileStorageTests : IDisposable
     [Fact]
     public async Task ConcurrentReadWrite_CollectionFile_NoCrash()
     {
-        var dbPath  = Path.Combine(_tempDir, "concur_coll.db");
+        var dbPath = Path.Combine(_tempDir, "concur_coll.db");
         var collDir = Path.Combine(_tempDir, "concur_coll_dir");
-        var config  = PageFileConfig.Small with { CollectionDataDirectory = collDir };
+        var config = PageFileConfig.Small with { CollectionDataDirectory = collDir };
 
         using var engine = new StorageEngine(dbPath, config);
 
@@ -695,7 +695,7 @@ public class MultiFileStorageTests : IDisposable
         engine.FlushPageFile();
 
         var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
-        var tasks  = new List<Task>();
+        var tasks = new List<Task>();
 
         for (int r = 0; r < 20; r++)
         {
@@ -715,7 +715,7 @@ public class MultiFileStorageTests : IDisposable
         for (int w = 0; w < 10; w++)
         {
             var idx = w % pageCount;
-            tasks.Add(Task.Run(() =>
+            tasks.Add(Task.Run(async () =>
             {
                 try
                 {
@@ -723,8 +723,8 @@ public class MultiFileStorageTests : IDisposable
                     var data = new byte[engine.PageSize];
                     data[0] = (byte)(idx + 1);
                     engine.WritePage(pageIds[idx], txn.TransactionId, data);
-                    engine.CommitTransaction(txn);
-                    engine.Checkpoint(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
+                    await engine.CommitTransactionAsync(txn);
+                    await engine.CheckpointAsync(); // flush WAL → PageFile, exercises ReaderWriterLockSlim path
                 }
                 catch (Exception ex) { errors.Add(ex); }
             }));
@@ -744,13 +744,13 @@ public class MultiFileStorageTests : IDisposable
 
         // Pre-allocate a stable page to read from during the race
         var stablePage = engine.AllocatePage();
-        var seedData   = new byte[engine.PageSize];
+        var seedData = new byte[engine.PageSize];
         seedData[0] = 0x42;
         engine.WritePageImmediate(stablePage, seedData);
         engine.FlushPageFile();
 
         var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
-        var tasks  = new List<Task>();
+        var tasks = new List<Task>();
 
         // Readers continuously read the stable page
         for (int r = 0; r < 20; r++)

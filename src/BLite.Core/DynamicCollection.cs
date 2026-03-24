@@ -190,7 +190,7 @@ public sealed class DynamicCollection : IDisposable
         meta.RetentionPolicyMs = (long)retentionPolicy.TotalMilliseconds;
         meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
         _storage.SaveCollectionMetadata(meta);
-        _isTimeSeries = true; // Update in-memory flag so subsequent inserts route to TS path
+        _isTimeSeries = true; // UpdateAsync in-memory flag so subsequent inserts route to TS path
     }
 
     /// <summary>
@@ -199,7 +199,7 @@ public sealed class DynamicCollection : IDisposable
     /// NOTE (v1 known limitation): the primary BTree index retains stale entries for pruned pages.
     /// FindAll will silently skip null results from freed pages, so reads remain safe.
     /// </summary>
-    public void ForcePrune()
+    public async Task ForcePruneAsync()
     {
         if (!_isTimeSeries)
             throw new InvalidOperationException("ForcePrune is only valid on TimeSeries collections.");
@@ -207,7 +207,7 @@ public sealed class DynamicCollection : IDisposable
         var meta = _storage.GetCollectionMetadata(_collectionName);
         if (meta == null || meta.RetentionPolicyMs <= 0) return;
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         _storage.PruneTimeSeries(meta, transaction);
         meta.InsertedSinceLastPruning = 0;
         meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
@@ -237,33 +237,7 @@ public sealed class DynamicCollection : IDisposable
 
     #region Insert
 
-    /// <summary>
-    /// Inserts a BsonDocument into the collection.
-    /// If the document has no _id field, one is auto-generated.
-    /// Returns the BsonId of the inserted document.
-    /// </summary>
-    public BsonId Insert(BsonDocument document)
-    {
-        if (document == null) throw new ArgumentNullException(nameof(document));
-
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        _collectionLock.Wait();
-        try
-        {
-            return InsertCore(document, transaction);
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
-        finally
-        {
-            _collectionLock.Release();
-        }
-    }
-
-    private BsonId InsertCore(BsonDocument document, ITransaction transaction)
+    private async Task<BsonId> InsertCore(BsonDocument document, ITransaction transaction)
     {
         // Extract or generate ID
         BsonId id;
@@ -299,11 +273,11 @@ public sealed class DynamicCollection : IDisposable
         var key = new IndexKey(id.ToBytes());
         _primaryIndex.Insert(key, location, transaction.TransactionId);
 
-        // Update secondary indexes
+        // UpdateAsync secondary indexes
         foreach (var (_, idx) in _secondaryIndexes)
             IndexInsert(idx, document, location, transaction);
 
-        NotifyCdc(OperationType.Insert, id, document.RawData);
+        await NotifyCdcAsync(OperationType.Insert, id, document.RawData);
         return id;
     }
 
@@ -351,43 +325,15 @@ public sealed class DynamicCollection : IDisposable
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
-            return InsertCore(document, transaction);
+            return await InsertCore(document, transaction);
         }
         catch
         {
-            transaction.Rollback();
-            throw;
-        }
-        finally
-        {
-            _collectionLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Inserts multiple BsonDocuments into the collection in a single transaction.
-    /// Returns the list of generated/existing BsonIds in insertion order.
-    /// </summary>
-    public List<BsonId> InsertBulk(IEnumerable<BsonDocument> documents)
-    {
-        if (documents == null) throw new ArgumentNullException(nameof(documents));
-
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        _collectionLock.Wait();
-        try
-        {
-            var ids = new List<BsonId>();
-            foreach (var doc in documents)
-                ids.Add(InsertCore(doc, transaction));
-            return ids;
-        }
-        catch
-        {
-            transaction.Rollback();
+            await transaction.RollbackAsync();
             throw;
         }
         finally
@@ -404,21 +350,21 @@ public sealed class DynamicCollection : IDisposable
     {
         if (documents == null) throw new ArgumentNullException(nameof(documents));
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var ids = new List<BsonId>();
             foreach (var doc in documents)
             {
                 ct.ThrowIfCancellationRequested();
-                ids.Add(InsertCore(doc, transaction));
+                ids.Add(await InsertCore(doc, transaction));
             }
             return ids;
         }
         catch
         {
-            transaction.Rollback();
+            await transaction.RollbackAsync();
             throw;
         }
         finally
@@ -432,54 +378,12 @@ public sealed class DynamicCollection : IDisposable
     #region Find
 
     /// <summary>
-    /// Finds a document by its BsonId.
-    /// </summary>
-    public BsonDocument? FindById(BsonId id)
-    {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        var key = new IndexKey(id.ToBytes());
-
-        if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
-            return null;
-
-        return ReadDocumentAt(location, transaction.TransactionId);
-    }
-
-    /// <summary>
-    /// Returns all documents in the collection.
-    /// </summary>
-    public IEnumerable<BsonDocument> FindAll()
-    {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        var txnId = transaction.TransactionId;
-        var minKey = IndexKey.MinKey;
-        var maxKey = IndexKey.MaxKey;
-
-        foreach (var entry in _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, txnId))
-        {
-            var doc = ReadDocumentAt(entry.Location, txnId);
-            if (doc != null)
-                yield return doc;
-        }
-    }
-
-    /// <summary>
-    /// Returns the count of documents in the collection.
-    /// </summary>
-    public int Count()
-    {
-        int count = 0;
-        foreach (var _ in FindAll()) count++;
-        return count;
-    }
-
-    /// <summary>
     /// Scans all documents applying a predicate at the BSON level (no deserialization to T).
     /// The predicate receives a BsonSpanReader positioned at the start of each document.
     /// </summary>
-    public IEnumerable<BsonDocument> Scan(BsonReaderPredicate predicate)
+    public async IAsyncEnumerable<BsonDocument> ScanAsync(BsonReaderPredicate predicate)
     {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
         foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId))
@@ -514,20 +418,20 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>
     /// Queries a secondary index for documents matching a range.
     /// </summary>
-    public IEnumerable<BsonDocument> QueryIndex(string indexName, object? minValue, object? maxValue)
+    public async IAsyncEnumerable<BsonDocument> QueryIndexAsync(string indexName, object? minValue, object? maxValue, bool ascending = true)
     {
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry))
             throw new ArgumentException($"Index '{indexName}' not found on collection '{_collectionName}'");
         if (entry.Kind != DynamicIndexKind.BTree || entry.BTree == null)
             throw new InvalidOperationException($"Index '{indexName}' is not a BTree index. Use VectorSearch/Near/Within for vector/spatial indexes.");
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
         var minKey = minValue != null ? CreateIndexKeyFromObject(minValue) : IndexKey.MinKey;
         var maxKey = maxValue != null ? CreateIndexKeyFromObject(maxValue) : IndexKey.MaxKey;
 
-        foreach (var indexEntry in entry.BTree.Range(minKey, maxKey, IndexDirection.Forward, txnId))
+        foreach (var indexEntry in entry.BTree.Range(minKey, maxKey, ascending ? IndexDirection.Forward : IndexDirection.Backward, txnId))
         {
             var doc = ReadDocumentAt(indexEntry.Location, txnId);
             if (doc != null) yield return doc;
@@ -536,18 +440,18 @@ public sealed class DynamicCollection : IDisposable
 
     /// <summary>
     /// Performs a vector similarity search using the named vector index.
-    /// The field must have been indexed via <see cref="CreateVectorIndex"/>.
+    /// The field must have been indexed via <see cref="CreateVectorIndexAsync"/>.
     /// </summary>
     /// <param name="indexName">Name of the vector index.</param>
     /// <param name="query">Query vector (must match the index dimensionality).</param>
     /// <param name="k">Maximum number of nearest neighbours to return.</param>
     /// <param name="efSearch">HNSW efSearch parameter (higher = more recall, slower). Default 100.</param>
-    public IEnumerable<BsonDocument> VectorSearch(string indexName, float[] query, int k, int efSearch = 100)
+    public async IAsyncEnumerable<BsonDocument> VectorSearchAsync(string indexName, float[] query, int k, int efSearch = 100)
     {
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Vector || entry.Vector == null)
             throw new ArgumentException($"Vector index '{indexName}' not found on collection '{_collectionName}'");
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         foreach (var result in entry.Vector.Search(query, k, efSearch, transaction))
         {
             var doc = ReadDocumentAt(result.Location, transaction.TransactionId);
@@ -557,14 +461,14 @@ public sealed class DynamicCollection : IDisposable
 
     /// <summary>
     /// Returns documents within a radius (km) of a geographic centre point.
-    /// The field must have been indexed via <see cref="CreateSpatialIndex"/>.
+    /// The field must have been indexed via <see cref="CreateSpatialIndexAsync"/>.
     /// </summary>
-    public IEnumerable<BsonDocument> Near(string indexName, (double Latitude, double Longitude) center, double radiusKm)
+    public async IAsyncEnumerable<BsonDocument> NearAsync(string indexName, (double Latitude, double Longitude) center, double radiusKm)
     {
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Spatial || entry.Spatial == null)
             throw new ArgumentException($"Spatial index '{indexName}' not found on collection '{_collectionName}'");
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var queryBox = SpatialMath.BoundingBox(center.Latitude, center.Longitude, radiusKm);
         foreach (var loc in entry.Spatial.Search(queryBox, transaction))
         {
@@ -575,14 +479,14 @@ public sealed class DynamicCollection : IDisposable
 
     /// <summary>
     /// Returns documents within a rectangular geographic area.
-    /// The field must have been indexed via <see cref="CreateSpatialIndex"/>.
+    /// The field must have been indexed via <see cref="CreateSpatialIndexAsync"/>.
     /// </summary>
-    public IEnumerable<BsonDocument> Within(string indexName, (double Latitude, double Longitude) min, (double Latitude, double Longitude) max)
+    public async IAsyncEnumerable<BsonDocument> WithinAsync(string indexName, (double Latitude, double Longitude) min, (double Latitude, double Longitude) max)
     {
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Spatial || entry.Spatial == null)
             throw new ArgumentException($"Spatial index '{indexName}' not found on collection '{_collectionName}'");
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var area = new GeoBox(min.Latitude, min.Longitude, max.Latitude, max.Longitude);
         foreach (var loc in entry.Spatial.Search(area, transaction))
         {
@@ -592,22 +496,12 @@ public sealed class DynamicCollection : IDisposable
     }
 
     /// <summary>
-    /// Returns documents matching the specified predicate.
-    /// </summary>
-    public IEnumerable<BsonDocument> Find(Func<BsonDocument, bool> predicate)
-    {
-        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-        foreach (var doc in FindAll())
-            if (predicate(doc)) yield return doc;
-    }
-
-    /// <summary>
     /// Asynchronously yields documents matching the specified predicate.
     /// </summary>
     public async IAsyncEnumerable<BsonDocument> FindAsync(Func<BsonDocument, bool> predicate, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-        await foreach (var doc in FindAllAsync(ct).ConfigureAwait(false))
+        await foreach (var doc in FindAllAsync(ct))
         {
             ct.ThrowIfCancellationRequested();
             if (predicate(doc)) yield return doc;
@@ -617,75 +511,6 @@ public sealed class DynamicCollection : IDisposable
     #endregion
 
     #region Update
-
-    /// <summary>
-    /// Updates a document by its BsonId. Replaces the entire document.
-    /// </summary>
-    public bool Update(BsonId id, BsonDocument newDocument)
-    {
-        if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
-
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        _collectionLock.Wait();
-        try
-        {
-            var key = new IndexKey(id.ToBytes());
-            if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
-                return false;
-
-            // Read old document for secondary index cleanup
-            var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
-
-            // Delete old slot
-            DeleteSlot(oldLocation, transaction);
-
-            // Ensure _id is present in new document
-            if (!newDocument.TryGetId(out _))
-            {
-                newDocument = PrependId(newDocument, id);
-            }
-
-            // Insert updated document
-            var docData = newDocument.RawData;
-            DocumentLocation newLocation = default;
-
-            if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
-            {
-                var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
-                if (pageId == 0) pageId = AllocateNewDataPage(transaction);
-                var slotIndex = InsertIntoPage(pageId, docData, transaction);
-                newLocation = new DocumentLocation(pageId, slotIndex);
-            }
-            else
-            {
-                throw new InvalidOperationException("Document too large for single page. Overflow not yet supported in DynamicCollection.");
-            }
-
-            // Update primary index: delete old, insert new
-            _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
-            _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
-
-            // Update secondary indexes
-            foreach (var (_, idx) in _secondaryIndexes)
-            {
-                if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
-                IndexInsert(idx, newDocument, newLocation, transaction);
-            }
-
-            NotifyCdc(OperationType.Update, id, newDocument.RawData);
-            return true;
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
-        finally
-        {
-            _collectionLock.Release();
-        }
-    }
-
     /// <summary>
     /// Updates a document by its BsonId asynchronously. Replaces the entire document.
     /// </summary>
@@ -693,8 +518,8 @@ public sealed class DynamicCollection : IDisposable
     {
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -730,72 +555,12 @@ public sealed class DynamicCollection : IDisposable
                 IndexInsert(idx, newDocument, newLocation, transaction);
             }
 
-            NotifyCdc(OperationType.Update, id, newDocument.RawData);
+            await NotifyCdcAsync(OperationType.Update, id, newDocument.RawData);
             return true;
         }
         catch
         {
-            transaction.Rollback();
-            throw;
-        }
-        finally
-        {
-            _collectionLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Updates multiple documents by their BsonIds in a single transaction.
-    /// Returns the number of documents successfully updated.
-    /// </summary>
-    public int UpdateBulk(IEnumerable<(BsonId Id, BsonDocument Document)> updates)
-    {
-        if (updates == null) throw new ArgumentNullException(nameof(updates));
-
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        _collectionLock.Wait();
-        try
-        {
-            var count = 0;
-            foreach (var (id, doc) in updates)
-            {
-                var key = new IndexKey(id.ToBytes());
-                if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
-                    continue;
-
-                var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
-                DeleteSlot(oldLocation, transaction);
-
-                var newDoc = doc;
-                if (!newDoc.TryGetId(out _))
-                    newDoc = PrependId(newDoc, id);
-
-                var docData = newDoc.RawData;
-                if (docData.Length + SlotEntry.Size > _maxDocumentSizeForSinglePage)
-                    throw new InvalidOperationException("Document too large for single page.");
-
-                var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
-                if (pageId == 0) pageId = AllocateNewDataPage(transaction);
-                var slotIndex = InsertIntoPage(pageId, docData, transaction);
-                var newLocation = new DocumentLocation(pageId, slotIndex);
-
-                _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
-                _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
-
-                foreach (var (_, idx) in _secondaryIndexes)
-                {
-                    if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
-                    IndexInsert(idx, newDoc, newLocation, transaction);
-                }
-
-                NotifyCdc(OperationType.Update, id, newDoc.RawData);
-                count++;
-            }
-            return count;
-        }
-        catch
-        {
-            transaction.Rollback();
+            await transaction.RollbackAsync();
             throw;
         }
         finally
@@ -812,8 +577,8 @@ public sealed class DynamicCollection : IDisposable
     {
         if (updates == null) throw new ArgumentNullException(nameof(updates));
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var count = 0;
@@ -849,14 +614,14 @@ public sealed class DynamicCollection : IDisposable
                     IndexInsert(idx, newDoc, newLocation, transaction);
                 }
 
-                NotifyCdc(OperationType.Update, id, newDoc.RawData);
+                await NotifyCdcAsync(OperationType.Update, id, newDoc.RawData);
                 count++;
             }
             return count;
         }
         catch
         {
-            transaction.Rollback();
+            await transaction.RollbackAsync();
             throw;
         }
         finally
@@ -870,55 +635,12 @@ public sealed class DynamicCollection : IDisposable
     #region Delete
 
     /// <summary>
-    /// Deletes a document by its BsonId.
-    /// </summary>
-    public bool Delete(BsonId id)
-    {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        _collectionLock.Wait();
-        try
-        {
-            var key = new IndexKey(id.ToBytes());
-            if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
-                return false;
-
-            // Read doc for secondary index cleanup
-            var doc = ReadDocumentAt(location, transaction.TransactionId);
-
-            // Delete from primary index
-            _primaryIndex.Delete(key, location, transaction.TransactionId);
-
-            // Delete from secondary indexes
-            if (doc != null)
-            {
-                foreach (var (_, idx) in _secondaryIndexes)
-                    IndexDelete(idx, doc, location, transaction);
-            }
-
-            // Mark slot as deleted
-            DeleteSlot(location, transaction);
-
-            NotifyCdc(OperationType.Delete, id);
-            return true;
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
-        finally
-        {
-            _collectionLock.Release();
-        }
-    }
-
-    /// <summary>
     /// Deletes a document by its BsonId asynchronously.
     /// </summary>
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -935,57 +657,12 @@ public sealed class DynamicCollection : IDisposable
             }
 
             DeleteSlot(location, transaction);
-            NotifyCdc(OperationType.Delete, id);
+            await NotifyCdcAsync(OperationType.Delete, id);
             return true;
         }
         catch
         {
-            transaction.Rollback();
-            throw;
-        }
-        finally
-        {
-            _collectionLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Deletes multiple documents by their BsonIds in a single transaction.
-    /// Returns the number of documents successfully deleted.
-    /// </summary>
-    public int DeleteBulk(IEnumerable<BsonId> ids)
-    {
-        if (ids == null) throw new ArgumentNullException(nameof(ids));
-
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        _collectionLock.Wait();
-        try
-        {
-            var count = 0;
-            foreach (var id in ids)
-            {
-                var key = new IndexKey(id.ToBytes());
-                if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
-                    continue;
-
-                var doc = ReadDocumentAt(location, transaction.TransactionId);
-                _primaryIndex.Delete(key, location, transaction.TransactionId);
-
-                if (doc != null)
-                {
-                    foreach (var (_, idx) in _secondaryIndexes)
-                        IndexDelete(idx, doc, location, transaction);
-                }
-
-                DeleteSlot(location, transaction);
-                NotifyCdc(OperationType.Delete, id);
-                count++;
-            }
-            return count;
-        }
-        catch
-        {
-            transaction.Rollback();
+            await transaction.RollbackAsync();
             throw;
         }
         finally
@@ -1002,8 +679,8 @@ public sealed class DynamicCollection : IDisposable
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
-        await _collectionLock.WaitAsync(ct).ConfigureAwait(false);
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        await _collectionLock.WaitAsync(ct);
         try
         {
             var count = 0;
@@ -1024,14 +701,14 @@ public sealed class DynamicCollection : IDisposable
                 }
 
                 DeleteSlot(location, transaction);
-                NotifyCdc(OperationType.Delete, id);
+                await NotifyCdcAsync(OperationType.Delete, id);
                 count++;
             }
             return count;
         }
         catch
         {
-            transaction.Rollback();
+            await transaction.RollbackAsync();
             throw;
         }
         finally
@@ -1048,7 +725,7 @@ public sealed class DynamicCollection : IDisposable
     /// Creates a secondary B-Tree index on a field path.
     /// Supports nested properties using dot-notation (e.g., "address.city.name").
     /// </summary>
-    public void CreateIndex(string fieldPath, string? name = null, bool unique = false)
+    public async Task CreateIndexAsync(string fieldPath, string? name = null, bool unique = false)
     {
         name ??= $"idx_{fieldPath.ToLowerInvariant()}";
         fieldPath = fieldPath.ToLowerInvariant();
@@ -1064,7 +741,7 @@ public sealed class DynamicCollection : IDisposable
         var entry = new DynamicSecondaryIndex(btree, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
@@ -1079,7 +756,7 @@ public sealed class DynamicCollection : IDisposable
     /// The field must be stored as a BSON Array of numeric values.
     /// Supports nested properties using dot-notation.
     /// </summary>
-    public void CreateVectorIndex(string fieldPath, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
+    public async Task CreateVectorIndexAsync(string fieldPath, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
     {
         name ??= $"idx_vector_{fieldPath.ToLowerInvariant()}";
         fieldPath = fieldPath.ToLowerInvariant();
@@ -1095,7 +772,7 @@ public sealed class DynamicCollection : IDisposable
         var entry = new DynamicSecondaryIndex(vector, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
@@ -1110,7 +787,7 @@ public sealed class DynamicCollection : IDisposable
     /// The field must be stored as a BSON coordinates array <c>[lat, lon]</c>.
     /// Supports nested properties using dot-notation.
     /// </summary>
-    public void CreateSpatialIndex(string fieldPath, string? name = null)
+    public async Task CreateSpatialIndexAsync(string fieldPath, string? name = null)
     {
         name ??= $"idx_spatial_{fieldPath.ToLowerInvariant()}";
         fieldPath = fieldPath.ToLowerInvariant();
@@ -1126,7 +803,7 @@ public sealed class DynamicCollection : IDisposable
         var entry = new DynamicSecondaryIndex(spatial, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
@@ -1342,7 +1019,7 @@ public sealed class DynamicCollection : IDisposable
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
-            await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+            await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
 
             var pageType = (PageType)buffer[4];
 
@@ -1384,27 +1061,36 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>Async exact-match lookup.</summary>
     public async ValueTask<BsonDocument?> FindByIdAsync(BsonId id, CancellationToken ct = default)
     {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var key = new IndexKey(id.ToBytes());
-        var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct).ConfigureAwait(false);
+        var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct);
         if (!found) return null;
-        return await ReadDocumentAtAsync(location, transaction.TransactionId, ct).ConfigureAwait(false);
+        return await ReadDocumentAtAsync(location, transaction.TransactionId, ct);
     }
 
     /// <summary>Async full-collection scan.</summary>
     public async IAsyncEnumerable<BsonDocument> FindAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
         await foreach (var entry in _primaryIndex
             .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
-            .ConfigureAwait(false))
+            )
         {
             ct.ThrowIfCancellationRequested();
-            var doc = await ReadDocumentAtAsync(entry.Location, txnId, ct).ConfigureAwait(false);
+            var doc = await ReadDocumentAtAsync(entry.Location, txnId, ct);
             if (doc != null) yield return doc;
         }
+    }
+
+    /// <summary>Returns the number of documents in this collection.</summary>
+    public async Task<int> CountAsync(CancellationToken ct = default)
+    {
+        var count = 0;
+        await foreach (var _ in FindAllAsync(ct))
+            count++;
+        return count;
     }
 
     private uint FindPageWithSpace(int requiredBytes, ulong txnId)
@@ -1452,7 +1138,7 @@ public sealed class DynamicCollection : IDisposable
         return pageId;
     }
 
-    private ushort InsertIntoPage(uint pageId, ReadOnlySpan<byte> data, ITransaction transaction)
+    private ushort InsertIntoPage(uint pageId, ReadOnlyMemory<byte> data, ITransaction transaction)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
@@ -1493,7 +1179,7 @@ public sealed class DynamicCollection : IDisposable
 
             // Write document data
             var docOffset = header.FreeSpaceEnd - data.Length;
-            data.CopyTo(buffer.AsSpan(docOffset, data.Length));
+            data.Span.CopyTo(buffer.AsSpan(docOffset, data.Length));
 
             // Write slot entry
             var slotOffset = SlottedPageHeader.Size + (slotIndex * SlotEntry.Size);
@@ -1505,7 +1191,7 @@ public sealed class DynamicCollection : IDisposable
             };
             slot.WriteTo(buffer.AsSpan(slotOffset));
 
-            // Update header
+            // UpdateAsync header
             if (slotIndex >= header.SlotCount)
                 header.SlotCount = (ushort)(slotIndex + 1);
             header.FreeSpaceStart = (ushort)(SlottedPageHeader.Size + (header.SlotCount * SlotEntry.Size));
@@ -1657,12 +1343,12 @@ public sealed class DynamicCollection : IDisposable
         new DynamicChangeStreamObservable(
             _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap());
 
-    private void NotifyCdc(OperationType type, BsonId id, ReadOnlySpan<byte> docData = default)
+    private async Task NotifyCdcAsync(OperationType type, BsonId id, ReadOnlyMemory<byte> docData = default)
     {
         if (_storage.Cdc == null) return;
         if (!_storage.Cdc.HasAnyWatchers(_collectionName)) return;
 
-        var transaction = _transactionHolder.GetCurrentTransactionOrStart();
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
 
         ReadOnlyMemory<byte>? payload = null;
         if (!docData.IsEmpty && _storage.Cdc.HasPayloadWatchers(_collectionName))

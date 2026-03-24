@@ -9,7 +9,7 @@ namespace BLite.Core;
 /// Provides one-time migration utilities to convert a BLite database between
 /// single-file and multi-file storage layouts without any data loss.
 ///
-/// <para><b>Single-file → Multi-file</b> (<see cref="ToMultiFile"/>): all documents,
+/// <para><b>Single-file → Multi-file</b> (<see cref="ToMultiFileAsync"/>): all documents,
 /// KV entries, and index definitions are copied from the original monolithic
 /// <c>.db</c> file into the new per-file layout described by
 /// <paramref name="targetConfig"/>.  After a successful migration the original
@@ -17,7 +17,7 @@ namespace BLite.Core;
 /// files are written directly to the locations specified in
 /// <paramref name="targetConfig"/>.</para>
 ///
-/// <para><b>Multi-file → Single-file</b> (<see cref="ToSingleFile"/>): the
+/// <para><b>Multi-file → Single-file</b> (<see cref="ToSingleFileAsync"/>): the
 /// reverse operation.  The main <c>.db</c>, index file, and all per-collection
 /// files are collapsed back into a single database at <paramref name="targetPath"/>.
 /// The source multi-file layout is left untouched unless
@@ -69,7 +69,7 @@ public static class BLiteMigration
     /// <see cref="PageFileConfig.IndexFilePath"/>, and
     /// <see cref="PageFileConfig.CollectionDataDirectory"/> are <c>null</c>).
     /// </exception>
-    public static void ToMultiFile(string sourcePath, PageFileConfig targetConfig)
+    public static async Task ToMultiFileAsync(string sourcePath, PageFileConfig targetConfig)
     {
         if (!File.Exists(sourcePath))
             throw new FileNotFoundException($"Source database not found: '{sourcePath}'", sourcePath);
@@ -97,7 +97,7 @@ public static class BLiteMigration
             using (var source = new BLiteEngine(sourcePath, sourceConfig))
             using (var target = new BLiteEngine(tempDbPath, targetConfig))
             {
-                CopyAll(source, target);
+                await CopyAllAsync(source, target);
             }
 
             // Atomically replace: delete original, move temp into place.
@@ -145,7 +145,7 @@ public static class BLiteMigration
     /// <exception cref="FileNotFoundException">
     /// Thrown if <paramref name="sourcePath"/> does not exist.
     /// </exception>
-    public static void ToSingleFile(
+    public static async Task ToSingleFileAsync(
         string sourcePath,
         PageFileConfig sourceConfig,
         string targetPath,
@@ -175,7 +175,7 @@ public static class BLiteMigration
             using (var source = new BLiteEngine(sourcePath, sourceConfig))
             using (var target = new BLiteEngine(actualTargetPath, singleFileConfig))
             {
-                CopyAll(source, target);
+                await CopyAllAsync(source, target);
             }
 
             if (isInPlace)
@@ -204,20 +204,20 @@ public static class BLiteMigration
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>Copies all collections and KV entries from source to target.</summary>
-    private static void CopyAll(BLiteEngine source, BLiteEngine target)
+    private static async Task CopyAllAsync(BLiteEngine source, BLiteEngine target)
     {
         // Sync the C-BSON key dictionary first so that raw BSON bytes written by the
         // source engine are decodable by the target without re-serialisation.
         target.ImportDictionary(source.GetKeyReverseMap());
 
-        CopyCollections(source, target);
+        await CopyCollectionsASync(source, target);
         CopyKvStore(source, target);
         // Flush all committed WAL records to the main page file before the engine
         // is closed and its files are renamed / deleted.
-        target.Checkpoint();
+        await target.CheckpointAsync();
     }
 
-    private static void CopyCollections(BLiteEngine source, BLiteEngine target)
+    private static async Task CopyCollectionsASync(BLiteEngine source, BLiteEngine target)
     {
         foreach (var collName in source.ListCollections())
         {
@@ -226,7 +226,12 @@ public static class BLiteMigration
 
             // Detect Id type from the first document; fall back to ObjectId.
             var idType = BsonIdType.ObjectId;
-            var firstDoc = sourceColl.FindAll().FirstOrDefault();
+            BsonDocument? firstDoc = null;
+            await foreach (var doc in sourceColl.FindAllAsync())
+            {
+                firstDoc = doc;
+                break;
+            }
             if (firstDoc != null && firstDoc.TryGetId(out var firstId))
                 idType = firstId.Type;
 
@@ -243,19 +248,19 @@ public static class BLiteMigration
 
             // Copy documents in batches to avoid holding all of them in memory.
             var batch = new List<BsonDocument>(BatchSize);
-            foreach (var doc in sourceColl.FindAll())
+            await foreach (var doc in sourceColl.FindAllAsync())
             {
                 batch.Add(doc);
                 if (batch.Count >= BatchSize)
                 {
-                    targetColl.InsertBulk(batch);
+                    await targetColl.InsertBulkAsync(batch);
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
-                targetColl.InsertBulk(batch);
+                await targetColl.InsertBulkAsync(batch);
 
-            target.Commit();
+            await target.CommitAsync();
 
             // Recreate secondary indexes (after documents are inserted so the
             // index is built from the full data set in one pass).
@@ -264,26 +269,26 @@ public static class BLiteMigration
                 foreach (var idx in meta.Indexes)
                 {
                     if (idx.PropertyPaths.Length == 0) continue;
-                    RecreateIndex(targetColl, idx);
+                    await RecreateIndexAsync(targetColl, idx);
                 }
-                target.Commit();
+                await target.CommitAsync();
             }
         }
     }
 
-    private static void RecreateIndex(DynamicCollection col, IndexMetadata idx)
+    private static async Task RecreateIndexAsync(DynamicCollection col, IndexMetadata idx)
     {
         var field = idx.PropertyPaths[0];
         switch (idx.Type)
         {
             case IndexType.BTree:
-                col.CreateIndex(field, idx.Name, idx.IsUnique);
+                await col.CreateIndexAsync(field, idx.Name, idx.IsUnique);
                 break;
             case IndexType.Vector:
-                col.CreateVectorIndex(field, idx.Dimensions, idx.Metric, idx.Name);
+                await col.CreateVectorIndexAsync(field, idx.Dimensions, idx.Metric, idx.Name);
                 break;
             case IndexType.Spatial:
-                col.CreateSpatialIndex(field, idx.Name);
+                await col.CreateSpatialIndexAsync(field, idx.Name);
                 break;
         }
     }
