@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.0.0"></a>
+## [4.0.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.0.0) (2026-03-25)
+
+### Features
+
+* Document async-only CRUD API & update samples ([e13fe24](https://www.github.com/EntglDb/BLite/commit/e13fe24e7888ea9067b9423422b682d851111f4d))
+
+### Breaking Changes
+
+* Document async-only CRUD API & update samples ([e13fe24](https://www.github.com/EntglDb/BLite/commit/e13fe24e7888ea9067b9423422b682d851111f4d))
+
 <a name="3.8.1-preview.3"></a>
 ## [3.8.1-preview.3](https://www.github.com/EntglDb/BLite/releases/tag/v3.8.1-preview.3) (2026-03-25)
 
