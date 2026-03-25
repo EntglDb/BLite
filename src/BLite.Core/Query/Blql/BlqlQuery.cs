@@ -170,9 +170,8 @@ public sealed class BlqlQuery
 
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
-        //TODO: collection must have a count method
         int count = 0;
-        await foreach (var doc in _collection.FindAllAsync(cancellationToken))
+        await foreach (var doc in GetScanSource(_filter, cancellationToken).WithCancellation(cancellationToken))
             if (_filter.Matches(doc)) count++;
         return count;
     }
@@ -185,9 +184,9 @@ public sealed class BlqlQuery
 
     public async Task<BsonDocument?> FirstOrDefaultAsync(CancellationToken cancellationToken = default)
     {
-        //TODO: first or default must be optimized
-        await foreach (var doc in _collection.FindAsync(d => _filter.Matches(d), cancellationToken))
+        await foreach (var doc in GetScanSource(_filter, cancellationToken).WithCancellation(cancellationToken))
         {
+            if (!_filter.Matches(doc)) continue;
             return _projection.IsIdentity
                 ? doc
                 : _collection.ProjectDocument(doc, _projection);
@@ -216,7 +215,7 @@ public sealed class BlqlQuery
 
     public async Task<bool> AnyAsync(CancellationToken cancellationToken = default)
     {
-        await foreach (var doc in _collection.FindAllAsync(cancellationToken))
+        await foreach (var doc in GetScanSource(_filter, cancellationToken).WithCancellation(cancellationToken))
             if (_filter.Matches(doc)) return true;
         return false;
     }
@@ -234,25 +233,50 @@ public sealed class BlqlQuery
 
         if (_sort != null)
         {
-            // Sort requires full materialization — fetch directly to avoid circular call via ToList()
+            // Optimization: single-key sort on an indexed field — use the B-tree for ordering
+            // instead of materializing all documents ("top-N via index" pattern).
+            if (_sort.Keys.Count == 1)
+            {
+                var sortKey = _sort.Keys[0];
+                var sortIndexName = _collection.FindBTreeIndexForField(sortKey.Field);
+                if (sortIndexName != null)
+                {
+                    bool ascending = !sortKey.Descending;
+                    // If the filter also targets the sort field, use its bounds to further narrow
+                    // the index scan; otherwise use open bounds.
+                    object? min = null, max = null;
+                    if (filterRef.TryGetIndexCandidate(out var fc) && fc.Field == sortKey.Field)
+                        (min, max) = (fc.Min, fc.Max);
+
+                    int sk = 0, tk = 0;
+                    await foreach (var doc in _collection.QueryIndexAsync(sortIndexName, min, max, ascending).WithCancellation(ct).ConfigureAwait(false))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        if (!filterRef.Matches(doc)) continue;
+                        if (sk < _skip) { sk++; continue; }
+                        if (_take.HasValue && tk >= _take.Value) yield break;
+                        yield return _projection.IsIdentity ? doc : _collection.ProjectDocument(doc, _projection);
+                        tk++;
+                    }
+                    yield break;
+                }
+            }
+
+            // Fallback: full scan + in-memory sort (index narrowing still applies for the filter)
             var all = new List<BsonDocument>();
-            await foreach (var doc in _collection.FindAsync(d => filterRef.Matches(d), ct).ConfigureAwait(false))
-                all.Add(doc);
+            await foreach (var doc in GetScanSource(filterRef, ct).WithCancellation(ct).ConfigureAwait(false))
+                if (filterRef.Matches(doc)) all.Add(doc);
 
             all.Sort(new ComparisonComparer<BsonDocument>(_sort.ToComparison()));
 
-            int sk = 0;
-            int tk = 0;
+            int s = 0, t = 0;
             foreach (var doc in all)
             {
                 ct.ThrowIfCancellationRequested();
-                if (sk < _skip) { sk++; continue; }
-                if (_take.HasValue && tk >= _take.Value) yield break;
-
-                yield return _projection.IsIdentity
-                    ? doc
-                    : _collection.ProjectDocument(doc, _projection);
-                tk++;
+                if (s < _skip) { s++; continue; }
+                if (_take.HasValue && t >= _take.Value) yield break;
+                yield return _projection.IsIdentity ? doc : _collection.ProjectDocument(doc, _projection);
+                t++;
             }
             yield break;
         }
@@ -260,21 +284,31 @@ public sealed class BlqlQuery
         int skipped = 0;
         int taken = 0;
 
-        await foreach (var doc in _collection.FindAsync(d => filterRef.Matches(d), ct).ConfigureAwait(false))
+        await foreach (var doc in GetScanSource(filterRef, ct).WithCancellation(ct).ConfigureAwait(false))
         {
+            if (!filterRef.Matches(doc)) continue;
             if (skipped < _skip) { skipped++; continue; }
             if (_take.HasValue && taken >= _take.Value) yield break;
-
-            yield return _projection.IsIdentity
-                ? doc
-                : _collection.ProjectDocument(doc, _projection);
-
+            yield return _projection.IsIdentity ? doc : _collection.ProjectDocument(doc, _projection);
             taken++;
         }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
-
+    // Returns the narrowest possible document source for the given filter:
+    // uses a B-tree secondary index range scan when one exists for the filter field,
+    // otherwise falls back to a full collection scan. Callers must apply the filter
+    // as a residual predicate because the index scan uses conservative (inclusive) bounds.
+    private IAsyncEnumerable<BsonDocument> GetScanSource(BlqlFilter filter, CancellationToken ct)
+    {
+        if (filter.TryGetIndexCandidate(out var candidate))
+        {
+            var indexName = _collection.FindBTreeIndexForField(candidate.Field);
+            if (indexName != null)
+                return _collection.QueryIndexAsync(indexName, candidate.Min, candidate.Max);
+        }
+        return _collection.FindAllAsync(ct);
+    }
     private sealed class ComparisonComparer<T> : IComparer<T>
     {
         private readonly Comparison<T> _comparison;

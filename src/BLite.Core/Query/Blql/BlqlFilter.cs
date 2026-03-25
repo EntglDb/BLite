@@ -275,6 +275,17 @@ public abstract class BlqlFilter
     /// </summary>
     internal virtual bool MatchesValue(string field, BsonValue value) => false;
 
+    /// <summary>
+    /// Attempts to extract a single-field B-tree range/equality scan candidate.
+    /// Returns true when this filter can be narrowed to a B-tree range scan on one field.
+    /// The caller must still apply the original predicate as a residual for correctness.
+    /// </summary>
+    internal virtual bool TryGetIndexCandidate(out IndexScanCandidate candidate)
+    {
+        candidate = default;
+        return false;
+    }
+
     // ── Internal node types ────────────────────────────────────────────────
 
     private enum CompareOp { Eq, Ne, Gt, Gte, Lt, Lte }
@@ -347,6 +358,33 @@ public abstract class BlqlFilter
                 ? $"{{ \"{_field}\": {_value} }}"
                 : $"{{ \"{_field}\": {{ \"{opStr}\": {_value} }} }}";
         }
+
+        internal override bool TryGetIndexCandidate(out IndexScanCandidate candidate)
+        {
+            var v = ToIndexObject(_value);
+            if (v is null) { candidate = default; return false; }
+            candidate = _op switch
+            {
+                CompareOp.Eq  => new IndexScanCandidate(_field, v, v),
+                CompareOp.Gt  => new IndexScanCandidate(_field, v, null),
+                CompareOp.Gte => new IndexScanCandidate(_field, v, null),
+                CompareOp.Lt  => new IndexScanCandidate(_field, null, v),
+                CompareOp.Lte => new IndexScanCandidate(_field, null, v),
+                _             => default
+            };
+            return _op is CompareOp.Eq or CompareOp.Gt or CompareOp.Gte or CompareOp.Lt or CompareOp.Lte;
+        }
+
+        private static object? ToIndexObject(BsonValue v) => v.Type switch
+        {
+            BsonType.Int32    => (object)v.AsInt32,
+            BsonType.Int64    => v.AsInt64,
+            BsonType.Double   => v.AsDouble,
+            BsonType.String   => v.AsString,
+            BsonType.ObjectId => v.AsObjectId,
+            BsonType.DateTime => v.AsInt64,
+            _                 => null
+        };
     }
 
     private sealed class InFilter : BlqlFilter
@@ -424,6 +462,22 @@ public abstract class BlqlFilter
             var op = _op switch { LogicalOp.And => "$and", LogicalOp.Or => "$or", LogicalOp.Nor => "$nor", _ => "?" };
             var parts = string.Join(", ", _filters.Select(f => f.ToString()));
             return $"{{ \"{op}\": [{parts}] }}";
+        }
+
+        // Merge AND of two single-sided range candidates on the same field
+        // e.g. Gte(field, a) AND Lte(field, b) → range [a, b]
+        internal override bool TryGetIndexCandidate(out IndexScanCandidate candidate)
+        {
+            if (_op == LogicalOp.And && _filters.Length == 2
+                && _filters[0].TryGetIndexCandidate(out var a)
+                && _filters[1].TryGetIndexCandidate(out var b)
+                && a.Field == b.Field)
+            {
+                candidate = new IndexScanCandidate(a.Field, a.Min ?? b.Min, a.Max ?? b.Max);
+                return true;
+            }
+            candidate = default;
+            return false;
         }
     }
 

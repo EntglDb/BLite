@@ -439,6 +439,22 @@ public sealed class DynamicCollection : IDisposable
     }
 
     /// <summary>
+    /// Returns the name of the first BTree secondary index whose field path matches
+    /// <paramref name="fieldPath"/>, or <c>null</c> if none exists.
+    /// Used by the BLQL query optimizer to route filters through indexed scans.
+    /// </summary>
+    internal string? FindBTreeIndexForField(string fieldPath)
+    {
+        foreach (var (name, entry) in _secondaryIndexes)
+        {
+            if (entry.Kind == DynamicIndexKind.BTree
+                && string.Equals(entry.FieldPath, fieldPath, StringComparison.OrdinalIgnoreCase))
+                return name;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Performs a vector similarity search using the named vector index.
     /// The field must have been indexed via <see cref="CreateVectorIndexAsync"/>.
     /// </summary>
