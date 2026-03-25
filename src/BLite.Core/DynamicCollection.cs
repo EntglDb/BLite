@@ -1253,11 +1253,14 @@ public sealed class DynamicCollection : IDisposable
     {
         return value.Type switch
         {
-            BsonType.Int32 => new IndexKey(value.AsInt32),
-            BsonType.Int64 => new IndexKey(value.AsInt64),
-            BsonType.String => new IndexKey(value.AsString),
+            BsonType.Int32    => new IndexKey(value.AsInt32),
+            BsonType.Int64    => new IndexKey(value.AsInt64),
+            BsonType.String   => new IndexKey(value.AsString),
             BsonType.ObjectId => new IndexKey(value.AsObjectId),
-            BsonType.Double => new IndexKey(BitConverter.GetBytes(value.AsDouble)),
+            BsonType.Double   => new IndexKey(BitConverter.GetBytes(value.AsDouble)),
+            // DateTime is stored as BitConverter.Int64BitsToDouble(unixMs); key on the raw long
+            // to get the same ordering used by ToIndexObject in BlqlFilter.
+            BsonType.DateTime => new IndexKey(value.AsDateTimeOffset.ToUnixTimeMilliseconds()),
             _ => null // Can't index this type as BTree key
         };
     }

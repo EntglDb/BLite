@@ -397,8 +397,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
             double doubleVal => new IndexKey(doubleVal),
             float floatVal => new IndexKey((double)floatVal),
             decimal decimalVal => new IndexKey((double)decimalVal),
-            DateTime dateTime => new IndexKey(dateTime.Ticks),
-            bool boolVal => new IndexKey(boolVal ? 1 : 0),
+            DateTime dateTime => new IndexKey(new DateTimeOffset(dateTime.ToUniversalTime()).ToUnixTimeMilliseconds()),
+            DateTimeOffset dto => new IndexKey(dto.ToUnixTimeMilliseconds()),
             byte[] byteArray => new IndexKey(byteArray),
             
             // Enum values are boxed as the enum type (not the underlying int).

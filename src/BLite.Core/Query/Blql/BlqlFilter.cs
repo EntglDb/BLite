@@ -382,7 +382,9 @@ public abstract class BlqlFilter
             BsonType.Double   => v.AsDouble,
             BsonType.String   => v.AsString,
             BsonType.ObjectId => v.AsObjectId,
-            BsonType.DateTime => v.AsInt64,
+            // DateTime is stored as BitConverter.Int64BitsToDouble(unixMs); extract as long so
+            // CreateIndexKeyFromObject can create a comparable IndexKey(long) for BTree range scans.
+            BsonType.DateTime => v.AsDateTimeOffset.ToUnixTimeMilliseconds(),
             _                 => null
         };
     }
