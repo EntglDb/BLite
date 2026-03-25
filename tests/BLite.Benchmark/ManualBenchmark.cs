@@ -1,6 +1,3 @@
-using BLite.Bson;
-using BLite.Core;
-using BLite.Core.Query.Blql;
 using BLite.Shared;
 using System.Diagnostics;
 using System.IO;
@@ -176,73 +173,6 @@ public class ManualBenchmark
         var oDuckTop   = Measure(() => { olap.DuckDB_TopN(); });      Log($"   DuckDB:       {oDuckTop} ms\n");
 
         olap.Cleanup();
-
-        // ════════════════════════════════════════════════════════════════
-        // BLQL INDEX OPTIMIZATION
-        // Validates that BlqlQuery now exploits BTree secondary indexes instead
-        // of materialising the full collection for OrderBy+Take and range filters.
-        // Documents use double "total" (indexable type; Decimal128 is not indexed).
-        // ════════════════════════════════════════════════════════════════
-        Log("── BLQL Index Optimization Validation (10 000 documents) ──────────────────\n");
-
-        const int BlqlDocCount   = 10_000;
-        const double BlqlThreshold = 4_000.0;   // ~top 25 %: total = (100 + i*1.5) * 1.22
-        const int BlqlTopN       = 10;
-        const int BlqlRuns       = 100;
-
-        var blqlDbPath = Path.Combine(AppContext.BaseDirectory, $"blql_val_{Guid.NewGuid():N}.db");
-        try
-        {
-            using var blqlEngine = new BLiteEngine(blqlDbPath);
-            var blqlCol = blqlEngine.GetOrCreateCollection("orders");
-
-            // Seed: one BsonDocument per order; total stored as double so the
-            // BTree index can key on it (Decimal128 is not a supported key type).
-            var blqlDocs = Enumerable.Range(0, BlqlDocCount)
-                .Select(i => blqlEngine.CreateDocument(
-                    ["total", "status"],
-                    b =>
-                    {
-                        b.AddDouble("total",  (100.0 + i * 1.5) * 1.22);
-                        b.AddString("status", (i % 4) switch { 0 => "pending", 1 => "confirmed", 2 => "shipped", _ => "delivered" });
-                    }))
-                .ToArray();
-
-            blqlCol.InsertBulkAsync(blqlDocs).GetAwaiter().GetResult();
-
-            // BTree secondary index on "total".
-            blqlCol.CreateIndexAsync("total", "idx_total").GetAwaiter().GetResult();
-
-            // ── Top-10 by Total DESC ─────────────────────────────────────
-            // Before fix: materialises all 10 000 docs, sorts in RAM, yields 10.
-            // After fix : BTree backward scan, reads exactly 10 index entries.
-            sw.Restart();
-            for (int run = 0; run < BlqlRuns; run++)
-                blqlCol.Query().OrderByDescending("total").Take(BlqlTopN).ToList();
-            var blqlTop10 = sw.ElapsedMilliseconds;
-            Log($"9.  BLQL Top-10 OrderByDesc    (idx, {BlqlRuns}x): {blqlTop10,6} ms  ({blqlTop10 / (double)BlqlRuns:F2} ms/op)");
-
-            // ── Range filter: Total > threshold (~25 % of docs) ─────────
-            // Before fix: full scan + per-document predicate.
-            // After fix : BTree range scan starting at threshold.
-            sw.Restart();
-            for (int run = 0; run < BlqlRuns; run++)
-                blqlCol.Query().Filter(BlqlFilter.Gt("total", BlqlThreshold)).ToList();
-            var blqlRange = sw.ElapsedMilliseconds;
-            Log($"10. BLQL Range Total > {BlqlThreshold:F0}     (idx, {BlqlRuns}x): {blqlRange,6} ms  ({blqlRange / (double)BlqlRuns:F2} ms/op)");
-
-            // ── CountAsync with equality filter ──────────────────────────
-            // Status has no index; shows filter-only path (no index candidate).
-            sw.Restart();
-            for (int run = 0; run < BlqlRuns; run++)
-                blqlCol.Query().Filter(BlqlFilter.Eq("status", "shipped")).CountAsync().GetAwaiter().GetResult();
-            var blqlCount = sw.ElapsedMilliseconds;
-            Log($"11. BLQL Count Eq status       (scan,{BlqlRuns}x): {blqlCount,6} ms  ({blqlCount / (double)BlqlRuns:F2} ms/op)  [no idx — shows scan baseline]\n");
-        }
-        finally
-        {
-            if (File.Exists(blqlDbPath)) File.Delete(blqlDbPath);
-        }
 
         // ── Results ─────────────────────────────────────────────────
         Log("============================================================================");

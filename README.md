@@ -15,6 +15,10 @@
 
 ---
 
+> [!IMPORTANT]
+> **v4.0.0 — Breaking Change: Async-Only CRUD API**
+> Synchronous data methods (`Insert`, `Update`, `Delete`, `FindById`, `FindAll`, `Find`, `InsertBulk`, `UpdateBulk`, `DeleteBulk`, `Count`) have been **removed** from `DocumentCollection<TId, T>` and `DynamicCollection`. Only `*Async` variants are available. Update all call sites to use `await InsertAsync(...)`, `await FindByIdAsync(...)`, etc., and `SaveChangesAsync()` as the commit path.
+
 ## 🚀 Why BLite?
 
 Most embedded databases for .NET are either wrappers around C libraries (SQLite, RocksDB) or legacy C# codebases burdened by heavy GC pressure.
@@ -203,7 +207,7 @@ using var subscription = db.People.Watch(capturePayload: true)
     });
 
 // Perform operations - events fire after commit
-db.People.Insert(new Person { Id = 1, Name = "Alice" });
+await db.People.InsertAsync(new Person { Id = 1, Name = "Alice" });
 
 // v3.6.0 — DynamicCollection.Watch() is also supported
 using var dynSub = engine.GetOrCreateCollection("orders").Watch()
@@ -215,8 +219,8 @@ using var dynSub = engine.GetOrCreateCollection("orders").Watch()
 - **Durable**: WAL ensures data safety even in power loss.
 - **Isolated**: Snapshot isolation allowing concurrent readers and writers.
 - **Thread-Safe**: Protected with `SemaphoreSlim` to prevent race conditions in concurrent scenarios.
-- **Async-First**: Full async/await support across reads, writes, and transactions.
-- **Implicit Transactions**: Use `SaveChanges()` / `SaveChangesAsync()` for automatic transaction management.
+- **Async-Only**: All CRUD operations on `DocumentCollection<TId, T>` and `DynamicCollection` are exclusively async/await — no blocking synchronous methods. Eliminates accidental blocking calls on thread-pool threads.
+- **Implicit Transactions**: Use `SaveChangesAsync()` for automatic transaction management.
 
 ### � Native TimeSeries
 A dedicated `PageType.TimeSeries` — an append-only page format optimised for high-throughput time-ordered data. Introduced natively in **1.12**; the typed `DocumentDbContext` fluent API (`HasTimeSeries`) was added in **3.3.0**.
@@ -237,7 +241,7 @@ var doc = sensors.CreateDocument(
     b => b.Set("deviceId", "sensor-42")
           .Set("temperature", 23.5)
           .Set("timestamp", DateTime.UtcNow));
-sensors.Insert(doc);
+await sensors.InsertAsync(doc);
 
 // Force prune immediately (useful in tests)
 sensors.ForcePrune();
@@ -256,13 +260,13 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 }
 
 // Insert as normal — routing to TS pages is automatic
-db.SensorReadings.Insert(new SensorReading
+await db.SensorReadings.InsertAsync(new SensorReading
 {
     SensorId  = "sensor-42",
     Value     = 23.5,
     Timestamp = DateTime.UtcNow
 });
-db.SaveChanges();
+await db.SaveChangesAsync();
 
 // Force prune (useful in tests / maintenance)
 db.SensorReadings.ForcePrune();
@@ -317,7 +321,7 @@ var arr = await db.Orders.AsQueryable().ToArrayAsync(ct);
 await db.SaveChangesAsync(ct);
 ```
 
-**Available async read methods on `DocumentCollection<TId, T>`:**
+**Available async methods on `DocumentCollection<TId, T>` (all CRUD operations are async-only since v4.0.0):**
 
 | Method | Description |
 |:-------|:------------|
@@ -386,7 +390,7 @@ BLite supports standard .NET Data Annotations for mapping and validation:
 > Validation attributes (`[Required]`, `[Range]`, etc.) throw a `System.ComponentModel.DataAnnotations.ValidationException` during serialization if rules are violated.
 
 ### � `IDocumentCollection<TId, T>` Abstraction *(v3.5.0)*
-Typed collections implement the `IDocumentCollection<TId, T>` interface — a clean contract covering full CRUD, bulk operations, LINQ, and async methods. This makes constructor injection and unit-test mocking straightforward without binding to the concrete `DocumentCollection` class.
+Typed collections implement the `IDocumentCollection<TId, T>` interface — a clean contract covering async CRUD, bulk operations, and LINQ. This makes constructor injection and unit-test mocking straightforward without binding to the concrete `DocumentCollection` class.
 
 ```csharp
 // Inject or mock via the interface
@@ -397,7 +401,7 @@ public class OrderService
     public OrderService(IDocumentCollection<ObjectId, Order> orders) 
         => _orders = orders;
 
-    public void Place(Order o) { _orders.Insert(o); }
+    public async Task PlaceAsync(Order o) { await _orders.InsertAsync(o); }
 }
 ```
 
@@ -523,26 +527,26 @@ public partial class MyDbContext : DocumentDbContext
     }
 }
 
-// 3. Use with Implicit Transactions (Recommended)
+// 3. Use with Async Implicit Transactions (Recommended)
 using var db = new MyDbContext("mydb.db");
 
 // Operations are tracked automatically
-db.Users.Insert(new User { Name = "Alice" });
-db.Users.Insert(new User { Name = "Bob" });
+await db.Users.InsertAsync(new User { Name = "Alice" });
+await db.Users.InsertAsync(new User { Name = "Bob" });
 
 // Commit all changes at once
-db.SaveChanges();
+await db.SaveChangesAsync();
 
-// 4. Query naturally with LINQ
-var results = db.Users.AsQueryable()
+// 4. Query naturally with LINQ (async)
+var results = await db.Users.AsQueryable()
     .Where(u => u.Name.StartsWith("A"))
-    .AsEnumerable();
+    .ToListAsync();
 
 // 5. Or use explicit transactions for fine-grained control
 using (var txn = db.BeginTransaction())
 {
-    db.Users.Insert(new User { Name = "Charlie" });
-    txn.Commit(); // Explicit commit
+    await db.Users.InsertAsync(new User { Name = "Charlie" });
+    await txn.CommitAsync(); // Explicit async commit
 }
 ```
 
@@ -580,13 +584,9 @@ var doc = orders.CreateDocument(
         .Set("total",    199.99)
         .Set("currency", "EUR"));
 
-BsonId id = orders.Insert(doc);
-
-// Async variant
 BsonId id = await orders.InsertAsync(doc, ct);
 
 // Bulk insert (single transaction)
-List<BsonId> ids = orders.InsertBulk([doc1, doc2, doc3]);
 List<BsonId> ids = await orders.InsertBulkAsync([doc1, doc2, doc3], ct);
 ```
 
@@ -594,15 +594,12 @@ List<BsonId> ids = await orders.InsertBulkAsync([doc1, doc2, doc3], ct);
 
 ```csharp
 // Primary-key lookup
-BsonDocument? doc = orders.FindById(id);
 BsonDocument? doc = await orders.FindByIdAsync(id, ct);
 
 // Full scan
-foreach (var d in orders.FindAll()) { ... }
 await foreach (var d in orders.FindAllAsync(ct)) { ... }
 
 // Predicate filter
-var pending = orders.Find(d => d.GetString("status") == "pending");
 await foreach (var d in orders.FindAsync(d => d.GetString("status") == "pending", ct)) { ... }
 
 // Zero-copy predicate scan (BsonSpanReader — no heap allocation per document)
@@ -625,24 +622,16 @@ var nearby = orders.Near("idx_location", (45.46, 9.18), radiusKm: 5.0);
 var inArea  = orders.Within("idx_location", (45.0, 9.0), (46.0, 10.0));
 
 // Count
-int total = orders.Count();
+int total = await orders.CountAsync(ct);
 ```
 
 ### Update & Delete
 
 ```csharp
-bool updated = orders.Update(id, newDoc);
-bool deleted = orders.Delete(id);
-
-// Async (collection-level)
 bool updated = await orders.UpdateAsync(id, newDoc, ct);
 bool deleted = await orders.DeleteAsync(id, ct);
 
 // Bulk (single transaction)
-int updatedCount = orders.UpdateBulk([(id1, doc1), (id2, doc2)]);
-int deletedCount = orders.DeleteBulk([id1, id2, id3]);
-
-// Bulk async
 int updatedCount = await orders.UpdateBulkAsync([(id1, doc1), (id2, doc2)], ct);
 int deletedCount = await orders.DeleteBulkAsync([id1, id2, id3], ct);
 
@@ -744,7 +733,7 @@ var col = session.GetOrCreateCollection("events");
 col.Insert(eventDoc);
 ```
 
-> **BLiteSession API** (selected): `BeginTransaction()`, `CommitAsync()`, `Rollback()`, `GetOrCreateCollection(name)`, `GetCollection(name)`, `Insert/InsertAsync/InsertBulk/InsertBulkAsync`, `FindById/FindByIdAsync/FindAll/FindAllAsync/Find/FindAsync`, `Update/UpdateAsync/UpdateBulk/UpdateBulkAsync`.
+> **BLiteSession API** (selected): `BeginTransaction()`, `CommitAsync()`, `Rollback()`, `GetOrCreateCollection(name)`, `GetCollection(name)`, `InsertAsync/InsertBulkAsync`, `FindByIdAsync/FindAllAsync/FindAsync`, `UpdateAsync/UpdateBulkAsync`, `DeleteAsync/DeleteBulkAsync`.
 
 ---
 
@@ -970,6 +959,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **BLiteSession — Per-Connection Isolation (v3.8.0)**: `BLiteEngine.OpenSession()` returns a `BLiteSession` with its own isolated transaction context. Multiple sessions on the same engine run independent concurrent transactions. Disposing a session rolls back any uncommitted transaction automatically.
 - ✅ **Multi-File Storage Layout (v3.8.0)**: `PageFileConfig.Server(dbPath)` configures separate files for WAL, index data, and per-collection data. `BLiteMigration.ToMultiFile()` / `ToSingleFile()` migrate existing databases between layouts, preserving all documents, KV entries (including TTL), and index definitions.
 - ✅ **Non-Blocking Checkpoints (v3.8.0)**: checkpoint and metadata writes are deferred to avoid blocking the hot path. `PageFile` uses `Lazy<T>` for collection file initialization and `ReaderWriterLockSlim` to fix concurrent read/write races.
+- ✅ **Async-Only CRUD API (v4.0.0 — Breaking Change)**: Synchronous data methods (`Insert`, `Update`, `Delete`, `FindById`, `FindAll`, `Find`, and all bulk variants) have been **removed** from `DocumentCollection<TId, T>` and `DynamicCollection`. All data operations are now exclusively async — this eliminates accidental blocking calls on thread-pool threads, simplifies the internal code paths, and enforces correct async usage throughout the entire stack.
 
 ## 🔮 Future Vision
 
