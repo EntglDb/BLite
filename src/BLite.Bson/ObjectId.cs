@@ -8,7 +8,7 @@ namespace BLite.Bson;
 /// Implemented as readonly struct for zero allocation.
 /// </summary>
 [StructLayout(LayoutKind.Explicit, Size = 12)]
-public readonly struct ObjectId : IEquatable<ObjectId>
+public readonly struct ObjectId : IEquatable<ObjectId>, IComparable<ObjectId>, IComparable
 {
     [FieldOffset(0)] private readonly int _timestamp;
     [FieldOffset(4)] private readonly long _randomAndCounter;
@@ -88,6 +88,30 @@ public readonly struct ObjectId : IEquatable<ObjectId>
 
     public static bool operator ==(ObjectId left, ObjectId right) => left.Equals(right);
     public static bool operator !=(ObjectId left, ObjectId right) => !left.Equals(right);
+    public static bool operator < (ObjectId left, ObjectId right) => left.CompareTo(right) < 0;
+    public static bool operator > (ObjectId left, ObjectId right) => left.CompareTo(right) > 0;
+    public static bool operator <=(ObjectId left, ObjectId right) => left.CompareTo(right) <= 0;
+    public static bool operator >=(ObjectId left, ObjectId right) => left.CompareTo(right) >= 0;
+
+    /// <summary>
+    /// Compares two ObjectIds. Ordering matches MongoDB: timestamp (seconds) ascending,
+    /// then the remaining 8 bytes (machine id + pid + counter) treated as an unsigned integer.
+    /// </summary>
+    public int CompareTo(ObjectId other)
+    {
+        // Compare timestamp (big-endian seconds) as unsigned 32-bit integer.
+        int tsCompare = ((uint)_timestamp).CompareTo((uint)other._timestamp);
+        if (tsCompare != 0) return tsCompare;
+        // Compare remaining 8 bytes as unsigned 64-bit integer.
+        return ((ulong)_randomAndCounter).CompareTo((ulong)other._randomAndCounter);
+    }
+
+    public int CompareTo(object? obj)
+    {
+        if (obj is null) return 1;
+        if (obj is ObjectId other) return CompareTo(other);
+        throw new ArgumentException($"Object must be of type {nameof(ObjectId)}.", nameof(obj));
+    }
 
     public override string ToString()
     {

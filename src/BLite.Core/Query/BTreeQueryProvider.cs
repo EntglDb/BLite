@@ -94,7 +94,14 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
 
     public TResult Execute<TResult>(Expression expression)
     {
-        return ExecuteAsync<TResult>(expression, CancellationToken.None).GetAwaiter().GetResult();
+        // Run on the thread pool to avoid deadlocks when called from a thread that
+        // has a SynchronizationContext (ASP.NET classic, WPF, Blazor).
+        // Without Task.Run, ExecuteAsync awaits FindAllAsync which uses SemaphoreSlim.WaitAsync;
+        // its continuation would try to resume on the captured context that is already blocked
+        // by this .GetAwaiter().GetResult() call → deadlock.
+        // BTreeQueryable.GetAsyncEnumerator applies the same pattern for the async path.
+        return Task.Run(() => ExecuteAsync<TResult>(expression, CancellationToken.None))
+                   .GetAwaiter().GetResult();
     }
 
     private async Task<TResult> ExecuteAsync<TResult>(Expression expression, CancellationToken cancellationToken)
