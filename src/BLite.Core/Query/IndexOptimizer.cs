@@ -282,7 +282,17 @@ internal static class IndexOptimizer
     private static bool Matches(CollectionIndexInfo index, string propertyName)
     {
         if (index.PropertyPaths == null || index.PropertyPaths.Length == 0) return false;
-        return index.PropertyPaths[0].Equals(propertyName, StringComparison.OrdinalIgnoreCase);
+        var indexPath = index.PropertyPaths[0];
+        if (indexPath.Equals(propertyName, StringComparison.OrdinalIgnoreCase)) return true;
+
+        // Treat "_id" (BSON primary-key name) and "Id" (C# property name) as equivalent so that
+        // an index created with either name can be found when the expression visitor extracts the
+        // other.  The serializer writes the field as "_id" for root documents and "id" for nested
+        // documents, but both refer to the same primary-key property.
+        static string Normalize(string s) =>
+            s.Equals("_id", StringComparison.OrdinalIgnoreCase) ? "Id" : s;
+
+        return Normalize(indexPath).Equals(Normalize(propertyName), StringComparison.OrdinalIgnoreCase);
     }
 
     private static (string? propertyName, object? value, ExpressionType op) ParseSimplePredicate(Expression expression, ParameterExpression parameter, ValueConverterRegistry? registry = null)

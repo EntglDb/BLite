@@ -95,7 +95,11 @@ internal static class BsonExpressionEvaluator
             {
                 var fieldName = member.Member.Name;
                 var bsonName  = fieldName.ToLowerInvariant();
-                if (bsonName == "id") bsonName = "_id";
+                // "Id" and "_id" both refer to the BSON primary-key field.
+                // The serializer writes the root-entity primary key as "_id" regardless of the
+                // C# property name when the property is "Id".  Nested-entity mappers write "id".
+                // Normalise both here so that predicates on x.Id always scan for "_id".
+                if (bsonName == "id" || bsonName == "_id") bsonName = "_id";
 
                 // Right side: ConstantExpression or closure capture (any non-parameter expr)
                 var (ok, value) = TryEvaluate(right);
