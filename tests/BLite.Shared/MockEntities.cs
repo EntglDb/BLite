@@ -786,4 +786,23 @@ namespace BLite.Shared
         public double Value { get; set; }
         public DateTime Timestamp { get; set; }
     }
+
+    // ── Device – entity with a ulong property that requires HasConversion on a non-ID property ──
+    public class Device
+    {
+        public string Id { get; set; } = "";
+        public ulong SearchIndexId { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>
+    /// Demonstrates a ulong→long converter for storage in BSON (which has no native ulong type).
+    /// Values are stored as their bit-equivalent long (two's complement), so the round-trip
+    /// ulong → long → ulong is lossless even for values above <see cref="long.MaxValue"/>.
+    /// </summary>
+    public class UlongToInt64Converter : ValueConverter<ulong, long>
+    {
+        public override long ConvertToProvider(ulong model) => (long)model;
+        public override ulong ConvertFromProvider(long provider) => (ulong)provider;
+    }
 }

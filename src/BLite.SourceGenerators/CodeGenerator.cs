@@ -33,10 +33,23 @@ namespace BLite.SourceGenerators
             
             sb.AppendLine($"    {{");
             
-            // Converter instance
+            // Converter instance for the primary key
             if (keyProp?.ConverterTypeName != null)
             {
                 sb.AppendLine($"        private readonly global::{keyProp.ConverterTypeName} _idConverter = new();");
+                sb.AppendLine();
+            }
+
+            // Converter instances for non-key properties that have a detected converter
+            var nonKeyConverterProps = entity.Properties
+                .Where(p => !p.IsKey && p.ConverterTypeName != null)
+                .ToList();
+            foreach (var prop in nonKeyConverterProps)
+            {
+                sb.AppendLine($"        private readonly global::{prop.ConverterTypeName} _converter_{prop.Name} = new();");
+            }
+            if (nonKeyConverterProps.Any())
+            {
                 sb.AppendLine();
             }
 
@@ -315,40 +328,74 @@ namespace BLite.SourceGenerators
                     sb.AppendLine($"            writer.{underlyingWrite}(\"{fieldName}\", ({prop.EnumUnderlyingTypeName})entity.{prop.Name});");
                 }
             }
-            else
-            {
-                var writeMethod = GetPrimitiveWriteMethod(prop, allowKey: false);
-                if (writeMethod != null)
+                else
                 {
-                    if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String")
+                    var writeMethod = GetPrimitiveWriteMethod(prop, allowKey: false);
+                    if (writeMethod != null)
                     {
-                        sb.AppendLine($"            if (entity.{prop.Name} != null)");
-                        sb.AppendLine($"            {{");
-                        // For nullable value types, use .Value to unwrap
-                        // String is a reference type and doesn't need .Value
-                        var isValueTypeNullable = prop.IsNullable && IsValueType(prop.TypeName);
-                        var valueAccess = isValueTypeNullable 
-                            ? $"entity.{prop.Name}.Value" 
-                            : $"entity.{prop.Name}";
-                        sb.AppendLine($"                writer.{writeMethod}(\"{fieldName}\", {valueAccess});");
-                        sb.AppendLine($"            }}");
-                        sb.AppendLine($"            else");
-                        sb.AppendLine($"            {{");
-                        sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
-                        sb.AppendLine($"            }}");
+                        if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String")
+                        {
+                            sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                            sb.AppendLine($"            {{");
+                            // For nullable value types, use .Value to unwrap
+                            // String is a reference type and doesn't need .Value
+                            var isValueTypeNullable = prop.IsNullable && IsValueType(prop.TypeName);
+                            var valueAccess = isValueTypeNullable 
+                                ? $"entity.{prop.Name}.Value" 
+                                : $"entity.{prop.Name}";
+                            sb.AppendLine($"                writer.{writeMethod}(\"{fieldName}\", {valueAccess});");
+                            sb.AppendLine($"            }}");
+                            sb.AppendLine($"            else");
+                            sb.AppendLine($"            {{");
+                            sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                            sb.AppendLine($"            }}");
+                        }
+                        else
+                        {
+                            sb.AppendLine($"            writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
+                        }
+                    }
+                    else if (prop.ConverterTypeName != null)
+                    {
+                        // Non-key property with a source-generator-detected converter.
+                        var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
+                        var converterWriteMethod = GetPrimitiveWriteMethod(providerProp, allowKey: false);
+                        if (converterWriteMethod != null)
+                        {
+                            if (prop.IsNullable)
+                            {
+                                // For nullable properties, guard against null before calling ConvertToProvider.
+                                var isValueTypeNullable = IsValueType(prop.TypeName);
+                                var valueAccess = isValueTypeNullable
+                                    ? $"entity.{prop.Name}.Value"
+                                    : $"entity.{prop.Name}";
+                                sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                                sb.AppendLine($"            {{");
+                                sb.AppendLine($"                writer.{converterWriteMethod}(\"{fieldName}\", _converter_{prop.Name}.ConvertToProvider({valueAccess}));");
+                                sb.AppendLine($"            }}");
+                                sb.AppendLine($"            else");
+                                sb.AppendLine($"            {{");
+                                sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                                sb.AppendLine($"            }}");
+                            }
+                            else
+                            {
+                                sb.AppendLine($"            writer.{converterWriteMethod}(\"{fieldName}\", _converter_{prop.Name}.ConvertToProvider(entity.{prop.Name}));");
+                            }
+                        }
+                        else
+                        {
+                            sb.AppendLine($"#warning Property '{prop.Name}': converter '{prop.ConverterTypeName}' has an unsupported provider type '{prop.ProviderTypeName}'. It will be skipped during serialization.");
+                            sb.AppendLine($"            // Unsupported provider type: {prop.ProviderTypeName} for {prop.Name}");
+                        }
                     }
                     else
                     {
-                        sb.AppendLine($"            writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
+                        sb.AppendLine($"#warning Property '{prop.Name}' of type '{prop.TypeName}' is not directly supported and has no converter. It will be skipped during serialization.");
+                        sb.AppendLine($"            // Unsupported type: {prop.TypeName} for {prop.Name}");
                     }
                 }
-                else
-                {
-                    sb.AppendLine($"#warning Property '{prop.Name}' of type '{prop.TypeName}' is not directly supported and has no converter. It will be skipped during serialization.");
-                    sb.AppendLine($"            // Unsupported type: {prop.TypeName} for {prop.Name}");
-                }
             }
-        }
 
         private static void GenerateDeserializeMethod(StringBuilder sb, EntityInfo entity, bool isRoot, string mapperNamespace)
         {
@@ -691,6 +738,36 @@ namespace BLite.SourceGenerators
                         var readArgs = IsCoercedReadMethod(readMethod) ? $"({bsonTypeVar})" : "()";
                         sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}{readArgs};");
                     }
+                 }
+                 else if (prop.ConverterTypeName != null)
+                 {
+                     // Non-key property with a source-generator-detected converter.
+                     var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
+                     var converterReadMethod = GetPrimitiveReadMethod(providerProp);
+                     if (converterReadMethod != null)
+                     {
+                         var converterReadArgs = IsCoercedReadMethod(converterReadMethod) ? $"({bsonTypeVar})" : "()";
+                         if (prop.IsNullable)
+                         {
+                             // Guard against BSON null so ConvertFromProvider is never called with a missing value.
+                             sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                             sb.AppendLine($"                        {{");
+                             sb.AppendLine($"                            {localVar} = null;");
+                             sb.AppendLine($"                        }}");
+                             sb.AppendLine($"                        else");
+                             sb.AppendLine($"                        {{");
+                             sb.AppendLine($"                            {localVar} = _converter_{prop.Name}.ConvertFromProvider(reader.{converterReadMethod}{converterReadArgs});");
+                             sb.AppendLine($"                        }}");
+                         }
+                         else
+                         {
+                             sb.AppendLine($"                        {localVar} = _converter_{prop.Name}.ConvertFromProvider(reader.{converterReadMethod}{converterReadArgs});");
+                         }
+                     }
+                     else
+                     {
+                         sb.AppendLine($"                        reader.SkipValue({bsonTypeVar});");
+                     }
                  }
                  else
                  {

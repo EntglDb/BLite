@@ -77,6 +77,9 @@ public partial class TestDbContext : DocumentDbContext
     // SensorReading – TimeSeries via DocumentDbContext fluent API
     public DocumentCollection<ObjectId, SensorReading> SensorReadings { get; set; } = null!;
 
+    // Device – HasConversion on a non-ID property (ulong → long)
+    public DocumentCollection<string, Device> Devices { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
         InitializeCollections();
@@ -171,6 +174,12 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<SensorReading>()
             .ToCollection("sensor_readings")
             .HasTimeSeries(r => r.Timestamp, retention: TimeSpan.FromDays(7));
+
+        // Device – HasConversion on a non-ID property (ulong → long)
+        modelBuilder.Entity<Device>()
+            .ToCollection("devices")
+            .Property(x => x.SearchIndexId)
+            .HasConversion<UlongToInt64Converter>();
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);
