@@ -613,6 +613,74 @@ public class SourceGeneratorFeaturesTests : IDisposable
 
     #endregion
 
+    #region HasConversion on Non-ID Properties
+
+    [Fact]
+    public async Task Device_NonIdProperty_HasConversion_Serializes_Correctly()
+    {
+        // ulong is not natively supported by BSON; the converter maps it to long.
+        var device = new Device
+        {
+            Id            = "dev-001",
+            SearchIndexId = ulong.MaxValue,   // largest ulong — exercises the full range
+            Name          = "Test Device",
+        };
+
+        var id = await _db.Devices.InsertAsync(device);
+        await _db.SaveChangesAsync();
+
+        var retrieved = await _db.Devices.FindByIdAsync(id);
+
+        Assert.NotNull(retrieved);
+        Assert.Equal("dev-001", retrieved.Id);
+        Assert.Equal(ulong.MaxValue, retrieved.SearchIndexId);
+        Assert.Equal("Test Device", retrieved.Name);
+    }
+
+    [Fact]
+    public async Task Device_NonIdProperty_HasConversion_RoundTrips_Multiple_Values()
+    {
+        var devices = new[]
+        {
+            new Device { Id = "d1", SearchIndexId = 0UL,               Name = "Zero"    },
+            new Device { Id = "d2", SearchIndexId = 1UL,               Name = "One"     },
+            new Device { Id = "d3", SearchIndexId = 9_999_999_999UL,   Name = "Large"   },
+            new Device { Id = "d4", SearchIndexId = ulong.MaxValue,    Name = "MaxVal"  },
+        };
+
+        foreach (var d in devices)
+            await _db.Devices.InsertAsync(d);
+        await _db.SaveChangesAsync();
+
+        foreach (var original in devices)
+        {
+            var loaded = await _db.Devices.FindByIdAsync(original.Id);
+            Assert.NotNull(loaded);
+            Assert.Equal(original.SearchIndexId, loaded.SearchIndexId);
+            Assert.Equal(original.Name, loaded.Name);
+        }
+    }
+
+    [Fact]
+    public async Task Device_NonIdProperty_HasConversion_Update_Works()
+    {
+        var device = new Device { Id = "dev-upd", SearchIndexId = 42UL, Name = "Before" };
+        await _db.Devices.InsertAsync(device);
+        await _db.SaveChangesAsync();
+
+        device.SearchIndexId = 99UL;
+        device.Name          = "After";
+        await _db.Devices.UpdateAsync(device);
+        await _db.SaveChangesAsync();
+
+        var loaded = await _db.Devices.FindByIdAsync("dev-upd");
+        Assert.NotNull(loaded);
+        Assert.Equal(99UL, loaded.SearchIndexId);
+        Assert.Equal("After", loaded.Name);
+    }
+
+    #endregion
+
     public void Dispose()
     {
         _db?.Dispose();

@@ -583,11 +583,29 @@ public readonly struct BLiteDiagnostic
                         var propertyName = SyntaxHelper.GetPropertyName(propertyCall.ArgumentList.Arguments.FirstOrDefault()?.Expression);
                         if (propertyName == null) continue;
 
-                        // Trace further back: Entity<T>().Property(...)
-                        if (propertyCall.Expression is MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax entityCall } &&
-                            entityCall.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var entityMethodText } } } && entityMethodText == BLiteConventions.EntityMethodName)
+                        // Trace further back through the fluent chain to find Entity<T>().
+                        // The pattern may include intermediate calls such as .ToCollection("..."),
+                        // e.g. modelBuilder.Entity<T>().ToCollection("name").Property(...).HasConversion<TC>()
+                        // propertyCall.Expression is a MemberAccessExpressionSyntax (the ".Property" part);
+                        // its own Expression is the invocation that precedes ".Property".
+                        const int maxChainDepth = 20; // guard against pathological chains
+                        var entityCallCandidate = (propertyCall.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
+                        int chainDepth = 0;
+                        while (entityCallCandidate != null && chainDepth < maxChainDepth)
                         {
-                            var entityTypeName = SyntaxHelper.GetGenericTypeArgument(entityCall);
+                            if (entityCallCandidate.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var methodText } } } &&
+                                methodText == BLiteConventions.EntityMethodName)
+                            {
+                                break; // found Entity<T>()
+                            }
+                            // Step back one more level in the chain
+                            entityCallCandidate = (entityCallCandidate.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
+                            chainDepth++;
+                        }
+
+                        if (entityCallCandidate != null)
+                        {
+                            var entityTypeName = SyntaxHelper.GetGenericTypeArgument(entityCallCandidate);
                             if (entityTypeName != null)
                             {
                                 var entity = info.Entities.FirstOrDefault(e => e.Name == entityTypeName || e.FullTypeName.EndsWith("." + entityTypeName));
