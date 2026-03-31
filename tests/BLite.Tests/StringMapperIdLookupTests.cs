@@ -42,20 +42,20 @@ public class StringMapperIdLookupTests : IDisposable
     [Fact]
     public async Task StringId_FirstOrDefaultAsync_ConstantEquality_NoSecondaryIndex_ReturnsDocument()
     {
-        await _db.StringEntities.InsertAsync(new StringEntity { Id = "CC3Rgw-i", Value = "test" });
+        await _db.StringEntities.InsertAsync(new StringEntity { Id = "device1", Value = "test" });
         await _db.SaveChangesAsync();
 
         // Sanity: full scan (no predicate) must work
         var all = await _db.StringEntities.AsQueryable().FirstOrDefaultAsync();
         Assert.NotNull(all);
-        Assert.Equal("CC3Rgw-i", all!.Id);
+        Assert.Equal("device1", all!.Id);
 
         // Primary path under test: constant equality on Id
         var result = await _db.StringEntities.AsQueryable()
-            .FirstOrDefaultAsync(x => x.Id == "CC3Rgw-i");
+            .FirstOrDefaultAsync(x => x.Id == "device1");
 
         Assert.NotNull(result);
-        Assert.Equal("CC3Rgw-i", result!.Id);
+        Assert.Equal("device1", result!.Id);
     }
 
     /// <summary>
@@ -64,15 +64,15 @@ public class StringMapperIdLookupTests : IDisposable
     [Fact]
     public async Task StringId_FirstOrDefaultAsync_ClosureEquality_NoSecondaryIndex_ReturnsDocument()
     {
-        await _db.StringEntities.InsertAsync(new StringEntity { Id = "CC3Rgw-i", Value = "test" });
+        await _db.StringEntities.InsertAsync(new StringEntity { Id = "device1", Value = "test" });
         await _db.SaveChangesAsync();
 
-        var id = "CC3Rgw-i";
+        var id = "device1";
         var result = await _db.StringEntities.AsQueryable()
             .FirstOrDefaultAsync(x => x.Id == id);
 
         Assert.NotNull(result);
-        Assert.Equal("CC3Rgw-i", result!.Id);
+        Assert.Equal("device1", result!.Id);
     }
 
     /// <summary>
@@ -86,7 +86,7 @@ public class StringMapperIdLookupTests : IDisposable
         // Create a secondary unique index on Id (mirrors the user's .HasIndex(x => x.Id, unique: true))
         await _db.StringEntities.CreateIndexAsync(x => x.Id, unique: true, name: "idx_Id");
 
-        await _db.StringEntities.InsertAsync(new StringEntity { Id = "CC3Rgw-i", Value = "test" });
+        await _db.StringEntities.InsertAsync(new StringEntity { Id = "device1", Value = "test" });
         await _db.SaveChangesAsync();
 
         // Sanity: count and full scan must work
@@ -95,16 +95,16 @@ public class StringMapperIdLookupTests : IDisposable
 
         var allFirst = await _db.StringEntities.AsQueryable().FirstOrDefaultAsync();
         Assert.NotNull(allFirst);
-        Assert.Equal("CC3Rgw-i", allFirst!.Id);
+        Assert.Equal("device1", allFirst!.Id);
 
         // Primary path under test: equality on Id with a secondary index present
         // Before the fix this returned null because the IndexOptimizer selected the secondary
         // index but the BSON scan path (which correctly maps "Id" → "_id") was skipped.
         var result = await _db.StringEntities.AsQueryable()
-            .FirstOrDefaultAsync(x => x.Id == "CC3Rgw-i");
+            .FirstOrDefaultAsync(x => x.Id == "device1");
 
         Assert.NotNull(result);
-        Assert.Equal("CC3Rgw-i", result!.Id);
+        Assert.Equal("device1", result!.Id);
     }
 
     /// <summary>
@@ -115,15 +115,15 @@ public class StringMapperIdLookupTests : IDisposable
     {
         await _db.StringEntities.CreateIndexAsync(x => x.Id, unique: true, name: "idx_Id");
 
-        await _db.StringEntities.InsertAsync(new StringEntity { Id = "CC3Rgw-i", Value = "test" });
+        await _db.StringEntities.InsertAsync(new StringEntity { Id = "device1", Value = "test" });
         await _db.SaveChangesAsync();
 
-        var id = "CC3Rgw-i";
+        var id = "device1";
         var result = await _db.StringEntities.AsQueryable()
             .FirstOrDefaultAsync(x => x.Id == id);
 
         Assert.NotNull(result);
-        Assert.Equal("CC3Rgw-i", result!.Id);
+        Assert.Equal("device1", result!.Id);
     }
 
     /// <summary>
@@ -135,14 +135,14 @@ public class StringMapperIdLookupTests : IDisposable
     {
         await _db.StringEntities.CreateIndexAsync(x => x.Id, unique: true, name: "idx_Id");
 
-        await _db.StringEntities.InsertAsync(new StringEntity { Id = "CC3Rgw-i", Value = "test" });
+        await _db.StringEntities.InsertAsync(new StringEntity { Id = "device1", Value = "test" });
         await _db.SaveChangesAsync();
 
         var result = await _db.StringEntities.AsQueryable()
-            .FirstOrDefaultAsync(x => x.Id.ToLowerInvariant() == "CC3Rgw-i".ToLowerInvariant());
+            .FirstOrDefaultAsync(x => x.Id.ToLowerInvariant() == "device1".ToLowerInvariant());
 
         Assert.NotNull(result);
-        Assert.Equal("CC3Rgw-i", result!.Id);
+        Assert.Equal("device1", result!.Id);
     }
 
     /// <summary>
@@ -175,7 +175,7 @@ public class StringMapperIdLookupTests : IDisposable
     {
         await _db.StringEntities.CreateIndexAsync(x => x.Id, unique: true, name: "idx_Id");
 
-        await _db.StringEntities.InsertAsync(new StringEntity { Id = "CC3Rgw-i", Value = "test" });
+        await _db.StringEntities.InsertAsync(new StringEntity { Id = "device1", Value = "test" });
         await _db.SaveChangesAsync();
 
         var result = await _db.StringEntities.AsQueryable()
