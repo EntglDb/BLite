@@ -63,17 +63,6 @@ public ref struct BsonSpanWriter
     }
 
     /// <summary>
-    /// Writes a C-style null-terminated string
-    /// </summary>
-    private void WriteCString(string value)
-    {
-        var bytesWritten = Encoding.UTF8.GetBytes(value, _buffer[_position..]);
-        _position += bytesWritten;
-        _buffer[_position] = 0; // Null terminator
-        _position++;
-    }
-
-    /// <summary>
     /// Writes end-of-document marker
     /// </summary>
     public void WriteEndOfDocument()

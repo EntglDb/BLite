@@ -61,6 +61,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     private readonly int _maxDocumentSizeForSinglePage;
 
+    // Tracks the last successful serialized size (+25% margin) to skip retry steps that are
+    // known to be too small. Volatile: benign race in Parallel.For — worst case a step is
+    // not skipped once, never a correctness issue.
+    private volatile int _lastSerializedSize = 65536;
+
     // Value converters registered via OnModelCreating (e.g. ValueObject Id converters).
     // Exposed to BTreeQueryProvider so the query engine can convert ValueObjects to BSON
     // primitives at query-plan time, enabling index lookups on ValueObject-keyed collections.
@@ -1884,11 +1889,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var keyMap = _storage.GetFrozenKeyMap();
 
         // Stored as compiler-constant data segment — no heap allocation.
-        ReadOnlySpan<int> steps = [65536, 2097152, 16777216]; // 64KB, 2MB, 16MB
+        ReadOnlySpan<int> steps = [65536, 524288, 2097152, 16777216]; // 64KB, 512KB, 2MB, 16MB
+
+        int minSize = _lastSerializedSize;
 
         foreach (var size in steps)
         {
             int bufSize = size < _storage.PageSize ? _storage.PageSize : size;
+
+            // Skip steps that are smaller than the last known serialized size.
+            // This avoids predictable failures and the associated exception overhead.
+            if (bufSize < minSize) continue;
 
             var buffer = ArrayPool<byte>.Shared.Rent(bufSize);
             try
@@ -1904,6 +1915,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     }
                     AppendVersionField(buffer, ref bytesWritten);
                 }
+
+                // Update warm-start hint: last size + 25% margin so the next document of
+                // similar size starts at the right step without needing a retry.
+                _lastSerializedSize = Math.Max(_lastSerializedSize, bytesWritten + (bytesWritten >> 2));
 
                 rentedBuffer = buffer;
                 return bytesWritten;
