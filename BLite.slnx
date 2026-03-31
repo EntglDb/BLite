@@ -15,6 +15,7 @@
     <Project Path="src/BLite/BLite.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="FirstOrDefaultAyncIssueRepro/FirstOrDefaultAyncIssueRepro.csproj" Id="c8e4a66a-9934-4389-a4b8-c2cf171333f9" />
     <Project Path="tests/BLite.Benchmark/BLite.Benchmark.csproj" />
     <Project Path="tests/BLite.CheckpointTest/DocumentDb.CheckpointTest.csproj" />
     <Project Path="tests/BLite.ConsoleSample/BLite.ConsoleSample.csproj" />
