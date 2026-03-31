@@ -333,7 +333,7 @@ namespace BLite.SourceGenerators
                     var writeMethod = GetPrimitiveWriteMethod(prop, allowKey: false);
                     if (writeMethod != null)
                     {
-                        if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String")
+                        if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String" || prop.TypeName == "byte[]")
                         {
                             sb.AppendLine($"            if (entity.{prop.Name} != null)");
                             sb.AppendLine($"            {{");
@@ -718,6 +718,27 @@ namespace BLite.SourceGenerators
                  var readMethod = GetPrimitiveReadMethod(prop);
                  if (readMethod != null)
                  {
+                    if (readMethod == "ReadBinary")
+                    {
+                        // ReadBinary returns ReadOnlySpan<byte> — must call .ToArray() to materialise
+                        if (prop.IsNullable)
+                        {
+                            sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                            sb.AppendLine($"                        {{");
+                            sb.AppendLine($"                            {localVar} = null;");
+                            sb.AppendLine($"                        }}");
+                            sb.AppendLine($"                        else");
+                            sb.AppendLine($"                        {{");
+                            sb.AppendLine($"                            {localVar} = reader.ReadBinary(out _).ToArray();");
+                            sb.AppendLine($"                        }}");
+                        }
+                        else
+                        {
+                            sb.AppendLine($"                        {localVar} = reader.ReadBinary(out _).ToArray();");
+                        }
+                    }
+                    else
+                    {
                     var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
                     
                     // Handle nullable types - check for null in BSON stream
@@ -737,6 +758,7 @@ namespace BLite.SourceGenerators
                     {
                         var readArgs = IsCoercedReadMethod(readMethod) ? $"({bsonTypeVar})" : "()";
                         sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}{readArgs};");
+                    }
                     }
                  }
                  else if (prop.ConverterTypeName != null)
@@ -931,6 +953,7 @@ namespace BLite.SourceGenerators
             if (cleanType.EndsWith("TimeOnly")) return "WriteTimeOnly";
             if (cleanType.EndsWith("Guid")) return "WriteGuid";
             if (cleanType.EndsWith("ObjectId")) return "WriteObjectId";
+            if (cleanType == "byte[]") return "WriteBinary";
 
             return null;
         }
@@ -964,6 +987,7 @@ namespace BLite.SourceGenerators
             if (cleanType.EndsWith("TimeOnly")) return "ReadTimeOnly";
             if (cleanType.EndsWith("Guid")) return "ReadGuid";
             if (cleanType.EndsWith("ObjectId")) return "ReadObjectId";
+            if (cleanType == "byte[]") return "ReadBinary";
 
             return null;
         }
@@ -1025,6 +1049,7 @@ namespace BLite.SourceGenerators
                 case "object":
                 case "dynamic":
                 case "void":
+                case "byte[]":
                     return baseType + (isNullable ? "?" : "");
                 case "Guid": return "global::System.Guid" + (isNullable ? "?" : "");
                 case "DateTime": return "global::System.DateTime" + (isNullable ? "?" : "");

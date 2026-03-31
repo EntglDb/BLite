@@ -80,6 +80,9 @@ public partial class TestDbContext : DocumentDbContext
     // Device – HasConversion on a non-ID property (ulong → long)
     public DocumentCollection<string, Device> Devices { get; set; } = null!;
 
+    // Binary Property Tests
+    public DocumentCollection<ObjectId, BinaryEntity> BinaryEntities { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
         InitializeCollections();
@@ -183,6 +186,9 @@ public partial class TestDbContext : DocumentDbContext
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);
+
+        // Binary Property Tests
+        modelBuilder.Entity<BinaryEntity>().ToCollection("binary_entities");
     }
 
     public void ForceCheckpoint()

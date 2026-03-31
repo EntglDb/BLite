@@ -199,6 +199,16 @@ namespace BLite.Shared
         public int Quantity { get; set; }
     }
 
+    // --- Binary Property Tests ---
+
+    public class BinaryEntity
+    {
+        public ObjectId Id { get; set; }
+        public string Label { get; set; } = "";
+        public byte[] Data { get; set; } = Array.Empty<byte>();
+        public byte[]? OptionalData { get; set; }
+    }
+
     public record OrderId(string Value)
     {
         public OrderId() : this(string.Empty) { }
