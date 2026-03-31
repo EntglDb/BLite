@@ -143,6 +143,9 @@ namespace BLite.SourceGenerators.Helpers
             // Handle arrays
             if (type is IArrayTypeSymbol arrayType)
             {
+                // Exclude byte[] — it maps to BSON Binary, not a sequence of integers
+                if (arrayType.ElementType.SpecialType == SpecialType.System_Byte)
+                    return false;
                 itemType = arrayType.ElementType;
                 return true;
             }
