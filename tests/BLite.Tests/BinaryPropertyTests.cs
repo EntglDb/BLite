@@ -26,7 +26,16 @@ public class BinaryPropertyTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+        DeleteFileIfExists(_dbPath);
+        DeleteFileIfExists(Path.ChangeExtension(_dbPath, ".wal"));
+    }
+
+    private static void DeleteFileIfExists(string path)
+    {
+        if (!string.IsNullOrEmpty(path) && File.Exists(path))
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -149,7 +158,8 @@ public class BinaryPropertyTests : IDisposable
             Assert.Equal(expected, result!.Data);
         }
 
-        if (File.Exists(path)) File.Delete(path);
+        DeleteFileIfExists(path);
+        DeleteFileIfExists(Path.ChangeExtension(path, ".wal"));
     }
 
     [Fact]
@@ -209,7 +219,8 @@ public class BinaryPropertyTests : IDisposable
             Assert.Null(result.OptionalData);
         }
 
-        if (File.Exists(path)) File.Delete(path);
+        DeleteFileIfExists(path);
+        DeleteFileIfExists(Path.ChangeExtension(path, ".wal"));
     }
 
     // ── JSON serialization ────────────────────────────────────────────────────
@@ -270,7 +281,11 @@ public class BinaryPropertyTests : IDisposable
 
     private static bool IsValidJson(string json)
     {
-        try { JsonDocument.Parse(json); return true; }
+        try
+        {
+            using var _ = JsonDocument.Parse(json);
+            return true;
+        }
         catch { return false; }
     }
 }
