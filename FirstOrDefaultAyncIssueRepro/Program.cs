@@ -28,6 +28,7 @@ public class Program
         };
 
         await ReadOnlyDb.Devices.InsertAsync(device);
+        await ReadOnlyDb.SaveChangesAsync();
 
         var ct = CancellationToken.None;
 
