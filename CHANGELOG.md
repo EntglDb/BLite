@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.1.0"></a>
+## [4.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.0) (2026-04-01)
+
+### Features
+
+* complete async LINQ materialiser layer for IBLiteQueryable ([#30](https://www.github.com/EntglDb/BLite/issues/30)) ([2499054](https://www.github.com/EntglDb/BLite/commit/2499054432c66070b06080a99495028951e3c4ed))
+
+### Bug Fixes
+
+* Add warm-start buffer sizing; remove WriteCString ([90955bd](https://www.github.com/EntglDb/BLite/commit/90955bd20350332957ad32bf980f3bfcf15e71ab))
+
 <a name="4.0.3"></a>
 ## [4.0.3](https://www.github.com/EntglDb/BLite/releases/tag/v4.0.3) (2026-03-31)
 
