@@ -54,9 +54,11 @@ jobs:
         with:
           dotnet-version: "10.x"
 
-      # ── 4. Installa dotnet-versionize ────────────────────────────────────────
+      # ── 4. Installa Versionize e aggiunge il path degli strumenti globali ──────
       - name: Install versionize
-        run: dotnet tool install --global dotnet-versionize
+        run: |
+          dotnet tool install --global Versionize
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       # ── 5. Esegui versionize ─────────────────────────────────────────────────
       #   --skip-dirty  — ignora le modifiche non tracciate nell'ambiente CI
@@ -73,7 +75,7 @@ jobs:
             EXTRA_FLAGS="$EXTRA_FLAGS --dry-run"
           fi
 
-          dotnet versionize --skip-dirty $EXTRA_FLAGS
+          versionize --skip-dirty $EXTRA_FLAGS
 
           # Legge il tag appena creato da versionize (es. v1.2.3)
           VTAG=$(git describe --tags --abbrev=0)
