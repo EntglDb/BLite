@@ -223,4 +223,432 @@ public static class BLiteQueryableExtensions
 
         return await Task.Run(() => source.All(predicate), ct).ConfigureAwait(false);
     }
+
+    // ─── Throwing single-element ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the first element of the sequence asynchronously.
+    /// Throws <see cref="InvalidOperationException"/> if the sequence is empty.
+    /// </summary>
+    public static async Task<T> FirstAsync<T>(
+        this IQueryable<T> source,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                return item;
+            throw new InvalidOperationException("Sequence contains no elements.");
+        }
+
+        return await Task.Run(source.First, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the first element matching the predicate asynchronously.
+    /// Throws <see cref="InvalidOperationException"/> if no element matches.
+    /// </summary>
+    public static Task<T> FirstAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken ct = default)
+        => source.Where(predicate).FirstAsync(ct);
+
+    /// <summary>
+    /// Returns the single element of the sequence asynchronously.
+    /// Throws <see cref="InvalidOperationException"/> if the sequence is empty or contains more than one element.
+    /// </summary>
+    public static async Task<T> SingleAsync<T>(
+        this IQueryable<T> source,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            T? found = default;
+            bool seen = false;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                if (seen) throw new InvalidOperationException("Sequence contains more than one element.");
+                found = item;
+                seen = true;
+            }
+            if (!seen) throw new InvalidOperationException("Sequence contains no elements.");
+            return found!;
+        }
+
+        return await Task.Run(source.Single, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the single element matching the predicate asynchronously.
+    /// Throws <see cref="InvalidOperationException"/> if no element or more than one element matches.
+    /// </summary>
+    public static Task<T> SingleAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken ct = default)
+        => source.Where(predicate).SingleAsync(ct);
+
+    // ─── Last ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the last element of the sequence asynchronously.
+    /// Throws <see cref="InvalidOperationException"/> if the sequence is empty.
+    /// </summary>
+    public static async Task<T> LastAsync<T>(
+        this IQueryable<T> source,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            T? found = default;
+            bool seen = false;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                found = item;
+                seen = true;
+            }
+            if (!seen) throw new InvalidOperationException("Sequence contains no elements.");
+            return found!;
+        }
+
+        return await Task.Run(source.Last, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the last element matching the predicate asynchronously.
+    /// Throws <see cref="InvalidOperationException"/> if no element matches.
+    /// </summary>
+    public static Task<T> LastAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken ct = default)
+        => source.Where(predicate).LastAsync(ct);
+
+    /// <summary>Returns the last element, or <c>default</c> if the sequence is empty.</summary>
+    public static async Task<T?> LastOrDefaultAsync<T>(
+        this IQueryable<T> source,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            T? found = default;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                found = item;
+            return found;
+        }
+
+        return await Task.Run(source.LastOrDefault, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the last element matching the predicate, or <c>default</c>.</summary>
+    public static Task<T?> LastOrDefaultAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken ct = default)
+        => source.Where(predicate).LastOrDefaultAsync(ct);
+
+    // ─── ElementAt ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the element at the specified 0-based index asynchronously.
+    /// Throws <see cref="ArgumentOutOfRangeException"/> if <paramref name="index"/> is out of range.
+    /// </summary>
+    public static async Task<T> ElementAtAsync<T>(
+        this IQueryable<T> source,
+        int index,
+        CancellationToken ct = default)
+    {
+        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
+
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            int current = 0;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                if (current == index) return item;
+                current++;
+            }
+            throw new ArgumentOutOfRangeException(nameof(index), "Index was out of range.");
+        }
+
+        return await Task.Run(() => source.ElementAt(index), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the element at the specified 0-based index, or <c>default</c> if the index is out of range.
+    /// </summary>
+    public static async Task<T?> ElementAtOrDefaultAsync<T>(
+        this IQueryable<T> source,
+        int index,
+        CancellationToken ct = default)
+    {
+        if (index < 0) return default;
+
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            int current = 0;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                if (current == index) return item;
+                current++;
+            }
+            return default;
+        }
+
+        return await Task.Run(() => source.ElementAtOrDefault(index), ct).ConfigureAwait(false);
+    }
+
+    // ─── Min / Max ────────────────────────────────────────────────────────────
+
+    /// <summary>Returns the minimum projected value asynchronously.</summary>
+    public static async Task<TResult> MinAsync<T, TResult>(
+        this IQueryable<T> source,
+        Expression<Func<T, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            var comparer = Comparer<TResult>.Default;
+            TResult? min = default;
+            bool seen = false;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                var val = compiled(item);
+                if (!seen || comparer.Compare(val, min!) < 0)
+                {
+                    min = val;
+                    seen = true;
+                }
+            }
+            if (!seen) throw new InvalidOperationException("Sequence contains no elements.");
+            return min!;
+        }
+
+        return await Task.Run(() => source.Min(selector)!, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the maximum projected value asynchronously.</summary>
+    public static async Task<TResult> MaxAsync<T, TResult>(
+        this IQueryable<T> source,
+        Expression<Func<T, TResult>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            var comparer = Comparer<TResult>.Default;
+            TResult? max = default;
+            bool seen = false;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                var val = compiled(item);
+                if (!seen || comparer.Compare(val, max!) > 0)
+                {
+                    max = val;
+                    seen = true;
+                }
+            }
+            if (!seen) throw new InvalidOperationException("Sequence contains no elements.");
+            return max!;
+        }
+
+        return await Task.Run(() => source.Max(selector)!, ct).ConfigureAwait(false);
+    }
+
+    // ─── Sum ──────────────────────────────────────────────────────────────────
+
+    /// <summary>Returns the sum of a projected <see cref="int"/> column asynchronously.</summary>
+    public static async Task<int> SumAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, int>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            int sum = 0;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                sum += compiled(item);
+            return sum;
+        }
+
+        return await Task.Run(() => source.Sum(selector), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the sum of a projected <see cref="long"/> column asynchronously.</summary>
+    public static async Task<long> SumAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, long>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            long sum = 0L;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                sum += compiled(item);
+            return sum;
+        }
+
+        return await Task.Run(() => source.Sum(selector), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the sum of a projected <see cref="double"/> column asynchronously.</summary>
+    public static async Task<double> SumAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, double>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            double sum = 0.0;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                sum += compiled(item);
+            return sum;
+        }
+
+        return await Task.Run(() => source.Sum(selector), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the sum of a projected <see cref="decimal"/> column asynchronously.</summary>
+    public static async Task<decimal> SumAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, decimal>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            decimal sum = 0m;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                sum += compiled(item);
+            return sum;
+        }
+
+        return await Task.Run(() => source.Sum(selector), ct).ConfigureAwait(false);
+    }
+
+    // ─── Average ──────────────────────────────────────────────────────────────
+
+    /// <summary>Returns the average of a projected <see cref="int"/> column asynchronously.</summary>
+    public static async Task<double> AverageAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, int>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            long sum = 0L;
+            long count = 0L;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                sum += compiled(item);
+                count++;
+            }
+            if (count == 0) throw new InvalidOperationException("Sequence contains no elements.");
+            return (double)sum / count;
+        }
+
+        return await Task.Run(() => source.Average(selector), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the average of a projected <see cref="long"/> column asynchronously.</summary>
+    public static async Task<double> AverageAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, long>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            long sum = 0L;
+            long count = 0L;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                sum += compiled(item);
+                count++;
+            }
+            if (count == 0) throw new InvalidOperationException("Sequence contains no elements.");
+            return (double)sum / count;
+        }
+
+        return await Task.Run(() => source.Average(selector), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the average of a projected <see cref="double"/> column asynchronously.</summary>
+    public static async Task<double> AverageAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, double>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            double sum = 0.0;
+            long count = 0L;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                sum += compiled(item);
+                count++;
+            }
+            if (count == 0) throw new InvalidOperationException("Sequence contains no elements.");
+            return sum / count;
+        }
+
+        return await Task.Run(() => source.Average(selector), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Returns the average of a projected <see cref="decimal"/> column asynchronously.</summary>
+    public static async Task<decimal> AverageAsync<T>(
+        this IQueryable<T> source,
+        Expression<Func<T, decimal>> selector,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            var compiled = selector.Compile();
+            decimal sum = 0m;
+            long count = 0L;
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+            {
+                sum += compiled(item);
+                count++;
+            }
+            if (count == 0) throw new InvalidOperationException("Sequence contains no elements.");
+            return sum / count;
+        }
+
+        return await Task.Run(() => source.Average(selector), ct).ConfigureAwait(false);
+    }
+
+    // ─── ForEach ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Executes the given <paramref name="action"/> for each element of the sequence asynchronously.
+    /// </summary>
+    public static async Task ForEachAsync<T>(
+        this IQueryable<T> source,
+        Action<T> action,
+        CancellationToken ct = default)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnum)
+        {
+            await foreach (var item in asyncEnum.WithCancellation(ct).ConfigureAwait(false))
+                action(item);
+            return;
+        }
+
+        await Task.Run(() =>
+        {
+            foreach (var item in source)
+            {
+                ct.ThrowIfCancellationRequested();
+                action(item);
+            }
+        }, ct).ConfigureAwait(false);
+    }
 }
