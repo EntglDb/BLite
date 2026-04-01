@@ -1,0 +1,114 @@
+name: "Bump Version"
+
+# Eseguito manualmente dalla UI di GitHub (Actions → Bump Version → Run workflow)
+on:
+  workflow_dispatch:
+    inputs:
+      increment:
+        description: "Tipo di bump (lascia 'auto' per lasciar decidere versionize dai commit)"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: "Dry-run: mostra la versione calcolata senza committare né taggare"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout con storia completa (necessario per versionize) ──────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Usa un Personal Access Token con scope "repo" se vuoi che i tag
+          # pushati da qui riattivino altri workflow (es. studio-release.yml).
+          # Crea il segreto PAT_TOKEN nel repo e scommentare le righe sotto.
+          token: ${{ secrets.PAT_TOKEN }}
+
+      # ── 2. Configura Git ─────────────────────────────────────────────────────
+      - name: Configure Git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # ── 3. Installa .NET (usato da versionize) ───────────────────────────────
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.x"
+
+      # ── 4. Installa dotnet-versionize ────────────────────────────────────────
+      - name: Install versionize
+        run: dotnet tool install --global dotnet-versionize
+
+      # ── 5. Esegui versionize ─────────────────────────────────────────────────
+      #   --skip-dirty  — ignora le modifiche non tracciate nell'ambiente CI
+      #   Il flag --${{ inputs.increment }} viene aggiunto solo se != "auto"
+      - name: Run versionize
+        id: versionize
+        run: |
+          EXTRA_FLAGS=""
+          if [[ "${{ inputs.increment }}" != "auto" ]]; then
+            EXTRA_FLAGS="--${{ inputs.increment }}"
+          fi
+
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --dry-run"
+          fi
+
+          dotnet versionize --skip-dirty $EXTRA_FLAGS
+
+          # Legge il tag appena creato da versionize (es. v1.2.3)
+          VTAG=$(git describe --tags --abbrev=0)
+          VERSION="${VTAG#v}"
+          echo "tag=$VTAG"            >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
+          echo "Versione rilevata: $VERSION"
+
+      # ── 6. Aggiungi tag studio-vX.X.X ───────────────────────────────────────
+      - name: Create studio tag
+        if: inputs.dry_run == false
+        run: |
+          STUDIO_TAG="studio-v${{ steps.versionize.outputs.version }}"
+          git tag "$STUDIO_TAG" "${{ steps.versionize.outputs.tag }}^{}"
+          echo "Tag creato: $STUDIO_TAG"
+
+      # ── 7. Push commit + entrambi i tag ─────────────────────────────────────
+      - name: Push changes
+        if: inputs.dry_run == false
+        run: |
+          git push --follow-tags origin HEAD
+          git push origin "studio-v${{ steps.versionize.outputs.version }}"
+
+      # ── 8. Riepilogo ─────────────────────────────────────────────────────────
+      - name: Summary
+        run: |
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "### Dry-run completato" >> "$GITHUB_STEP_SUMMARY"
+            echo "Nessuna modifica applicata." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Versione aggiornata a ${{ steps.versionize.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Tag creati:" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`${{ steps.versionize.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`studio-v${{ steps.versionize.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Il tag \`studio-v*\` attiverà automaticamente il workflow **Studio — Release**." >> "$GITHUB_STEP_SUMMARY"
+          fi
