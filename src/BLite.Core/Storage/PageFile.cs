@@ -181,6 +181,10 @@ public sealed class PageFile : IDisposable
     private readonly PageFileConfig _config;
     private FileStream? _fileStream;
     private MemoryMappedFile? _mappedFile;
+    // Persistent full-file read accessor — created once on Open(), recreated on file growth.
+    // Enables zero-alloc page reads via unsafe pointer instead of
+    // CreateViewAccessor-per-read (which allocates an object + 16 KB temp array each time).
+    private MemoryMappedViewAccessor? _readAccessor;
 
     // _rwLock guards _mappedFile, _nextPageId, and _firstFreePageId.
     // Read lock:  ReadPage(), WritePage() when no file growth is needed.
@@ -298,7 +302,12 @@ public sealed class PageFile : IDisposable
                 _config.Access,
                 HandleInheritability.None,
                 leaveOpen: true);
-                
+
+            // Persistent read accessor — covers the whole mapped region (size=0 means entire file).
+            // Used by ReadPageCore for zero-alloc reads via AcquirePointer.
+            _readAccessor?.Dispose();
+            _readAccessor = _mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
+
             // Read free list head from Page 0
             if (_fileStream.Length >= _config.PageSize)
             {
@@ -369,13 +378,21 @@ public sealed class PageFile : IDisposable
             throw new ObjectDisposedException(nameof(PageFile));
     }
 
-    private void ReadPageCore(uint pageId, Span<byte> destination)
+    private unsafe void ReadPageCore(uint pageId, Span<byte> destination)
     {
+        // Zero-alloc fast path: acquire the base pointer of the persistent full-file
+        // accessor and copy exactly one page.  One memcpy, no heap allocation.
         var offset = (long)pageId * _config.PageSize;
-        using var accessor = _mappedFile!.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Read);
-        var temp = new byte[_config.PageSize];
-        accessor.ReadArray(0, temp, 0, _config.PageSize);
-        temp.CopyTo(destination);
+        byte* basePtr = null;
+        _readAccessor!.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
+        try
+        {
+            new ReadOnlySpan<byte>(basePtr + offset, _config.PageSize).CopyTo(destination);
+        }
+        finally
+        {
+            _readAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
     }
 
     private void WritePageCore(uint pageId, ReadOnlySpan<byte> source)
@@ -408,6 +425,10 @@ public sealed class PageFile : IDisposable
             _config.Access,
             HandleInheritability.None,
             leaveOpen: true);
+
+        // Recreate the persistent read accessor so it covers the newly grown region.
+        _readAccessor?.Dispose();
+        _readAccessor = _mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
     }
 
     // ── Public page I/O ────────────────────────────────────────────────────
@@ -439,54 +460,40 @@ public sealed class PageFile : IDisposable
 
     /// <summary>
     /// Reads a page by ID into the provided buffer (asynchronous).
-    /// On .NET 6+: uses <see cref="RandomAccess.ReadAsync"/> for true lock-free OS-level async I/O (IOCP on Windows).
-    /// On .NET Standard 2.1: performs a synchronous read under the shared <see cref="_rwLock"/> read lock
-    /// so it is correctly excluded by concurrent write-lock resize operations (<see cref="EnsureCapacityCore"/>).
+    /// Uses the memory-mapped file path (same as <see cref="ReadPage"/>) so that
+    /// repeated reads of hot pages are pure in-memory copies from the OS page cache.
+    /// The method is non-async and returns a completed <see cref="ValueTask"/> synchronously;
+    /// callers see the async signature but pay no state-machine or I/O overhead.
     /// WAL/in-memory paths should be handled by the caller before invoking this method.
     /// </summary>
     /// <param name="pageId">The page to read.</param>
     /// <param name="destination">Buffer of at least <see cref="PageSize"/> bytes.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
+    public ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         if (destination.Length < _config.PageSize)
             throw new ArgumentException($"Destination must be at least {_config.PageSize} bytes");
 
-        if (_fileStream == null)
+        if (_mappedFile == null)
             throw new InvalidOperationException("File not open");
 
-        var offset = (long)pageId * _config.PageSize;
-        var slice = destination[.._config.PageSize];
-
-#if NET6_0_OR_GREATER
-        var bytesRead = await RandomAccess.ReadAsync(_fileStream.SafeFileHandle, slice, offset, cancellationToken).ConfigureAwait(false);
-#else
-        // netstandard2.1: FileStream.Seek+Read shares the same stream position as
-        // EnsureCapacityCore's SetLength. Use a synchronous read under the shared
-        // _rwLock read lock so it is excluded by any concurrent write-lock resize path.
-        // Additionally, lock _fileStream itself to serialize concurrent readers:
-        // multiple threads holding _rwLock in read mode would otherwise race on
-        // Seek+Read (FileStream is NOT thread-safe for concurrent positional access).
-        cancellationToken.ThrowIfCancellationRequested();
-        int bytesRead;
         _rwLock.EnterReadLock();
         try
         {
-            lock (_fileStream!)
-            {
-                _fileStream.Seek(offset, SeekOrigin.Begin);
-                bytesRead = _fileStream.Read(slice.Span);
-            }
+            ReadPageCore(pageId, destination.Span[.._config.PageSize]);
         }
         finally
         {
             _rwLock.ExitReadLock();
         }
-#endif
 
-        if (bytesRead < _config.PageSize)
-            throw new IOException($"Incomplete page read: expected {_config.PageSize} bytes, got {bytesRead} (pageId={pageId})");
+#if NET5_0_OR_GREATER
+        return ValueTask.CompletedTask;
+#else
+        return default;
+#endif
     }
 
     /// <summary>
@@ -753,7 +760,9 @@ public sealed class PageFile : IDisposable
                 _fileStream.Flush(flushToDisk: true);
             }
             
-            // 2. Close memory-mapped file first
+            // 2. Close memory-mapped file first (and the persistent read accessor that depends on it)
+            _readAccessor?.Dispose();
+            _readAccessor = null;
             _mappedFile?.Dispose();
             _mappedFile = null;
             

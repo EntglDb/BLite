@@ -115,8 +115,16 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     // ITransactionHolder
     // ─────────────────────────────────────────────────────────────────────────
 
-    Task<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync()
-        => BeginTransactionAsync();
+    ValueTask<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync()
+    {
+        var current = CurrentTransaction;
+        if (current != null)
+            return new ValueTask<ITransaction>(current);
+
+        // Slow path: no active transaction yet — start one synchronously (no real I/O).
+        CurrentTransaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        return new ValueTask<ITransaction>(CurrentTransaction!);
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Collection management

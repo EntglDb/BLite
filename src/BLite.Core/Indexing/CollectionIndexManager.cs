@@ -23,6 +23,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     private bool _disposed;
     private readonly string _collectionName;
     private CollectionMetadata _metadata;
+    private volatile IReadOnlyList<CollectionIndexInfo>? _cachedIndexInfo;
 
     public CollectionIndexManager(StorageEngine storage, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
@@ -87,6 +88,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             var secondaryIndex = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper,
                 onRootChanged: _ => { lock (_lock) { SaveMetadata(); } });
             _indexes[definition.Name] = secondaryIndex;
+            _cachedIndexInfo = null; // invalidate cache
             
             // Persist metadata
             UpdateMetadata();
@@ -258,6 +260,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 index.FreeAllPages(_storage);
                 index.Dispose();
                 _indexes.Remove(name);
+                _cachedIndexInfo = null; // invalidate cache
                 
                 SaveMetadata(); // Save metadata after dropping index
                 return true;
@@ -290,13 +293,29 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
-    /// Gets information about all indexes
+    /// Gets information about all indexes. Result is cached and rebuilt only when indexes change.
     /// </summary>
-    public IEnumerable<CollectionIndexInfo> GetIndexInfo()
+    public IReadOnlyList<CollectionIndexInfo> GetIndexInfo()
+    {
+        var cached = _cachedIndexInfo;
+        if (cached != null) return cached;
+        return BuildIndexInfoCache();
+    }
+
+    private IReadOnlyList<CollectionIndexInfo> BuildIndexInfoCache()
     {
         lock (_lock)
         {
-            return _indexes.Values.Select(idx => idx.GetInfo()).ToList();
+            // Re-check under lock in case another thread already built the cache.
+            var cached = _cachedIndexInfo;
+            if (cached != null) return cached;
+
+            var result = new CollectionIndexInfo[_indexes.Count];
+            int i = 0;
+            foreach (var idx in _indexes.Values)
+                result[i++] = idx.GetInfo();
+            _cachedIndexInfo = result;
+            return result;
         }
     }
 

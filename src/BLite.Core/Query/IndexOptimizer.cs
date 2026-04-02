@@ -13,6 +13,15 @@ internal static class IndexOptimizer
         public string IndexName { get; set; } = "";
         public object? MinValue { get; set; }
         public object? MaxValue { get; set; }
+
+        /// <summary>
+        /// <c>true</c> when the index scan covers the <em>entire</em> WHERE expression
+        /// and no in-memory post-filter is needed after reading documents from the index.<br/>
+        /// <c>false</c> when the index only narrows the candidate set (e.g. one side of
+        /// a compound <c>AND</c> where the other condition targets a non-indexed field);
+        /// in that case the caller must still apply the full compiled predicate.
+        /// </summary>
+        public bool IsExactFilter { get; set; } = true;
         public bool IsRange { get; set; }
         public bool IsVectorSearch { get; set; }
         public float[]? VectorQuery { get; set; }
@@ -41,6 +50,13 @@ internal static class IndexOptimizer
 
         return OptimizeExpression(model.WhereClause.Body, model.WhereClause.Parameters[0], indexes, registry);
     }
+
+    /// <summary>
+    /// Overload that works directly on a WHERE lambda, without a full <see cref="QueryModel"/>.
+    /// Used by <c>DocumentCollection.FetchAsync</c> so the index-selection logic lives in one place.
+    /// </summary>
+    public static OptimizationResult? TryOptimize<T>(LambdaExpression whereClause, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
+        => OptimizeExpression(whereClause.Body, whereClause.Parameters[0], indexes, registry);
 
     /// <summary>
     /// Attempts to satisfy an <c>OrderBy[Descending](field).Take(N)</c> query entirely from a
@@ -74,7 +90,8 @@ internal static class IndexOptimizer
 
         if (propName is null) return null;
 
-        var index = indexes.FirstOrDefault(i => Matches(i, propName) && i.Type == IndexType.BTree);
+        CollectionIndexInfo? index = null;
+        foreach (var idx in indexes) { if (idx.Type == IndexType.BTree && Matches(idx, propName)) { index = idx; break; } }
         if (index is null) return null;
 
         return new OptimizationResult
@@ -94,22 +111,29 @@ internal static class IndexOptimizer
 
             if (left != null && right != null && left.IndexName == right.IndexName)
             {
+                // Both sides are covered by the same index range → fully exact.
                 return new OptimizationResult
                 {
                     IndexName = left.IndexName,
                     MinValue = left.MinValue ?? right.MinValue,
                     MaxValue = left.MaxValue ?? right.MaxValue,
-                    IsRange = true
+                    IsRange = true,
+                    IsExactFilter = true
                 };
             }
-            return left ?? right;
+            // Only one side of the AND is indexable — the index narrows candidates but
+            // does not fully satisfy the WHERE; caller must post-filter.
+            if (left != null) { left.IsExactFilter = false; return left; }
+            if (right != null) { right.IsExactFilter = false; return right; }
+            return null;
         }
 
         // Handle Simple Binary Predicates
         var (propertyName, value, op) = ParseSimplePredicate(expression, parameter, registry);
         if (propertyName != null)
         {
-            var index = indexes.FirstOrDefault(i => Matches(i, propertyName));
+            CollectionIndexInfo? index = null;
+            foreach (var idx in indexes) { if (Matches(idx, propertyName)) { index = idx; break; } }
             if (index != null)
             {
                 var result = new OptimizationResult { IndexName = index.Name };
@@ -119,18 +143,31 @@ internal static class IndexOptimizer
                         result.MinValue = value;
                         result.MaxValue = value;
                         result.IsRange = false;
+                        result.IsExactFilter = true;   // equality on indexed field: scan is exact
                         break;
-                    case ExpressionType.GreaterThan: 
                     case ExpressionType.GreaterThanOrEqual:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
+                        result.IsExactFilter = true;   // BTree Range includes lower bound => exact
                         break;
-                     case ExpressionType.LessThan:
-                     case ExpressionType.LessThanOrEqual:
+                    case ExpressionType.GreaterThan:
+                        result.MinValue = value;
+                        result.MaxValue = null;
+                        result.IsRange = true;
+                        result.IsExactFilter = false;  // BTree Range includes lower bound; need post-filter to exclude it
+                        break;
+                    case ExpressionType.LessThanOrEqual:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
+                        result.IsExactFilter = true;   // BTree Range includes upper bound => exact
+                        break;
+                    case ExpressionType.LessThan:
+                        result.MinValue = null;
+                        result.MaxValue = value;
+                        result.IsRange = true;
+                        result.IsExactFilter = false;  // BTree Range includes upper bound; need post-filter to exclude it
                         break;
                 }
                 return result;
@@ -142,7 +179,8 @@ internal static class IndexOptimizer
         {
              if (member.Expression == parameter && call.Arguments[0] is ConstantExpression constant && constant.Value is string prefix)
              {
-                 var index = indexes.FirstOrDefault(i => Matches(i, member.Member.Name));
+                 CollectionIndexInfo? index = null;
+                 foreach (var idx in indexes) { if (Matches(idx, member.Member.Name) && idx.Type == IndexType.BTree) { index = idx; break; } }
                  if (index != null && index.Type == IndexType.BTree)
                  {
                      var nextPrefix = IncrementPrefix(prefix);
@@ -166,7 +204,8 @@ internal static class IndexOptimizer
                 var query = EvaluateExpression<float[]>(mcall.Arguments[1]);
                 var k = EvaluateExpression<int>(mcall.Arguments[2]);
                 
-                var index = indexes.FirstOrDefault(i => i.Type == IndexType.Vector && Matches(i, vMember.Member.Name));
+                CollectionIndexInfo? index = null;
+                foreach (var idx in indexes) { if (idx.Type == IndexType.Vector && Matches(idx, vMember.Member.Name)) { index = idx; break; } }
                 if (index != null)
                 {
                     return new OptimizationResult
@@ -185,7 +224,8 @@ internal static class IndexOptimizer
                 var center = EvaluateExpression<(double, double)>(mcall.Arguments[1]);
                 var radius = EvaluateExpression<double>(mcall.Arguments[2]);
 
-                var index = indexes.FirstOrDefault(i => i.Type == IndexType.Spatial && Matches(i, nMember.Member.Name));
+                CollectionIndexInfo? index = null;
+                foreach (var idx in indexes) { if (idx.Type == IndexType.Spatial && Matches(idx, nMember.Member.Name)) { index = idx; break; } }
                 if (index != null)
                 {
                     return new OptimizationResult
@@ -205,7 +245,8 @@ internal static class IndexOptimizer
                 var min = EvaluateExpression<(double, double)>(mcall.Arguments[1]);
                 var max = EvaluateExpression<(double, double)>(mcall.Arguments[2]);
 
-                var index = indexes.FirstOrDefault(i => i.Type == IndexType.Spatial && Matches(i, wMember.Member.Name));
+                CollectionIndexInfo? index = null;
+                foreach (var idx in indexes) { if (idx.Type == IndexType.Spatial && Matches(idx, wMember.Member.Name)) { index = idx; break; } }
                 if (index != null)
                 {
                     return new OptimizationResult
@@ -251,6 +292,19 @@ internal static class IndexOptimizer
     /// </summary>
     private static bool TryWalkMemberChain(Expression expr, out object? value)
     {
+        // Fast path: depth-1 closure capture (e.g. `x => x.Prop == capturedVar`).
+        // The compiler generates a DisplayClass with a field; the RHS is:
+        //   MemberExpression { Member = capturedVar_field, Expression = ConstantExpression(displayClass) }
+        // This is by far the most common case — avoid Stack<MemberInfo> allocation entirely.
+        if (expr is MemberExpression me1 && me1.Expression is ConstantExpression root1)
+        {
+            value = me1.Member is FieldInfo fi1
+                ? fi1.GetValue(root1.Value)
+                : ((PropertyInfo)me1.Member).GetValue(root1.Value);
+            return true;
+        }
+
+        // General path: arbitrarily deep chain of member accesses on a closure root.
         var chain = new Stack<MemberInfo>();
         Expression? current = expr;
 

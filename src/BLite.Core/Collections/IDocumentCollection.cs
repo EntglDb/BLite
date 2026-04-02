@@ -40,6 +40,12 @@ public interface IDocumentCollection<TId, T> where T : class
 
     IAsyncEnumerable<T> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
+    /// Stops reading from the storage engine as soon as one document is found.
+    /// </summary>
+    Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
+
     IBLiteQueryable<T> AsQueryable();
 
     // ── UpdateAsync ────────────────────────────────────────────────────────────────

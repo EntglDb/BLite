@@ -363,17 +363,16 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     }
                 }
 
-                // Now yield matching documents (Span is out of scope).
-                // A data page may contain slots from multiple collections; the predicate
-                // operates on raw BSON and can match documents that belong to a different
-                // collection sharing the same page.  If FindByLocationAsync / Mapper fails
-                // for such a document, silently skip it.
+                // Yield matching documents. The buffer already holds this page — pass it
+                // to FindByLocationAsync so the page is not read a second time.
+                // A data page may contain slots from multiple collections; if the mapper
+                // fails for a foreign-collection document, silently skip it.
                 foreach (var (pid, idx) in matchingLocations)
                 {
                     T? doc;
                     try
                     {
-                        doc = await FindByLocationAsync(new DocumentLocation(pid, idx), txnId, ct);
+                        doc = await FindByLocationAsync(new DocumentLocation(pid, idx), txnId, buffer, ct);
                     }
                     catch
                     {
@@ -668,13 +667,36 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (index == null) throw new ArgumentException($"Index {indexName} not found");
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var txnId = transaction.TransactionId;
         var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
 
-        foreach (var location in index.Range(minKey, maxKey, direction, transaction))
+        // Per-query page cache: when multiple index entries point to the same data page
+        // (common for small documents), each page is loaded only once.
+        // For a collection of 200-byte docs on 16 KB pages (~80 docs/page), a query
+        // returning 250 docs touches ~3 unique pages — without this cache we'd do 250
+        // ReadPage calls instead of 3.
+        var pageCache = new Dictionary<uint, byte[]>();
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            var doc = await FindByLocationAsync(location, transaction.TransactionId, ct);
-            if (doc != null) yield return doc;
+            foreach (var location in index.Range(minKey, maxKey, direction, transaction))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (!pageCache.TryGetValue(location.PageId, out var cachedBuffer))
+                {
+                    cachedBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                    _storage.ReadPage(location.PageId, txnId, cachedBuffer);
+                    pageCache[location.PageId] = cachedBuffer;
+                }
+
+                var doc = await FindByLocationAsync(location, txnId, cachedBuffer, ct);
+                if (doc != null) yield return doc;
+            }
+        }
+        finally
+        {
+            foreach (var buf in pageCache.Values)
+                ArrayPool<byte>.Shared.Return(buf);
         }
     }
 
@@ -682,10 +704,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         // Iterate all documents in the collection via primary index
-        var minKey = new IndexKey(Array.Empty<byte>());
-        var maxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 32).ToArray());
-
-        foreach (var entry in _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, transaction.TransactionId))
+        foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             ct.ThrowIfCancellationRequested();
             try
@@ -1342,14 +1361,31 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction?.TransactionId ?? 0;
 
-        await foreach (var entry in _primaryIndex
-            .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
-            .ConfigureAwait(false))
+        var pageCache = new Dictionary<uint, byte[]>();
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            var entity = await FindByLocationAsync(entry.Location, txnId, ct).ConfigureAwait(false);
-            if (entity != null)
-                yield return entity;
+            await foreach (var entry in _primaryIndex
+                .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
+                .ConfigureAwait(false))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (!pageCache.TryGetValue(entry.Location.PageId, out var cachedBuffer))
+                {
+                    cachedBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                    _storage.ReadPage(entry.Location.PageId, txnId, cachedBuffer);
+                    pageCache[entry.Location.PageId] = cachedBuffer;
+                }
+
+                var entity = await FindByLocationAsync(entry.Location, txnId, cachedBuffer, ct).ConfigureAwait(false);
+                if (entity != null)
+                    yield return entity;
+            }
+        }
+        finally
+        {
+            foreach (var buf in pageCache.Values)
+                ArrayPool<byte>.Shared.Return(buf);
         }
     }
 
@@ -1456,13 +1492,33 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// All <see cref="Span{T}"/> operations are performed synchronously on the in-memory buffer.
     /// No Span variable survives across an <c>await</c> boundary.
     /// </summary>
-    internal async ValueTask<T?> FindByLocationAsync(DocumentLocation location, ulong txnId, CancellationToken ct = default)
+    internal ValueTask<T?> FindByLocationAsync(DocumentLocation location, ulong txnId, CancellationToken ct = default)
+        => FindByLocationCoreAsync(location, txnId, null, ct);
+
+    // Called when the primary page for this location is already in memory (page-cache fast path).
+    // The preloadedPage buffer skips the initial ReadPageAsync; overflow chain pages are still read
+    // from storage as needed.
+    internal ValueTask<T?> FindByLocationAsync(DocumentLocation location, ulong txnId, byte[] preloadedPage, CancellationToken ct = default)
+        => FindByLocationCoreAsync(location, txnId, preloadedPage, ct);
+
+    private async ValueTask<T?> FindByLocationCoreAsync(DocumentLocation location, ulong txnId, byte[]? preloadedPage, CancellationToken ct)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        byte[]? ownedBuffer = null;
+        byte[] buffer;
+
+        if (preloadedPage is not null)
+        {
+            buffer = preloadedPage;
+        }
+        else
+        {
+            ownedBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            await _storage.ReadPageAsync(location.PageId, txnId, ownedBuffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+            buffer = ownedBuffer;
+        }
+
         try
         {
-            await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
-
             // --- all Span work is sync after the first read ---
             var pageType = (PageType)buffer[4];
             if (pageType == PageType.Free || pageType == PageType.Empty)
@@ -1526,7 +1582,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             // Inline deserialization — Span created after the only await, safe
             return _mapper.Deserialize(new BsonSpanReader(buffer.AsSpan(slot.Offset, slot.Length), _storage.GetKeyReverseMap()));
         }
-        finally { ArrayPool<byte>.Shared.Return(buffer); }
+        finally
+        {
+            // Only return the buffer to the pool when we own it; caller-provided pages
+            // are managed by the caller (e.g. the per-query page cache in QueryIndexAsync).
+            if (ownedBuffer is not null)
+                ArrayPool<byte>.Shared.Return(ownedBuffer);
+        }
     }
 
     #endregion
@@ -1879,7 +1941,128 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     public IAsyncEnumerable<T> FindAsync(
         System.Linq.Expressions.Expression<Func<T, bool>> predicate,
         CancellationToken ct = default)
-        => AsQueryable().Where(predicate).AsAsyncEnumerable();
+        => FetchAsync(predicate, int.MaxValue, ct);
+
+    /// <summary>
+    /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
+    /// Stops reading from the storage engine as soon as one document is found (fetchLimit = 1).
+    /// </summary>
+    public async Task<T?> FindOneAsync(
+        System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+        CancellationToken ct = default)
+    {
+        // Fast path: equality query on an indexed field.
+        // Bypasses FetchAsync / QueryIndexAsync / page-cache Dictionary entirely.
+        // Path: IndexOptimizer → CollectionSecondaryIndex.Seek (TryFindFirst) → FindByLocationAsync.
+        var indexOpt = Query.IndexOptimizer.TryOptimize<T>(predicate, GetIndexes(), ConverterRegistry);
+        if (indexOpt != null && !indexOpt.IsRange && !indexOpt.IsVectorSearch && !indexOpt.IsSpatialSearch
+            && indexOpt.MinValue != null)
+        {
+            var index = _indexManager.GetIndex(indexOpt.IndexName);
+            if (index != null)
+            {
+                var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync().ConfigureAwait(false);
+                var location = index.Seek(indexOpt.MinValue, transaction);
+                if (location == null) return default;
+                return await FindByLocationAsync(location.Value, transaction.TransactionId, ct).ConfigureAwait(false);
+            }
+        }
+
+        // General path: range / vector / spatial / no index.
+        await foreach (var item in FetchAsync(predicate, 1, ct).ConfigureAwait(false))
+            return item;
+        return default;
+    }
+
+    /// <summary>
+    /// Core data-fetching primitive used by both <see cref="FindAsync"/> and
+    /// <see cref="BLite.Core.Query.BTreeQueryProvider{TId,T}"/>.
+    /// Selects the cheapest access strategy in order:
+    /// <list type="number">
+    ///   <item>BTree index scan (narrows candidates to the index range) + in-memory WHERE filter</item>
+    ///   <item>BSON-level predicate scan (compiled once, no full deserialization per-document)</item>
+    ///   <item>Full collection scan + in-memory predicate filter</item>
+    /// </list>
+    /// All three strategies guarantee the returned stream is fully filtered: callers
+    /// never need to re-apply <paramref name="whereClause"/> after consuming this enumerable.
+    /// </summary>
+    /// <param name="whereClause">
+    /// Optional filter.  Must be an <c>Expression&lt;Func&lt;T, bool&gt;&gt;</c> at runtime.
+    /// Pass <c>null</c> to enumerate all documents.
+    /// </param>
+    /// <param name="fetchLimit">
+    /// Maximum number of documents to yield.  Pass <see cref="int.MaxValue"/> for no limit.
+    /// </param>
+    internal async IAsyncEnumerable<T> FetchAsync(
+        System.Linq.Expressions.LambdaExpression? whereClause,
+        int fetchLimit,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        int yielded = 0;
+
+        if (whereClause != null)
+        {
+            // Lazy compile: Expression.Compile() is expensive (~1 ms) — pay it at most once
+            // per FetchAsync call, only if we actually need the compiled delegate.
+            Func<T, bool>? compiledWhere = null;
+            Func<T, bool> GetCompiled() =>
+                compiledWhere ??= ((System.Linq.Expressions.Expression<Func<T, bool>>)whereClause).Compile();
+
+            // ── Strategy 1: BTree index ───────────────────────────────────────
+            // IsExactFilter = true  → index range == full WHERE result; no post-filter.
+            // IsExactFilter = false → index only narrows candidates (strict inequalities,
+            //   partial AND); reuse the lazily-compiled Func<T,bool> as post-filter.
+            var indexOpt = Query.IndexOptimizer.TryOptimize<T>(whereClause, GetIndexes(), ConverterRegistry);
+            if (indexOpt != null)
+            {
+                if (indexOpt.IsVectorSearch)
+                {
+                    await foreach (var item in VectorSearchAsync(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K, ct: ct))
+                        if (indexOpt.IsExactFilter || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                }
+                else if (indexOpt.IsSpatialSearch)
+                {
+                    var spatialSeq = indexOpt.SpatialType == Query.IndexOptimizer.SpatialQueryType.Near
+                        ? NearAsync(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm, ct)
+                        : WithinAsync(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax, ct);
+                    await foreach (var item in spatialSeq)
+                        if (indexOpt.IsExactFilter || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                }
+                else
+                {
+                    await foreach (var item in QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, ct: ct))
+                        if (indexOpt.IsExactFilter || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                }
+                yield break;
+            }
+
+            // ── Strategy 2: BSON-level predicate scan ─────────────────────────
+            // Filters at raw-BSON level before deserializing — no compiled Func<T,bool> needed.
+            if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry) is { } bsonPred)
+            {
+                await foreach (var item in ScanAsync(bsonPred, ct))
+                {
+                    yield return item;
+                    if (++yielded >= fetchLimit) yield break;
+                }
+                yield break;
+            }
+
+            // ── Strategy 3: full scan + in-memory filter ──────────────────────
+            // Reuses compiledWhere if Strategy 1 already triggered it; compiles otherwise.
+            await foreach (var item in FindAllAsync(ct))
+                if (GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+        }
+        else
+        {
+            // ── No WHERE: plain full scan with optional limit ─────────────────
+            await foreach (var item in FindAllAsync(ct))
+            {
+                yield return item;
+                if (++yielded >= fetchLimit) yield break;
+            }
+        }
+    }
 
     #endregion
 

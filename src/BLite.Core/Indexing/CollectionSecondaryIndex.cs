@@ -21,6 +21,21 @@ namespace BLite.Core.Indexing;
 /// <typeparam name="T">Document type</typeparam>
 public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionIndex<TId, T> where T : class
 {
+    // Pre-allocated boundary sentinels — single allocation at type-init time.
+    // 255 bytes of 0xFF covers any composite key length used in this implementation.
+    private static readonly IndexKey s_maxBoundaryKey;
+    // 16 bytes of 0xFF covers any GUID or ObjectId suffix in composite keys.
+    private static readonly IndexKey s_maxIdBoundaryKey;
+
+    static CollectionSecondaryIndex()
+    {
+        // Fill the pre-allocated boundary buffers with 0xFF.
+        var buf255 = new byte[255]; Array.Fill(buf255, (byte)0xFF);
+        var buf16  = new byte[16];  Array.Fill(buf16,  (byte)0xFF);
+        s_maxBoundaryKey   = new IndexKey(buf255);
+        s_maxIdBoundaryKey = new IndexKey(buf16);
+    }
+
     private readonly CollectionIndexDefinition<T> _definition;
     private readonly BTreeIndex? _btreeIndex;
     private readonly VectorSearchIndex? _vectorIndex;
@@ -212,8 +227,9 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
             var userKey = ConvertToIndexKey(key);
             var minComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: true);
             var maxComposite = CreateCompositeKeyBoundary(userKey, useMinObjectId: false);
-            var firstEntry = _btreeIndex.Range(minComposite, maxComposite, IndexDirection.Forward, transaction?.TransactionId).FirstOrDefault();
-            return firstEntry.Location.PageId == 0 ? null : (DocumentLocation?)firstEntry.Location;
+            return _btreeIndex.TryFindFirst(minComposite, maxComposite, transaction?.TransactionId ?? 0, out var loc)
+                ? loc
+                : null;
         }
         
         return null;
@@ -272,12 +288,12 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         if (minKey == null && maxKey == null)
         {
             // Full scan - use extreme values
-            actualMinKey = new IndexKey(new byte[0]); // Empty = smallest
-            actualMaxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 255).ToArray()); // Max bytes
+            actualMinKey = IndexKey.MinKey; // Empty = smallest
+            actualMaxKey = s_maxBoundaryKey; // Max bytes
         }
         else if (minKey == null)
         {
-            actualMinKey = new IndexKey(new byte[0]);
+            actualMinKey = IndexKey.MinKey;
             var userMaxKey = ConvertToIndexKey(maxKey!);
             actualMaxKey = CreateCompositeKeyBoundary(userMaxKey, useMinObjectId: false); // Max boundary
         }
@@ -285,7 +301,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         {
             var userMinKey = ConvertToIndexKey(minKey);
             actualMinKey = CreateCompositeKeyBoundary(userMinKey, useMinObjectId: true); // Min boundary
-            actualMaxKey = new IndexKey(Enumerable.Repeat((byte)0xFF, 255).ToArray());
+            actualMaxKey = s_maxBoundaryKey;
         }
         else
         {
@@ -338,16 +354,11 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// </summary>
     private IndexKey CreateCompositeKey(IndexKey userKey, IndexKey documentIdKey)
     {
-        // Allocate buffer: user key + document ID key length
+        // Allocate once — ownership is transferred to IndexKey.FromOwnedArray, no second copy.
         var compositeBytes = new byte[userKey.Data.Length + documentIdKey.Data.Length];
-        
-        // Copy user key
         userKey.Data.CopyTo(compositeBytes.AsSpan(0, userKey.Data.Length));
-        
-        // Append document ID key
         documentIdKey.Data.CopyTo(compositeBytes.AsSpan(userKey.Data.Length));
-        
-        return new IndexKey(compositeBytes);
+        return IndexKey.FromOwnedArray(compositeBytes);
     }
 
     /// <summary>
@@ -356,11 +367,11 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// </summary>
     private IndexKey CreateCompositeKeyBoundary(IndexKey userKey, bool useMinObjectId)
     {
-        // For range boundaries, we use an empty key for Min and a very large key for Max 
+        // For range boundaries, we use an empty key for Min and a cached all-0xFF key for Max
         // to wrap around all possible IDs for this user key.
         IndexKey idBoundary = useMinObjectId 
-            ? new IndexKey(Array.Empty<byte>()) 
-            : new IndexKey(Enumerable.Repeat((byte)0xFF, 16).ToArray()); // Using 16 as a safe max for GUID/ObjectId
+            ? IndexKey.MinKey
+            : s_maxIdBoundaryKey;
             
         return CreateCompositeKey(userKey, idBoundary);
     }

@@ -1,6 +1,5 @@
 using BLite.Bson;
 using System;
-using System.Linq;
 
 namespace BLite.Core.Indexing;
 
@@ -14,8 +13,13 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     private readonly byte[] _data;
     private readonly int _hashCode;
 
-    public static IndexKey MinKey => new IndexKey(Array.Empty<byte>());
-    public static IndexKey MaxKey => new IndexKey(Enumerable.Repeat((byte)0xFF, 32).ToArray());
+    // Pre-allocated static sentinels — single allocation at type-init time.
+    public static readonly IndexKey MinKey = new IndexKey(Array.Empty<byte>());
+    public static readonly IndexKey MaxKey = new IndexKey(new byte[] {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF });
 
     public IndexKey(ReadOnlySpan<byte> data)
     {
@@ -70,6 +74,36 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     {
         _data = value.ToByteArray();
         _hashCode = ComputeHashCode(_data);
+    }
+
+    // ── Ownership-taking factory ───────────────────────────────────────────────
+    // Used by CreateCompositeKey to avoid the extra .ToArray() copy that the
+    // ReadOnlySpan<byte> ctor incurs (intermediate byte[] allocated by the caller
+    // + second copy inside the ctor = 2 allocations → now 1).
+    // The caller transfers ownership; the array must not be used afterwards.
+    private IndexKey(byte[] ownedData, bool _)
+    {
+        _data = ownedData;
+        _hashCode = ComputeHashCode(ownedData);
+    }
+
+    internal static IndexKey FromOwnedArray(byte[] ownedData)
+        => new IndexKey(ownedData, true);
+
+    // ── Zero-allocation span comparison ──────────────────────────────────────
+    // Compares raw byte spans with the same semantics as IndexKey.CompareTo,
+    // but without constructing an IndexKey (and without allocating a byte[]).
+    // Used by BTreeIndex.Range and FindChildNode to eliminate per-entry allocations
+    // during leaf/internal-node scans.
+    internal static int CompareRaw(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+    {
+        var minLen = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < minLen; i++)
+        {
+            int diff = a[i] - b[i];
+            if (diff != 0) return diff;
+        }
+        return a.Length - b.Length;
     }
 
     public readonly ReadOnlySpan<byte> Data => _data;

@@ -205,20 +205,29 @@ public sealed class BTreeIndex
 
                     for (int i = 0; i < header.EntryCount; i++)
                     {
-                        var entryKey = ReadIndexKey(pageBuffer, dataOffset);
+                        // Read the key length prefix and form a span — no IndexKey allocation.
+                        int keyLength = BitConverter.ToInt32(pageBuffer.AsSpan(dataOffset, 4));
+                        var entryKeySpan = pageBuffer.AsSpan(dataOffset + 4, keyLength);
 
-                        if (entryKey >= minKey && entryKey <= maxKey)
+                        int cmpMin = IndexKey.CompareRaw(entryKeySpan, minKey.Data);
+                        if (cmpMin >= 0) // entryKey >= minKey
                         {
-                            var locationOffset = dataOffset + 4 + entryKey.Data.Length;
-                            var location = DocumentLocation.ReadFrom(pageBuffer.AsSpan(locationOffset, DocumentLocation.SerializedSize));
-                            yield return new IndexEntry(entryKey, location);
+                            int cmpMax = IndexKey.CompareRaw(entryKeySpan, maxKey.Data);
+                            if (cmpMax <= 0) // entryKey <= maxKey → in range
+                            {
+                                var locationOffset = dataOffset + 4 + keyLength;
+                                var location = DocumentLocation.ReadFrom(pageBuffer.AsSpan(locationOffset, DocumentLocation.SerializedSize));
+                                // Allocate IndexKey only for entries that are actually yielded.
+                                yield return new IndexEntry(new IndexKey(pageBuffer.AsSpan(dataOffset + 4, keyLength)), location);
+                            }
+                            else
+                            {
+                                yield break; // entryKey > maxKey → past the range
+                            }
                         }
-                        else if (entryKey > maxKey)
-                        {
-                            yield break; // Exceeded range
-                        }
+                        // else entryKey < minKey → not yet in range, advance
 
-                        dataOffset += 4 + entryKey.Data.Length + DocumentLocation.SerializedSize;
+                        dataOffset += 4 + keyLength + DocumentLocation.SerializedSize;
                     }
 
                     leafPageId = header.NextLeafPageId;
@@ -277,6 +286,58 @@ public sealed class BTreeIndex
         }
     }
 
+    /// <summary>
+    /// Finds the first leaf entry in [minKey, maxKey] (inclusive) without allocating an
+    /// iterator state machine.  Equivalent to <c>Range(min,max).FirstOrDefault()</c> but with
+    /// zero extra heap allocations and no enumerator overhead.
+    /// Returns <c>true</c> and sets <paramref name="location"/> when a match is found.
+    /// </summary>
+    internal bool TryFindFirst(IndexKey minKey, IndexKey maxKey, ulong txnId, out DocumentLocation location)
+    {
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            var leafPageId = FindLeafNode(minKey, txnId);
+
+            while (leafPageId != 0)
+            {
+                ReadPage(leafPageId, txnId, pageBuffer);
+                var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+                var dataOffset = 32 + 20; // header offset same as Range forward
+
+                for (int i = 0; i < header.EntryCount; i++)
+                {
+                    int keyLength = BitConverter.ToInt32(pageBuffer.AsSpan(dataOffset, 4));
+                    var entryKeySpan = pageBuffer.AsSpan(dataOffset + 4, keyLength);
+
+                    if (IndexKey.CompareRaw(entryKeySpan, minKey.Data) >= 0)
+                    {
+                        if (IndexKey.CompareRaw(entryKeySpan, maxKey.Data) <= 0)
+                        {
+                            location = DocumentLocation.ReadFrom(
+                                pageBuffer.AsSpan(dataOffset + 4 + keyLength, DocumentLocation.SerializedSize));
+                            return location.PageId != 0;
+                        }
+                        // entryKey > maxKey — past the range, no match possible
+                        location = default;
+                        return false;
+                    }
+
+                    dataOffset += 4 + keyLength + DocumentLocation.SerializedSize;
+                }
+
+                leafPageId = header.NextLeafPageId;
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+
+        location = default;
+        return false;
+    }
+
     internal uint FindLeafNode(IndexKey key, ulong transactionId)
     {
         var path = new List<uint>();
@@ -328,18 +389,20 @@ public sealed class BTreeIndex
         // Linear search for now (optimize to binary search later)
         for (int i = 0; i < header.EntryCount; i++)
         {
-            var entryKey = ReadIndexKey(nodeBuffer, dataOffset);
-            var keyLen = 4 + entryKey.Data.Length;
-            var pointerOffset = dataOffset + keyLen;
+            // Read key length and span — no IndexKey allocation needed for traversal.
+            int keyLength = BitConverter.ToInt32(nodeBuffer.Slice(dataOffset, 4));
+            var entryKeySpan = nodeBuffer.Slice(dataOffset + 4, keyLength);
+            var pointerOffset = dataOffset + 4 + keyLength;
             var nextPointer = BitConverter.ToUInt32(nodeBuffer.Slice(pointerOffset, 4));
 
-            if (key < entryKey)
+            // key < entryKey → descend into current (left) child
+            if (IndexKey.CompareRaw(key.Data, entryKeySpan) < 0)
             {
                 return childPageId;
             }
 
             childPageId = nextPointer;
-            dataOffset += keyLen + 4; // Key + Pointer
+            dataOffset = pointerOffset + 4; // advance past key + pointer
         }
 
         return childPageId; // Return last pointer (>= last key)

@@ -9,7 +9,7 @@ using static BLite.Core.Query.IndexOptimizer;
 
 namespace BLite.Core.Query;
 
-public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
+public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider where T : class
 {
     private readonly DocumentCollection<TId, T> _collection;
     private readonly ValueConverterRegistry _converterRegistry;
@@ -104,8 +104,15 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
                    .GetAwaiter().GetResult();
     }
 
+    // Explicit IAsyncQueryProvider implementation — delegates to the private async path,
+    // allowing BTreeQueryable<T> to call ExecuteAsync directly (no double Task.Run).
+    Task<TResult> IAsyncQueryProvider.ExecuteAsync<TResult>(Expression expression, CancellationToken ct)
+        => ExecuteAsync<TResult>(expression, ct);
+
     private async Task<TResult> ExecuteAsync<TResult>(Expression expression, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 1. Parse the LINQ expression tree into a flat QueryModel.
         var visitor = new BTreeExpressionVisitor();
         visitor.Visit(expression);
@@ -144,98 +151,46 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             if (pushed is not null) return pushed;
         }
 
-        // 2. Data fetching — index / BSON-scan / full scan.
-        IEnumerable<T> sourceData = Array.Empty<T>();
-        bool whereAlreadyApplied = false;
-
-        // When Take (+ optional Skip) is present without any complex operators or ordering that
-        // requires a full scan first, we can stop reading from any source as soon as we have
-        // enough rows.  Take+Skip caps the maximum items we need to materialise.
-        // (OrderDescending + in-memory sort still needs all rows, so we skip the limit there.)
+        // 2. Data fetching.
+        // When Take (+ optional Skip) is present without complex operators or ordering that
+        // requires a full scan first, cap how many rows we need to materialise.
         int fetchLimit = (model.Take.HasValue && model.OrderByClause == null && !model.HasComplexOperators)
             ? (model.Skip.GetValueOrDefault() + model.Take.Value)
             : int.MaxValue;
 
-        var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes(), _converterRegistry);
-        if (indexOpt != null)
+        // ── Fast path: OrderBy(indexedField).Take(N) without WHERE ───────────
+        // Reads N entries directly from the index in sorted order, skipping the
+        // O(n log n) in-memory sort over all documents.  Only applicable when there
+        // is no WHERE clause (FetchAsync handles the WHERE+index case below).
+        if (model.WhereClause == null && model.OrderByClause != null &&
+            model.Take.HasValue && !model.Skip.HasValue)
         {
-            if (indexOpt.IsVectorSearch)
+            var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
+            if (orderOpt is not null)
             {
-                await foreach (var item in _collection.VectorSearchAsync(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K, ct: cancellationToken))
+                bool ascending = !model.OrderDescending;
+                var topN = new List<T>(model.Take.Value);
+                await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, cancellationToken))
                 {
-                    sourceData = sourceData.Append(item);
+                    topN.Add(item);
+                    if (topN.Count >= model.Take.Value) break;
                 }
-            }
-            else if (indexOpt.IsSpatialSearch)
-            {
-                if (indexOpt.SpatialType == SpatialQueryType.Near)
-                {
-                    await foreach (var item in _collection.NearAsync(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm, cancellationToken))
-                    {
-                        sourceData = sourceData.Append(item);
-                    }
-                }
-                else
-                {
-                    await foreach (var item in _collection.WithinAsync(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax, cancellationToken))
-                    {
-                        sourceData = sourceData.Append(item);
-                    }
-                }
-            }
-            else
-            {
-                int fetched = 0;
-                await foreach (var item in _collection.QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, ct: cancellationToken))
-                {
-                    sourceData = sourceData.Append(item);
-                    if (++fetched >= fetchLimit) break;
-                }
+                if (model.SelectClause != null)
+                    return ProjectEnumerable<TResult>(topN, model.SelectClause);
+                return TerminalReturn<TResult>(topN);
             }
         }
-        else if (model.WhereClause != null &&
-                 BsonExpressionEvaluator.TryCompile<T>(model.WhereClause, _converterRegistry) is { } bsonPred)
-        {
-            int fetched = 0;
-            await foreach (var item in _collection.ScanAsync(bsonPred))
-            {
-                sourceData = sourceData.Append(item);
-                if (++fetched >= fetchLimit) break;
-            }
-            whereAlreadyApplied = true;
-        }
-        else
-        {
-            // ── Fast path: OrderBy(indexedField).Take(N) via secondary BTree ────
-            // Reads N entries directly from the index in the requested direction,
-            // skipping the O(n log n) in-memory sort over all documents.
-            if (model.OrderByClause != null && model.Take.HasValue && !model.Skip.HasValue)
-            {
-                var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
-                if (orderOpt is not null)
-                {
-                    bool ascending = !model.OrderDescending;
-                    IEnumerable<T> topN = Array.Empty<T>();
-                    var taker = 0;
-                    await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending))
-                    {
-                        topN = topN.Append(item);
-                        if (++taker >= model.Take.Value) break;
-                    }
 
-                    if (model.SelectClause != null)
-                        return ProjectEnumerable<TResult>(topN, model.SelectClause);
-                    return TerminalReturn<TResult>(topN);
-                }
-            }
+        // ── General path: FetchAsync picks index / BSON scan / full scan ─────
+        // FetchAsync always applies the WHERE clause internally (all three strategies
+        // filter before yielding), so no residual WHERE step is needed afterwards.
+        var sourceList = new List<T>();
+        bool whereAlreadyApplied = model.WhereClause != null;
 
-            int fetched = 0;
-            await foreach (var item in _collection.FindAllAsync())
-            {
-                sourceData = sourceData.Append(item);
-                if (++fetched >= fetchLimit) break;
-            }
-        }
+        await foreach (var item in _collection.FetchAsync(model.WhereClause, fetchLimit, cancellationToken))
+            sourceList.Add(item);
+
+        IEnumerable<T> sourceData = sourceList;
 
         // ── Complex-operator fallback ──────────────────────────────────────────
         // GroupBy, Join, Sum/Average/Min/Max with selectors — operators the direct

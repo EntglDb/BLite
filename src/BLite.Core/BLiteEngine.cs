@@ -213,9 +213,19 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// <summary>
     /// Begins a new transaction asynchronously or returns the current one.
     /// </summary>
-    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    public Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
+
+        // Fast path: reuse the existing transaction without touching the semaphore.
+        if (CurrentTransaction != null)
+            return Task.FromResult(CurrentTransaction);
+
+        return SlowBeginTransactionAsync(ct);
+    }
+
+    private async Task<ITransaction> SlowBeginTransactionAsync(CancellationToken ct)
+    {
         bool lockAcquired = false;
         try
         {
@@ -289,7 +299,14 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #region ITransactionHolder
 
-    Task<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync() => BeginTransactionAsync();
+    ValueTask<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync()
+    {
+        var current = CurrentTransaction;
+        if (current != null)
+            return new ValueTask<ITransaction>(current);
+
+        return new ValueTask<ITransaction>(SlowBeginTransactionAsync(default));
+    }
 
     #endregion
 

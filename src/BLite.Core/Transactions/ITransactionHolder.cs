@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using BLite.Core.Transactions;
 
 namespace BLite.Core;
@@ -13,8 +14,7 @@ public interface ITransactionHolder
 
     /// <summary>
     /// Gets the current transaction if one exists; otherwise, starts a new transaction asynchronously.
+    /// Returns a <see cref="ValueTask{T}"/> to avoid heap allocation on the hot path (existing transaction).
     /// </summary>
-    /// <returns>A task that represents the asynchronous operation. The task result contains an <see cref="ITransaction"/>
-    /// representing the current or newly started transaction.</returns>
-    Task<ITransaction> GetCurrentTransactionOrStartAsync();
+    ValueTask<ITransaction> GetCurrentTransactionOrStartAsync();
 }

@@ -280,11 +280,20 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         }
     }
 
-    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    public Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-        
+
+        // Fast path: reuse the existing transaction without touching the semaphore.
+        if (CurrentTransaction != null)
+            return Task.FromResult(CurrentTransaction);
+
+        return SlowBeginTransactionAsync(ct);
+    }
+
+    private async Task<ITransaction> SlowBeginTransactionAsync(CancellationToken ct)
+    {
         bool lockAcquired = false;
         try
         {
@@ -303,9 +312,13 @@ public abstract partial class DocumentDbContext : IDisposable, ITransactionHolde
         }
     }
 
-    public async Task<ITransaction> GetCurrentTransactionOrStartAsync()
+    public ValueTask<ITransaction> GetCurrentTransactionOrStartAsync()
     {
-        return await BeginTransactionAsync();
+        var current = CurrentTransaction;
+        if (current != null)
+            return new ValueTask<ITransaction>(current);
+
+        return new ValueTask<ITransaction>(SlowBeginTransactionAsync(default));
     }
 
     public async Task SaveChangesAsync(CancellationToken ct = default)

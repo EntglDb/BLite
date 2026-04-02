@@ -1,17 +1,17 @@
 # BLite Benchmarks
 
-Performance benchmarks comparing BLite with SQLite using BenchmarkDotNet.
+Performance benchmarks comparing BLite with LiteDB, SQLite, DuckDB, and Couchbase Lite using BenchmarkDotNet.
 
 ## Quick Start
 
 ```bash
 # Run all benchmarks
-dotnet run -c Release --project src/BLite.Benchmark
+dotnet run -c Release --project tests/BLite.Benchmark
 
 # Run specific benchmark category
-dotnet run -c Release --project src/BLite.Benchmark --filter "*Insert*"
-dotnet run -c Release --project src/BLite.Benchmark --filter "*Read*"
-dotnet run -c Release --project src/BLite.Benchmark --filter "*Serialization*"
+dotnet run -c Release --project tests/BLite.Benchmark --filter "*Insert*"
+dotnet run -c Release --project tests/BLite.Benchmark --filter "*Read*"
+dotnet run -c Release --project tests/BLite.Benchmark --filter "*RealWorld*"
 ```
 
 ## Benchmark Categories
@@ -22,6 +22,14 @@ dotnet run -c Release --project src/BLite.Benchmark --filter "*Serialization*"
 
 ### Read Benchmarks
 - **FindById** - Lookup single document by primary key
+
+### Real-World Read Benchmarks (`RealWorldReadBenchmarks`)
+Simulates a photo-library workload (5,000 photos across 20 folders). Directly
+modelled after the community benchmark by [@LeoYang6](https://github.com/LeoYang6)
+that drove the zero-allocation read path optimisations in v4.x.
+
+- **1-to-1** — `FindOneAsync` by unique `FilePath` index (100 queries/iteration): exercises the direct B-Tree `Seek` fast path introduced in v4.x.
+- **1-to-N** — `FindAsync` by non-unique `SourceId` index (2 queries × ~250 results each): exercises indexed range scan vs. full LiteDB scan.
 
 ### Serialization Benchmarks
 - **Single** - Serialize/Deserialize one object (BSON vs JSON)
