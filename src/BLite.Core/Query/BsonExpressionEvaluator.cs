@@ -296,14 +296,102 @@ internal static class BsonExpressionEvaluator
                 };
             }
         }
+        else if (type == BsonType.Int64)
+        {
+            var val = reader.ReadInt64();
+            if (target is long targetLong)
+            {
+                return op switch
+                {
+                    ExpressionType.Equal => val == targetLong,
+                    ExpressionType.NotEqual => val != targetLong,
+                    ExpressionType.GreaterThan => val > targetLong,
+                    ExpressionType.GreaterThanOrEqual => val >= targetLong,
+                    ExpressionType.LessThan => val < targetLong,
+                    ExpressionType.LessThanOrEqual => val <= targetLong,
+                    _ => false
+                };
+            }
+        }
+        else if (type == BsonType.Double)
+        {
+            var val = reader.ReadDouble();
+            double? targetDouble = target switch
+            {
+                double d => d,
+                float f => f,
+                decimal dec => (double)dec,
+                _ => null
+            };
+            if (targetDouble.HasValue)
+            {
+                return op switch
+                {
+                    ExpressionType.Equal => val == targetDouble.Value,
+                    ExpressionType.NotEqual => val != targetDouble.Value,
+                    ExpressionType.GreaterThan => val > targetDouble.Value,
+                    ExpressionType.GreaterThanOrEqual => val >= targetDouble.Value,
+                    ExpressionType.LessThan => val < targetDouble.Value,
+                    ExpressionType.LessThanOrEqual => val <= targetDouble.Value,
+                    _ => false
+                };
+            }
+        }
+        else if (type == BsonType.Boolean)
+        {
+            var val = reader.ReadBoolean();
+            if (target is bool targetBool)
+            {
+                return op switch
+                {
+                    ExpressionType.Equal => val == targetBool,
+                    ExpressionType.NotEqual => val != targetBool,
+                    _ => false
+                };
+            }
+        }
+        else if (type == BsonType.DateTime)
+        {
+            var val = reader.ReadDateTime();
+            if (target is DateTime targetDt)
+            {
+                // Normalise both sides to UTC ticks for a reliable comparison.
+                var valTicks = val.ToUniversalTime().Ticks;
+                var targetTicks = targetDt.ToUniversalTime().Ticks;
+                return op switch
+                {
+                    ExpressionType.Equal => valTicks == targetTicks,
+                    ExpressionType.NotEqual => valTicks != targetTicks,
+                    ExpressionType.GreaterThan => valTicks > targetTicks,
+                    ExpressionType.GreaterThanOrEqual => valTicks >= targetTicks,
+                    ExpressionType.LessThan => valTicks < targetTicks,
+                    ExpressionType.LessThanOrEqual => valTicks <= targetTicks,
+                    _ => false
+                };
+            }
+            if (target is DateTimeOffset targetDto)
+            {
+                var valTicks = val.ToUniversalTime().Ticks;
+                var targetTicks = targetDto.ToUniversalTime().Ticks;
+                return op switch
+                {
+                    ExpressionType.Equal => valTicks == targetTicks,
+                    ExpressionType.NotEqual => valTicks != targetTicks,
+                    ExpressionType.GreaterThan => valTicks > targetTicks,
+                    ExpressionType.GreaterThanOrEqual => valTicks >= targetTicks,
+                    ExpressionType.LessThan => valTicks < targetTicks,
+                    ExpressionType.LessThanOrEqual => valTicks <= targetTicks,
+                    _ => false
+                };
+            }
+        }
         else if (type == BsonType.ObjectId && target is ObjectId targetId)
         {
             var val = reader.ReadObjectId();
-             // ObjectId only supports Equal check easily unless we implement complex logic
             if (op == ExpressionType.Equal) return val.Equals(targetId);
             if (op == ExpressionType.NotEqual) return !val.Equals(targetId);
         }
-        
+
         return false;
     }
 }

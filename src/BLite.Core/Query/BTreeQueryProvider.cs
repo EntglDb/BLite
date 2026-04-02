@@ -148,6 +148,14 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
         IEnumerable<T> sourceData = Array.Empty<T>();
         bool whereAlreadyApplied = false;
 
+        // When Take (+ optional Skip) is present without any complex operators or ordering that
+        // requires a full scan first, we can stop reading from any source as soon as we have
+        // enough rows.  Take+Skip caps the maximum items we need to materialise.
+        // (OrderDescending + in-memory sort still needs all rows, so we skip the limit there.)
+        int fetchLimit = (model.Take.HasValue && model.OrderByClause == null && !model.HasComplexOperators)
+            ? (model.Skip.GetValueOrDefault() + model.Take.Value)
+            : int.MaxValue;
+
         var indexOpt = IndexOptimizer.TryOptimize<T>(model, _collection.GetIndexes(), _converterRegistry);
         if (indexOpt != null)
         {
@@ -177,18 +185,22 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
             }
             else
             {
-                await foreach (var item in _collection.QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue))
+                int fetched = 0;
+                await foreach (var item in _collection.QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, ct: cancellationToken))
                 {
                     sourceData = sourceData.Append(item);
+                    if (++fetched >= fetchLimit) break;
                 }
             }
         }
         else if (model.WhereClause != null &&
                  BsonExpressionEvaluator.TryCompile<T>(model.WhereClause, _converterRegistry) is { } bsonPred)
         {
+            int fetched = 0;
             await foreach (var item in _collection.ScanAsync(bsonPred))
             {
                 sourceData = sourceData.Append(item);
+                if (++fetched >= fetchLimit) break;
             }
             whereAlreadyApplied = true;
         }
@@ -217,9 +229,11 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider where T : class
                 }
             }
 
+            int fetched = 0;
             await foreach (var item in _collection.FindAllAsync())
             {
                 sourceData = sourceData.Append(item);
+                if (++fetched >= fetchLimit) break;
             }
         }
 

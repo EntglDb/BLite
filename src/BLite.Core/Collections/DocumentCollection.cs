@@ -363,10 +363,22 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     }
                 }
 
-                // Now yield matching documents (Span is out of scope)
+                // Now yield matching documents (Span is out of scope).
+                // A data page may contain slots from multiple collections; the predicate
+                // operates on raw BSON and can match documents that belong to a different
+                // collection sharing the same page.  If FindByLocationAsync / Mapper fails
+                // for such a document, silently skip it.
                 foreach (var (pid, idx) in matchingLocations)
                 {
-                    var doc = await FindByLocationAsync(new DocumentLocation(pid, idx), txnId, ct);
+                    T? doc;
+                    try
+                    {
+                        doc = await FindByLocationAsync(new DocumentLocation(pid, idx), txnId, ct);
+                    }
+                    catch
+                    {
+                        continue; // foreign-collection document — skip
+                    }
                     if (doc != null) yield return doc;
                 }
             }
@@ -1857,22 +1869,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     }
 
     /// <summary>
-    /// Async predicate scan over the full collection.
-    /// Iterates <see cref="FindAllAsync"/> and yields each entity that satisfies
-    /// <paramref name="predicate"/>. CancellationToken is propagated to the
-    /// underlying page reads.
+    /// Queries the collection using an expression tree predicate, enabling index optimisation.
+    /// When the predicate references an indexed field the query engine performs a BTree lookup
+    /// instead of a full collection scan.
+    /// The returned <see cref="IBLiteQueryable{T}"/> preserves the expression tree so that
+    /// terminal operators (<c>FirstOrDefaultAsync</c>, <c>ToListAsync</c>, etc.) can inject
+    /// limits before materialisation.
     /// </summary>
-    public async IAsyncEnumerable<T> FindAsync(
-        Func<T, bool> predicate,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-    {
-        await foreach (var entity in FindAllAsync(ct).ConfigureAwait(false))
-        {
-            ct.ThrowIfCancellationRequested();
-            if (predicate(entity))
-                yield return entity;
-        }
-    }
+    public IAsyncEnumerable<T> FindAsync(
+        System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+        CancellationToken ct = default)
+        => AsQueryable().Where(predicate).AsAsyncEnumerable();
 
     #endregion
 

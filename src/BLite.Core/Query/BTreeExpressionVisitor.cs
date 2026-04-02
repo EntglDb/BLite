@@ -16,28 +16,28 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
             {
                 case "Where":
                     VisitWhere(node);
-                    break;
+                    return node;
                 case "Select":
                     VisitSelect(node);
-                    break;
+                    return node;
                 case "OrderBy":
                 case "OrderByDescending":
                     VisitOrderBy(node);
-                    break;
+                    return node;
                 case "Take":
                     VisitTake(node);
-                    break;
+                    return node;
                 case "Skip":
                     VisitSkip(node);
-                    break;
+                    return node;
                 case "Sum":
                 case "Average":
                     VisitAggregate(node);
-                    break;
+                    return node;
                 case "Count":
                 case "LongCount":
                     VisitCount(node);
-                    break;
+                    return node;
                 default:
                     // GroupBy, Join, Min, Max, etc. — operators the direct pipeline cannot model.
                     _model.HasComplexOperators = true;

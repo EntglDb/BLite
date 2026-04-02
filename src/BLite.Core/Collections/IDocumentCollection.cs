@@ -38,7 +38,7 @@ public interface IDocumentCollection<TId, T> where T : class
 
     IAsyncEnumerable<T> FindAllAsync(CancellationToken ct = default);
 
-    IAsyncEnumerable<T> FindAsync(Func<T, bool> predicate, CancellationToken ct = default);
+    IAsyncEnumerable<T> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
     IBLiteQueryable<T> AsQueryable();
 
