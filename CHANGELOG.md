@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.1.1"></a>
+## [4.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.1) (2026-04-02)
+
+### Bug Fixes
+
+* Query, index and transaction optimizations ([e7583cb](https://www.github.com/EntglDb/BLite/commit/e7583cbb64dc848a28443e1abba782dd2f5f1077))
+
 <a name="4.1.0"></a>
 ## [4.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.0) (2026-04-01)
 

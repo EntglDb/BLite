@@ -992,7 +992,15 @@ We welcome contributions! This is a great project to learn about database intern
 
 ---
 
-## 📝 License
+## � Acknowledgements
+
+Special thanks to the community members who helped improve BLite:
+
+- **[@LeoYang06](https://github.com/LeoYang06)** — For identifying and benchmarking real-world performance bottlenecks, directly driving the zero-allocation read path optimisations in BLite 4.x.
+
+---
+
+## �📝 License
 
 Licensed under the MIT License. Use it freely in personal and commercial projects.
 
