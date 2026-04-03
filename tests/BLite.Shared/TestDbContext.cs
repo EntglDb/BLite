@@ -113,7 +113,7 @@ public partial class TestDbContext : DocumentDbContext
         modelBuilder.Entity<CustomKeyEntity>().HasKey(e => e.Code);
         modelBuilder.Entity<AsyncDoc>().ToCollection("async_docs");
         modelBuilder.Entity<SchemaUser>().ToCollection("schema_users").HasKey(e => e.Id);
-        modelBuilder.Entity<TestDocument>();
+        modelBuilder.Entity<TestDocument>().HasIndex(x => x.Category);
         modelBuilder.Entity<OrderDocument>();
         modelBuilder.Entity<ComplexDocument>();
         

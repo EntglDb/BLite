@@ -7,15 +7,9 @@ using BLite.Core.Metadata;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
-using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
-using System.Linq;
 using System.Linq.Expressions;
 using BLite.Core.Query;
-using System.Collections.Generic;
-using System;
-using System.Threading;
 
 [assembly: InternalsVisibleTo("BLite.Tests")]
 
@@ -1550,6 +1544,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 int primaryChunkSize   = slot.Length - 8;
 
                 var fullBuffer = ArrayPool<byte>.Shared.Rent(totalLength);
+                // Use a dedicated overflow-chain buffer so the primary page buffer (which may be a
+                // shared cached entry from FindAllAsync) is never overwritten during the chain walk.
+                var overflowBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
                 try
                 {
                     // Copy primary chunk synchronously (no await here)
@@ -1561,19 +1558,23 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     while (currentPage != 0 && bytesCopied < totalLength)
                     {
                         ct.ThrowIfCancellationRequested();
-                        await _storage.ReadPageAsync(currentPage, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+                        await _storage.ReadPageAsync(currentPage, txnId, overflowBuffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
 
-                        // Recreate SlottedPageHeader span after each await — safe because buffer is byte[]
-                        uint nextPage   = SlottedPageHeader.ReadFrom(buffer).NextOverflowPage;
+                        // Recreate SlottedPageHeader span after each await — safe because overflowBuffer is byte[]
+                        uint nextPage   = SlottedPageHeader.ReadFrom(overflowBuffer).NextOverflowPage;
                         int chunkSize   = Math.Min(_storage.PageSize - SlottedPageHeader.Size, totalLength - bytesCopied);
-                        buffer.AsSpan(SlottedPageHeader.Size, chunkSize).CopyTo(fullBuffer.AsSpan(bytesCopied));
+                        overflowBuffer.AsSpan(SlottedPageHeader.Size, chunkSize).CopyTo(fullBuffer.AsSpan(bytesCopied));
                         bytesCopied    += chunkSize;
                         currentPage     = nextPage;
                     }
 
                     return _mapper.Deserialize(new BsonSpanReader(fullBuffer.AsSpan(0, totalLength), _storage.GetKeyReverseMap()));
                 }
-                finally { ArrayPool<byte>.Shared.Return(fullBuffer); }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(overflowBuffer);
+                    ArrayPool<byte>.Shared.Return(fullBuffer);
+                }
             }
 
             if (slot.Offset + slot.Length > buffer.Length)

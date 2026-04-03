@@ -41,16 +41,12 @@ Most embedded databases for .NET are either wrappers around C libraries (SQLite,
 Write queries naturally using LINQ. The engine automatically translates them to optimized B-Tree lookups.
 
 ```csharp
-// 1. Declare a secondary index in OnModelCreating:
-//    modelBuilder.Entity<User>().HasIndex(x => x.Name);
-
-// 2. Query — the engine translates StartsWith into a B-Tree range scan on 'name'.
-//    The Age predicate is evaluated in-memory on the already-filtered result set.
-var users = await collection.AsQueryable()
+// Automatic Index Usage
+var users = collection.AsQueryable()
     .Where(x => x.Age > 25 && x.Name.StartsWith("A"))
     .OrderBy(x => x.Age)
     .Take(10)
-    .ToListAsync(); // → B-Tree range scan on 'name' + in-memory Age filter
+    .AsEnumerable(); // Executed efficiently on the engine
 ```
 
 - **Optimized**: Uses B-Tree indexes for `=`, `>`, `<`, `Between`, and `StartsWith`.
@@ -83,13 +79,10 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
         .HasIndex(x => x.Shipping.Address.PostalCode);
 }
 
-// Indexed range query — B-Tree hit on "address.city"
-var italianCustomers = await db.Customers.AsQueryable()
+// The index is then used automatically by the LINQ engine
+var italianCustomers = db.Customers.AsQueryable()
     .Where(c => c.Address.City == "Milan")
-    .ToListAsync(); // → B-Tree index hit on "address.city"
-
-// Single-document equality lookup — fast path directly via index Seek (v4.x)
-var customer = await db.Customers.FindOneAsync(c => c.Email == "alice@example.com");
+    .ToList(); // → B-Tree index hit on "address.city"
 ```
 
 > **Note**: If an intermediate property is `null` (e.g. `Address` is `null`) the record is simply skipped by the indexer — no exception is thrown.
@@ -294,42 +287,23 @@ await engine.BackupAsync("backups/mydb-backup.blite");
 
 All read paths have a true async counterpart — cancellation is propagated all the way down to OS-level `RandomAccess.ReadAsync` (IOCP on Windows).
 
-> [!IMPORTANT]
-> **Choosing the right query API — performance matters**
->
-> | API | Complexity | Index used? | When to use |
-> |:----|:----------:|:-----------:|:------------|
-> | `FindByIdAsync(id)` | O(log N) | ✅ Primary key | Always the fastest path for single-document lookup by ID |
-> | `FindOneAsync(x => x.Field == value)` | O(log N) | ✅ Secondary (equality) | Single-document equality lookup on an indexed field — direct index `Seek`, bypasses the full LINQ pipeline |
-> | `AsQueryable().Where(x => x.Field == value).ToListAsync()` | O(log N + results) | ✅ Secondary (range/eq) | Multi-document queries, range scans, `StartsWith`, composite predicates |
-> | `FindAsync(predicate)` | **O(N)** | ❌ **None** | Full collection scan — only use when no suitable index exists or for small collections |
-> | `FindAllAsync()` | O(N) | ❌ None | Full streaming scan — suitable for batch processing of entire collections |
->
-> **Rule**: always declare a `HasIndex` on the fields you query by equality or range. Without an index, any query degrades to O(N).
-
 ```csharp
-// ── Fastest: primary-key lookup (O(log N)) ────────────────────────────────
+// FindById — async primary-key lookup via B-Tree
 var order = await db.Orders.FindByIdAsync(id, ct);
 
-// ── Fast: single-doc equality via index Seek — bypasses full LINQ pipeline ─
-// Requires: modelBuilder.Entity<Order>().HasIndex(x => x.OrderNumber, unique: true)
-var order = await db.Orders.FindOneAsync(o => o.OrderNumber == "ORD-9999", ct);
+// FindAll — async streaming (IAsyncEnumerable)
+await foreach (var order in db.Orders.FindAllAsync(ct))
+    Process(order);
 
-// ── Indexed multi-doc query — B-Tree scan O(log N + results) ──────────────
-// Requires: modelBuilder.Entity<Order>().HasIndex(x => x.Status)
+// FindAsync — async predicate scan (IAsyncEnumerable)
+await foreach (var order in db.Orders.FindAsync(o => o.Status == "shipped", ct))
+    Process(order);
+
+// LINQ — full async materialisation
 var shipped = await db.Orders
     .AsQueryable()
     .Where(o => o.Status == "shipped")
     .ToListAsync(ct);
-
-// ── Full scan — use only when no index applies ────────────────────────────
-// ⚠️ O(N): reads every document in the collection.
-await foreach (var order in db.Orders.FindAsync(o => o.Notes != null, ct))
-    Process(order);
-
-// ── Full collection stream ────────────────────────────────────────────────
-await foreach (var order in db.Orders.FindAllAsync(ct))
-    Process(order);
 
 // Async aggregates
 int count = await db.Orders.AsQueryable().CountAsync(ct);
@@ -351,10 +325,9 @@ await db.SaveChangesAsync(ct);
 
 | Method | Description |
 |:-------|:------------|
-| `FindByIdAsync(id, ct)` | Primary-key lookup via B-Tree — O(log N); returns `ValueTask<T?>` |
-| `FindOneAsync(predicate, ct)` | Single-document equality fast path — O(log N) on an indexed field; returns `ValueTask<T?>` |
-| `FindAllAsync(ct)` | Full collection streaming — O(N); returns `IAsyncEnumerable<T>` |
-| `FindAsync(predicate, ct)` | **Full scan** — O(N), no index involvement; returns `IAsyncEnumerable<T>`. Prefer `AsQueryable().Where(...)` for indexed fields |
+| `FindByIdAsync(id, ct)` | Primary-key lookup via B-Tree; returns `ValueTask<T?>` |
+| `FindAllAsync(ct)` | Full collection streaming; returns `IAsyncEnumerable<T>` |
+| `FindAsync(predicate, ct)` | Async predicate scan; returns `IAsyncEnumerable<T>` |
 | `AsQueryable().ToListAsync(ct)` | LINQ pipeline materialized as `Task<List<T>>` |
 | `AsQueryable().ToArrayAsync(ct)` | LINQ pipeline materialized as `Task<T[]>` |
 | `AsQueryable().FirstOrDefaultAsync(ct)` | First match or `null` |
@@ -1019,15 +992,7 @@ We welcome contributions! This is a great project to learn about database intern
 
 ---
 
-## � Acknowledgements
-
-Special thanks to the community members who helped improve BLite:
-
-- **[@LeoYang6](https://github.com/LeoYang6)** — For identifying and benchmarking real-world performance bottlenecks, directly driving the zero-allocation read path optimisations in BLite 4.x.
-
----
-
-## �📝 License
+## 📝 License
 
 Licensed under the MIT License. Use it freely in personal and commercial projects.
 

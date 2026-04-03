@@ -62,13 +62,22 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
         }
         else
         {
-            // Combine predicates (AND)
+            // Combine predicates with AND, inlining both lambda bodies onto a single
+            // shared parameter instead of wrapping them in Expression.Invoke.
+            // Expression.Invoke produces an InvocationExpression that IndexOptimizer /
+            // ParseSimplePredicate cannot traverse, causing every chained .Where() call
+            // to fall back to a full scan even when the predicate targets an indexed field.
+            // By rewriting both bodies to share one ParameterExpression the resulting
+            // BinaryExpression.AndAlso stays fully transparent to the optimizer.
             var parameter = Expression.Parameter(lambda.Parameters[0].Type, "x");
-            var body = Expression.AndAlso(
-                Expression.Invoke(_model.WhereClause, parameter),
-                Expression.Invoke(lambda, parameter)
-            );
-            _model.WhereClause = Expression.Lambda(body, parameter);
+            var leftBody  = new BsonProjectionCompiler.ParameterReplacer(
+                                _model.WhereClause.Parameters[0], parameter)
+                                .Visit(_model.WhereClause.Body);
+            var rightBody = new BsonProjectionCompiler.ParameterReplacer(
+                                lambda.Parameters[0], parameter)
+                                .Visit(lambda.Body);
+            _model.WhereClause = Expression.Lambda(
+                Expression.AndAlso(leftBody, rightBody), parameter);
         }
     }
 

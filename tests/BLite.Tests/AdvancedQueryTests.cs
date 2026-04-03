@@ -237,5 +237,75 @@ namespace BLite.Tests
             Assert.Equal("Keyboard", retrieved.Items[2].Name);
             Assert.Equal(75, retrieved.Items[2].Price);
         }
+
+        // ── Chained .Where() index-transparency tests ─────────────────────────
+        //
+        // VisitWhere previously combined predicates with Expression.Invoke, producing
+        // an InvocationExpression that IndexOptimizer.ParseSimplePredicate cannot
+        // traverse.  Two chained .Where() calls on an indexed field would therefore
+        // always fall back to a full scan — returning correct results but ignoring
+        // the BTree index.
+        //
+        // After the fix (ParameterReplacer inline) the resulting body is a plain
+        // BinaryExpression.AndAlso, which the optimizer can evaluate and use the index.
+        // The tests below verify correctness; the benchmark suite covers performance.
+
+        [Fact]
+        public async Task ChainedWhere_TwoPredicates_ReturnsCorrectResults()
+        {
+            // Seed: _db already has Category=A (2 items), B (2), C (1).
+            // Extra filter: Amount > 10 applied as a second chained .Where()
+            var results = await _db.TestDocuments
+                .AsQueryable()
+                .Where(x => x.Category == "A")
+                .Where(x => x.Amount > 10)
+                .ToListAsync();
+
+            Assert.Single(results);
+            Assert.Equal("Item2", results[0].Name);
+        }
+
+        [Fact]
+        public async Task ChainedWhere_ThreePredicates_ReturnsCorrectResults()
+        {
+            var results = await _db.TestDocuments
+                .AsQueryable()
+                .Where(x => x.Category == "B")
+                .Where(x => x.Amount >= 30)
+                .Where(x => x.Amount < 40)
+                .ToListAsync();
+
+            Assert.Single(results);
+            Assert.Equal("Item3", results[0].Name);
+        }
+
+        [Fact]
+        public async Task ChainedWhere_OnIndexedField_ReturnsCorrectCount()
+        {
+            // Category has a BTree index in TestDbContext.OnModelCreating.
+            // With the fix, the second .Where() on Category should use the index
+            // (not a full scan). Correctness is validated here; the benchmark
+            // confirms the performance difference.
+            var resultA = await _db.TestDocuments
+                .AsQueryable()
+                .Where(x => x.Amount > 0)         // first Where (no index)
+                .Where(x => x.Category == "A")    // second Where (Category is indexed)
+                .ToListAsync();
+
+            Assert.Equal(2, resultA.Count);
+            Assert.All(resultA, r => Assert.Equal("A", r.Category));
+        }
+
+        [Fact]
+        public async Task ChainedWhere_WithCountAsync_ReturnsCorrectCount()
+        {
+            var count = await _db.TestDocuments
+                .AsQueryable()
+                .Where(x => x.Category == "B")
+                .Where(x => x.Amount == 40)
+                .CountAsync();
+
+            Assert.Equal(1, count);
+        }
     }
 }
