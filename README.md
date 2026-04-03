@@ -1023,7 +1023,7 @@ We welcome contributions! This is a great project to learn about database intern
 
 Special thanks to the community members who helped improve BLite:
 
-- **[@LeoYang6](https://github.com/LeoYang6)** — For identifying and benchmarking real-world performance bottlenecks, directly driving the zero-allocation read path optimisations in BLite 4.x.
+- **[@LeoYang06](https://github.com/LeoYang06)** — For identifying and benchmarking real-world performance bottlenecks, directly driving the zero-allocation read path optimisations in BLite 4.x.
 
 ---
 
