@@ -51,6 +51,27 @@ internal static class BsonExpressionEvaluator
             return null;
         }
 
+        // ── Bare bool member: e => e.IsActive  →  IsActive == true ──────────────
+        if (body is MemberExpression bareM &&
+            bareM.Expression == parameter &&
+            bareM.Type == typeof(bool))
+        {
+            var bsonName = bareM.Member.Name.ToLowerInvariant();
+            if (bsonName == "id") bsonName = "_id";
+            return CreatePredicate(bsonName, true, ExpressionType.Equal);
+        }
+
+        // ── Logical NOT on bool member: e => !e.IsActive  →  IsActive == false ─
+        if (body is UnaryExpression { NodeType: ExpressionType.Not } notExpr &&
+            notExpr.Operand is MemberExpression notM &&
+            notM.Expression == parameter &&
+            notM.Type == typeof(bool))
+        {
+            var bsonName = notM.Member.Name.ToLowerInvariant();
+            if (bsonName == "id") bsonName = "_id";
+            return CreatePredicate(bsonName, false, ExpressionType.Equal);
+        }
+
         // ── .Equals() method call ──────────────────────────────────────────────
         // Pattern: e.Prop.Equals(closureVar)  or  e.Prop.Equals(constant)
         if (body is MethodCallExpression methodCall &&

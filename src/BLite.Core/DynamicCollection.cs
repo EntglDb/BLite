@@ -428,8 +428,23 @@ public sealed class DynamicCollection : IDisposable
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
-        var minKey = minValue != null ? CreateIndexKeyFromObject(minValue) : IndexKey.MinKey;
-        var maxKey = maxValue != null ? CreateIndexKeyFromObject(maxValue) : IndexKey.MaxKey;
+        // null  → open bound: use NullSentinelNext so that indexed-null entries are excluded from range scans.
+        // DBNull → explicit null equality query: use NullSentinel to target exactly the null bucket.
+        IndexKey minKey;
+        if (minValue == null)
+            minKey = IndexKey.NullSentinelNext;       // skip null entries in range scans
+        else if (minValue is DBNull)
+            minKey = IndexKey.NullSentinel;            // explicit null equality
+        else
+            minKey = CreateIndexKeyFromObject(minValue);
+
+        IndexKey maxKey;
+        if (maxValue == null)
+            maxKey = IndexKey.MaxKey;
+        else if (maxValue is DBNull)
+            maxKey = IndexKey.NullSentinel;            // explicit null equality
+        else
+            maxKey = CreateIndexKeyFromObject(maxValue);
 
         foreach (var indexEntry in entry.BTree.Range(minKey, maxKey, ascending ? IndexDirection.Forward : IndexDirection.Backward, txnId))
         {
@@ -1253,6 +1268,7 @@ public sealed class DynamicCollection : IDisposable
     {
         return value.Type switch
         {
+            BsonType.Null     => IndexKey.NullSentinel, // Null values are indexed with a dedicated sentinel key
             BsonType.Int32    => new IndexKey(value.AsInt32),
             BsonType.Int64    => new IndexKey(value.AsInt64),
             BsonType.String   => new IndexKey(value.AsString),
@@ -1336,6 +1352,7 @@ public sealed class DynamicCollection : IDisposable
 
     private static IndexKey CreateIndexKeyFromObject(object value) => value switch
     {
+        DBNull  => IndexKey.NullSentinel, // explicit null equality query
         int i => new IndexKey(i),
         long l => new IndexKey(l),
         string s => new IndexKey(s),

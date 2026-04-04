@@ -98,8 +98,22 @@ namespace BLite.SourceGenerators
                     if (AttributeHelper.ShouldIgnore(prop))
                         continue;
                     
+                    // Auto-properties with private setters from compiled assemblies (metadata)
+                    // appear as getter-only (prop.SetMethod == null) because Roslyn does not expose
+                    // private accessors across assembly boundaries. However, they always have a
+                    // compiler-generated backing field named "<PropertyName>k__BackingField".
+                    // Detect this case so the property is included with HasAnySetter=true.
+                    bool hasCompilerGeneratedBackingField = false;
+                    if (prop.SetMethod == null && !SyntaxHelper.HasBackingField(prop))
+                    {
+                        var expectedBackingFieldName = $"<{prop.Name}{BLiteConventions.CompilerBackingFieldSuffix}";
+                        hasCompilerGeneratedBackingField = prop.ContainingType.GetMembers()
+                            .OfType<Microsoft.CodeAnalysis.IFieldSymbol>()
+                            .Any(f => f.Name == expectedBackingFieldName);
+                    }
+
                     // Skip computed getter-only properties (no setter, no backing field)
-                    bool isReadOnlyGetter = prop.SetMethod == null && !SyntaxHelper.HasBackingField(prop);
+                    bool isReadOnlyGetter = prop.SetMethod == null && !SyntaxHelper.HasBackingField(prop) && !hasCompilerGeneratedBackingField;
                     Microsoft.CodeAnalysis.IFieldSymbol? conventionalBackingField = null;
                     if (isReadOnlyGetter)
                     {
@@ -132,7 +146,9 @@ namespace BLite.SourceGenerators
                         
                         HasPublicSetter = prop.SetMethod?.DeclaredAccessibility == Accessibility.Public,
                         HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
-                        HasAnySetter = prop.SetMethod != null,
+                        // For compiled assemblies, private setters appear as null in prop.SetMethod.
+                        // Use hasCompilerGeneratedBackingField to detect that a private setter exists.
+                        HasAnySetter = prop.SetMethod != null || hasCompilerGeneratedBackingField,
                         IsReadOnlyGetter = isReadOnlyGetter,
                         HasPrivateBackingFieldAccess = conventionalBackingField != null,
                         BackingFieldName = conventionalBackingField != null

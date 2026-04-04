@@ -21,6 +21,19 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
         0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF });
 
+    /// <summary>
+    /// Sentinel key stored in the B-tree for BSON null values.
+    /// Sorts after MinKey (0-byte array) and before all real data keys (DateTimeOffset, int, etc.
+    /// encode with a leading byte ≥ 0x01).
+    /// </summary>
+    public static readonly IndexKey NullSentinel = new IndexKey(new byte[] { 0x00 });
+
+    /// <summary>
+    /// One step above NullSentinel — used as the open lower bound in range scans so that
+    /// null-valued entries are excluded from inequality / range queries.
+    /// </summary>
+    public static readonly IndexKey NullSentinelNext = new IndexKey(new byte[] { 0x01 });
+
     public IndexKey(ReadOnlySpan<byte> data)
     {
         _data = data.ToArray();

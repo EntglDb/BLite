@@ -128,6 +128,30 @@ internal static class IndexOptimizer
             return null;
         }
 
+        // Handle bare bool member: e => e.IsActive  (equivalent to e.IsActive == true)
+        // Handle logical NOT over bool member: e => !e.IsActive  (equivalent to e.IsActive == false)
+        if (expression is MemberExpression bareMember &&
+            bareMember.Expression == parameter &&
+            bareMember.Type == typeof(bool))
+        {
+            var (pn, _, _) = (bareMember.Member.Name, (object)true, ExpressionType.Equal);
+            CollectionIndexInfo? ix = null;
+            foreach (var idx in indexes) { if (Matches(idx, bareMember.Member.Name)) { ix = idx; break; } }
+            if (ix != null)
+                return new OptimizationResult { IndexName = ix.Name, MinValue = true, MaxValue = true, IsRange = false, IsExactFilter = true };
+        }
+
+        if (expression is UnaryExpression { NodeType: ExpressionType.Not } notExpr &&
+            notExpr.Operand is MemberExpression notMember &&
+            notMember.Expression == parameter &&
+            notMember.Type == typeof(bool))
+        {
+            CollectionIndexInfo? ix = null;
+            foreach (var idx in indexes) { if (Matches(idx, notMember.Member.Name)) { ix = idx; break; } }
+            if (ix != null)
+                return new OptimizationResult { IndexName = ix.Name, MinValue = false, MaxValue = false, IsRange = false, IsExactFilter = true };
+        }
+
         // Handle Simple Binary Predicates
         var (propertyName, value, op) = ParseSimplePredicate(expression, parameter, registry);
         if (propertyName != null)
@@ -140,8 +164,18 @@ internal static class IndexOptimizer
                 switch (op)
                 {
                     case ExpressionType.Equal:
-                        result.MinValue = value;
-                        result.MaxValue = value;
+                        if (value == null)
+                        {
+                            // Null equality: use DBNull.Value as sentinel so QueryIndexAsync
+                            // scans exactly the NullSentinel key (the null bucket in the B-tree).
+                            result.MinValue = DBNull.Value;
+                            result.MaxValue = DBNull.Value;
+                        }
+                        else
+                        {
+                            result.MinValue = value;
+                            result.MaxValue = value;
+                        }
                         result.IsRange = false;
                         result.IsExactFilter = true;   // equality on indexed field: scan is exact
                         break;
@@ -169,6 +203,12 @@ internal static class IndexOptimizer
                         result.IsRange = true;
                         result.IsExactFilter = false;  // BTree Range includes upper bound; need post-filter to exclude it
                         break;
+                    default:
+                        // NotEqual and any future operators cannot be satisfied by a single
+                        // contiguous B-tree range scan.  Return null so the caller falls through
+                        // to BsonExpressionEvaluator (Strategy 2) or full-scan (Strategy 3),
+                        // both of which evaluate the predicate correctly in-memory.
+                        return null;
                 }
                 return result;
             }
