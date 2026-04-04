@@ -11,6 +11,7 @@ namespace BLite.Tests
             public int Id { get; set; }
             public string Name { get; set; } = "";
             public int Age { get; set; }
+            public bool IsActive { get; set; }
         }
 
         [Fact]
@@ -123,6 +124,64 @@ namespace BLite.Tests
             };
 
             Expression<Func<TestEntity, bool>> predicate = x => x.Name == "Alice"; // Name is not indexed
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void Optimizer_BareBoolMember_ReturnsEqualityTrue()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_active", PropertyPaths = ["IsActive"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => x.IsActive;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_active", result.IndexName);
+            Assert.Equal(true, result.MinValue);
+            Assert.Equal(true, result.MaxValue);
+            Assert.False(result.IsRange);
+            Assert.True(result.IsExactFilter);
+        }
+
+        [Fact]
+        public void Optimizer_NotBoolMember_ReturnsEqualityFalse()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_active", PropertyPaths = ["IsActive"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => !x.IsActive;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_active", result.IndexName);
+            Assert.Equal(false, result.MinValue);
+            Assert.Equal(false, result.MaxValue);
+            Assert.False(result.IsRange);
+            Assert.True(result.IsExactFilter);
+        }
+
+        [Fact]
+        public void Optimizer_BareBoolMember_NonIndexedField_ReturnsNull()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => x.IsActive; // IsActive not indexed
             var model = new QueryModel { WhereClause = predicate };
 
             var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);

@@ -131,14 +131,14 @@ public class IndexKeyTests
     public void Data_ReturnsCorrectLength_ForInt()
     {
         var key = new IndexKey(0);
-        Assert.Equal(4, key.Data.Length); // int → 4 bytes
+        Assert.Equal(5, key.Data.Length); // prefix(1) + int(4) = 5 bytes
     }
 
     [Fact]
     public void Data_ReturnsCorrectLength_ForLong()
     {
         var key = new IndexKey(0L);
-        Assert.Equal(8, key.Data.Length); // long → 8 bytes
+        Assert.Equal(9, key.Data.Length); // prefix(1) + long(8) = 9 bytes
     }
 
     #endregion
@@ -284,7 +284,7 @@ public class IndexKeyTests
     {
         var min = IndexKey.MinKey;
         var key = new IndexKey(int.MinValue);
-        // MinKey has 0 bytes, key has 4 bytes → 0 < 4 in length comparison
+        // MinKey has 0 bytes; real keys start with prefix 0x02 → MinKey < any real key
         Assert.True(min.CompareTo(key) < 0);
     }
 
@@ -293,9 +293,34 @@ public class IndexKeyTests
     {
         var max = IndexKey.MaxKey;
         var key = new IndexKey(int.MaxValue);
-        // MaxKey is 32 × 0xFF, key is 4 bytes; first 4 bytes equal (all 0xFF after flip),
-        // then MaxKey has 28 more bytes → MaxKey > key
+        // MaxKey starts with 0xFF; real keys start with the 0x02 prefix → MaxKey > key
         Assert.True(max.CompareTo(key) > 0);
+    }
+
+    [Fact]
+    public void NullSentinel_IsLessThan_AllRealKeys()
+    {
+        // NullSentinel = {0x00}; all real keys are prefixed with 0x02, so null < any real key.
+        var sentinel = IndexKey.NullSentinel;
+        Assert.True(sentinel.CompareTo(new IndexKey(int.MinValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey(int.MaxValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey(long.MinValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey(0.0)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey("")) < 0);
+    }
+
+    [Fact]
+    public void NullSentinelNext_IsLessThan_AllRealKeys()
+    {
+        // NullSentinelNext = {0x01}; all real keys start with 0x02, so sentinel < any real key.
+        // This guarantees that using NullSentinelNext as a lower bound excludes only null entries
+        // and never incorrectly skips negative numbers or other values encoding to 0x00/0x01 bytes.
+        var sentinel = IndexKey.NullSentinelNext;
+        Assert.True(sentinel.CompareTo(new IndexKey(int.MinValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey(int.MaxValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey(long.MinValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey(double.MinValue)) < 0);
+        Assert.True(sentinel.CompareTo(new IndexKey("")) < 0);
     }
 
     #endregion

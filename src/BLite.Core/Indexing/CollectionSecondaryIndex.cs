@@ -401,6 +401,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     {
         return value switch
         {
+            DBNull => IndexKey.NullSentinel, // explicit null equality query
             ObjectId objectId => new IndexKey(objectId),
             string str => new IndexKey(str),
             int intVal => new IndexKey(intVal),

@@ -218,7 +218,7 @@ public sealed class BTreeIndex
                                 var locationOffset = dataOffset + 4 + keyLength;
                                 var location = DocumentLocation.ReadFrom(pageBuffer.AsSpan(locationOffset, DocumentLocation.SerializedSize));
                                 // Allocate IndexKey only for entries that are actually yielded.
-                                yield return new IndexEntry(new IndexKey(pageBuffer.AsSpan(dataOffset + 4, keyLength)), location);
+                                yield return new IndexEntry(IndexKey.FromOwnedArray(pageBuffer.AsSpan(dataOffset + 4, keyLength).ToArray()), location);
                             }
                             else
                             {
@@ -593,7 +593,7 @@ public sealed class BTreeIndex
         for (int i = 0; i < header.EntryCount; i++)
         {
             var keyLen = BitConverter.ToInt32(pageBuffer.Slice(dataOffset, 4));
-            var existingKey = new IndexKey(pageBuffer.Slice(dataOffset + 4, keyLen).ToArray());
+            var existingKey = IndexKey.FromOwnedArray(pageBuffer.Slice(dataOffset + 4, keyLen).ToArray());
             if (insertOffset == -1 && entry.Key.CompareTo(existingKey) <= 0)
                 insertOffset = dataOffset;
             dataOffset += 4 + keyLen + DocumentLocation.SerializedSize;
@@ -1000,14 +1000,14 @@ public sealed class BTreeIndex
     {
         var keyLength = BitConverter.ToInt32(buffer.Slice(offset, 4));
         var keyData = buffer.Slice(offset + 4, keyLength);
-        return new IndexKey(keyData);
+        return IndexKey.FromOwnedArray(keyData.ToArray());
     }
 
     private IndexKey ReadIndexKey(byte[] buffer, int offset)
     {
         var keyLength = BitConverter.ToInt32(buffer.AsSpan(offset, 4));
         var keyData = buffer.AsSpan(offset + 4, keyLength);
-        return new IndexKey(keyData);
+        return IndexKey.FromOwnedArray(keyData.ToArray());
     }
 
     /// <summary>
