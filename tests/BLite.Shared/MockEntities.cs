@@ -861,8 +861,8 @@ namespace BLite.Shared
     // ========================================
 
     /// <summary>
-    /// Entity with Dictionary properties — the source generator must serialize these
-    /// as BSON sub-documents (key-value maps), not as arrays.
+    /// Entity with Dictionary properties — the source generator serializes these
+    /// as BSON arrays of alternating key/value entries (not as sub-documents).
     /// Bug: previously treated as IEnumerable&lt;KeyValuePair&gt; → compile error in generated code.
     /// </summary>
     public class EntityWithDictionary
@@ -870,13 +870,13 @@ namespace BLite.Shared
         public ObjectId Id { get; set; }
         public string Name { get; set; } = string.Empty;
 
-        /// <summary>Dictionary with string values — serialized as BSON document.</summary>
+        /// <summary>Dictionary with string values — serialized as BSON array of alternating key/value entries.</summary>
         public Dictionary<string, string> Labels { get; set; } = new();
 
         /// <summary>Dictionary with int values.</summary>
         public Dictionary<string, int> Counters { get; set; } = new();
 
-        /// <summary>Nullable dictionary — should serialize as null when not set.</summary>
+        /// <summary>Nullable dictionary — serializes as BSON Null when not set.</summary>
         public Dictionary<string, string>? OptionalMeta { get; set; }
     }
 

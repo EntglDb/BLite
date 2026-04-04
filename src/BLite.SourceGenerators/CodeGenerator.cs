@@ -328,21 +328,24 @@ namespace BLite.SourceGenerators
                 }
                 var dictArrVar = $"{prop.Name.ToLower()}DictArrPos";
                 var dictIdxVar = $"{prop.Name.ToLower()}DictIdx";
+                var dummyKeyProp   = new PropertyInfo { TypeName = prop.DictionaryKeyType   ?? "string" };
+                var dummyValueProp = new PropertyInfo { TypeName = prop.DictionaryValueType ?? "string" };
+                var primitiveKeyWriteMethod   = GetPrimitiveWriteMethod(dummyKeyProp);
+                var primitiveValueWriteMethod = GetPrimitiveWriteMethod(dummyValueProp);
                 sb.AppendLine($"            {indent}var {dictArrVar} = writer.BeginArray(\"{fieldName}\");");
                 sb.AppendLine($"            {indent}var {dictIdxVar} = 0;");
                 sb.AppendLine($"            {indent}foreach (var kvp in entity.{prop.Name})");
                 sb.AppendLine($"            {indent}{{");
-                sb.AppendLine($"            {indent}    writer.WriteArrayString({dictIdxVar}++, kvp.Key);");
-                var dummyValueProp = new PropertyInfo { TypeName = prop.DictionaryValueType ?? "string" };
-                var primitiveWriteMethod = GetPrimitiveWriteMethod(dummyValueProp);
-                if (primitiveWriteMethod != null)
+                if (primitiveKeyWriteMethod != null && primitiveValueWriteMethod != null)
                 {
-                    var arrayValWriteMethod = ToArrayWriteMethod(primitiveWriteMethod);
+                    var arrayKeyWriteMethod = ToArrayWriteMethod(primitiveKeyWriteMethod);
+                    var arrayValWriteMethod = ToArrayWriteMethod(primitiveValueWriteMethod);
+                    sb.AppendLine($"            {indent}    writer.{arrayKeyWriteMethod}({dictIdxVar}++, kvp.Key);");
                     sb.AppendLine($"            {indent}    writer.{arrayValWriteMethod}({dictIdxVar}++, kvp.Value);");
                 }
                 else
                 {
-                    sb.AppendLine($"            {indent}    {dictIdxVar}++; // Dictionary value type '{prop.DictionaryValueType}' is not directly supported — value skipped.");
+                    sb.AppendLine($"            {indent}    // Dictionary entry skipped: key type '{prop.DictionaryKeyType}' or value type '{prop.DictionaryValueType}' is not a supported primitive.");
                 }
                 sb.AppendLine($"            {indent}}}");
                 sb.AppendLine($"            {indent}writer.EndArray({dictArrVar});");
@@ -508,7 +511,10 @@ namespace BLite.SourceGenerators
                 {
                     var keyT   = QualifyType(prop.DictionaryKeyType   ?? "string");
                     var valT   = QualifyType(prop.DictionaryValueType ?? "object");
-                    sb.AppendLine($"            var {prop.Name.ToLower()} = new global::System.Collections.Generic.Dictionary<{keyT}, {valT}>();");
+                    if (prop.IsNullable)
+                        sb.AppendLine($"            global::System.Collections.Generic.Dictionary<{keyT}, {valT}>? {prop.Name.ToLower()} = null;");
+                    else
+                        sb.AppendLine($"            var {prop.Name.ToLower()} = new global::System.Collections.Generic.Dictionary<{keyT}, {valT}>();");
                 }
                 else
                 {
@@ -753,14 +759,23 @@ namespace BLite.SourceGenerators
              }
              else if (prop.IsDictionary)
              {
-                 // Dictionary encoded as BSON array: [0]=key(string), [1]=value, [2]=key, [3]=value, ...
+                 // Dictionary encoded as BSON array: [0]=key, [1]=value, [2]=key, [3]=value, ...
                  if (prop.IsNullable)
-                     sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null) break;");
+                 {
+                     sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                     sb.AppendLine($"                        {{");
+                     sb.AppendLine($"                            {localVar} = default;");
+                     sb.AppendLine($"                            break;");
+                     sb.AppendLine($"                        }}");
+                 }
+                 var keyT2   = QualifyType(prop.DictionaryKeyType   ?? "string");
+                 var valT2   = QualifyType(prop.DictionaryValueType ?? "object");
+                 sb.AppendLine($"                        {localVar} = new global::System.Collections.Generic.Dictionary<{keyT2}, {valT2}>();");
                  sb.AppendLine($"                        var {localVar}ArrSize = reader.ReadDocumentSize();");
                  sb.AppendLine($"                        var {localVar}ArrEnd  = reader.Position + {localVar}ArrSize - {BLiteConventions.BsonDocumentSizeOverhead};");
                  sb.AppendLine($"                        while (reader.Position < {localVar}ArrEnd)");
                  sb.AppendLine($"                        {{");
-                 // Read key element (BsonType.String)
+                 // Read key element
                  sb.AppendLine($"                            var {localVar}KeyBsonType = reader.ReadBsonType();");
                  sb.AppendLine($"                            if ({localVar}KeyBsonType == global::BLite.Bson.BsonType.EndOfDocument) break;");
                  sb.AppendLine($"                            reader.SkipArrayKey();");
@@ -775,7 +790,14 @@ namespace BLite.SourceGenerators
                  {
                      var castDict2 = (prop.DictionaryValueType == "float" || prop.DictionaryValueType == "Single") ? "(float)" : "";
                      var dictReadArgs2 = IsCoercedReadMethod(dictReadMethod2) ? $"({localVar}ValBsonType)" : "()";
-                     sb.AppendLine($"                            {localVar}[{localVar}Key] = {castDict2}reader.{dictReadMethod2}{dictReadArgs2};");
+                     sb.AppendLine($"                            if ({localVar}ValBsonType == global::BLite.Bson.BsonType.Null)");
+                     sb.AppendLine($"                            {{");
+                     sb.AppendLine($"                                {localVar}[{localVar}Key] = default;");
+                     sb.AppendLine($"                            }}");
+                     sb.AppendLine($"                            else");
+                     sb.AppendLine($"                            {{");
+                     sb.AppendLine($"                                {localVar}[{localVar}Key] = {castDict2}reader.{dictReadMethod2}{dictReadArgs2};");
+                     sb.AppendLine($"                            }}");
                  }
                  else
                  {

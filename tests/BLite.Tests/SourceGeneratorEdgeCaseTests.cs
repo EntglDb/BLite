@@ -123,6 +123,7 @@ public class SourceGeneratorEdgeCaseTests : IDisposable
 
         Assert.NotNull(retrievedNoMeta);
         Assert.NotNull(retrievedWithMeta);
+        Assert.Null(retrievedNoMeta.OptionalMeta);
         Assert.NotNull(retrievedWithMeta.OptionalMeta);
         Assert.Equal("value", retrievedWithMeta.OptionalMeta["key"]);
     }

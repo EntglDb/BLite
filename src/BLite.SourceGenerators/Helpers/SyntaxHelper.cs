@@ -140,7 +140,8 @@ namespace BLite.SourceGenerators.Helpers
             if (type.SpecialType == SpecialType.System_String)
                 return false;
             
-            // Exclude Dictionary types — they are serialized as BSON key-value documents, not arrays
+            // Exclude Dictionary types — they are serialized as BSON arrays of alternating key/value entries,
+            // not as regular collections of itemType elements
             if (IsDictionaryType(type, out _, out _))
                 return false;
             
