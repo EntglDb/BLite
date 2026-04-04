@@ -134,7 +134,6 @@ internal static class IndexOptimizer
             bareMember.Expression == parameter &&
             bareMember.Type == typeof(bool))
         {
-            var (pn, _, _) = (bareMember.Member.Name, (object)true, ExpressionType.Equal);
             CollectionIndexInfo? ix = null;
             foreach (var idx in indexes) { if (Matches(idx, bareMember.Member.Name)) { ix = idx; break; } }
             if (ix != null)

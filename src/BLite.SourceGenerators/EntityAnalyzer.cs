@@ -102,14 +102,19 @@ namespace BLite.SourceGenerators
                     // appear as getter-only (prop.SetMethod == null) because Roslyn does not expose
                     // private accessors across assembly boundaries. However, they always have a
                     // compiler-generated backing field named "<PropertyName>k__BackingField".
-                    // Detect this case so the property is included with HasAnySetter=true.
+                    // Detect this case so the property is included with HasAnySetter=true, but
+                    // exclude get-only auto-properties whose compiler-generated backing field is
+                    // readonly (those truly have no setter and cannot be assigned).
                     bool hasCompilerGeneratedBackingField = false;
                     if (prop.SetMethod == null && !SyntaxHelper.HasBackingField(prop))
                     {
                         var expectedBackingFieldName = $"<{prop.Name}{BLiteConventions.CompilerBackingFieldSuffix}";
-                        hasCompilerGeneratedBackingField = prop.ContainingType.GetMembers()
+                        var compilerGeneratedBackingField = prop.ContainingType.GetMembers()
                             .OfType<Microsoft.CodeAnalysis.IFieldSymbol>()
-                            .Any(f => f.Name == expectedBackingFieldName);
+                            .FirstOrDefault(f => f.Name == expectedBackingFieldName);
+
+                        hasCompilerGeneratedBackingField = compilerGeneratedBackingField != null
+                            && !compilerGeneratedBackingField.IsReadOnly;
                     }
 
                     // Skip computed getter-only properties (no setter, no backing field)

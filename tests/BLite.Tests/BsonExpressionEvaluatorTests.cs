@@ -14,6 +14,12 @@ namespace BLite.Tests;
 /// </summary>
 public class BsonExpressionEvaluatorTests : IDisposable
 {
+    // Local entity with bool property used in bare-bool and NOT-bool predicate tests.
+    private class FlagEntity
+    {
+        public int Id { get; set; }
+        public bool IsActive { get; set; }
+    }
     private readonly string _dbPath;
     private readonly TestDbContext _db;
 
@@ -127,6 +133,56 @@ public class BsonExpressionEvaluatorTests : IDisposable
         User other = new() { Name = "Alice" };
         Expression<Func<User, bool>> lambda = x => other != null && x.Name.Equals(other.Name);
         Assert.NotNull(BsonExpressionEvaluator.TryCompile<User>(lambda));
+    }
+
+    // ─── TryCompile: bool member and logical NOT ─────────────────────────────
+
+    [Fact]
+    public void TryCompile_BareBoolMember_ReturnsNonNull()
+    {
+        Expression<Func<FlagEntity, bool>> lambda = x => x.IsActive;
+        Assert.NotNull(BsonExpressionEvaluator.TryCompile<FlagEntity>(lambda));
+    }
+
+    [Fact]
+    public void TryCompile_LogicalNotBoolMember_ReturnsNonNull()
+    {
+        Expression<Func<FlagEntity, bool>> lambda = x => !x.IsActive;
+        Assert.NotNull(BsonExpressionEvaluator.TryCompile<FlagEntity>(lambda));
+    }
+
+    [Fact]
+    public void TryCompile_BareBoolMember_PredicateMatchesTrue()
+    {
+        Expression<Func<FlagEntity, bool>> lambda = x => x.IsActive;
+        var predicate = BsonExpressionEvaluator.TryCompile<FlagEntity>(lambda);
+        Assert.NotNull(predicate);
+
+        var keyMap = new Dictionary<string, ushort> { ["isactive"] = 1 };
+        var reverseKeyMap = new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>(
+            new Dictionary<ushort, string> { [1] = "isactive" });
+        var activeDoc   = BsonDocument.Create(keyMap, reverseKeyMap, b => b.AddBoolean("isactive", true));
+        var inactiveDoc = BsonDocument.Create(keyMap, reverseKeyMap, b => b.AddBoolean("isactive", false));
+
+        Assert.True(predicate!(activeDoc.GetReader()));
+        Assert.False(predicate!(inactiveDoc.GetReader()));
+    }
+
+    [Fact]
+    public void TryCompile_LogicalNotBoolMember_PredicateMatchesFalse()
+    {
+        Expression<Func<FlagEntity, bool>> lambda = x => !x.IsActive;
+        var predicate = BsonExpressionEvaluator.TryCompile<FlagEntity>(lambda);
+        Assert.NotNull(predicate);
+
+        var keyMap = new Dictionary<string, ushort> { ["isactive"] = 1 };
+        var reverseKeyMap = new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>(
+            new Dictionary<ushort, string> { [1] = "isactive" });
+        var activeDoc   = BsonDocument.Create(keyMap, reverseKeyMap, b => b.AddBoolean("isactive", true));
+        var inactiveDoc = BsonDocument.Create(keyMap, reverseKeyMap, b => b.AddBoolean("isactive", false));
+
+        Assert.False(predicate!(activeDoc.GetReader()));
+        Assert.True(predicate!(inactiveDoc.GetReader()));
     }
 
     // ─── TryCompile: returns null for unsupported expressions ────────────────

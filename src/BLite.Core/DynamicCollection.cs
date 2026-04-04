@@ -428,23 +428,34 @@ public sealed class DynamicCollection : IDisposable
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
-        // null  → open bound: use NullSentinelNext so that indexed-null entries are excluded from range scans.
-        // DBNull → explicit null equality query: use NullSentinel to target exactly the null bucket.
+        // (null, null) → unbounded full-index scan: include every entry (nulls and non-nulls alike).
+        // (null, upper) → open lower bound: use NullSentinelNext to skip null entries.
+        // (lower, null) → open upper bound: scan from lower to MaxKey.
+        // DBNull → explicit null equality: use NullSentinel to target exactly the null bucket.
         IndexKey minKey;
-        if (minValue == null)
-            minKey = IndexKey.NullSentinelNext;       // skip null entries in range scans
-        else if (minValue is DBNull)
-            minKey = IndexKey.NullSentinel;            // explicit null equality
-        else
-            minKey = CreateIndexKeyFromObject(minValue);
-
         IndexKey maxKey;
-        if (maxValue == null)
+
+        if (minValue == null && maxValue == null)
+        {
+            minKey = IndexKey.MinKey;
             maxKey = IndexKey.MaxKey;
-        else if (maxValue is DBNull)
-            maxKey = IndexKey.NullSentinel;            // explicit null equality
+        }
         else
-            maxKey = CreateIndexKeyFromObject(maxValue);
+        {
+            if (minValue == null)
+                minKey = IndexKey.NullSentinelNext;    // skip null entries in range scans
+            else if (minValue is DBNull)
+                minKey = IndexKey.NullSentinel;        // explicit null equality
+            else
+                minKey = CreateIndexKeyFromObject(minValue);
+
+            if (maxValue == null)
+                maxKey = IndexKey.MaxKey;
+            else if (maxValue is DBNull)
+                maxKey = IndexKey.NullSentinel;        // explicit null equality
+            else
+                maxKey = CreateIndexKeyFromObject(maxValue);
+        }
 
         foreach (var indexEntry in entry.BTree.Range(minKey, maxKey, ascending ? IndexDirection.Forward : IndexDirection.Backward, txnId))
         {

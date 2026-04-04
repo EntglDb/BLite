@@ -62,7 +62,7 @@ internal sealed class ChangeStreamObservable<TId, T> : IObservable<ChangeStreamE
                     try
                     {
                         // Deserializza ID
-                        var eventId = _mapper.FromIndexKey(new IndexKey(internalEvent.IdBytes.ToArray()));
+                        var eventId = _mapper.FromIndexKey(IndexKey.FromOwnedArray(internalEvent.IdBytes.ToArray()));
                         
                         // Deserializza Payload (se presente)
                         T? entity = default;

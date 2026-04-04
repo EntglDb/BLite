@@ -205,7 +205,7 @@ internal sealed class BTreeCursor : IBTreeCursor
             var keyLen = BitConverter.ToInt32(_pageBuffer.AsSpan(dataOffset, 4));
             var keyData = new byte[keyLen];
             _pageBuffer.AsSpan(dataOffset + 4, keyLen).CopyTo(keyData);
-            var key = new IndexKey(keyData);
+            var key = IndexKey.FromOwnedArray(keyData);
             dataOffset += 4 + keyLen;
 
             // Read Location

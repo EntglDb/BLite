@@ -13,9 +13,17 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     private readonly byte[] _data;
     private readonly int _hashCode;
 
+    // Discriminator prefix prepended to every real (non-sentinel) key byte array.
+    // Guarantees NullSentinel (0x00) and NullSentinelNext (0x01) sort strictly before
+    // all encoded user values, including int.MinValue which encodes to { 0x00, 0x00, 0x00, 0x00 }
+    // without the prefix.
+    private const byte KeyPrefix = 0x02;
+
     // Pre-allocated static sentinels — single allocation at type-init time.
-    public static readonly IndexKey MinKey = new IndexKey(Array.Empty<byte>());
-    public static readonly IndexKey MaxKey = new IndexKey(new byte[] {
+    // These use the raw (no-prefix) FromOwnedArray factory so the sentinel byte values
+    // are preserved exactly as-is and not mistaken for real user keys.
+    public static readonly IndexKey MinKey = FromOwnedArray(Array.Empty<byte>());
+    public static readonly IndexKey MaxKey = FromOwnedArray(new byte[] {
         0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
         0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
         0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
@@ -23,27 +31,33 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
 
     /// <summary>
     /// Sentinel key stored in the B-tree for BSON null values.
-    /// Sorts after MinKey (0-byte array) and before all real data keys (DateTimeOffset, int, etc.
-    /// encode with a leading byte ≥ 0x01).
+    /// Sorts after MinKey (empty array) and before all real data keys, which are
+    /// prefixed with <c>KeyPrefix</c> (0x02).
     /// </summary>
-    public static readonly IndexKey NullSentinel = new IndexKey(new byte[] { 0x00 });
+    public static readonly IndexKey NullSentinel = FromOwnedArray(new byte[] { 0x00 });
 
     /// <summary>
     /// One step above NullSentinel — used as the open lower bound in range scans so that
     /// null-valued entries are excluded from inequality / range queries.
+    /// All real data keys start with <c>KeyPrefix</c> (0x02), so this sentinel safely
+    /// sorts before every encoded non-null value.
     /// </summary>
-    public static readonly IndexKey NullSentinelNext = new IndexKey(new byte[] { 0x01 });
+    public static readonly IndexKey NullSentinelNext = FromOwnedArray(new byte[] { 0x01 });
 
     public IndexKey(ReadOnlySpan<byte> data)
     {
-        _data = data.ToArray();
-        _hashCode = ComputeHashCode(data);
+        var buf = new byte[data.Length + 1];
+        buf[0] = KeyPrefix;
+        data.CopyTo(buf.AsSpan(1));
+        _data = buf;
+        _hashCode = ComputeHashCode(_data);
     }
 
     public IndexKey(ObjectId objectId)
     {
-        _data = new byte[12];
-        objectId.WriteTo(_data);
+        _data = new byte[13];
+        _data[0] = KeyPrefix;
+        objectId.WriteTo(_data.AsSpan(1));
         _hashCode = ComputeHashCode(_data);
     }
 
@@ -51,7 +65,7 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     {
         // Big-endian + sign-bit flip: lexicographic byte order == numeric order (including negatives).
         uint u = (uint)value ^ 0x8000_0000u;
-        _data = [(byte)(u >> 24), (byte)(u >> 16), (byte)(u >> 8), (byte)u];
+        _data = [KeyPrefix, (byte)(u >> 24), (byte)(u >> 16), (byte)(u >> 8), (byte)u];
         _hashCode = ComputeHashCode(_data);
     }
 
@@ -59,7 +73,7 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     {
         // Big-endian + sign-bit flip: lexicographic byte order == numeric order (including negatives).
         ulong u = (ulong)value ^ 0x8000_0000_0000_0000UL;
-        _data = [(byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
+        _data = [KeyPrefix, (byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
                  (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
         _hashCode = ComputeHashCode(_data);
     }
@@ -72,20 +86,26 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         // Result: lexicographic byte order == IEEE 754 numeric order for all finite and ±Inf.
         var bits = BitConverter.DoubleToInt64Bits(value);
         ulong u = bits < 0 ? ~(ulong)bits : (ulong)bits | 0x8000_0000_0000_0000UL;
-        _data = [(byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
+        _data = [KeyPrefix, (byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
                  (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
         _hashCode = ComputeHashCode(_data);
     }
 
     public IndexKey(string value)
     {
-        _data = System.Text.Encoding.UTF8.GetBytes(value);
+        var utf8 = System.Text.Encoding.UTF8.GetBytes(value);
+        var buf = new byte[utf8.Length + 1];
+        buf[0] = KeyPrefix;
+        utf8.CopyTo(buf, 1);
+        _data = buf;
         _hashCode = ComputeHashCode(_data);
     }
 
     public IndexKey(Guid value)
     {
-        _data = value.ToByteArray();
+        _data = new byte[17];
+        _data[0] = KeyPrefix;
+        value.ToByteArray().CopyTo(_data, 1);
         _hashCode = ComputeHashCode(_data);
     }
 
@@ -190,31 +210,35 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     {
         if (_data == null) return default!;
 
-        if (typeof(T) == typeof(ObjectId)) return (T)(object)new ObjectId(_data);
+        // Skip the KeyPrefix discriminator byte (index 0) that was prepended by the constructors.
+        // Sentinel keys (NullSentinel, NullSentinelNext, MinKey, MaxKey) are never decoded via As<T>.
+        var d = _data.AsSpan(1);
+
+        if (typeof(T) == typeof(ObjectId)) return (T)(object)new ObjectId(d.ToArray());
         if (typeof(T) == typeof(int))
         {
-            uint u = ((uint)_data[0] << 24) | ((uint)_data[1] << 16) | ((uint)_data[2] << 8) | _data[3];
+            uint u = ((uint)d[0] << 24) | ((uint)d[1] << 16) | ((uint)d[2] << 8) | d[3];
             return (T)(object)(int)(u ^ 0x8000_0000u);
         }
         if (typeof(T) == typeof(long))
         {
-            ulong u = ((ulong)_data[0] << 56) | ((ulong)_data[1] << 48) | ((ulong)_data[2] << 40) | ((ulong)_data[3] << 32)
-                    | ((ulong)_data[4] << 24) | ((ulong)_data[5] << 16) | ((ulong)_data[6] <<  8) | _data[7];
+            ulong u = ((ulong)d[0] << 56) | ((ulong)d[1] << 48) | ((ulong)d[2] << 40) | ((ulong)d[3] << 32)
+                    | ((ulong)d[4] << 24) | ((ulong)d[5] << 16) | ((ulong)d[6] <<  8) | d[7];
             return (T)(object)(long)(u ^ 0x8000_0000_0000_0000UL);
         }
         if (typeof(T) == typeof(double))
         {
-            ulong u = ((ulong)_data[0] << 56) | ((ulong)_data[1] << 48) | ((ulong)_data[2] << 40) | ((ulong)_data[3] << 32)
-                    | ((ulong)_data[4] << 24) | ((ulong)_data[5] << 16) | ((ulong)_data[6] <<  8) | _data[7];
+            ulong u = ((ulong)d[0] << 56) | ((ulong)d[1] << 48) | ((ulong)d[2] << 40) | ((ulong)d[3] << 32)
+                    | ((ulong)d[4] << 24) | ((ulong)d[5] << 16) | ((ulong)d[6] <<  8) | d[7];
             // Reverse encoding: if MSB was set (positive double), clear it; else flip all bits (negative double)
             long bits = u >= 0x8000_0000_0000_0000UL
                 ? (long)(u ^ 0x8000_0000_0000_0000UL)
                 : (long)~u;
             return (T)(object)BitConverter.Int64BitsToDouble(bits);
         }
-        if (typeof(T) == typeof(string)) return (T)(object)System.Text.Encoding.UTF8.GetString(_data);
-        if (typeof(T) == typeof(Guid)) return (T)(object)new Guid(_data);
-        if (typeof(T) == typeof(byte[])) return (T)(object)_data;
+        if (typeof(T) == typeof(string)) return (T)(object)System.Text.Encoding.UTF8.GetString(d);
+        if (typeof(T) == typeof(Guid)) return (T)(object)new Guid(d.ToArray());
+        if (typeof(T) == typeof(byte[])) return (T)(object)d.ToArray();
 
         throw new NotSupportedException($"Type {typeof(T).Name} cannot be extracted from IndexKey. Provide a custom mapping.");
     }
