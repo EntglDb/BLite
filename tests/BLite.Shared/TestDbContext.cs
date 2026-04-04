@@ -84,6 +84,10 @@ public partial class TestDbContext : DocumentDbContext
     // Binary Property Tests
     public DocumentCollection<ObjectId, BinaryEntity> BinaryEntities { get; set; } = null!;
 
+    // Source Generator Edge Case Tests – Dictionary and generic class properties
+    public DocumentCollection<ObjectId, EntityWithDictionary> DictionaryEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithGenericProperty> GenericPropertyEntities { get; set; } = null!;
+
     public TestDbContext(string databasePath) : base(databasePath)
     {
         InitializeCollections();
@@ -190,6 +194,10 @@ public partial class TestDbContext : DocumentDbContext
 
         // Binary Property Tests
         modelBuilder.Entity<BinaryEntity>().ToCollection("binary_entities");
+
+        // Source Generator Edge Case Tests
+        modelBuilder.Entity<EntityWithDictionary>().ToCollection("dictionary_entities");
+        modelBuilder.Entity<EntityWithGenericProperty>().ToCollection("generic_property_entities");
     }
 
     public void ForceCheckpoint()

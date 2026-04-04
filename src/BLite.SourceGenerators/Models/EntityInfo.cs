@@ -84,6 +84,11 @@ namespace BLite.SourceGenerators.Models
         public string? NestedTypeFullName { get; set; }
         public string? ConverterTypeName { get; set; }
         public string? ProviderTypeName { get; set; }
+
+        // Dictionary<TKey, TValue> support
+        public bool IsDictionary { get; set; }
+        public string? DictionaryKeyType { get; set; }
+        public string? DictionaryValueType { get; set; }
     }
 
     public class NestedTypeInfo
