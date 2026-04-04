@@ -42,6 +42,7 @@ public partial class TestDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, EntityWithComputedProperties> ComputedPropertyEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithAdvancedCollections> AdvancedCollectionEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithPrivateSetters> PrivateSetterEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, EntityWithInheritedPrivateSetters> InheritedPrivateSetterEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithInitSetters> InitSetterEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithInitIdAndNullables> InitIdNullableEntities { get; set; } = null!;
     

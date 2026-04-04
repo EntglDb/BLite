@@ -115,6 +115,17 @@ namespace BLite.SourceGenerators
 
                         hasCompilerGeneratedBackingField = compilerGeneratedBackingField != null
                             && !compilerGeneratedBackingField.IsReadOnly;
+
+                        // Fallback for reference assemblies: private backing fields are stripped from
+                        // reference-assembly metadata. If no backing field was found but the property
+                        // comes from an external (compiled) assembly and is not abstract, assume it
+                        // has a private setter — the most common case for auditable entity properties.
+                        if (!hasCompilerGeneratedBackingField
+                            && !prop.IsAbstract
+                            && prop.DeclaringSyntaxReferences.IsEmpty)
+                        {
+                            hasCompilerGeneratedBackingField = true;
+                        }
                     }
 
                     // Skip computed getter-only properties (no setter, no backing field)

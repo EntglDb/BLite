@@ -474,6 +474,76 @@ public class SourceGeneratorFeaturesTests : IDisposable
 
     #endregion
 
+    #region Inherited Private Setters Tests
+
+    [Fact]
+    public async Task EntityWithInheritedPrivateSetters_CanBeDeserialized()
+    {
+        // Arrange
+        var entity = EntityWithInheritedPrivateSetters.Create("Alice", 25, "system");
+
+        await _db.InheritedPrivateSetterEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+
+        // Act
+        var result = await _db.InheritedPrivateSetterEntities.FindByIdAsync(entity.Id);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(entity.Name, result.Name);
+        Assert.Equal(entity.Age, result.Age);
+        Assert.Equal(entity.CreatedBy, result.CreatedBy);
+        Assert.Equal(entity.IsDeleted, result.IsDeleted);
+    }
+
+    [Fact]
+    public async Task EntityWithInheritedPrivateSetters_Update_Works()
+    {
+        // Arrange
+        var entity = EntityWithInheritedPrivateSetters.Create("Bob", 35, "system");
+
+        await _db.InheritedPrivateSetterEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+
+        // Act — update via replace
+        var fetched = await _db.InheritedPrivateSetterEntities.FindByIdAsync(entity.Id);
+        Assert.NotNull(fetched);
+        await _db.InheritedPrivateSetterEntities.UpdateAsync(fetched);
+        await _db.SaveChangesAsync();
+
+        var updated = await _db.InheritedPrivateSetterEntities.FindByIdAsync(entity.Id);
+
+        // Assert
+        Assert.NotNull(updated);
+        Assert.Equal(fetched.Name, updated.Name);
+        Assert.Equal(fetched.Age, updated.Age);
+        Assert.Equal(fetched.CreatedBy, updated.CreatedBy);
+    }
+
+    [Fact]
+    public async Task EntityWithInheritedPrivateSetters_Query_Works()
+    {
+        // Arrange
+        var entity1 = EntityWithInheritedPrivateSetters.Create("Carol", 20, "system");
+        var entity2 = EntityWithInheritedPrivateSetters.Create("David", 40, "admin");
+        var entity3 = EntityWithInheritedPrivateSetters.Create("Eve", 55, "admin");
+
+        await _db.InheritedPrivateSetterEntities.InsertAsync(entity1);
+        await _db.InheritedPrivateSetterEntities.InsertAsync(entity2);
+        await _db.InheritedPrivateSetterEntities.InsertAsync(entity3);
+        await _db.SaveChangesAsync();
+
+        // Act
+        var admins = await _db.InheritedPrivateSetterEntities.FindAsync(e => e.CreatedBy == "admin").ToListAsync();
+
+        // Assert
+        Assert.Equal(2, admins.Count);
+        Assert.Contains(admins, e => e.Name == "David");
+        Assert.Contains(admins, e => e.Name == "Eve");
+    }
+
+    #endregion
+
     #region Init-Only Setters Tests
 
     [Fact]

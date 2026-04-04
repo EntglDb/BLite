@@ -371,6 +371,46 @@ namespace BLite.Shared
     }
 
     /// <summary>
+    /// Abstract base class with private setters — simulates an auditable base from the same assembly.
+    /// </summary>
+    public abstract class AuditableBase
+    {
+        public DateTime CreatedAt { get; private set; }
+        public string CreatedBy { get; private set; } = string.Empty;
+        public DateTime? DeletedAt { get; private set; }
+        public bool IsDeleted { get; private set; }
+
+        public static void SimulateAudit(AuditableBase entity, string createdBy)
+        {
+            entity.CreatedAt = DateTime.UtcNow;
+            entity.CreatedBy = createdBy;
+        }
+    }
+
+    /// <summary>
+    /// Entity that inherits private-setter properties from AuditableBase.
+    /// Tests that the source generator correctly includes inherited private-setter properties.
+    /// </summary>
+    public class EntityWithInheritedPrivateSetters : AuditableBase
+    {
+        public ObjectId Id { get; private set; }
+        public string Name { get; private set; } = string.Empty;
+        public int Age { get; private set; }
+
+        public static EntityWithInheritedPrivateSetters Create(string name, int age, string createdBy)
+        {
+            var e = new EntityWithInheritedPrivateSetters
+            {
+                Id = ObjectId.NewObjectId(),
+                Name = name,
+                Age = age
+            };
+            SimulateAudit(e, createdBy);
+            return e;
+        }
+    }
+
+    /// <summary>
     /// Entity with init-only setters (can use object initializer)
     /// </summary>
     public class EntityWithInitSetters
