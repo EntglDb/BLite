@@ -11,7 +11,7 @@ namespace BLite.Core;
 /// <summary>
 /// Defines the contract for a document database context.
 /// </summary>
-public interface IDbContext : IDisposable, ITransactionHolder
+public interface IDocumentDbContext : IDisposable, ITransactionHolder
 {
     /// <summary>
     /// Gets the current active transaction, or <c>null</c> if no transaction is active.
