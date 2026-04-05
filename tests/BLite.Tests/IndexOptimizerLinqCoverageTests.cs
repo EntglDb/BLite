@@ -338,6 +338,40 @@ public class IndexOptimizerLinqCoverageTests : IDisposable
         Assert.Equal("Doohickey", page3[0].Title);    // 29.99
     }
 
+    [Fact]
+    public void Linq_OrderByDescending_Pagination_ReturnsCorrectWindows()
+    {
+        // Products prices descending: [29.99, 19.99, 14.99, 9.99, 4.99]
+        // Page 1: Skip(0).Take(2) → [29.99, 19.99]
+        var page1 = _db.Products.AsQueryable()
+            .OrderByDescending(x => x.Price)
+            .Skip(0)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page1.Count);
+        Assert.Equal("Doohickey", page1[0].Title);       // 29.99
+        Assert.Equal("Gadget", page1[1].Title);           // 19.99
+
+        // Page 2: Skip(2).Take(2) → [14.99, 9.99]
+        var page2 = _db.Products.AsQueryable()
+            .OrderByDescending(x => x.Price)
+            .Skip(2)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page2.Count);
+        Assert.Equal("Whatchamacallit", page2[0].Title);  // 14.99
+        Assert.Equal("Widget", page2[1].Title);            // 9.99
+
+        // Page 3: Skip(4).Take(2) → [4.99] (only 1 item remains)
+        var page3 = _db.Products.AsQueryable()
+            .OrderByDescending(x => x.Price)
+            .Skip(4)
+            .Take(2)
+            .ToList();
+        Assert.Single(page3);
+        Assert.Equal("Thingy", page3[0].Title);           // 4.99
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     //  Terminal operators
     // ══════════════════════════════════════════════════════════════════════
