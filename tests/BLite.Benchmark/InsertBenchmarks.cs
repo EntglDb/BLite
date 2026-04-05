@@ -16,7 +16,7 @@ using System.Threading;
 
 namespace BLite.Benchmark;
 
-[InProcess]
+[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "Insert")]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]

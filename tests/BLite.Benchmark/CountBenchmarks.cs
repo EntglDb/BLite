@@ -26,8 +26,7 @@ namespace BLite.Benchmark;
 /// All three BLite paths are compared with SQLite, LiteDB, and DuckDB equivalents over
 /// 10 000 <see cref="CustomerOrder"/> documents.
 /// </summary>
-[SimpleJob]
-[InProcess]
+[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "Count")]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]
