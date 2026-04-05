@@ -84,6 +84,9 @@ public partial class TestDbContext : DocumentDbContext
     // Binary Property Tests
     public DocumentCollection<ObjectId, BinaryEntity> BinaryEntities { get; set; } = null!;
 
+    // Null Non-Nullable String Property Tests
+    public DocumentCollection<ObjectId, EntityWithUnassignedString> UnassignedStringEntities { get; set; } = null!;
+
     // Source Generator Edge Case Tests – Dictionary and generic class properties
     public DocumentCollection<ObjectId, EntityWithDictionary> DictionaryEntities { get; set; } = null!;
     public DocumentCollection<ObjectId, EntityWithGenericProperty> GenericPropertyEntities { get; set; } = null!;

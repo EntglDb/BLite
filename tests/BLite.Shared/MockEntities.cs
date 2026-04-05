@@ -199,6 +199,20 @@ namespace BLite.Shared
         public int Quantity { get; set; }
     }
 
+    // --- Null Non-Nullable String Property Tests ---
+
+    /// <summary>
+    /// Entity with a non-annotated (non-nullable) string property that is never assigned,
+    /// so it remains null at runtime. Used to verify that the serializer writes BsonNull
+    /// and the deserializer reads it back as null without throwing.
+    /// </summary>
+    public class EntityWithUnassignedString
+    {
+        public ObjectId Id { get; set; }
+        public string Title { get; set; } = null!;  // intentionally left null at runtime
+        public int Number { get; set; }
+    }
+
     // --- Binary Property Tests ---
 
     public class BinaryEntity

@@ -847,7 +847,7 @@ namespace BLite.SourceGenerators
                     if (readMethod == "ReadBinary")
                     {
                         // ReadBinary returns ReadOnlySpan<byte> — must call .ToArray() to materialise
-                        if (prop.IsNullable)
+                        if (prop.IsNullable || prop.TypeName == "byte[]")
                         {
                             sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
                             sb.AppendLine($"                        {{");
@@ -867,8 +867,8 @@ namespace BLite.SourceGenerators
                     {
                     var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
                     
-                    // Handle nullable types - check for null in BSON stream
-                    if (prop.IsNullable)
+                    // Handle nullable types and reference types (string) - check for null in BSON stream
+                    if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String")
                     {
                         sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
                         sb.AppendLine($"                        {{");
