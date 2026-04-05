@@ -56,7 +56,7 @@ internal static class IndexOptimizer
         Exact,
 
         /// <summary>
-        /// The BTree scan uses inclusive bounds, but the original operator was strict (&gt; or &lt;).
+        /// The BTree scan uses inclusive bounds, but the original operator was strict (> or <).
         /// The boundary value(s) must be excluded by applying the compiled predicate as a post-filter.
         /// </summary>
         StrictBoundary,
