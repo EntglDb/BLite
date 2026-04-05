@@ -270,6 +270,74 @@ public class AsyncQueryableTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task CountAsync_WithCompoundStrictRange_ReturnsExactCount()
+    {
+        // Verifies that a two-sided strict range (Price > 30m && Price < 80m) correctly
+        // excludes both boundary values from the key-only index scan.
+        // Price 10,20,30,40,50,60,70,80,90,100 → prices in (30,80) are 40,50,60,70 = 4
+        var dbPath = Path.Combine(Path.GetTempPath(), $"blite_countrange_{Guid.NewGuid()}.db");
+        try
+        {
+            using var db = new TestDbContext(dbPath);
+            for (int i = 1; i <= 10; i++)
+                await db.Products.InsertAsync(new Product { Id = i, Title = $"P{i}", Price = i * 10m });
+
+            var count = await db.Products.AsQueryable()
+                .CountAsync(p => p.Price > 30m && p.Price < 80m);
+
+            Assert.Equal(4, count);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
+    }
+
+    [Fact]
+    public async Task CountAsync_AfterTake_ReturnsTakenCount()
+    {
+        // Verifies that Take() limits the result before counting.
+        // The count fast-path must not bypass Take/Skip shaping operators.
+        using var db = await CreateAndSeed(10);
+
+        var count = await db.AsyncDocs.AsQueryable()
+            .Take(3)
+            .CountAsync();
+
+        Assert.Equal(3, count);
+    }
+
+    [Fact]
+    public async Task CountAsync_AfterSkip_ReturnsRemainingCount()
+    {
+        // Verifies that Skip() offsets the result set before counting.
+        using var db = await CreateAndSeed(10);
+
+        var count = await db.AsyncDocs.AsQueryable()
+            .Skip(4)
+            .CountAsync();
+
+        Assert.Equal(6, count);
+    }
+
+    [Fact]
+    public async Task CountAsync_AfterWhereSkipTake_ReturnsShapedCount()
+    {
+        // Verifies that Where + Skip + Take are all applied before counting.
+        using var db = await CreateAndSeed(10);
+
+        var count = await db.AsyncDocs.AsQueryable()
+            .Where(d => d.Id <= 8)
+            .Skip(3)
+            .Take(2)
+            .CountAsync();
+
+        Assert.Equal(2, count);
+    }
+
     // ─── AnyAsync ────────────────────────────────────────────────────────────
 
     [Fact]

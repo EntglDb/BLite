@@ -1980,15 +1980,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var index = _indexManager.GetIndex(indexOpt.IndexName);
             if (index != null)
             {
-                // Determine boundary inclusivity:
-                //   IsExactFilter=true  → operator is inclusive (==, >=, <=, or a two-sided AND range)
-                //   IsExactFilter=false → operator is strict (> or <); the boundary value itself must be excluded.
-                // When a bound is null it means "unbounded" — the default sentinel is already used, so
-                // the inclusivity flag for that side has no effect and defaults to true.
-                bool startInclusive = indexOpt.IsExactFilter || indexOpt.MinValue == null;
-                bool endInclusive   = indexOpt.IsExactFilter || indexOpt.MaxValue == null;
+                // Use the per-bound inclusivity flags from OptimizationResult.
+                // These are set correctly for every operator (==, >=, >, <=, <) and
+                // propagated through AND-merges, so compound predicates like
+                // x.Price > 50 && x.Price < 90 get both boundaries exclusive.
                 return index.CountRange(indexOpt.MinValue, indexOpt.MaxValue,
-                    startInclusive, endInclusive, transaction);
+                    indexOpt.StartInclusive, indexOpt.EndInclusive, transaction);
             }
         }
 

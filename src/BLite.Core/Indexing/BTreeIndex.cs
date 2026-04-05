@@ -287,6 +287,70 @@ public sealed class BTreeIndex
     }
 
     /// <summary>
+    /// Counts leaf entries in [<paramref name="minKey"/>, <paramref name="maxKey"/>] (inclusive)
+    /// without allocating any <see cref="IndexEntry"/> or key objects.
+    /// Equivalent to <c>Range(min, max).Count()</c> but with zero per-entry heap allocations.
+    /// </summary>
+    internal int CountRange(IndexKey minKey, IndexKey maxKey, ulong? transactionId = null)
+    {
+        var txnId = transactionId ?? 0;
+        int count = 0;
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            var leafPageId = FindLeafNode(minKey, txnId);
+            // Once we've passed minKey in the sorted leaf chain all subsequent entries
+            // are also >= minKey, so we only need the minKey check until we enter the range.
+            bool inRange = false;
+
+            while (leafPageId != 0)
+            {
+                ReadPage(leafPageId, txnId, pageBuffer);
+                var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+                var dataOffset = 32 + 20;
+                bool stopScan = false;
+
+                for (int i = 0; i < header.EntryCount; i++)
+                {
+                    int keyLength = BitConverter.ToInt32(pageBuffer.AsSpan(dataOffset, 4));
+                    var entryKeySpan = pageBuffer.AsSpan(dataOffset + 4, keyLength);
+
+                    if (!inRange)
+                    {
+                        // Advance until we reach an entry >= minKey.
+                        if (IndexKey.CompareRaw(entryKeySpan, minKey.Data) >= 0)
+                            inRange = true;
+                        else
+                        {
+                            dataOffset += 4 + keyLength + DocumentLocation.SerializedSize;
+                            continue;
+                        }
+                    }
+
+                    // inRange: compare against maxKey only.
+                    if (IndexKey.CompareRaw(entryKeySpan, maxKey.Data) <= 0)
+                        count++;
+                    else
+                    {
+                        stopScan = true; // past maxKey — no more matches in any leaf
+                        break;
+                    }
+
+                    dataOffset += 4 + keyLength + DocumentLocation.SerializedSize;
+                }
+
+                if (stopScan) break;
+                leafPageId = header.NextLeafPageId;
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+        return count;
+    }
+
+    /// <summary>
     /// Finds the first leaf entry in [minKey, maxKey] (inclusive) without allocating an
     /// iterator state machine.  Equivalent to <c>Range(min,max).FirstOrDefault()</c> but with
     /// zero extra heap allocations and no enumerator overhead.
