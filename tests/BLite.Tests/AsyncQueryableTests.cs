@@ -168,6 +168,16 @@ public class AsyncQueryableTests : IDisposable
     }
 
     [Fact]
+    public async Task CountAsync_ReturnsZero_WhenEmpty()
+    {
+        using var db = new TestDbContext(_dbPath);
+
+        var count = await db.AsyncDocs.AsQueryable().CountAsync();
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
     public async Task CountAsync_WithPredicate_ReturnsFilteredCount()
     {
         using var db = await CreateAndSeed(10);
@@ -176,6 +186,40 @@ public class AsyncQueryableTests : IDisposable
             .CountAsync(d => d.Id <= 5);
 
         Assert.Equal(5, count);
+    }
+
+    [Fact]
+    public async Task CountAsync_WithPredicate_ReturnsZero_WhenNoMatch()
+    {
+        using var db = await CreateAndSeed(5);
+
+        var count = await db.AsyncDocs.AsQueryable()
+            .CountAsync(d => d.Id > 100);
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public async Task CountAsync_WithSecondaryIndexPredicate_ReturnsCorrectCount()
+    {
+        // Verifies the key-only index scan path: Product.Price has a secondary index.
+        var dbPath = Path.Combine(Path.GetTempPath(), $"blite_countidx_{Guid.NewGuid()}.db");
+        try
+        {
+            using var db = new TestDbContext(dbPath);
+            for (int i = 1; i <= 10; i++)
+                await db.Products.InsertAsync(new Product { Id = i, Title = $"P{i}", Price = i * 10m });
+
+            var count = await db.Products.AsQueryable().CountAsync(p => p.Price <= 50m);
+
+            Assert.Equal(5, count);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
     }
 
     // ─── AnyAsync ────────────────────────────────────────────────────────────

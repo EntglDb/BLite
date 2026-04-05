@@ -1932,6 +1932,49 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     }
 
     /// <summary>
+    /// Counts documents matching <paramref name="whereClause"/> without fully materializing
+    /// the result set in memory.
+    /// <list type="number">
+    ///   <item>If the predicate targets an indexed field with an exact-covering filter,
+    ///         the count is derived from an index key-only leaf scan — zero data-page reads.</item>
+    ///   <item>Otherwise the documents are streamed through <see cref="FetchAsync"/> (index /
+    ///         BSON / full-scan strategies) and counted in a tight loop without accumulating
+    ///         a <c>List&lt;T&gt;</c>.</item>
+    /// </list>
+    /// </summary>
+    internal async Task<int> CountByPredicateAsync(
+        System.Linq.Expressions.LambdaExpression whereClause,
+        CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+
+        // Strategy 1: Index key-only scan — no data-page reads at all.
+        // Only applicable when the index fully covers the predicate (IsExactFilter).
+        var indexOpt = Query.IndexOptimizer.TryOptimize<T>(whereClause, GetIndexes(), ConverterRegistry);
+        if (indexOpt != null
+            && !indexOpt.IsVectorSearch
+            && !indexOpt.IsSpatialSearch
+            && indexOpt.IsExactFilter)
+        {
+            var index = _indexManager.GetIndex(indexOpt.IndexName);
+            if (index != null)
+                return index.Range(indexOpt.MinValue, indexOpt.MaxValue,
+                    Indexing.IndexDirection.Forward, transaction).Count();
+        }
+
+        // Strategy 2 / 3: Stream matching documents via FetchAsync and count without
+        // keeping them in a List<T>, relying on FetchAsync's own BSON-scan / full-scan
+        // strategies to minimise allocations.
+        int count = 0;
+        await foreach (var _ in FetchAsync(whereClause, int.MaxValue, ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            count++;
+        }
+        return count;
+    }
+
+    /// <summary>
     /// Queries the collection using an expression tree predicate, enabling index optimisation.
     /// When the predicate references an indexed field the query engine performs a BTree lookup
     /// instead of a full collection scan.

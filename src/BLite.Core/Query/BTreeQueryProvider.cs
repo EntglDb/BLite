@@ -122,7 +122,17 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         // Uses the primary BTree key scan (O(n) key reads, zero document reads).
         if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators)
         {
-            var count = await _collection.CountAsync();
+            var count = await _collection.CountAsync(cancellationToken);
+            if (typeof(TResult) == typeof(int)) return (TResult)(object)count;
+            if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)count;
+        }
+
+        // ── Fast path: Count() / LongCount() terminal with WHERE predicate ────────
+        // Uses index key-only scan for indexed predicates (zero document reads) or a
+        // streaming count for non-indexed predicates (no large List<T> accumulation).
+        if (model.IsCountOnly && model.WhereClause != null && !model.HasComplexOperators)
+        {
+            var count = await _collection.CountByPredicateAsync(model.WhereClause, cancellationToken);
             if (typeof(TResult) == typeof(int)) return (TResult)(object)count;
             if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)count;
         }
