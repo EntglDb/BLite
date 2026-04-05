@@ -16,7 +16,7 @@ namespace BLite.Core;
 /// Inherit and add DocumentCollection{T} properties for your entities.
 /// Use partial class for Source Generator integration.
 /// </summary>
-public abstract partial class DocumentDbContext : IDisposable, ITransactionHolder
+public abstract partial class DocumentDbContext : IDocumentDbContext
 {
     protected readonly StorageEngine _storage;
     internal readonly CDC.ChangeStreamDispatcher _cdc;
