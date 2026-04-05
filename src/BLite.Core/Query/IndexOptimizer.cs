@@ -22,6 +22,16 @@ internal static class IndexOptimizer
         /// in that case the caller must still apply the full compiled predicate.
         /// </summary>
         public bool IsExactFilter { get; set; } = true;
+
+        /// <summary>
+        /// <c>true</c> when a compound <c>AND</c> predicate has at least one clause that
+        /// targets a non-indexed field.  The index can be used to narrow the candidate set,
+        /// but the full predicate must still be evaluated per document.  Operations that
+        /// need an exact count (e.g. <c>CountAsync</c>) must fall through to a document
+        /// scan instead of counting index entries directly.
+        /// </summary>
+        public bool HasResiduePredicate { get; set; }
+
         public bool IsRange { get; set; }
         public bool IsVectorSearch { get; set; }
         public float[]? VectorQuery { get; set; }
@@ -123,8 +133,8 @@ internal static class IndexOptimizer
             }
             // Only one side of the AND is indexable — the index narrows candidates but
             // does not fully satisfy the WHERE; caller must post-filter.
-            if (left != null) { left.IsExactFilter = false; return left; }
-            if (right != null) { right.IsExactFilter = false; return right; }
+            if (left != null)  { left.IsExactFilter = false;  left.HasResiduePredicate  = true; return left; }
+            if (right != null) { right.IsExactFilter = false; right.HasResiduePredicate = true; return right; }
             return null;
         }
 

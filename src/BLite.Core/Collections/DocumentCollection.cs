@@ -1949,17 +1949,31 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
 
         // Strategy 1: Index key-only scan — no data-page reads at all.
-        // Only applicable when the index fully covers the predicate (IsExactFilter).
+        // Applicable whenever the predicate targets an indexed field AND the index fully
+        // covers the predicate (HasResiduePredicate=false).  Strict operators (> / <) set
+        // IsExactFilter=false but HasResiduePredicate=false, so we still handle them here
+        // by passing the correct start/end inclusivity to CountRange.
+        // When HasResiduePredicate=true (compound AND with a non-indexed clause), we must
+        // fall through to FetchAsync so the residue predicate is applied per document.
         var indexOpt = Query.IndexOptimizer.TryOptimize<T>(whereClause, GetIndexes(), ConverterRegistry);
         if (indexOpt != null
             && !indexOpt.IsVectorSearch
             && !indexOpt.IsSpatialSearch
-            && indexOpt.IsExactFilter)
+            && !indexOpt.HasResiduePredicate)
         {
             var index = _indexManager.GetIndex(indexOpt.IndexName);
             if (index != null)
-                return index.Range(indexOpt.MinValue, indexOpt.MaxValue,
-                    Indexing.IndexDirection.Forward, transaction).Count();
+            {
+                // Determine boundary inclusivity:
+                //   IsExactFilter=true  → operator is inclusive (==, >=, <=, or a two-sided AND range)
+                //   IsExactFilter=false → operator is strict (> or <); the boundary value itself must be excluded.
+                // When a bound is null it means "unbounded" — the default sentinel is already used, so
+                // the inclusivity flag for that side has no effect and defaults to true.
+                bool startInclusive = indexOpt.IsExactFilter || indexOpt.MinValue == null;
+                bool endInclusive   = indexOpt.IsExactFilter || indexOpt.MaxValue == null;
+                return index.CountRange(indexOpt.MinValue, indexOpt.MaxValue,
+                    startInclusive, endInclusive, transaction);
+            }
         }
 
         // Strategy 2 / 3: Stream matching documents via FetchAsync and count without

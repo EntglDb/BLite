@@ -222,6 +222,54 @@ public class AsyncQueryableTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task CountAsync_WithStrictGreaterThan_UsesIndexKeyOnlyScan()
+    {
+        // Verifies the key-only index scan path for strict > (IsExactFilter=false).
+        // Price 10,20,30,40,50,60,70,80,90,100 → prices > 50 are 60,70,80,90,100 = 5
+        var dbPath = Path.Combine(Path.GetTempPath(), $"blite_countgt_{Guid.NewGuid()}.db");
+        try
+        {
+            using var db = new TestDbContext(dbPath);
+            for (int i = 1; i <= 10; i++)
+                await db.Products.InsertAsync(new Product { Id = i, Title = $"P{i}", Price = i * 10m });
+
+            var count = await db.Products.AsQueryable().CountAsync(p => p.Price > 50m);
+
+            Assert.Equal(5, count);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
+    }
+
+    [Fact]
+    public async Task CountAsync_WithStrictLessThan_UsesIndexKeyOnlyScan()
+    {
+        // Verifies the key-only index scan path for strict < (IsExactFilter=false).
+        // Price 10,20,30,40,50,60,70,80,90,100 → prices < 50 are 10,20,30,40 = 4
+        var dbPath = Path.Combine(Path.GetTempPath(), $"blite_countlt_{Guid.NewGuid()}.db");
+        try
+        {
+            using var db = new TestDbContext(dbPath);
+            for (int i = 1; i <= 10; i++)
+                await db.Products.InsertAsync(new Product { Id = i, Title = $"P{i}", Price = i * 10m });
+
+            var count = await db.Products.AsQueryable().CountAsync(p => p.Price < 50m);
+
+            Assert.Equal(4, count);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
+    }
+
     // ─── AnyAsync ────────────────────────────────────────────────────────────
 
     [Fact]
