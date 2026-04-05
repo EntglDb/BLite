@@ -648,6 +648,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <param name="minKey">Minimum key value (inclusive)</param>
     /// <param name="maxKey">Maximum key value (inclusive)</param>
     /// <param name="ascending">True for ascending order, false for descending</param>
+    /// <param name="skip">Number of index entries to skip before yielding documents.
+    /// Skipping is performed at the index-entry level so documents are never read for
+    /// skipped positions, enabling efficient pagination without full materialization.</param>
+    /// <param name="take">Maximum number of documents to yield. Defaults to all.</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Async enumerable of matching documents</returns>
     public async IAsyncEnumerable<T> QueryIndexAsync(
@@ -655,6 +659,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         object? minKey,
         object? maxKey,
         bool ascending = true,
+        int skip = 0,
+        int take = int.MaxValue,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var index = _indexManager.GetIndex(indexName);
@@ -672,8 +678,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var pageCache = new Dictionary<uint, byte[]>();
         try
         {
+            int skipped = 0;
+            int taken = 0;
             foreach (var location in index.Range(minKey, maxKey, direction, transaction))
             {
+                // Skip index entries without reading documents — O(skip) index key reads,
+                // zero document deserializations for skipped positions.
+                if (skip > 0 && skipped < skip) { skipped++; continue; }
+
                 ct.ThrowIfCancellationRequested();
 
                 if (!pageCache.TryGetValue(location.PageId, out var cachedBuffer))
@@ -684,7 +696,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 }
 
                 var doc = await FindByLocationAsync(location, txnId, cachedBuffer, ct);
-                if (doc != null) yield return doc;
+                if (doc != null)
+                {
+                    yield return doc;
+                    if (++taken >= take) break;
+                }
             }
         }
         finally

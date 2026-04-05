@@ -255,18 +255,121 @@ public class IndexOptimizerLinqCoverageTests : IDisposable
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    //  OrderBy + Skip + Take (pipeline path)
+    //  OrderBy + Skip + Take (index optimization path)
     // ══════════════════════════════════════════════════════════════════════
 
     [Fact]
     public void Linq_OrderBy_Skip_Take()
     {
-        var page = _db.Users.AsQueryable()
+        // People has index on Age: [20, 25, 30, 35, 40]
+        // Skip(1) → skip age=20, Take(2) → [25, 30]
+        var page = _db.People.AsQueryable()
             .OrderBy(x => x.Age)
             .Skip(1)
             .Take(2)
             .ToList();
         Assert.Equal(2, page.Count);
+        Assert.Equal(25, page[0].Age);
+        Assert.Equal(30, page[1].Age);
+    }
+
+    [Fact]
+    public void Linq_OrderBy_Skip0_Take_ViaIndex()
+    {
+        // Explicit Skip(0) must not block the index fast path.
+        // People ages sorted: [20, 25, 30, 35, 40] → first 3 = [20, 25, 30]
+        var page = _db.People.AsQueryable()
+            .OrderBy(x => x.Age)
+            .Skip(0)
+            .Take(3)
+            .ToList();
+        Assert.Equal(3, page.Count);
+        Assert.Equal(20, page[0].Age);
+        Assert.Equal(25, page[1].Age);
+        Assert.Equal(30, page[2].Age);
+    }
+
+    [Fact]
+    public void Linq_OrderByDescending_Skip_Take_ViaIndex()
+    {
+        // People ages descending: [40, 35, 30, 25, 20]
+        // Skip(1).Take(2) → [35, 30]
+        var page = _db.People.AsQueryable()
+            .OrderByDescending(x => x.Age)
+            .Skip(1)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page.Count);
+        Assert.Equal(35, page[0].Age);
+        Assert.Equal(30, page[1].Age);
+    }
+
+    [Fact]
+    public void Linq_OrderBy_Pagination_ReturnsCorrectWindows()
+    {
+        // Products prices: [4.99, 9.99, 14.99, 19.99, 29.99]
+        // Page 1: Skip(0).Take(2) → [4.99, 9.99]
+        var page1 = _db.Products.AsQueryable()
+            .OrderBy(x => x.Price)
+            .Skip(0)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page1.Count);
+        Assert.Equal("Thingy", page1[0].Title);       // 4.99
+        Assert.Equal("Widget", page1[1].Title);       // 9.99
+
+        // Page 2: Skip(2).Take(2) → [14.99, 19.99]
+        var page2 = _db.Products.AsQueryable()
+            .OrderBy(x => x.Price)
+            .Skip(2)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page2.Count);
+        Assert.Equal("Whatchamacallit", page2[0].Title); // 14.99
+        Assert.Equal("Gadget", page2[1].Title);          // 19.99
+
+        // Page 3: Skip(4).Take(2) → [29.99] (only 1 item remains)
+        var page3 = _db.Products.AsQueryable()
+            .OrderBy(x => x.Price)
+            .Skip(4)
+            .Take(2)
+            .ToList();
+        Assert.Single(page3);
+        Assert.Equal("Doohickey", page3[0].Title);    // 29.99
+    }
+
+    [Fact]
+    public void Linq_OrderByDescending_Pagination_ReturnsCorrectWindows()
+    {
+        // Products prices descending: [29.99, 19.99, 14.99, 9.99, 4.99]
+        // Page 1: Skip(0).Take(2) → [29.99, 19.99]
+        var page1 = _db.Products.AsQueryable()
+            .OrderByDescending(x => x.Price)
+            .Skip(0)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page1.Count);
+        Assert.Equal("Doohickey", page1[0].Title);       // 29.99
+        Assert.Equal("Gadget", page1[1].Title);           // 19.99
+
+        // Page 2: Skip(2).Take(2) → [14.99, 9.99]
+        var page2 = _db.Products.AsQueryable()
+            .OrderByDescending(x => x.Price)
+            .Skip(2)
+            .Take(2)
+            .ToList();
+        Assert.Equal(2, page2.Count);
+        Assert.Equal("Whatchamacallit", page2[0].Title);  // 14.99
+        Assert.Equal("Widget", page2[1].Title);            // 9.99
+
+        // Page 3: Skip(4).Take(2) → [4.99] (only 1 item remains)
+        var page3 = _db.Products.AsQueryable()
+            .OrderByDescending(x => x.Price)
+            .Skip(4)
+            .Take(2)
+            .ToList();
+        Assert.Single(page3);
+        Assert.Equal("Thingy", page3[0].Title);           // 4.99
     }
 
     // ══════════════════════════════════════════════════════════════════════

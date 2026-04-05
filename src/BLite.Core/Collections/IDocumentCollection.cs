@@ -94,6 +94,8 @@ public interface IDocumentCollection<TId, T> where T : class
         object? minKey,
         object? maxKey,
         bool ascending = true,
+        int skip = 0,
+        int take = int.MaxValue,
         CancellationToken ct = default);
 
     // ── Raw scan (local engine only; remote throws NotSupportedException) ──────
