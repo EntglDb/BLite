@@ -59,21 +59,21 @@ internal static class IndexOptimizer
         => OptimizeExpression(whereClause.Body, whereClause.Parameters[0], indexes, registry);
 
     /// <summary>
-    /// Attempts to satisfy an <c>OrderBy[Descending](field).Take(N)</c> query entirely from a
-    /// secondary BTree index, avoiding a full <c>FindAll()</c> + in-memory sort.
+    /// Attempts to satisfy an <c>OrderBy[Descending](field).Skip(S).Take(N)</c> query entirely
+    /// from a secondary BTree index, avoiding a full <c>FindAll()</c> + in-memory sort.
     /// <para>
     /// Prerequisites: no WHERE clause, a simple single-field OrderBy on an indexed field, and
-    /// a Take(N) limit.  The caller is expected to use the returned index in forward or backward
-    /// order and stop after <paramref name="model"/>.Take items.
+    /// a Take(N) limit.  An optional Skip(S) is supported; the caller passes the skip and take
+    /// counts directly to <c>QueryIndexAsync</c>, which skips index entries before reading
+    /// documents so that only the requested window is ever deserialised.
     /// </para>
     /// </summary>
     public static OptimizationResult? TryOptimizeOrderBy(QueryModel model, IEnumerable<CollectionIndexInfo> indexes)
     {
-        // Only applicable when there is no WHERE, no Skip, and a Take limit.
+        // Only applicable when there is no WHERE and a Take limit.
         if (model.WhereClause != null) return null;
         if (model.OrderByClause == null) return null;
         if (!model.Take.HasValue) return null;
-        if (model.Skip.HasValue) return null;
 
         var body = model.OrderByClause.Body;
         var param = model.OrderByClause.Parameters[0];
