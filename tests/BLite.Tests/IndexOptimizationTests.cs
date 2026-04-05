@@ -92,6 +92,52 @@ namespace BLite.Tests
             Assert.Equal(20, result.MinValue);
             Assert.Equal(40, result.MaxValue);
             Assert.True(result.IsRange);
+            // Both sides are strict — merged range still needs a post-filter to exclude boundaries.
+            Assert.Equal(IndexOptimizer.FilterCompleteness.StrictBoundary, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_Identifies_Range_Between_InclusiveLower_StrictUpper()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            // >= is Exact, < is StrictBoundary — merged result must be StrictBoundary.
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age >= 20 && x.Age < 40;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_age", result.IndexName);
+            Assert.Equal(20, result.MinValue);
+            Assert.Equal(40, result.MaxValue);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.StrictBoundary, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_Identifies_Range_Between_InclusiveBounds()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            // Both sides are inclusive — merged result should be Exact (no post-filter needed).
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age >= 20 && x.Age <= 40;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_age", result.IndexName);
+            Assert.Equal(20, result.MinValue);
+            Assert.Equal(40, result.MaxValue);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
         }
         
          [Fact]

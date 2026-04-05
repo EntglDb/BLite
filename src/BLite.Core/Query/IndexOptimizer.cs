@@ -135,14 +135,20 @@ internal static class IndexOptimizer
 
             if (left != null && right != null && left.IndexName == right.IndexName)
             {
-                // Both sides are covered by the same index range → fully exact.
+                // Both sides are covered by the same index — combine into a single range.
+                // Propagate the stricter completeness: if either branch required a post-filter
+                // (StrictBoundary), the merged range still needs one.
+                var mergedCompleteness = (left.FilterCompleteness == FilterCompleteness.Exact &&
+                                          right.FilterCompleteness == FilterCompleteness.Exact)
+                    ? FilterCompleteness.Exact
+                    : FilterCompleteness.StrictBoundary;
                 return new OptimizationResult
                 {
                     IndexName = left.IndexName,
                     MinValue = left.MinValue ?? right.MinValue,
                     MaxValue = left.MaxValue ?? right.MaxValue,
                     IsRange = true,
-                    FilterCompleteness = FilterCompleteness.Exact
+                    FilterCompleteness = mergedCompleteness
                 };
             }
             // Only one side of the AND is indexable — the index narrows candidates but
