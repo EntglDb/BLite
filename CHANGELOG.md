@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.1.5"></a>
+## [4.1.5](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.5) (2026-04-05)
+
+### Bug Fixes
+
+* address dictionary code review comments ([678aa20](https://www.github.com/EntglDb/BLite/commit/678aa2097d06a919da282ca976878e68791d70c8))
+* Handle null strings and byte[] in source generator ([805ac49](https://www.github.com/EntglDb/BLite/commit/805ac49959050e7d14568b7350d9cadaa547bc9c))
+
 <a name="4.1.4"></a>
 ## [4.1.4](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.4) (2026-04-04)
 
