@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.1.5"></a>
+## [4.1.5](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.5) (2026-04-05)
+
 <a name="4.1.4"></a>
 ## [4.1.4](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.4) (2026-04-04)
 
