@@ -2010,16 +2010,16 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 compiledWhere ??= ((System.Linq.Expressions.Expression<Func<T, bool>>)whereClause).Compile();
 
             // ── Strategy 1: BTree index ───────────────────────────────────────
-            // IsExactFilter = true  → index range == full WHERE result; no post-filter.
-            // IsExactFilter = false → index only narrows candidates (strict inequalities,
-            //   partial AND); reuse the lazily-compiled Func<T,bool> as post-filter.
+            // FilterCompleteness.Exact      → index range == full WHERE result; no post-filter.
+            // FilterCompleteness.StrictBoundary / .PartialAnd
+            //   → index only narrows candidates; reuse the lazily-compiled Func<T,bool> as post-filter.
             var indexOpt = Query.IndexOptimizer.TryOptimize<T>(whereClause, GetIndexes(), ConverterRegistry);
             if (indexOpt != null)
             {
                 if (indexOpt.IsVectorSearch)
                 {
                     await foreach (var item in VectorSearchAsync(indexOpt.IndexName, indexOpt.VectorQuery!, indexOpt.K, ct: ct))
-                        if (indexOpt.IsExactFilter || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                        if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
                 }
                 else if (indexOpt.IsSpatialSearch)
                 {
@@ -2027,12 +2027,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                         ? NearAsync(indexOpt.IndexName, indexOpt.SpatialPoint, indexOpt.RadiusKm, ct)
                         : WithinAsync(indexOpt.IndexName, indexOpt.SpatialMin, indexOpt.SpatialMax, ct);
                     await foreach (var item in spatialSeq)
-                        if (indexOpt.IsExactFilter || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                        if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
                 }
                 else
                 {
                     await foreach (var item in QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, ct: ct))
-                        if (indexOpt.IsExactFilter || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                        if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
                 }
                 yield break;
             }

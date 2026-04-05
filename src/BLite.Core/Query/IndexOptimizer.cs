@@ -15,13 +15,12 @@ internal static class IndexOptimizer
         public object? MaxValue { get; set; }
 
         /// <summary>
-        /// <c>true</c> when the index scan covers the <em>entire</em> WHERE expression
-        /// and no in-memory post-filter is needed after reading documents from the index.<br/>
-        /// <c>false</c> when the index only narrows the candidate set (e.g. one side of
-        /// a compound <c>AND</c> where the other condition targets a non-indexed field);
-        /// in that case the caller must still apply the full compiled predicate.
+        /// Describes how completely the index scan covers the WHERE expression.
+        /// <see cref="FilterCompleteness.Exact"/> means the index result is the full WHERE result
+        /// and no in-memory post-filter is needed.  Any other value means the caller must still
+        /// apply the full compiled predicate after reading candidates from the index.
         /// </summary>
-        public bool IsExactFilter { get; set; } = true;
+        public FilterCompleteness FilterCompleteness { get; set; } = FilterCompleteness.Exact;
         public bool IsRange { get; set; }
         public bool IsVectorSearch { get; set; }
         public float[]? VectorQuery { get; set; }
@@ -43,6 +42,31 @@ internal static class IndexOptimizer
     }
 
     public enum SpatialQueryType { Near, Within }
+
+    /// <summary>
+    /// Describes how completely an index scan covers a WHERE expression.
+    /// </summary>
+    public enum FilterCompleteness
+    {
+        /// <summary>
+        /// The index scan fully covers the WHERE clause; no in-memory post-filter is needed.
+        /// Applies to equality, inclusive-bound ranges (>= / <=), boolean members, and compound
+        /// AND expressions where both branches map to the same index.
+        /// </summary>
+        Exact,
+
+        /// <summary>
+        /// The BTree scan uses inclusive bounds, but the original operator was strict (&gt; or &lt;).
+        /// The boundary value(s) must be excluded by applying the compiled predicate as a post-filter.
+        /// </summary>
+        StrictBoundary,
+
+        /// <summary>
+        /// The index covers only one branch of a compound AND expression.
+        /// The full WHERE predicate must be evaluated as a post-filter to satisfy the remaining condition.
+        /// </summary>
+        PartialAnd,
+    }
 
     public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
     {
@@ -118,13 +142,13 @@ internal static class IndexOptimizer
                     MinValue = left.MinValue ?? right.MinValue,
                     MaxValue = left.MaxValue ?? right.MaxValue,
                     IsRange = true,
-                    IsExactFilter = true
+                    FilterCompleteness = FilterCompleteness.Exact
                 };
             }
             // Only one side of the AND is indexable — the index narrows candidates but
             // does not fully satisfy the WHERE; caller must post-filter.
-            if (left != null) { left.IsExactFilter = false; return left; }
-            if (right != null) { right.IsExactFilter = false; return right; }
+            if (left != null) { left.FilterCompleteness = FilterCompleteness.PartialAnd; return left; }
+            if (right != null) { right.FilterCompleteness = FilterCompleteness.PartialAnd; return right; }
             return null;
         }
 
@@ -137,7 +161,7 @@ internal static class IndexOptimizer
             CollectionIndexInfo? ix = null;
             foreach (var idx in indexes) { if (Matches(idx, bareMember.Member.Name)) { ix = idx; break; } }
             if (ix != null)
-                return new OptimizationResult { IndexName = ix.Name, MinValue = true, MaxValue = true, IsRange = false, IsExactFilter = true };
+                return new OptimizationResult { IndexName = ix.Name, MinValue = true, MaxValue = true, IsRange = false, FilterCompleteness = FilterCompleteness.Exact };
         }
 
         if (expression is UnaryExpression { NodeType: ExpressionType.Not } notExpr &&
@@ -148,7 +172,7 @@ internal static class IndexOptimizer
             CollectionIndexInfo? ix = null;
             foreach (var idx in indexes) { if (Matches(idx, notMember.Member.Name)) { ix = idx; break; } }
             if (ix != null)
-                return new OptimizationResult { IndexName = ix.Name, MinValue = false, MaxValue = false, IsRange = false, IsExactFilter = true };
+                return new OptimizationResult { IndexName = ix.Name, MinValue = false, MaxValue = false, IsRange = false, FilterCompleteness = FilterCompleteness.Exact };
         }
 
         // Handle Simple Binary Predicates
@@ -176,31 +200,31 @@ internal static class IndexOptimizer
                             result.MaxValue = value;
                         }
                         result.IsRange = false;
-                        result.IsExactFilter = true;   // equality on indexed field: scan is exact
+                        result.FilterCompleteness = FilterCompleteness.Exact;   // equality on indexed field: scan is exact
                         break;
                     case ExpressionType.GreaterThanOrEqual:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
-                        result.IsExactFilter = true;   // BTree Range includes lower bound => exact
+                        result.FilterCompleteness = FilterCompleteness.Exact;   // BTree Range includes lower bound => exact
                         break;
                     case ExpressionType.GreaterThan:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
-                        result.IsExactFilter = false;  // BTree Range includes lower bound; need post-filter to exclude it
+                        result.FilterCompleteness = FilterCompleteness.StrictBoundary;  // BTree Range includes lower bound; need post-filter to exclude it
                         break;
                     case ExpressionType.LessThanOrEqual:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
-                        result.IsExactFilter = true;   // BTree Range includes upper bound => exact
+                        result.FilterCompleteness = FilterCompleteness.Exact;   // BTree Range includes upper bound => exact
                         break;
                     case ExpressionType.LessThan:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
-                        result.IsExactFilter = false;  // BTree Range includes upper bound; need post-filter to exclude it
+                        result.FilterCompleteness = FilterCompleteness.StrictBoundary;  // BTree Range includes upper bound; need post-filter to exclude it
                         break;
                     default:
                         // NotEqual and any future operators cannot be satisfied by a single
