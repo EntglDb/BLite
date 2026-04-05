@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.1.6"></a>
+## [4.1.6](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.6) (2026-04-05)
+
+### Bug Fixes
+
+* Handle null strings and byte[] in source generator ([fbf5d58](https://www.github.com/EntglDb/BLite/commit/fbf5d5862f7136a3ad33344dc4f44f0882850440))
+
 <a name="4.1.5"></a>
 ## [4.1.5](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.5) (2026-04-05)
 

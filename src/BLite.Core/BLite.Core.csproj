@@ -9,7 +9,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     
     <PackageId>BLite.Core</PackageId>
-    <Version>4.1.5</Version>
+    <Version>4.1.6</Version>
     <Authors>BLite Team</Authors>
     <Description>High-Performance BSON Database Engine Core Library — supports .NET 10 and .NET Standard 2.1</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
