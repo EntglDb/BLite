@@ -22,6 +22,30 @@ internal static class IndexOptimizer
         /// in that case the caller must still apply the full compiled predicate.
         /// </summary>
         public bool IsExactFilter { get; set; } = true;
+
+        /// <summary>
+        /// <c>true</c> when a compound <c>AND</c> predicate has at least one clause that
+        /// targets a non-indexed field.  The index can be used to narrow the candidate set,
+        /// but the full predicate must still be evaluated per document.  Operations that
+        /// need an exact count (e.g. <c>CountAsync</c>) must fall through to a document
+        /// scan instead of counting index entries directly.
+        /// </summary>
+        public bool HasResiduePredicate { get; set; }
+
+        /// <summary>
+        /// <c>true</c> when the lower bound is inclusive (<c>&gt;=</c>, <c>==</c>);
+        /// <c>false</c> for a strict greater-than (<c>&gt;</c>).
+        /// Meaningful only when <see cref="MinValue"/> is non-null.
+        /// </summary>
+        public bool StartInclusive { get; set; } = true;
+
+        /// <summary>
+        /// <c>true</c> when the upper bound is inclusive (<c>&lt;=</c>, <c>==</c>);
+        /// <c>false</c> for a strict less-than (<c>&lt;</c>).
+        /// Meaningful only when <see cref="MaxValue"/> is non-null.
+        /// </summary>
+        public bool EndInclusive { get; set; } = true;
+
         public bool IsRange { get; set; }
         public bool IsVectorSearch { get; set; }
         public float[]? VectorQuery { get; set; }
@@ -112,19 +136,28 @@ internal static class IndexOptimizer
             if (left != null && right != null && left.IndexName == right.IndexName)
             {
                 // Both sides are covered by the same index range → fully exact.
+                // Normal case: one side provides MinValue (lower bound), the other MaxValue
+                // (upper bound).  The null-coalescing picks the non-null bound from each side.
+                // Edge case: both sides provide a MinValue (e.g. x > 50 && x > 80) — the
+                // optimizer currently keeps the first bound as-is; callers must validate.
+                // The inclusivity of each bound comes from whichever side owns that bound.
+                bool startInclusive = left.MinValue != null ? left.StartInclusive : right.StartInclusive;
+                bool endInclusive   = left.MaxValue != null ? left.EndInclusive   : right.EndInclusive;
                 return new OptimizationResult
                 {
                     IndexName = left.IndexName,
                     MinValue = left.MinValue ?? right.MinValue,
                     MaxValue = left.MaxValue ?? right.MaxValue,
                     IsRange = true,
-                    IsExactFilter = true
+                    IsExactFilter = true,
+                    StartInclusive = startInclusive,
+                    EndInclusive = endInclusive
                 };
             }
             // Only one side of the AND is indexable — the index narrows candidates but
             // does not fully satisfy the WHERE; caller must post-filter.
-            if (left != null) { left.IsExactFilter = false; return left; }
-            if (right != null) { right.IsExactFilter = false; return right; }
+            if (left != null)  { left.IsExactFilter = false;  left.HasResiduePredicate  = true; return left; }
+            if (right != null) { right.IsExactFilter = false; right.HasResiduePredicate = true; return right; }
             return null;
         }
 
@@ -177,30 +210,40 @@ internal static class IndexOptimizer
                         }
                         result.IsRange = false;
                         result.IsExactFilter = true;   // equality on indexed field: scan is exact
+                        result.StartInclusive = true;
+                        result.EndInclusive   = true;
                         break;
                     case ExpressionType.GreaterThanOrEqual:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
                         result.IsExactFilter = true;   // BTree Range includes lower bound => exact
+                        result.StartInclusive = true;
+                        result.EndInclusive   = true;  // upper bound is unbounded
                         break;
                     case ExpressionType.GreaterThan:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
                         result.IsExactFilter = false;  // BTree Range includes lower bound; need post-filter to exclude it
+                        result.StartInclusive = false; // strict: boundary value itself is excluded
+                        result.EndInclusive   = true;  // upper bound is unbounded
                         break;
                     case ExpressionType.LessThanOrEqual:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
                         result.IsExactFilter = true;   // BTree Range includes upper bound => exact
+                        result.StartInclusive = true;  // lower bound is unbounded
+                        result.EndInclusive   = true;
                         break;
                     case ExpressionType.LessThan:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
                         result.IsExactFilter = false;  // BTree Range includes upper bound; need post-filter to exclude it
+                        result.StartInclusive = true;  // lower bound is unbounded
+                        result.EndInclusive   = false; // strict: boundary value itself is excluded
                         break;
                     default:
                         // NotEqual and any future operators cannot be satisfied by a single

@@ -120,11 +120,28 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
 
         // ── Fast path: Count() / LongCount() terminal with no WHERE ─────────────
         // Uses the primary BTree key scan (O(n) key reads, zero document reads).
-        if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators)
+        // Disabled when Take/Skip are present — those shaping operators reduce the
+        // logical row-set before counting and must not be bypassed.
+        if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators
+            && !model.Take.HasValue && !model.Skip.HasValue)
         {
-            var count = await _collection.CountAsync();
-            if (typeof(TResult) == typeof(int)) return (TResult)(object)count;
-            if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)count;
+            var count = await _collection.CountAsync(cancellationToken);
+            if (typeof(TResult) == typeof(int))    return (TResult)(object)count;
+            if (typeof(TResult) == typeof(long))   return (TResult)(object)(long)count;
+            if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
+        }
+
+        // ── Fast path: Count() / LongCount() terminal with WHERE predicate ────────
+        // Uses index key-only scan for indexed predicates (zero document reads) or a
+        // streaming count for non-indexed predicates (no large List<T> accumulation).
+        // Disabled when Take/Skip are present for the same reason as above.
+        if (model.IsCountOnly && model.WhereClause != null && !model.HasComplexOperators
+            && !model.Take.HasValue && !model.Skip.HasValue)
+        {
+            var count = await _collection.CountByPredicateAsync(model.WhereClause, cancellationToken);
+            if (typeof(TResult) == typeof(int))    return (TResult)(object)count;
+            if (typeof(TResult) == typeof(long))   return (TResult)(object)(long)count;
+            if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
         }
 
         // ── Fast path: Sum / Average via BSON field-projection scan ──────────────

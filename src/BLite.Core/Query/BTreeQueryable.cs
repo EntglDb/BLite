@@ -146,18 +146,26 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
     }
 
     /// <inheritdoc />
-    public async Task<int> CountAsync(CancellationToken ct)
+    public Task<int> CountAsync(CancellationToken ct)
     {
-        var results = await AsyncProvider.ExecuteAsync<IEnumerable<T>>(Expression, ct).ConfigureAwait(false);
-        return results.Count();
+        // Build Queryable.Count<T>(source) so the provider can push it down to the
+        // native key-only scan, avoiding full document materialization.
+        var countExpr = Expression.Call(
+            typeof(Queryable), nameof(Queryable.Count), new[] { typeof(T) },
+            Expression);
+        return AsyncProvider.ExecuteAsync<int>(countExpr, ct);
     }
 
     /// <inheritdoc />
-    public async Task<int> CountAsync(Expression<Func<T, bool>> predicate, CancellationToken ct)
+    public Task<int> CountAsync(Expression<Func<T, bool>> predicate, CancellationToken ct)
     {
+        // Build Queryable.Where(source, predicate).Count() so the provider can use an
+        // index key-only scan or a streaming count without keeping all T objects in memory.
         var filtered = Queryable.Where(this, predicate);
-        var results = await AsyncProvider.ExecuteAsync<IEnumerable<T>>(filtered.Expression, ct).ConfigureAwait(false);
-        return results.Count();
+        var countExpr = Expression.Call(
+            typeof(Queryable), nameof(Queryable.Count), new[] { typeof(T) },
+            filtered.Expression);
+        return AsyncProvider.ExecuteAsync<int>(countExpr, ct);
     }
 
     /// <inheritdoc />
