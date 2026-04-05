@@ -315,6 +315,49 @@ namespace BLite.SourceGenerators
                      sb.AppendLine($"            }}");
                  }
             }
+            else if (prop.IsDictionary)
+            {
+                // Encode Dictionary<string,V> as a BSON array of alternating key (string) / value pairs.
+                // This avoids inserting runtime strings into the static key-map.
+                // Layout: [0]=key(string), [1]=value, [2]=key, [3]=value, ...
+                var indent = prop.IsNullable ? "    " : "";
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                    sb.AppendLine($"            {{");
+                }
+                var dictArrVar = $"{prop.Name.ToLower()}DictArrPos";
+                var dictIdxVar = $"{prop.Name.ToLower()}DictIdx";
+                var dummyKeyProp   = new PropertyInfo { TypeName = prop.DictionaryKeyType   ?? "string" };
+                var dummyValueProp = new PropertyInfo { TypeName = prop.DictionaryValueType ?? "string" };
+                var primitiveKeyWriteMethod   = GetPrimitiveWriteMethod(dummyKeyProp);
+                var primitiveValueWriteMethod = GetPrimitiveWriteMethod(dummyValueProp);
+                sb.AppendLine($"            {indent}var {dictArrVar} = writer.BeginArray(\"{fieldName}\");");
+                sb.AppendLine($"            {indent}var {dictIdxVar} = 0;");
+                sb.AppendLine($"            {indent}foreach (var kvp in entity.{prop.Name})");
+                sb.AppendLine($"            {indent}{{");
+                if (primitiveKeyWriteMethod != null && primitiveValueWriteMethod != null)
+                {
+                    var arrayKeyWriteMethod = ToArrayWriteMethod(primitiveKeyWriteMethod);
+                    var arrayValWriteMethod = ToArrayWriteMethod(primitiveValueWriteMethod);
+                    sb.AppendLine($"            {indent}    writer.{arrayKeyWriteMethod}({dictIdxVar}++, kvp.Key);");
+                    sb.AppendLine($"            {indent}    writer.{arrayValWriteMethod}({dictIdxVar}++, kvp.Value);");
+                }
+                else
+                {
+                    sb.AppendLine($"            {indent}    // Dictionary entry skipped: key type '{prop.DictionaryKeyType}' or value type '{prop.DictionaryValueType}' is not a supported primitive.");
+                }
+                sb.AppendLine($"            {indent}}}");
+                sb.AppendLine($"            {indent}writer.EndArray({dictArrVar});");
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            }}");
+                    sb.AppendLine($"            else");
+                    sb.AppendLine($"            {{");
+                    sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                    sb.AppendLine($"            }}");
+                }
+            }
             else if (prop.IsNestedObject)
             {
                 sb.AppendLine($"            if (entity.{prop.Name} != null)");
@@ -360,9 +403,10 @@ namespace BLite.SourceGenerators
                         {
                             sb.AppendLine($"            if (entity.{prop.Name} != null)");
                             sb.AppendLine($"            {{");
-                            // For nullable value types, use .Value to unwrap
-                            // String is a reference type and doesn't need .Value
-                            var isValueTypeNullable = prop.IsNullable && IsValueType(prop.TypeName);
+                            // For nullable value types (Nullable<T>, e.g. int?), use .Value to unwrap.
+                            // Do NOT use .Value when the nullable annotation comes from an unconstrained T? generic
+                            // parameter (type name has no trailing '?' but NullableAnnotation is set).
+                            var isValueTypeNullable = prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName && IsValueType(prop.TypeName);
                             var valueAccess = isValueTypeNullable 
                                 ? $"entity.{prop.Name}.Value" 
                                 : $"entity.{prop.Name}";
@@ -388,7 +432,8 @@ namespace BLite.SourceGenerators
                             if (prop.IsNullable)
                             {
                                 // For nullable properties, guard against null before calling ConvertToProvider.
-                                var isValueTypeNullable = IsValueType(prop.TypeName);
+                                // For nullable value types (Nullable<T>) use .Value; unconstrained T? generics don't need it.
+                                var isValueTypeNullable = prop.TypeName.TrimEnd('?') != prop.TypeName && IsValueType(prop.TypeName);
                                 var valueAccess = isValueTypeNullable
                                     ? $"entity.{prop.Name}.Value"
                                     : $"entity.{prop.Name}";
@@ -461,6 +506,15 @@ namespace BLite.SourceGenerators
                     var itemType = prop.CollectionItemType;
                     if (prop.IsCollectionItemNested) itemType = $"global::{prop.NestedTypeFullName}"; // Use full name with global::
                      sb.AppendLine($"            var {prop.Name.ToLower()} = new global::System.Collections.Generic.List<{itemType}>();");
+                }
+                else if (prop.IsDictionary)
+                {
+                    var keyT   = QualifyType(prop.DictionaryKeyType   ?? "string");
+                    var valT   = QualifyType(prop.DictionaryValueType ?? "object");
+                    if (prop.IsNullable)
+                        sb.AppendLine($"            global::System.Collections.Generic.Dictionary<{keyT}, {valT}>? {prop.Name.ToLower()} = null;");
+                    else
+                        sb.AppendLine($"            var {prop.Name.ToLower()} = new global::System.Collections.Generic.Dictionary<{keyT}, {valT}>();");
                 }
                 else
                 {
@@ -561,8 +615,9 @@ namespace BLite.SourceGenerators
                     else if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
                     {
                         // Use Expression Tree setter (for private or init-only setters)
-                        // For nullable properties, preserve null rather than coercing to default(T)
-                        if (prop.IsNullable)
+                        // Preserve null only when the property is truly Nullable<T> (TypeName ends with '?').
+                        // Unconstrained T? generic parameters have IsNullable=true but TypeName has no '?'.
+                        if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
                             sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue});");
                         else
                             sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue} ?? default!);");
@@ -570,8 +625,7 @@ namespace BLite.SourceGenerators
                     else
                     {
                         // Direct property assignment
-                        // For nullable properties, preserve null rather than coercing to default(T)
-                        if (prop.IsNullable)
+                        if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
                             sb.AppendLine($"            entity.{prop.Name} = {propValue};");
                         else
                             sb.AppendLine($"            entity.{prop.Name} = {propValue} ?? default!;");
@@ -628,8 +682,9 @@ namespace BLite.SourceGenerators
                             // Otherwise keep as List (works for List<T>, IList<T>, ICollection<T>, IEnumerable<T>)
                         }
                     }
-                    // For nullable properties, don't use ?? default! since null is a valid value
-                    if (prop.IsNullable)
+                    // Use direct assignment only for truly nullable types (TypeName ends with '?').
+                    // Unconstrained T? generic parameters have IsNullable=true but TypeName has no '?'.
+                    if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
                     {
                         sb.AppendLine($"                {prop.Name} = {val},");
                     }
@@ -701,6 +756,54 @@ namespace BLite.SourceGenerators
                  var readMethod = GetPrimitiveReadMethod(providerProp);
                  var providerReadArgs = IsCoercedReadMethod(readMethod) ? $"({bsonTypeVar})" : "()";
                  sb.AppendLine($"                        {localVar} = _idConverter.ConvertFromProvider(reader.{readMethod}{providerReadArgs});");
+             }
+             else if (prop.IsDictionary)
+             {
+                 // Dictionary encoded as BSON array: [0]=key, [1]=value, [2]=key, [3]=value, ...
+                 if (prop.IsNullable)
+                 {
+                     sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                     sb.AppendLine($"                        {{");
+                     sb.AppendLine($"                            {localVar} = default;");
+                     sb.AppendLine($"                            break;");
+                     sb.AppendLine($"                        }}");
+                 }
+                 var keyT2   = QualifyType(prop.DictionaryKeyType   ?? "string");
+                 var valT2   = QualifyType(prop.DictionaryValueType ?? "object");
+                 sb.AppendLine($"                        {localVar} = new global::System.Collections.Generic.Dictionary<{keyT2}, {valT2}>();");
+                 sb.AppendLine($"                        var {localVar}ArrSize = reader.ReadDocumentSize();");
+                 sb.AppendLine($"                        var {localVar}ArrEnd  = reader.Position + {localVar}ArrSize - {BLiteConventions.BsonDocumentSizeOverhead};");
+                 sb.AppendLine($"                        while (reader.Position < {localVar}ArrEnd)");
+                 sb.AppendLine($"                        {{");
+                 // Read key element
+                 sb.AppendLine($"                            var {localVar}KeyBsonType = reader.ReadBsonType();");
+                 sb.AppendLine($"                            if ({localVar}KeyBsonType == global::BLite.Bson.BsonType.EndOfDocument) break;");
+                 sb.AppendLine($"                            reader.SkipArrayKey();");
+                 sb.AppendLine($"                            var {localVar}Key = reader.ReadString();");
+                 // Read value element
+                 sb.AppendLine($"                            var {localVar}ValBsonType = reader.ReadBsonType();");
+                 sb.AppendLine($"                            if ({localVar}ValBsonType == global::BLite.Bson.BsonType.EndOfDocument) break;");
+                 sb.AppendLine($"                            reader.SkipArrayKey();");
+                 var dictValProp2 = new PropertyInfo { TypeName = prop.DictionaryValueType ?? "string" };
+                 var dictReadMethod2 = GetPrimitiveReadMethod(dictValProp2);
+                 if (dictReadMethod2 != null)
+                 {
+                     var castDict2 = (prop.DictionaryValueType == "float" || prop.DictionaryValueType == "Single") ? "(float)" : "";
+                     var dictReadArgs2 = IsCoercedReadMethod(dictReadMethod2) ? $"({localVar}ValBsonType)" : "()";
+                     sb.AppendLine($"                            if ({localVar}ValBsonType == global::BLite.Bson.BsonType.Null)");
+                     sb.AppendLine($"                            {{");
+                     sb.AppendLine($"                                {localVar}[{localVar}Key] = default;");
+                     sb.AppendLine($"                            }}");
+                     sb.AppendLine($"                            else");
+                     sb.AppendLine($"                            {{");
+                     sb.AppendLine($"                                {localVar}[{localVar}Key] = {castDict2}reader.{dictReadMethod2}{dictReadArgs2};");
+                     sb.AppendLine($"                            }}");
+                 }
+                 else
+                 {
+                     sb.AppendLine($"                            reader.SkipValue({localVar}ValBsonType);");
+                 }
+                 sb.AppendLine($"                        }}");
              }
              else if (prop.IsNestedObject)
              {
@@ -829,8 +932,11 @@ namespace BLite.SourceGenerators
              // Escape any existing underscores first to prevent collisions between different
              // type name patterns (e.g. "NS.Foo_Bar" vs "NS.Foo.Bar" must produce different names).
              cleanName = cleanName.Replace("_", "__");
-             // Replace namespace separators (dots), nested class markers (+), and colons with single underscore
-             return cleanName.Replace(".", "_").Replace("+", "_").Replace(":", "_") + BLiteConventions.MapperClassSuffix;
+             // Replace namespace separators (dots), nested class markers (+), colons, and generic
+             // type argument delimiters (<, >, ',', ' ') with underscores / empty string.
+             return cleanName.Replace(".", "_").Replace("+", "_").Replace(":", "_")
+                            .Replace("<", "_").Replace(">", "").Replace(",", "_").Replace(" ", "")
+                            + BLiteConventions.MapperClassSuffix;
         }
 
         private static void GenerateIdAccessors(StringBuilder sb, EntityInfo entity)

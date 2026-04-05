@@ -34,7 +34,8 @@ namespace BLite.SourceGenerators
             }
             
             // Analyze properties of the root entity
-            AnalyzeProperties(entityType, entityInfo.Properties);
+            var symbolCache = new Dictionary<string, INamedTypeSymbol>();
+            AnalyzeProperties(entityType, entityInfo.Properties, symbolCache);
 
             // Check if entity needs reflection-based deserialization
             // Include properties with private setters, init-only setters, or DDD backing field pattern
@@ -49,7 +50,7 @@ namespace BLite.SourceGenerators
             // Analyze nested types recursively
             // We use a dictionary for nested types to ensure uniqueness by name
             var analyzedTypes = new HashSet<string>();
-            AnalyzeNestedTypesRecursive(entityInfo.Properties, entityInfo.NestedTypes, semanticModel, analyzedTypes, 1, BLiteConventions.DefaultMaxNestedTypeDepth, diagnostics);
+            AnalyzeNestedTypesRecursive(entityInfo.Properties, entityInfo.NestedTypes, semanticModel, analyzedTypes, 1, BLiteConventions.DefaultMaxNestedTypeDepth, symbolCache, diagnostics);
             
             // Determine ID property
             // entityInfo.IdProperty is computed from Properties.FirstOrDefault(p => p.IsKey)
@@ -77,7 +78,7 @@ namespace BLite.SourceGenerators
             return entityInfo;
         }
 
-        private static void AnalyzeProperties(INamedTypeSymbol typeSymbol, List<PropertyInfo> properties)
+        private static void AnalyzeProperties(INamedTypeSymbol typeSymbol, List<PropertyInfo> properties, Dictionary<string, INamedTypeSymbol>? symbolCache = null)
         {
             // Collect properties from the entire inheritance hierarchy
             var seenProperties = new HashSet<string>();
@@ -218,6 +219,8 @@ namespace BLite.SourceGenerators
                                 propInfo.IsCollectionItemNested = true;
                                 propInfo.NestedTypeName = itemType.Name;
                                 propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)itemType);
+                                if (symbolCache != null && !symbolCache.ContainsKey(propInfo.NestedTypeFullName))
+                                    symbolCache[propInfo.NestedTypeFullName] = (INamedTypeSymbol)itemType;
                             }
                             // Check if collection item is an enum
                             else if (itemType.TypeKind == TypeKind.Enum && itemType is INamedTypeSymbol enumItemSymbol)
@@ -227,6 +230,13 @@ namespace BLite.SourceGenerators
                                 propInfo.CollectionItemEnumUnderlyingTypeName = enumItemSymbol.EnumUnderlyingType?.ToDisplayString() ?? "int";
                             }
                         }
+                    }
+                    // Check for Dictionary type (must come before enum and nested object checks)
+                    else if (SyntaxHelper.IsDictionaryType(prop.Type, out var dictKeyType, out var dictValueType))
+                    {
+                        propInfo.IsDictionary = true;
+                        propInfo.DictionaryKeyType   = dictKeyType   != null ? SyntaxHelper.GetTypeName(dictKeyType)   : "string";
+                        propInfo.DictionaryValueType = dictValueType != null ? SyntaxHelper.GetTypeName(dictValueType) : "object";
                     }
                     // Check for enum type (direct property)
                     else if (SyntaxHelper.IsEnumType(prop.Type, out var enumUnderlying, out var enumFullName))
@@ -240,7 +250,10 @@ namespace BLite.SourceGenerators
                     {
                         propInfo.IsNestedObject = true;
                         propInfo.NestedTypeName = prop.Type.Name;
-                        propInfo.NestedTypeFullName = SyntaxHelper.GetFullName((INamedTypeSymbol)prop.Type);
+                        var nestedSymbol = (INamedTypeSymbol)prop.Type;
+                        propInfo.NestedTypeFullName = SyntaxHelper.GetFullName(nestedSymbol);
+                        if (symbolCache != null && !symbolCache.ContainsKey(propInfo.NestedTypeFullName))
+                            symbolCache[propInfo.NestedTypeFullName] = nestedSymbol;
                     }
 
                     properties.Add(propInfo);
@@ -257,6 +270,7 @@ namespace BLite.SourceGenerators
             HashSet<string> analyzedTypes,
             int currentDepth,
             int maxDepth,
+            Dictionary<string, INamedTypeSymbol> symbolCache,
             List<BLiteDiagnostic>? diagnostics = null)
         {
              if (currentDepth > maxDepth) return;
@@ -280,15 +294,14 @@ namespace BLite.SourceGenerators
                  // Try to find the symbol
                  INamedTypeSymbol? nestedTypeSymbol = null;
                  
-                 // Try by full name
+                 // Primary: try by full metadata name (works for non-generic types)
                  nestedTypeSymbol = semanticModel.Compilation.GetTypeByMetadataName(fullTypeName);
                  
-                 // If not found, try to resolve via semantic model (might be in the same compilation)
+                 // Fallback: for generic instantiations (e.g. "MyNS.Wrapper<string>"), GetTypeByMetadataName
+                 // returns null because it expects backtick notation ("MyNS.Wrapper`1"). Use the symbol
+                 // captured during property analysis instead.
                  if (nestedTypeSymbol == null)
-                 {
-                     // This is more complex, but usually fullTypeName from ToDisplayString() is traceable.
-                     // For now, let's assume GetTypeByMetadataName works for fully qualified names.
-                 }
+                     symbolCache.TryGetValue(fullTypeName, out nestedTypeSymbol);
 
                  if (nestedTypeSymbol == null)
                  {
@@ -310,8 +323,8 @@ namespace BLite.SourceGenerators
                      Depth = currentDepth
                  };
 
-                 // Analyze properties of this nested type
-                 AnalyzeProperties(nestedTypeSymbol, nestedInfo.Properties);
+                 // Analyze properties of this nested type (pass symbolCache for further generics)
+                 AnalyzeProperties(nestedTypeSymbol, nestedInfo.Properties, symbolCache);
                  
                  // Check if nested type needs reflection-based deserialization
                  var hasPublicParameterlessCtor = nestedTypeSymbol.Constructors
@@ -322,7 +335,7 @@ namespace BLite.SourceGenerators
                  targetNestedTypes[fullTypeName] = nestedInfo;
 
                  // Recurse
-                 AnalyzeNestedTypesRecursive(nestedInfo.Properties, nestedInfo.NestedTypes, semanticModel, analyzedTypes, currentDepth + 1, maxDepth, diagnostics);
+                 AnalyzeNestedTypesRecursive(nestedInfo.Properties, nestedInfo.NestedTypes, semanticModel, analyzedTypes, currentDepth + 1, maxDepth, symbolCache, diagnostics);
              }
         }
     }

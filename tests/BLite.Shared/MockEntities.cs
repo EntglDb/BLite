@@ -855,4 +855,53 @@ namespace BLite.Shared
         public override long ConvertToProvider(ulong model) => (long)model;
         public override ulong ConvertFromProvider(long provider) => (ulong)provider;
     }
+
+    // ========================================
+    // Source Generator Edge Case Tests
+    // ========================================
+
+    /// <summary>
+    /// Entity with Dictionary properties — the source generator serializes these
+    /// as BSON arrays of alternating key/value entries (not as sub-documents).
+    /// Bug: previously treated as IEnumerable&lt;KeyValuePair&gt; → compile error in generated code.
+    /// </summary>
+    public class EntityWithDictionary
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>Dictionary with string values — serialized as BSON array of alternating key/value entries.</summary>
+        public Dictionary<string, string> Labels { get; set; } = new();
+
+        /// <summary>Dictionary with int values.</summary>
+        public Dictionary<string, int> Counters { get; set; } = new();
+
+        /// <summary>Nullable dictionary — serializes as BSON Null when not set.</summary>
+        public Dictionary<string, string>? OptionalMeta { get; set; }
+    }
+
+    /// <summary>
+    /// Simple generic wrapper class used to test source generator support for
+    /// properties whose declared type is a closed generic class (e.g. GenericWrapper&lt;string&gt;).
+    /// Bug: GetTypeByMetadataName fails for display-format generic names;
+    /// GetMapperName used to produce identifiers containing '&lt;' and '&gt;'.
+    /// </summary>
+    public class GenericWrapper<T>
+    {
+        public T? Value { get; set; }
+        public string Label { get; set; } = string.Empty;
+        public int Count { get; set; }
+    }
+
+    /// <summary>
+    /// Entity with properties of a closed generic class type.
+    /// </summary>
+    public class EntityWithGenericProperty
+    {
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+
+        public GenericWrapper<string> StringWrapper { get; set; } = new();
+        public GenericWrapper<int> IntWrapper { get; set; } = new();
+    }
 }

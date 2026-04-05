@@ -140,6 +140,11 @@ namespace BLite.SourceGenerators.Helpers
             if (type.SpecialType == SpecialType.System_String)
                 return false;
             
+            // Exclude Dictionary types — they are serialized as BSON arrays of alternating key/value entries,
+            // not as regular collections of itemType elements
+            if (IsDictionaryType(type, out _, out _))
+                return false;
+            
             // Handle arrays
             if (type is IArrayTypeSymbol arrayType)
             {
@@ -206,6 +211,7 @@ namespace BLite.SourceGenerators.Helpers
             if (IsPrimitiveType(type)) return false;
             if (type.SpecialType == SpecialType.System_String) return false;
             if (IsCollectionType(type, out _)) return false;
+            if (IsDictionaryType(type, out _, out _)) return false;
             if (type.SpecialType == SpecialType.System_Object) return false;
             if (type is INamedTypeSymbol nt && nt.IsTupleType) return false;
             
@@ -244,6 +250,45 @@ namespace BLite.SourceGenerators.Helpers
             return property.ContainingType.GetMembers()
                 .OfType<IFieldSymbol>()
                 .Any(f => f.AssociatedSymbol?.Equals(property, SymbolEqualityComparer.Default) == true);
+        }
+
+        /// <summary>
+        /// Returns true when <paramref name="type"/> is (or implements) <c>IDictionary&lt;TKey, TValue&gt;</c>.
+        /// Populates <paramref name="keyType"/> and <paramref name="valueType"/> with the two type arguments.
+        /// </summary>
+        public static bool IsDictionaryType(ITypeSymbol type, out ITypeSymbol? keyType, out ITypeSymbol? valueType)
+        {
+            keyType = null;
+            valueType = null;
+
+            if (type is not INamedTypeSymbol namedType)
+                return false;
+
+            // Direct match: Dictionary<K,V> or IDictionary<K,V>
+            if (namedType.IsGenericType && namedType.TypeArguments.Length == 2)
+            {
+                var typeDefName = namedType.OriginalDefinition.ToDisplayString();
+                if (typeDefName == "System.Collections.Generic.IDictionary<TKey, TValue>" ||
+                    typeDefName == "System.Collections.Generic.Dictionary<TKey, TValue>")
+                {
+                    keyType   = namedType.TypeArguments[0];
+                    valueType = namedType.TypeArguments[1];
+                    return true;
+                }
+            }
+
+            // Types implementing IDictionary<K,V> (e.g. SortedDictionary, custom types)
+            var dictInterface = type.AllInterfaces
+                .FirstOrDefault(i => i.IsGenericType && i.TypeArguments.Length == 2 &&
+                                     i.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.IDictionary<TKey, TValue>");
+            if (dictInterface != null)
+            {
+                keyType   = dictInterface.TypeArguments[0];
+                valueType = dictInterface.TypeArguments[1];
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
