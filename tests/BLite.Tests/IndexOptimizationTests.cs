@@ -92,6 +92,52 @@ namespace BLite.Tests
             Assert.Equal(20, result.MinValue);
             Assert.Equal(40, result.MaxValue);
             Assert.True(result.IsRange);
+            // Both sides are strict — merged range still needs a post-filter to exclude boundaries.
+            Assert.Equal(IndexOptimizer.FilterCompleteness.StrictBoundary, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_Identifies_Range_Between_InclusiveLower_StrictUpper()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            // >= is Exact, < is StrictBoundary — merged result must be StrictBoundary.
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age >= 20 && x.Age < 40;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_age", result.IndexName);
+            Assert.Equal(20, result.MinValue);
+            Assert.Equal(40, result.MaxValue);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.StrictBoundary, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_Identifies_Range_Between_InclusiveBounds()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            // Both sides are inclusive — merged result should be Exact (no post-filter needed).
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age >= 20 && x.Age <= 40;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_age", result.IndexName);
+            Assert.Equal(20, result.MinValue);
+            Assert.Equal(40, result.MaxValue);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
         }
         
          [Fact]
@@ -149,7 +195,7 @@ namespace BLite.Tests
             Assert.Equal(true, result.MinValue);
             Assert.Equal(true, result.MaxValue);
             Assert.False(result.IsRange);
-            Assert.True(result.IsExactFilter);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
         }
 
         [Fact]
@@ -170,7 +216,7 @@ namespace BLite.Tests
             Assert.Equal(false, result.MinValue);
             Assert.Equal(false, result.MaxValue);
             Assert.False(result.IsRange);
-            Assert.True(result.IsExactFilter);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
         }
 
         [Fact]
@@ -187,6 +233,79 @@ namespace BLite.Tests
             var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
 
             Assert.Null(result);
+        }
+
+        [Fact]
+        public void Optimizer_StrictGreaterThan_ReturnsStrictBoundary()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age > 25;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.StrictBoundary, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_StrictLessThan_ReturnsStrictBoundary()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age < 50;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.StrictBoundary, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_InclusiveGreaterThanOrEqual_ReturnsExact()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age >= 25;
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.True(result.IsRange);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_PartialAnd_OneNonIndexedField_ReturnsPartialAnd()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_age", PropertyPaths = ["Age"] }
+            };
+
+            // Name is not indexed, so only the Age side is covered by the index.
+            Expression<Func<TestEntity, bool>> predicate = x => x.Age > 20 && x.Name == "Alice";
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_age", result.IndexName);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.PartialAnd, result.FilterCompleteness);
         }
     }
 }
