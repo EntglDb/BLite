@@ -104,6 +104,35 @@ public ref struct BsonSpanReader
         return Encoding.UTF8.GetString(stringBytes);
     }
 
+    /// <summary>
+    /// Reads a BSON string field and returns the raw UTF-8 bytes as a <see cref="ReadOnlySpan{T}"/>
+    /// without allocating a managed string.
+    /// The returned span points directly into the underlying buffer — it is only valid
+    /// until the next read that modifies <c>_position</c>.
+    /// </summary>
+    /// <remarks>
+    /// Use this for low-level pattern matching (ordinal Contains / StartsWith / EndsWith)
+    /// where the UTF-8 byte representation is sufficient and no heap allocation is desired.
+    /// Ordinal string comparison is semantically equivalent to ordinal UTF-8 byte comparison
+    /// because UTF-8 is a prefix-free, bijective encoding of Unicode code points.
+    /// </remarks>
+    public ReadOnlySpan<byte> ReadStringRawBytes()
+    {
+        var length = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position, 4));
+        _position += 4;
+
+        if (length < 1)
+        {
+            // Empty or invalid string — advance past the null terminator and return empty.
+            if (length == 1) _position += 1;
+            return ReadOnlySpan<byte>.Empty;
+        }
+
+        var stringBytes = _buffer.Slice(_position, length - 1); // exclude null terminator
+        _position += length; // advance past data + null terminator
+        return stringBytes;
+    }
+
     public int ReadInt32()
     {
         if (Remaining < 4)

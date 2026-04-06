@@ -144,15 +144,17 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
             if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
         }
 
-        // ── Fast path: Sum / Average via BSON field-projection scan ──────────────
+        // ── Fast path: Sum / Average / Min / Max via BSON field-projection scan ─
         // Reads only the target field from raw BSON — T is never fully instantiated.
-        // HasComplexOperators is intentionally NOT checked here: VisitAggregate always sets
-        // it so that Sum/Average WITH a WHERE falls through to EnumerableRewriter, but we
-        // still want the fast path to fire when there is no WHERE clause.
-        if (model.AggregateOp is not null && model.AggregateSelector is not null
-            && model.WhereClause == null)
+        // Fires for both no-WHERE and WHERE variants:
+        //   - No WHERE:  projector reads only the selector field.
+        //   - With WHERE: BsonProjectionCompiler merges WHERE + SELECT fields into one
+        //     BSON pass; documents that fail the WHERE return null and are skipped.
+        // HasComplexOperators is intentionally NOT checked here: VisitAggregate always
+        // sets it so that queries that cannot be pushed down fall back to EnumerableRewriter.
+        if (model.AggregateOp is not null && model.AggregateSelector is not null)
         {
-            if (TryBsonAggregate<TResult>(model.AggregateOp, model.AggregateSelector, out var aggResult))
+            if (TryBsonAggregate<TResult>(model.AggregateOp, model.AggregateSelector, model.WhereClause, out var aggResult))
                 return aggResult;
         }
 
@@ -337,6 +339,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     private bool TryBsonAggregate<TResult>(
         string aggregateOp,
         LambdaExpression selector,
+        LambdaExpression? whereClause,
         out TResult result)
     {
         result = default!;
@@ -348,13 +351,16 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
             fieldType != typeof(long))
             return false;
 
-        // Compile a BSON projector for the target field (result is cached per fieldType).
+        // Compile a BSON projector for the target field.
+        // When whereClause is provided, BsonProjectionCompiler merges WHERE + SELECT fields
+        // into one BSON pass; documents that fail the WHERE return null and are skipped
+        // by ScanAsync<FieldType>.
         object? projector;
         try
         {
             var compileMethod = s_compiledSelectMethods.GetOrAdd(
                 fieldType, t => s_tryCompileMethod.MakeGenericMethod(typeof(T), t));
-            projector = compileMethod.Invoke(null, [selector, null]);
+            projector = compileMethod.Invoke(null, [selector, whereClause]);
         }
         catch { return false; }
 
@@ -387,19 +393,40 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         if (fieldType == typeof(decimal))
         {
             var typed = (IEnumerable<decimal>)values;
-            decimal agg = op == "Sum" ? typed.Sum() : typed.DefaultIfEmpty().Average();
+            decimal agg = op switch
+            {
+                "Sum"     => typed.Sum(),
+                "Average" => typed.DefaultIfEmpty().Average(),
+                "Min"     => typed.DefaultIfEmpty().Min(),
+                "Max"     => typed.DefaultIfEmpty().Max(),
+                _         => throw new NotSupportedException($"Unsupported aggregate op: {op}")
+            };
             if (typeof(TResult) == typeof(decimal)) { result = (TResult)(object)agg; return true; }
         }
         else if (fieldType == typeof(double))
         {
             var typed = (IEnumerable<double>)values;
-            double agg = op == "Sum" ? typed.Sum() : typed.DefaultIfEmpty().Average();
+            double agg = op switch
+            {
+                "Sum"     => typed.Sum(),
+                "Average" => typed.DefaultIfEmpty().Average(),
+                "Min"     => typed.DefaultIfEmpty().Min(),
+                "Max"     => typed.DefaultIfEmpty().Max(),
+                _         => throw new NotSupportedException($"Unsupported aggregate op: {op}")
+            };
             if (typeof(TResult) == typeof(double)) { result = (TResult)(object)agg; return true; }
         }
         else if (fieldType == typeof(float))
         {
             var typed = (IEnumerable<float>)values;
-            float agg = op == "Sum" ? typed.Sum() : typed.DefaultIfEmpty().Average();
+            float agg = op switch
+            {
+                "Sum"     => typed.Sum(),
+                "Average" => typed.DefaultIfEmpty().Average(),
+                "Min"     => typed.DefaultIfEmpty().Min(),
+                "Max"     => typed.DefaultIfEmpty().Max(),
+                _         => throw new NotSupportedException($"Unsupported aggregate op: {op}")
+            };
             if (typeof(TResult) == typeof(float)) { result = (TResult)(object)agg; return true; }
         }
         else if (fieldType == typeof(int))
@@ -412,10 +439,20 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
                 if (typeof(TResult) == typeof(long)) { result = (TResult)(object)sum; return true; }
                 if (typeof(TResult) == typeof(int)) { result = (TResult)(object)(int)sum; return true; }
             }
-            else
+            else if (op == "Average")
             {
                 double avg = typed.DefaultIfEmpty().Average();
                 if (typeof(TResult) == typeof(double)) { result = (TResult)(object)avg; return true; }
+            }
+            else if (op == "Min")
+            {
+                int min = typed.DefaultIfEmpty().Min();
+                if (typeof(TResult) == typeof(int)) { result = (TResult)(object)min; return true; }
+            }
+            else if (op == "Max")
+            {
+                int max = typed.DefaultIfEmpty().Max();
+                if (typeof(TResult) == typeof(int)) { result = (TResult)(object)max; return true; }
             }
         }
         else if (fieldType == typeof(long))
@@ -427,10 +464,20 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
                 foreach (var v in typed) sum += v;
                 if (typeof(TResult) == typeof(long)) { result = (TResult)(object)sum; return true; }
             }
-            else
+            else if (op == "Average")
             {
                 double avg = typed.DefaultIfEmpty().Select(x => (double)x).Average();
                 if (typeof(TResult) == typeof(double)) { result = (TResult)(object)avg; return true; }
+            }
+            else if (op == "Min")
+            {
+                long min = typed.DefaultIfEmpty().Min();
+                if (typeof(TResult) == typeof(long)) { result = (TResult)(object)min; return true; }
+            }
+            else if (op == "Max")
+            {
+                long max = typed.DefaultIfEmpty().Max();
+                if (typeof(TResult) == typeof(long)) { result = (TResult)(object)max; return true; }
             }
         }
         return false;

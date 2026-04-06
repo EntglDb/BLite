@@ -23,8 +23,13 @@ internal static class BsonExpressionEvaluator
     /// <summary>
     /// Recursively compiles an expression node into a <see cref="BsonReaderPredicate"/>.
     /// Handles:
-    /// - <c>AndAlso</c>: skips sides that don't touch the parameter (e.g. null-guard closures)
+    /// - <c>AndAlso</c> / <c>OrElse</c>: skips sides that don't touch the parameter
     /// - <c>.Equals()</c> method calls: treated as equality
+    /// - Null checks: <c>x.Prop == null</c> / <c>x.Prop != null</c>
+    /// - IN operator: <c>list.Contains(x.Prop)</c> / <c>Enumerable.Contains(list, x.Prop)</c>
+    /// - String methods: <c>x.Prop.Contains(s)</c>, <c>StartsWith</c>, <c>EndsWith</c>
+    /// - Static string helpers: <c>string.IsNullOrEmpty(x.Prop)</c>, <c>string.IsNullOrWhiteSpace(x.Prop)</c>
+    /// - Enum comparisons (stored as Int32/Int64 in BSON)
     /// - Closure captures: evaluated at plan-time via <see cref="TryEvaluate"/>
     /// </summary>
     private static BsonReaderPredicate? TryCompileBody(Expression body, ParameterExpression parameter, ValueConverterRegistry? registry = null)
@@ -45,6 +50,33 @@ internal static class BsonExpressionEvaluator
                 var lp = TryCompileBody(andAlso.Left,  parameter, registry);
                 var rp = TryCompileBody(andAlso.Right, parameter, registry);
                 if (lp != null && rp != null) return reader => lp(reader) && rp(reader);
+                return lp ?? rp;
+            }
+
+            return null;
+        }
+
+        // ── OrElse ─────────────────────────────────────────────────────────────
+        // <see cref="BsonReaderPredicate"/> is declared as
+        // <c>delegate bool BsonReaderPredicate(BsonSpanReader reader)</c>.
+        // Because <see cref="BsonSpanReader"/> is a ref struct and the parameter
+        // is <em>not</em> passed by <c>ref</c>, every invocation receives its own
+        // value-copy of the reader.  This means both sides of the OR always start
+        // scanning from the same position (the beginning of the document), making
+        // independent compilation of lp and rp correct without any seek/reset.
+        if (body is BinaryExpression orElse && orElse.NodeType == ExpressionType.OrElse)
+        {
+            bool leftTouches  = TouchesParameter(orElse.Left,  parameter);
+            bool rightTouches = TouchesParameter(orElse.Right, parameter);
+
+            if (leftTouches && !rightTouches)  return TryCompileBody(orElse.Left,  parameter, registry);
+            if (rightTouches && !leftTouches)  return TryCompileBody(orElse.Right, parameter, registry);
+
+            if (leftTouches && rightTouches)
+            {
+                var lp = TryCompileBody(orElse.Left,  parameter, registry);
+                var rp = TryCompileBody(orElse.Right, parameter, registry);
+                if (lp != null && rp != null) return reader => lp(reader) || rp(reader);
                 return lp ?? rp;
             }
 
@@ -72,29 +104,102 @@ internal static class BsonExpressionEvaluator
             return CreatePredicate(bsonName, false, ExpressionType.Equal);
         }
 
-        // ── .Equals() method call ──────────────────────────────────────────────
-        // Pattern: e.Prop.Equals(closureVar)  or  e.Prop.Equals(constant)
-        if (body is MethodCallExpression methodCall &&
-            methodCall.Method.Name == "Equals" &&
-            methodCall.Arguments.Count == 1 &&
-            methodCall.Object is MemberExpression equalsOnMember &&
-            equalsOnMember.Expression == parameter)
+        // ── Method calls ───────────────────────────────────────────────────────
+        if (body is MethodCallExpression mc)
         {
-            var fieldName   = equalsOnMember.Member.Name;
-            var bsonName    = fieldName.ToLowerInvariant();
-            if (bsonName == "id") bsonName = "_id";
+            // .Equals() on a property: e.Prop.Equals(closureVar)
+            if (mc.Method.Name == "Equals" &&
+                mc.Arguments.Count == 1 &&
+                mc.Object is MemberExpression equalsOnMember &&
+                equalsOnMember.Expression == parameter)
+            {
+                var fieldName   = equalsOnMember.Member.Name;
+                var bsonName    = fieldName.ToLowerInvariant();
+                if (bsonName == "id") bsonName = "_id";
 
-            var (ok, value) = TryEvaluate(methodCall.Arguments[0]);
-            if (ok && IsKnownBsonPrimitive(value?.GetType()))
-                return CreatePredicate(bsonName, value, ExpressionType.Equal);
+                var (ok, value) = TryEvaluate(mc.Arguments[0]);
+                if (ok && IsKnownBsonPrimitive(value?.GetType()))
+                    return CreatePredicate(bsonName, value, ExpressionType.Equal);
 
-            // Try ValueObject → provider conversion
-            if (ok && value != null &&
-                registry?.TryConvert(fieldName, value, out var pv) == true &&
-                IsKnownBsonPrimitive(pv?.GetType()))
-                return CreatePredicate(bsonName, pv, ExpressionType.Equal);
+                // Try ValueObject → provider conversion
+                if (ok && value != null &&
+                    registry?.TryConvert(fieldName, value, out var pv) == true &&
+                    IsKnownBsonPrimitive(pv?.GetType()))
+                    return CreatePredicate(bsonName, pv, ExpressionType.Equal);
 
-            return null;
+                return null;
+            }
+
+            // String instance methods on a property: e.Prop.Contains(s), StartsWith, EndsWith
+            if (mc.Object is MemberExpression strMember &&
+                strMember.Expression == parameter &&
+                strMember.Type == typeof(string) &&
+                mc.Arguments.Count == 1 &&
+                mc.Method.Name is "Contains" or "StartsWith" or "EndsWith")
+            {
+                var bsonName = strMember.Member.Name.ToLowerInvariant();
+                if (bsonName == "id") bsonName = "_id";
+
+                var (ok, value) = TryEvaluate(mc.Arguments[0]);
+                if (ok && value is string pattern)
+                    return CreateStringMethodPredicate(bsonName, mc.Method.Name, pattern);
+
+                return null;
+            }
+
+            // Static string helpers: string.IsNullOrEmpty(x.Prop) / string.IsNullOrWhiteSpace(x.Prop)
+            if (mc.Object == null &&
+                mc.Method.DeclaringType == typeof(string) &&
+                mc.Method.Name is "IsNullOrEmpty" or "IsNullOrWhiteSpace" &&
+                mc.Arguments.Count == 1 &&
+                mc.Arguments[0] is MemberExpression staticStrMember &&
+                staticStrMember.Expression == parameter &&
+                staticStrMember.Type == typeof(string))
+            {
+                var bsonName = staticStrMember.Member.Name.ToLowerInvariant();
+                if (bsonName == "id") bsonName = "_id";
+                bool checkWhiteSpace = mc.Method.Name == "IsNullOrWhiteSpace";
+                return CreateIsNullOrEmptyPredicate(bsonName, checkWhiteSpace);
+            }
+
+            // IN operator: list.Contains(x.Prop) or Enumerable.Contains(list, x.Prop)
+            // Handles instance methods (List<T>.Contains, ICollection<T>.Contains),
+            // the Enumerable.Contains extension method, and the MemoryExtensions.Contains
+            // overload for arrays (which wraps the array in ReadOnlySpan<T> via op_Implicit
+            // in .NET 10 expression trees).
+            if (mc.Method.Name == "Contains")
+            {
+                // Instance method: list.Contains(x.Prop)  [also handles Convert-wrapped member]
+                if (mc.Object != null &&
+                    mc.Arguments.Count == 1)
+                {
+                    var argUnwrapped = UnwrapConvert(mc.Arguments[0]);
+                    if (argUnwrapped is MemberExpression inMember &&
+                        inMember.Expression == parameter)
+                    {
+                        var (ok, collection) = TryEvaluate(mc.Object);
+                        if (ok && collection != null)
+                            return TryCreateInPredicate(inMember, collection);
+                    }
+                }
+
+                // Extension method: Enumerable.Contains(list, x.Prop)  or
+                // MemoryExtensions.Contains(op_Implicit(array), x.Prop)
+                if (mc.Object == null &&
+                    mc.Arguments.Count == 2)
+                {
+                    var argUnwrapped = UnwrapConvert(mc.Arguments[1]);
+                    if (argUnwrapped is MemberExpression enumInMember &&
+                        enumInMember.Expression == parameter)
+                    {
+                        // TryEvaluateCollection handles both direct closures and
+                        // ReadOnlySpan<T> implicit conversions from arrays.
+                        var (ok, collection) = TryEvaluateCollection(mc.Arguments[0]);
+                        if (ok && collection != null)
+                            return TryCreateInPredicate(enumInMember, collection);
+                    }
+                }
+            }
         }
 
         // ── Simple binary: e.Prop op constant (or e.Prop op closureCapture) ───
@@ -104,28 +209,42 @@ internal static class BsonExpressionEvaluator
             var right = binary.Right;
             var nodeType = binary.NodeType;
 
-            // Normalize: Ensure Property is on Left
-            if (right is MemberExpression rMember && rMember.Expression == parameter &&
-                !IsDirectParameterAccess(left, parameter))
+            // Unwrap Convert nodes: e.g. enum comparisons produce
+            // Equal(Convert(x.Role, Int32), Convert(3, Int32)) in expression trees.
+            Expression leftInner  = UnwrapConvert(left);
+            Expression rightInner = UnwrapConvert(right);
+
+            // Normalize: Ensure Property is on Left (also support Convert-wrapped members)
+            bool rightIsParam = rightInner is MemberExpression rMbr && rMbr.Expression == parameter;
+            bool leftIsParam  = leftInner  is MemberExpression lMbr && lMbr.Expression == parameter;
+
+            if (rightIsParam && !leftIsParam)
             {
-                (left, right) = (right, left);
+                (left, right, leftInner, rightInner) = (right, left, rightInner, leftInner);
                 nodeType = Flip(nodeType);
             }
 
-            if (left is MemberExpression member && member.Expression == parameter)
+            if (leftInner is MemberExpression member && member.Expression == parameter)
             {
                 var fieldName = member.Member.Name;
                 var bsonName  = fieldName.ToLowerInvariant();
                 // "Id" and "_id" both refer to the BSON primary-key field.
-                // The serializer writes the root-entity primary key as "_id" regardless of the
-                // C# property name when the property is "Id".  Nested-entity mappers write "id".
-                // Normalise both here so that predicates on x.Id always scan for "_id".
                 if (bsonName == "id" || bsonName == "_id") bsonName = "_id";
 
                 // Right side: ConstantExpression or closure capture (any non-parameter expr)
-                var (ok, value) = TryEvaluate(right);
+                var (ok, value) = TryEvaluate(rightInner);
+
+                // Null check: x.Prop == null or x.Prop != null
+                if (ok && value == null &&
+                    nodeType is ExpressionType.Equal or ExpressionType.NotEqual)
+                    return CreateNullCheckPredicate(bsonName, nodeType == ExpressionType.Equal);
+
                 if (ok && IsKnownBsonPrimitive(value?.GetType()))
                     return CreatePredicate(bsonName, value, nodeType);
+
+                // Enum comparison: enums are stored as Int32/Int64 — convert and compare.
+                if (ok && value != null && value.GetType().IsEnum)
+                    return CreatePredicate(bsonName, Convert.ToInt64(value), nodeType);
 
                 // Try ValueObject → provider conversion
                 if (ok && value != null &&
@@ -138,10 +257,216 @@ internal static class BsonExpressionEvaluator
         return null;
     }
 
+    // ── Additional predicate factories ────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a predicate that checks whether <paramref name="fieldName"/> is BSON Null
+    /// (or absent from the document). When <paramref name="expectNull"/> is false the
+    /// predicate returns true for any non-null value.
+    /// </summary>
+    private static BsonReaderPredicate CreateNullCheckPredicate(string fieldName, bool expectNull)
+        => reader =>
+        {
+            try
+            {
+                reader.ReadDocumentSize();
+                while (reader.Remaining > 0)
+                {
+                    var type = reader.ReadBsonType();
+                    if (type == 0) break;
+                    var name = reader.ReadElementHeader();
+                    if (name == fieldName)
+                    {
+                        bool isNull = type == BsonType.Null;
+                        return expectNull == isNull;
+                    }
+                    reader.SkipValue(type);
+                }
+            }
+            catch { return false; }
+            // Field absent: treat as null
+            return expectNull;
+        };
+
+    /// <summary>
+    /// Creates a predicate for <c>x.Prop.Contains(pattern)</c>, <c>StartsWith</c>, or <c>EndsWith</c>.
+    /// The match is performed directly on the raw UTF-8 bytes stored in the BSON buffer —
+    /// no managed string is allocated for the field value at eval-time.
+    /// </summary>
+    /// <remarks>
+    /// The pattern is encoded to UTF-8 once at plan-time and captured in the closure.
+    /// Ordinal string comparison is semantically equivalent to ordinal UTF-8 byte comparison
+    /// (UTF-8 is a prefix-free, bijective encoding of Unicode code points), so this is
+    /// semantically identical to <c>string.Contains(pattern, StringComparison.Ordinal)</c>.
+    /// </remarks>
+    private static BsonReaderPredicate CreateStringMethodPredicate(string fieldName, string methodName, string pattern)
+    {
+        // Pre-encode the pattern to UTF-8 bytes once at plan-time.
+        var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
+
+        return reader =>
+        {
+            try
+            {
+                reader.ReadDocumentSize();
+                while (reader.Remaining > 0)
+                {
+                    var type = reader.ReadBsonType();
+                    if (type == 0) break;
+                    var name = reader.ReadElementHeader();
+                    if (name == fieldName)
+                    {
+                        if (type != BsonType.String) { reader.SkipValue(type); return false; }
+                        // Read the UTF-8 bytes directly — zero managed-string allocation.
+                        var valueBytes = reader.ReadStringRawBytes();
+                        return methodName switch
+                        {
+                            "Contains"   => valueBytes.IndexOf(patternBytes) >= 0,
+                            "StartsWith" => valueBytes.StartsWith(patternBytes),
+                            "EndsWith"   => valueBytes.EndsWith(patternBytes),
+                            _            => false
+                        };
+                    }
+                    reader.SkipValue(type);
+                }
+            }
+            catch { return false; }
+            return false;
+        };
+    }
+
+    /// <summary>
+    /// Creates a predicate for <c>string.IsNullOrEmpty(x.Prop)</c> or
+    /// <c>string.IsNullOrWhiteSpace(x.Prop)</c>.
+    /// </summary>
+    private static BsonReaderPredicate CreateIsNullOrEmptyPredicate(string fieldName, bool checkWhiteSpace)
+        => reader =>
+        {
+            try
+            {
+                reader.ReadDocumentSize();
+                while (reader.Remaining > 0)
+                {
+                    var type = reader.ReadBsonType();
+                    if (type == 0) break;
+                    var name = reader.ReadElementHeader();
+                    if (name == fieldName)
+                    {
+                        if (type == BsonType.Null) return true;
+                        if (type != BsonType.String) { reader.SkipValue(type); return false; }
+                        var val = reader.ReadString();
+                        return checkWhiteSpace ? string.IsNullOrWhiteSpace(val) : string.IsNullOrEmpty(val);
+                    }
+                    reader.SkipValue(type);
+                }
+            }
+            catch { return false; }
+            // Field absent — treat as null → true
+            return true;
+        };
+
+    /// <summary>
+    /// Tries to build an IN predicate from a collection instance obtained from a closure.
+    /// Returns <c>null</c> if the collection element type is not a supported BSON primitive.
+    /// </summary>
+    private static BsonReaderPredicate? TryCreateInPredicate(MemberExpression memberExpr, object collection)
+    {
+        var bsonName = memberExpr.Member.Name.ToLowerInvariant();
+        if (bsonName == "id") bsonName = "_id";
+
+        // Build a HashSet<object> at plan-time to enable O(1) lookups at eval-time.
+        var items = new HashSet<object?>();
+        var hasLong = false;
+        foreach (var item in (System.Collections.IEnumerable)collection)
+        {
+            if (item != null && !IsKnownBsonPrimitive(item.GetType()) && !item.GetType().IsEnum)
+                return null; // unsupported element type
+            if (item != null && item.GetType().IsEnum)
+            {
+                items.Add(Convert.ToInt64(item));
+                hasLong = true;
+            }
+            else
+            {
+                items.Add(item);
+            }
+        }
+
+        // Capture as immutable set for the predicate closure.
+        var capturedItems = items;
+        var capturedHasLong = hasLong;
+
+        return reader =>
+        {
+            try
+            {
+                reader.ReadDocumentSize();
+                while (reader.Remaining > 0)
+                {
+                    var type = reader.ReadBsonType();
+                    if (type == 0) break;
+                    var name = reader.ReadElementHeader();
+                    if (name == bsonName)
+                    {
+                        object? readValue = type switch
+                        {
+                            BsonType.Int32   => capturedHasLong ? (object)Convert.ToInt64(reader.ReadInt32()) : reader.ReadInt32(),
+                            BsonType.Int64   => reader.ReadInt64(),
+                            BsonType.String  => reader.ReadString(),
+                            BsonType.Double  => reader.ReadDouble(),
+                            BsonType.Decimal128 => reader.ReadDecimal128(),
+                            BsonType.Boolean => reader.ReadBoolean(),
+                            BsonType.ObjectId => reader.ReadObjectId(),
+                            BsonType.DateTime => reader.ReadDateTime(),
+                            BsonType.Null    => null,
+                            _                => null
+                        };
+                        return capturedItems.Contains(readValue);
+                    }
+                    reader.SkipValue(type);
+                }
+            }
+            catch { return false; }
+            return capturedItems.Contains(null);
+        };
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Like <see cref="TryEvaluate"/> but also handles the .NET 10 pattern where the C#
+    /// compiler wraps an array in an implicit <c>ReadOnlySpan&lt;T&gt;</c> conversion when
+    /// calling <c>MemoryExtensions.Contains</c>.  In that case the actual array lives in the
+    /// single argument of the <c>op_Implicit</c> call; we evaluate that inner expression
+    /// directly so that the array can be iterated as a normal <see cref="System.Collections.IEnumerable"/>.
+    /// </summary>
+    private static (bool Ok, object? Value) TryEvaluateCollection(Expression expression)
+    {
+        // MemoryExtensions.Contains wraps: op_Implicit(array) → ReadOnlySpan<T>
+        // Unwrap one level of op_Implicit to recover the underlying array.
+        if (expression is MethodCallExpression { Method.Name: "op_Implicit", Object: null } implicitCall
+            && implicitCall.Arguments.Count == 1)
+        {
+            var inner = TryEvaluate(implicitCall.Arguments[0]);
+            if (inner.Ok && inner.Value is System.Collections.IEnumerable)
+                return inner;
+        }
+
+        return TryEvaluate(expression);
+    }
 
     private static bool IsDirectParameterAccess(Expression expr, ParameterExpression p)
         => expr is MemberExpression m && m.Expression == p;
+
+    /// <summary>
+    /// Unwraps a single <c>Convert</c> / <c>ConvertChecked</c> node if present.
+    /// Enum comparisons are compiled to <c>Equal(Convert(x.Role,Int32), Convert(3,Int32))</c>
+    /// by the C# compiler; stripping the outer Convert lets us inspect the inner expression.
+    /// </summary>
+    private static Expression UnwrapConvert(Expression expr)
+        => expr is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } u
+            ? u.Operand
+            : expr;
 
     /// <summary>
     /// Returns <c>true</c> if any node in <paramref name="expression"/> references <paramref name="parameter"/>.
@@ -295,6 +620,21 @@ internal static class BsonExpressionEvaluator
                     ExpressionType.GreaterThanOrEqual => val >= targetInt,
                     ExpressionType.LessThan => val < targetInt,
                     ExpressionType.LessThanOrEqual => val <= targetInt,
+                    _ => false
+                };
+            }
+            // Enum stored as Int32, compared to a long (result of Convert.ToInt64(enumValue))
+            if (target is long targetLongFromEnum)
+            {
+                var valL = (long)val;
+                return op switch
+                {
+                    ExpressionType.Equal => valL == targetLongFromEnum,
+                    ExpressionType.NotEqual => valL != targetLongFromEnum,
+                    ExpressionType.GreaterThan => valL > targetLongFromEnum,
+                    ExpressionType.GreaterThanOrEqual => valL >= targetLongFromEnum,
+                    ExpressionType.LessThan => valL < targetLongFromEnum,
+                    ExpressionType.LessThanOrEqual => valL <= targetLongFromEnum,
                     _ => false
                 };
             }

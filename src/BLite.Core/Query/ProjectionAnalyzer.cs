@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 
 namespace BLite.Core.Query;
 
@@ -142,11 +143,27 @@ internal static class ProjectionAnalyzer
 
         protected override Expression VisitMethodCall(MethodCallExpression node)
         {
-            // Method call directly on a T property, e.g. x.Name.ToUpper() — not simple.
+            // Method call directly on a T property, e.g. x.Name.ToUpper() — mark as
+            // not simple UNLESS it is a safe string instance method whose side-effect is
+            // limited to inspecting the string value (Contains / StartsWith / EndsWith).
+            // For those safe methods the property itself IS still accessed; VisitMember will
+            // add it to Accessed when base.VisitMethodCall recurses into node.Object.
             if (node.Object is MemberExpression { Expression: ParameterExpression p } && p == _param)
-                IsSimple = false;
+            {
+                if (!IsSafeScalarMethod(node.Method))
+                    IsSimple = false;
+            }
 
             return base.VisitMethodCall(node);
         }
+
+        /// <summary>
+        /// Returns <c>true</c> for string instance methods that only read the string value
+        /// and return a scalar (bool). These are safe to leave in the expression tree after
+        /// the member access has been rewritten to an array-slot lookup.
+        /// </summary>
+        private static bool IsSafeScalarMethod(MethodInfo method)
+            => method.DeclaringType == typeof(string) &&
+               method.Name is "Contains" or "StartsWith" or "EndsWith";
     }
 }

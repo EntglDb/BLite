@@ -481,6 +481,71 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
+    /// <summary>
+    /// Counts documents matching <paramref name="predicate"/> by evaluating the predicate
+    /// directly on raw BSON bytes — no CLR <typeparamref name="T"/> instances are ever created.
+    /// </summary>
+    /// <remarks>
+    /// The predicate is executed once per non-deleted, non-overflow slot on every data page.
+    /// Overflow-flagged primary slots are skipped: the BSON data in such slots starts after
+    /// an 8-byte overflow header that a normal BSON predicate cannot parse correctly, so
+    /// those documents are not counted (same behaviour as the existing <see cref="ScanAsync(BsonReaderPredicate,CancellationToken)"/>
+    /// for overflow documents).
+    /// </remarks>
+    internal async Task<int> CountScanAsync(
+        BsonReaderPredicate predicate,
+        CancellationToken ct = default)
+    {
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var txnId = transaction.TransactionId;
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        int count = 0;
+
+        try
+        {
+            foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+            {
+                ct.ThrowIfCancellationRequested();
+                await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
+
+                var header = SlottedPageHeader.ReadFrom(buffer);
+                if (header.PageType != PageType.Data) continue;
+
+                var slots = MemoryMarshal.Cast<byte, SlotEntry>(
+                    buffer.AsSpan(SlottedPageHeader.Size, header.SlotCount * SlotEntry.Size));
+                var keyMap = _storage.GetKeyReverseMap();
+
+                for (int i = 0; i < header.SlotCount; i++)
+                {
+                    var slot = slots[i];
+                    if ((slot.Flags & SlotFlags.Deleted) != 0) continue;
+                    // Skip overflow continuation slots: the primary slot's raw data starts
+                    // with an 8-byte overflow header (totalLength + nextPageId), not BSON.
+                    if ((slot.Flags & SlotFlags.HasOverflow) != 0) continue;
+
+                    var data = buffer.AsSpan(slot.Offset, slot.Length);
+                    var reader = new BsonSpanReader(data, keyMap);
+                    try
+                    {
+                        if (predicate(reader)) count++;
+                    }
+                    catch
+                    {
+                        // Malformed BSON or foreign-collection slot — skip silently.
+                    }
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        return count;
+    }
+
     private void ScanPageProjected<TResult>(
         uint pageId,
         ulong txnId,
@@ -1989,7 +2054,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             }
         }
 
-        // Strategy 2 / 3: Stream matching documents via FetchAsync and count without
+        // Strategy 2: BSON-level count — evaluates the predicate on raw BSON bytes without
+        // deserialising T.  Combined with the Phase 1 widening of BsonExpressionEvaluator
+        // this covers the vast majority of real-world WHERE predicates.
+        if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry) is { } bsonPred)
+            return await CountScanAsync(bsonPred, ct).ConfigureAwait(false);
+
+        // Strategy 3: Stream matching documents via FetchAsync and count without
         // keeping them in a List<T>, relying on FetchAsync's own BSON-scan / full-scan
         // strategies to minimise allocations.
         int count = 0;

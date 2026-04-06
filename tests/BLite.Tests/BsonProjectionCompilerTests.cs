@@ -96,13 +96,14 @@ public class BsonProjectionCompilerTests : IDisposable
     }
 
     [Fact]
-    public void TryCompile_WithWhereLambda_NonSimpleWhere_ReturnsNull()
+    public void TryCompile_WithWhereLambda_StringMethodWhere_NowReturnsNonNull()
     {
-        // The where lambda uses a method call → not simple
+        // Phase 4: string instance methods in WHERE are now treated as "simple",
+        // so ProjectionAnalyzer no longer marks IsSimple=false for StartsWith etc.
         Expression<Func<User, string>> selectLambda = x => x.Name;
         Expression<Func<User, bool>> whereLambda = x => x.Name.StartsWith("A");
         var projector = BsonProjectionCompiler.TryCompile<User, string>(selectLambda, whereLambda);
-        Assert.Null(projector);
+        Assert.NotNull(projector);
     }
 
     [Fact]

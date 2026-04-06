@@ -32,6 +32,8 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
                     return node;
                 case "Sum":
                 case "Average":
+                case "Min":
+                case "Max":
                     VisitAggregate(node);
                     return node;
                 case "Count":
@@ -39,7 +41,7 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
                     VisitCount(node);
                     return node;
                 default:
-                    // GroupBy, Join, Min, Max, etc. — operators the direct pipeline cannot model.
+                    // GroupBy, Join, etc. — operators the direct pipeline cannot model.
                     _model.HasComplexOperators = true;
                     break;
             }
@@ -113,7 +115,8 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
     }
 
     /// <summary>
-    /// Handles <c>Sum(selector)</c> and <c>Average(selector)</c> as push-down aggregates.
+    /// Handles <c>Sum(selector)</c>, <c>Average(selector)</c>, <c>Min(selector)</c>, and
+    /// <c>Max(selector)</c> as push-down aggregates.
     /// When a single-field selector is detected we store it for BSON-level evaluation;
     /// otherwise we fall back to the EnumerableRewriter path.
     /// </summary>
