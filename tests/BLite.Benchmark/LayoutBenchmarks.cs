@@ -28,7 +28,7 @@ namespace BLite.Benchmark;
 ///   Read benchmarks  → stable contexts created once in GlobalSetup.
 ///   Write benchmarks → fresh empty DBs created per-iteration via targeted IterationSetup.
 /// </summary>
-[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "Layout")]
+[InProcess]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]

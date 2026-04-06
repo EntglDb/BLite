@@ -23,7 +23,8 @@ namespace BLite.Benchmark;
 ///   4. TopN        — top 10 orders by Total DESC
 /// Goal: compare BLite (OLTP) vs OLAP-oriented engines on analytical workloads.
 /// </summary>
-[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "Olap")]
+[SimpleJob]
+[InProcess]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]
