@@ -161,5 +161,5 @@ fully AOT-safe.
 
 ## Tracking issue
 
-See GitHub issue [#IL2104](https://github.com/EntglDb/BLite/issues) for the original report and
-planned improvements.
+See the [BLite GitHub issues](https://github.com/EntglDb/BLite/issues) tracker for the original
+IL2104/IL3053 report and planned improvements for AOT compatibility in 4.2.0.

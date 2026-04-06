@@ -61,7 +61,7 @@ namespace BLite.SourceGenerators
                 sb.AppendLine($"        // NOTE: CreateSetter uses Expression.Compile() and reflection fallback for properties");
                 sb.AppendLine($"        // from referenced assemblies that have private setters. This path is not AOT-safe");
                 sb.AppendLine($"        // when the entity type has private setters from an external referenced assembly.");
-                sb.AppendLine($"        // See: https://github.com/EntglDb/BLite/blob/main/AOT_LIMITATIONS.md");
+                sb.AppendLine($"        // See AOT_LIMITATIONS.md in the BLite repository for details.");
                 foreach (var prop in privateSetterProps)
                 {
                     var entityType = $"global::{entity.FullTypeName}";
