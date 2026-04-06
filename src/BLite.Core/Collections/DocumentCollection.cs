@@ -648,6 +648,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <param name="minKey">Minimum key value (inclusive)</param>
     /// <param name="maxKey">Maximum key value (inclusive)</param>
     /// <param name="ascending">True for ascending order, false for descending</param>
+    /// <param name="skip">Number of index entries to skip before yielding documents.
+    /// Skipping is performed at the index-entry level so documents are never read for
+    /// skipped positions, enabling efficient pagination without full materialization.</param>
+    /// <param name="take">Maximum number of documents to yield. Defaults to all.</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Async enumerable of matching documents</returns>
     public async IAsyncEnumerable<T> QueryIndexAsync(
@@ -655,6 +659,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         object? minKey,
         object? maxKey,
         bool ascending = true,
+        int skip = 0,
+        int take = int.MaxValue,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var index = _indexManager.GetIndex(indexName);
@@ -672,8 +678,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var pageCache = new Dictionary<uint, byte[]>();
         try
         {
+            int skipped = 0;
+            int taken = 0;
             foreach (var location in index.Range(minKey, maxKey, direction, transaction))
             {
+                // Skip index entries without reading documents — O(skip) index key reads,
+                // zero document deserializations for skipped positions.
+                if (skip > 0 && skipped < skip) { skipped++; continue; }
+
                 ct.ThrowIfCancellationRequested();
 
                 if (!pageCache.TryGetValue(location.PageId, out var cachedBuffer))
@@ -684,7 +696,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 }
 
                 var doc = await FindByLocationAsync(location, txnId, cachedBuffer, ct);
-                if (doc != null) yield return doc;
+                if (doc != null)
+                {
+                    yield return doc;
+                    if (++taken >= take) break;
+                }
             }
         }
         finally
@@ -1929,6 +1945,60 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var minKey = IndexKey.MinKey;
         var maxKey = IndexKey.MaxKey;
         return _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, transaction.TransactionId).Count();
+    }
+
+    /// <summary>
+    /// Counts documents matching <paramref name="whereClause"/> without fully materializing
+    /// the result set in memory.
+    /// <list type="number">
+    ///   <item>If the predicate targets an indexed field with an exact-covering filter,
+    ///         the count is derived from an index key-only leaf scan — zero data-page reads.</item>
+    ///   <item>Otherwise the documents are streamed through <see cref="FetchAsync"/> (index /
+    ///         BSON / full-scan strategies) and counted in a tight loop without accumulating
+    ///         a <c>List&lt;T&gt;</c>.</item>
+    /// </list>
+    /// </summary>
+    internal async Task<int> CountByPredicateAsync(
+        System.Linq.Expressions.LambdaExpression whereClause,
+        CancellationToken ct = default)
+    {
+        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+
+        // Strategy 1: Index key-only scan — no data-page reads at all.
+        // Applicable whenever the predicate targets an indexed field AND the index fully
+        // covers the predicate (HasResiduePredicate=false).  Strict operators (> / <) set
+        // IsExactFilter=false but HasResiduePredicate=false, so we still handle them here
+        // by passing the correct start/end inclusivity to CountRange.
+        // When HasResiduePredicate=true (compound AND with a non-indexed clause), we must
+        // fall through to FetchAsync so the residue predicate is applied per document.
+        var indexOpt = Query.IndexOptimizer.TryOptimize<T>(whereClause, GetIndexes(), ConverterRegistry);
+        if (indexOpt != null
+            && !indexOpt.IsVectorSearch
+            && !indexOpt.IsSpatialSearch
+            && !indexOpt.HasResiduePredicate)
+        {
+            var index = _indexManager.GetIndex(indexOpt.IndexName);
+            if (index != null)
+            {
+                // Use the per-bound inclusivity flags from OptimizationResult.
+                // These are set correctly for every operator (==, >=, >, <=, <) and
+                // propagated through AND-merges, so compound predicates like
+                // x.Price > 50 && x.Price < 90 get both boundaries exclusive.
+                return index.CountRange(indexOpt.MinValue, indexOpt.MaxValue,
+                    indexOpt.StartInclusive, indexOpt.EndInclusive, transaction);
+            }
+        }
+
+        // Strategy 2 / 3: Stream matching documents via FetchAsync and count without
+        // keeping them in a List<T>, relying on FetchAsync's own BSON-scan / full-scan
+        // strategies to minimise allocations.
+        int count = 0;
+        await foreach (var _ in FetchAsync(whereClause, int.MaxValue, ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            count++;
+        }
+        return count;
     }
 
     /// <summary>

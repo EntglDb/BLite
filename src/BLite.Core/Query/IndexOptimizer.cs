@@ -21,6 +21,29 @@ internal static class IndexOptimizer
         /// apply the full compiled predicate after reading candidates from the index.
         /// </summary>
         public FilterCompleteness FilterCompleteness { get; set; } = FilterCompleteness.Exact;
+
+        /// <summary>
+        /// <c>true</c> when a compound <c>AND</c> predicate has at least one clause that
+        /// targets a non-indexed field.  The index can be used to narrow the candidate set,
+        /// but the full predicate must still be evaluated per document.  Operations that
+        /// need an exact count (e.g. <c>CountAsync</c>) must fall through to a document
+        /// scan instead of counting index entries directly.
+        /// </summary>
+        public bool HasResiduePredicate { get; set; }
+
+        /// <summary>
+        /// <c>true</c> when the lower bound is inclusive (<c>&gt;=</c>, <c>==</c>);
+        /// <c>false</c> for a strict greater-than (<c>&gt;</c>).
+        /// Meaningful only when <see cref="MinValue"/> is non-null.
+        /// </summary>
+        public bool StartInclusive { get; set; } = true;
+
+        /// <summary>
+        /// <c>true</c> when the upper bound is inclusive (<c>&lt;=</c>, <c>==</c>);
+        /// <c>false</c> for a strict less-than (<c>&lt;</c>).
+        /// Meaningful only when <see cref="MaxValue"/> is non-null.
+        /// </summary>
+        public bool EndInclusive { get; set; } = true;
         public bool IsRange { get; set; }
         public bool IsVectorSearch { get; set; }
         public float[]? VectorQuery { get; set; }
@@ -83,21 +106,21 @@ internal static class IndexOptimizer
         => OptimizeExpression(whereClause.Body, whereClause.Parameters[0], indexes, registry);
 
     /// <summary>
-    /// Attempts to satisfy an <c>OrderBy[Descending](field).Take(N)</c> query entirely from a
-    /// secondary BTree index, avoiding a full <c>FindAll()</c> + in-memory sort.
+    /// Attempts to satisfy an <c>OrderBy[Descending](field).Skip(S).Take(N)</c> query entirely
+    /// from a secondary BTree index, avoiding a full <c>FindAll()</c> + in-memory sort.
     /// <para>
     /// Prerequisites: no WHERE clause, a simple single-field OrderBy on an indexed field, and
-    /// a Take(N) limit.  The caller is expected to use the returned index in forward or backward
-    /// order and stop after <paramref name="model"/>.Take items.
+    /// a Take(N) limit.  An optional Skip(S) is supported; the caller passes the skip and take
+    /// counts directly to <c>QueryIndexAsync</c>, which skips index entries before reading
+    /// documents so that only the requested window is ever deserialised.
     /// </para>
     /// </summary>
     public static OptimizationResult? TryOptimizeOrderBy(QueryModel model, IEnumerable<CollectionIndexInfo> indexes)
     {
-        // Only applicable when there is no WHERE, no Skip, and a Take limit.
+        // Only applicable when there is no WHERE and a Take limit.
         if (model.WhereClause != null) return null;
         if (model.OrderByClause == null) return null;
         if (!model.Take.HasValue) return null;
-        if (model.Skip.HasValue) return null;
 
         var body = model.OrderByClause.Body;
         var param = model.OrderByClause.Parameters[0];
@@ -138,23 +161,28 @@ internal static class IndexOptimizer
                 // Both sides are covered by the same index — combine into a single range.
                 // Propagate the stricter completeness: if either branch required a post-filter
                 // (StrictBoundary), the merged range still needs one.
+                // The inclusivity of each bound comes from whichever side owns that bound.
                 var mergedCompleteness = (left.FilterCompleteness == FilterCompleteness.Exact &&
                                           right.FilterCompleteness == FilterCompleteness.Exact)
                     ? FilterCompleteness.Exact
                     : FilterCompleteness.StrictBoundary;
+                bool startInclusive = left.MinValue != null ? left.StartInclusive : right.StartInclusive;
+                bool endInclusive   = left.MaxValue != null ? left.EndInclusive   : right.EndInclusive;
                 return new OptimizationResult
                 {
                     IndexName = left.IndexName,
                     MinValue = left.MinValue ?? right.MinValue,
                     MaxValue = left.MaxValue ?? right.MaxValue,
                     IsRange = true,
-                    FilterCompleteness = mergedCompleteness
+                    FilterCompleteness = mergedCompleteness,
+                    StartInclusive = startInclusive,
+                    EndInclusive = endInclusive
                 };
             }
             // Only one side of the AND is indexable — the index narrows candidates but
             // does not fully satisfy the WHERE; caller must post-filter.
-            if (left != null) { left.FilterCompleteness = FilterCompleteness.PartialAnd; return left; }
-            if (right != null) { right.FilterCompleteness = FilterCompleteness.PartialAnd; return right; }
+            if (left != null)  { left.FilterCompleteness  = FilterCompleteness.PartialAnd; left.HasResiduePredicate  = true; return left; }
+            if (right != null) { right.FilterCompleteness = FilterCompleteness.PartialAnd; right.HasResiduePredicate = true; return right; }
             return null;
         }
 
@@ -207,30 +235,40 @@ internal static class IndexOptimizer
                         }
                         result.IsRange = false;
                         result.FilterCompleteness = FilterCompleteness.Exact;   // equality on indexed field: scan is exact
+                        result.StartInclusive = true;
+                        result.EndInclusive   = true;
                         break;
                     case ExpressionType.GreaterThanOrEqual:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
                         result.FilterCompleteness = FilterCompleteness.Exact;   // BTree Range includes lower bound => exact
+                        result.StartInclusive = true;
+                        result.EndInclusive   = true;  // upper bound is unbounded
                         break;
                     case ExpressionType.GreaterThan:
                         result.MinValue = value;
                         result.MaxValue = null;
                         result.IsRange = true;
                         result.FilterCompleteness = FilterCompleteness.StrictBoundary;  // BTree Range includes lower bound; need post-filter to exclude it
+                        result.StartInclusive = false; // strict: boundary value itself is excluded
+                        result.EndInclusive   = true;  // upper bound is unbounded
                         break;
                     case ExpressionType.LessThanOrEqual:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
                         result.FilterCompleteness = FilterCompleteness.Exact;   // BTree Range includes upper bound => exact
+                        result.StartInclusive = true;  // lower bound is unbounded
+                        result.EndInclusive   = true;
                         break;
                     case ExpressionType.LessThan:
                         result.MinValue = null;
                         result.MaxValue = value;
                         result.IsRange = true;
                         result.FilterCompleteness = FilterCompleteness.StrictBoundary;  // BTree Range includes upper bound; need post-filter to exclude it
+                        result.StartInclusive = true;  // lower bound is unbounded
+                        result.EndInclusive   = false; // strict: boundary value itself is excluded
                         break;
                     default:
                         // NotEqual and any future operators cannot be satisfied by a single

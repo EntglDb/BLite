@@ -120,11 +120,28 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
 
         // ── Fast path: Count() / LongCount() terminal with no WHERE ─────────────
         // Uses the primary BTree key scan (O(n) key reads, zero document reads).
-        if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators)
+        // Disabled when Take/Skip are present — those shaping operators reduce the
+        // logical row-set before counting and must not be bypassed.
+        if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators
+            && !model.Take.HasValue && !model.Skip.HasValue)
         {
-            var count = await _collection.CountAsync();
-            if (typeof(TResult) == typeof(int)) return (TResult)(object)count;
-            if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)count;
+            var count = await _collection.CountAsync(cancellationToken);
+            if (typeof(TResult) == typeof(int))    return (TResult)(object)count;
+            if (typeof(TResult) == typeof(long))   return (TResult)(object)(long)count;
+            if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
+        }
+
+        // ── Fast path: Count() / LongCount() terminal with WHERE predicate ────────
+        // Uses index key-only scan for indexed predicates (zero document reads) or a
+        // streaming count for non-indexed predicates (no large List<T> accumulation).
+        // Disabled when Take/Skip are present for the same reason as above.
+        if (model.IsCountOnly && model.WhereClause != null && !model.HasComplexOperators
+            && !model.Take.HasValue && !model.Skip.HasValue)
+        {
+            var count = await _collection.CountByPredicateAsync(model.WhereClause, cancellationToken);
+            if (typeof(TResult) == typeof(int))    return (TResult)(object)count;
+            if (typeof(TResult) == typeof(long))   return (TResult)(object)(long)count;
+            if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
         }
 
         // ── Fast path: Sum / Average via BSON field-projection scan ──────────────
@@ -158,23 +175,22 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
             ? (model.Skip.GetValueOrDefault() + model.Take.Value)
             : int.MaxValue;
 
-        // ── Fast path: OrderBy(indexedField).Take(N) without WHERE ───────────
-        // Reads N entries directly from the index in sorted order, skipping the
-        // O(n log n) in-memory sort over all documents.  Only applicable when there
-        // is no WHERE clause (FetchAsync handles the WHERE+index case below).
-        if (model.WhereClause == null && model.OrderByClause != null &&
-            model.Take.HasValue && !model.Skip.HasValue)
+        // ── Fast path: OrderBy(indexedField).Skip(S).Take(N) without WHERE ───────────
+        // Reads only skip+take entries from the index in sorted order, skipping the
+        // O(n log n) in-memory sort over all documents.  Skip is performed at the
+        // index-entry level (no document reads for skipped positions), so only the
+        // requested page window is ever deserialised.
+        if (model.WhereClause == null && model.OrderByClause != null && model.Take.HasValue)
         {
             var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
             if (orderOpt is not null)
             {
                 bool ascending = !model.OrderDescending;
-                var topN = new List<T>(model.Take.Value);
-                await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, cancellationToken))
-                {
+                int skip = model.Skip ?? 0;
+                int take = model.Take.Value;
+                var topN = new List<T>(take);
+                await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, skip, take, cancellationToken))
                     topN.Add(item);
-                    if (topN.Count >= model.Take.Value) break;
-                }
                 if (model.SelectClause != null)
                     return ProjectEnumerable<TResult>(topN, model.SelectClause);
                 return TerminalReturn<TResult>(topN);

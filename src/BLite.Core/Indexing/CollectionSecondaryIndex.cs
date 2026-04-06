@@ -325,6 +325,60 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     }
 
     /// <summary>
+    /// Counts index entries that fall within the specified key range, performing a
+    /// key-only B-tree leaf scan (zero data-page reads, zero per-entry allocations).
+    /// </summary>
+    /// <param name="minKey">Lower bound value; <c>null</c> means unbounded.</param>
+    /// <param name="maxKey">Upper bound value; <c>null</c> means unbounded.</param>
+    /// <param name="startInclusive">
+    ///   <c>true</c> for <c>&gt;=</c> / <c>==</c>; <c>false</c> for strict <c>&gt;</c>.
+    /// </param>
+    /// <param name="endInclusive">
+    ///   <c>true</c> for <c>&lt;=</c> / <c>==</c>; <c>false</c> for strict <c>&lt;</c>.
+    /// </param>
+    /// <param name="transaction">Optional transaction for read-your-own-writes.</param>
+    /// <returns>Count of matching index entries.</returns>
+    public int CountRange(object? minKey, object? maxKey, bool startInclusive, bool endInclusive, ITransaction? transaction = null)
+    {
+        if (_btreeIndex == null) return 0;
+
+        // Unbounded defaults use the global sentinels: IndexKey.MinKey for the lower bound
+        // and s_maxBoundaryKey for the upper bound.
+        // When a user key is specified, CreateCompositeKeyBoundary builds the composite
+        // boundary for that user key so inclusive/exclusive range semantics are preserved.
+        //
+        // Composite key layout: [UserKeyBytes][DocumentIdBytes].
+        //   Inclusive start: lower composite boundary [userKey][MinId] — all real entries
+        //     [userKey][realId] are >= this boundary, so they are included.
+        //   Exclusive start: upper composite boundary [userKey][MaxId] — all real entries
+        //     [userKey][realId] are < this boundary (below it), so they are excluded.
+        //   Inclusive end:   upper composite boundary [userKey][MaxId] — all real entries
+        //     [userKey][realId] are <= this boundary, so they are included.
+        //   Exclusive end:   lower composite boundary [userKey][MinId] — all real entries
+        //     [userKey][realId] are > this boundary, so they are excluded.
+        IndexKey actualMinKey = IndexKey.MinKey;
+        IndexKey actualMaxKey = s_maxBoundaryKey;
+
+        if (minKey != null)
+        {
+            var userMin = ConvertToIndexKey(minKey);
+            // inclusive start: useMinObjectId=true  → lower composite boundary for the user key
+            // exclusive start: useMinObjectId=false → upper composite boundary for the user key
+            actualMinKey = CreateCompositeKeyBoundary(userMin, useMinObjectId: startInclusive);
+        }
+
+        if (maxKey != null)
+        {
+            var userMax = ConvertToIndexKey(maxKey);
+            // inclusive end:   useMinObjectId=false → upper composite boundary for the user key
+            // exclusive end:   useMinObjectId=true  → lower composite boundary for the user key
+            actualMaxKey = CreateCompositeKeyBoundary(userMax, useMinObjectId: !endInclusive);
+        }
+
+        return _btreeIndex.CountRange(actualMinKey, actualMaxKey, transaction?.TransactionId);
+    }
+
+    /// <summary>
     /// Gets statistics about this index
     /// </summary>
     public CollectionIndexInfo GetInfo()

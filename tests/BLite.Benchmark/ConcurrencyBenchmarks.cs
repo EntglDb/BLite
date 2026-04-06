@@ -33,7 +33,7 @@ namespace BLite.Benchmark;
 ///   Read    – <see cref="OpsPerTask"/> FindById lookups against seeded data
 ///   Mixed   – alternating insert / FindById (half-half), committed once per task
 /// </summary>
-[InProcess]
+[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "Concurrency")]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]
