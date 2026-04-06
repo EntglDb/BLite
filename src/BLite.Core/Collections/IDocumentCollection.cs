@@ -4,6 +4,7 @@ using BLite.Core.Indexing;
 using BLite.Core.Query;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,14 +39,20 @@ public interface IDocumentCollection<TId, T> where T : class
 
     IAsyncEnumerable<T> FindAllAsync(CancellationToken ct = default);
 
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     IAsyncEnumerable<T> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
     /// <summary>
     /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
     /// Stops reading from the storage engine as soon as one document is found.
     /// </summary>
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
+    [RequiresDynamicCode("LINQ queries over BLite collections use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ queries over BLite collections use reflection to resolve methods at runtime. Ensure all entity types and their members are preserved.")]
     IBLiteQueryable<T> AsQueryable();
 
     // ── UpdateAsync ────────────────────────────────────────────────────────────────
@@ -64,12 +71,14 @@ public interface IDocumentCollection<TId, T> where T : class
     // Local engine: fully supported.
     // Remote (BLite.Client): CreateIndexAsync/Drop/List supported; Scan/ForcePruneAsync throw NotSupportedException.
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
         bool unique = false,
         CancellationToken ct = default);
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     Task<ICollectionIndex<TId, T>> CreateVectorIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector,
         int dimensions,
@@ -77,6 +86,7 @@ public interface IDocumentCollection<TId, T> where T : class
         string? name = null,
         CancellationToken ct = default);
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     Task<ICollectionIndex<TId, T>> EnsureIndexAsync<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,

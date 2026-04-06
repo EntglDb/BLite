@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -16,6 +17,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
 
     // ── Reflection cache (computed once per TId+T combination) ────────────────
     // BsonProjectionCompiler.TryCompile<T, TResult> generic method definition.
+#pragma warning disable IL2026, IL2075
     private static readonly MethodInfo s_tryCompileMethod =
         typeof(BsonProjectionCompiler)
             .GetMethod(nameof(BsonProjectionCompiler.TryCompile),
@@ -26,6 +28,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         typeof(DocumentCollection<TId, T>)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Single(m => m.Name == "ScanAsync" && m.IsGenericMethodDefinition);
+#pragma warning restore IL2026, IL2075
 
     // ── Per-projection-type MakeGenericMethod cache (Fase 3) ─────────────────
     // Keyed on TProj. Avoids calling MakeGenericMethod on every query execution.
@@ -40,6 +43,9 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         _converterRegistry = registry ?? ValueConverterRegistry.Empty;
     }
 
+    // NOTE: CreateQuery implements IQueryProvider.CreateQuery which cannot be annotated.
+    // The body uses dynamic code (Compile, MakeGenericMethod) suppressed via pragma.
+#pragma warning disable IL3050, IL2026, IL2075
     public IQueryable CreateQuery(Expression expression)
     {
         // IQueryProvider.CreateQuery(Expression) is called only for operators that change the element
@@ -69,6 +75,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         });
         return del(this, expression);
     }
+#pragma warning restore IL3050, IL2026, IL2075
 
     private BTreeQueryable<TElement> CreateQueryTyped<TElement>(Expression expression)
         => new(this, expression);
@@ -87,6 +94,9 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     public IBLiteQueryable<TElement> CreateQuery<TElement>(Expression expression)
         => new BTreeQueryable<TElement>(this, expression);
 
+    // NOTE: Execute/Execute<TResult> implement IQueryProvider methods which cannot be annotated.
+    // Use pragma to suppress warnings about calling dynamic code methods within the body.
+#pragma warning disable IL3050, IL2026
     public object? Execute(Expression expression)
     {
         return Execute<object>(expression);
@@ -103,12 +113,17 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         return Task.Run(() => ExecuteAsync<TResult>(expression, CancellationToken.None))
                    .GetAwaiter().GetResult();
     }
+#pragma warning restore IL3050, IL2026
 
     // Explicit IAsyncQueryProvider implementation — delegates to the private async path,
     // allowing BTreeQueryable<T> to call ExecuteAsync directly (no double Task.Run).
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     Task<TResult> IAsyncQueryProvider.ExecuteAsync<TResult>(Expression expression, CancellationToken ct)
         => ExecuteAsync<TResult>(expression, ct);
 
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     private async Task<TResult> ExecuteAsync<TResult>(Expression expression, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -235,6 +250,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     /// Terminal results (<c>IEnumerable&lt;T&gt;</c>, <c>List&lt;T&gt;</c>, scalar aggregates)
     /// are dispatched via a type-switch to avoid any reflection call per invocation.
     /// </summary>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     private TResult ExecutePipeline<TResult>(QueryModel model, IEnumerable<T> source, bool whereAlreadyApplied)
     {
         IEnumerable<T> data = source;
@@ -276,6 +293,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     /// The generic dispatch (<c>ProjectTyped&lt;TProj&gt;</c>) is resolved via a cached
     /// <see cref="MethodInfo"/>: <c>MakeGenericMethod</c> is called once per projection type.
     /// </summary>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     private TResult ProjectEnumerable<TResult>(IEnumerable<T> source, LambdaExpression selectLambda)
     {
         var resultType = typeof(TResult);
@@ -293,6 +312,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     }
 
     /// <summary>Compiles <paramref name="selectLambda"/> as <c>Func&lt;T, TProj&gt;</c> and projects the source.</summary>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
     private static IEnumerable<TProj> ProjectTyped<TProj>(IEnumerable<T> source, LambdaExpression selectLambda)
     {
         var selector = (Func<T, TProj>)selectLambda.Compile();
@@ -336,6 +356,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     /// <c>true</c> and a populated <paramref name="result"/> on success;
     /// <c>false</c> to signal the caller should fall through to the standard path.
     /// </returns>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     private bool TryBsonAggregate<TResult>(
         string aggregateOp,
         LambdaExpression selector,
@@ -491,6 +513,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     /// </summary>
     /// <returns>The projected <c>IEnumerable&lt;TProj&gt;</c>, or <c>null</c> if push-down is
     /// not applicable (caller should fall through to the standard path).</returns>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     private TResult? TryPushDownSelect<TResult>(LambdaExpression selectLambda,
                                                    LambdaExpression? whereLambda = null)
     {
@@ -543,6 +567,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
     /// (keyed by <c>TResult.FullName + expression.ToString()</c>), so the expensive
     /// <see cref="Expression.Compile"/> call is paid only once per unique query shape.
     /// </remarks>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
     private TResult ExecuteViaEnumerableRewriter<TResult>(Expression expression, IEnumerable<T> sourceData)
     {
         var rootFinder = new RootFinder();

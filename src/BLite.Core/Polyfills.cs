@@ -29,6 +29,21 @@ namespace System.Diagnostics.CodeAnalysis
     // Required on constructors that initialise all `required` members (C# 11).
     [AttributeUsage(AttributeTargets.Constructor, AllowMultiple = false, Inherited = false)]
     internal sealed class SetsRequiredMembersAttribute : Attribute { }
+
+    // AOT/trim analysis attributes — available in .NET 5+ natively.
+    [AttributeUsage(AttributeTargets.Constructor | AttributeTargets.Method, Inherited = false)]
+    internal sealed class RequiresDynamicCodeAttribute : Attribute
+    {
+        public RequiresDynamicCodeAttribute(string message) => Message = message;
+        public string Message { get; }
+    }
+
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Constructor | AttributeTargets.Method, Inherited = false)]
+    internal sealed class RequiresUnreferencedCodeAttribute : Attribute
+    {
+        public RequiresUnreferencedCodeAttribute(string message) => Message = message;
+        public string Message { get; }
+    }
 }
 
 namespace System.Collections.Generic

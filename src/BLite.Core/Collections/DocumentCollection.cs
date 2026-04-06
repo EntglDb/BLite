@@ -1,6 +1,7 @@
 using BLite.Core.CDC;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
@@ -17,6 +18,8 @@ namespace BLite.Core.Collections;
 
 public class DocumentCollection<T> : DocumentCollection<ObjectId, T>, IDocumentCollection<T> where T : class
 {
+    [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
+    [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<T> mapper, string? collectionName = null)
         : base(storage, transactionHolder, mapper, collectionName)
     {
@@ -105,6 +108,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         _storage.SaveCollectionMetadata(meta);
     }
 
+    [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
+    [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
@@ -147,6 +152,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         _storage.RegisterKeys(_mapper.UsedKeys);
     }
 
+    [RequiresUnreferencedCode("Schema management uses reflection to discover entity properties. Ensure all entity types and their members are preserved.")]
     private void EnsureSchema()
     {
         var currentSchema = _mapper.GetSchema();
@@ -183,6 +189,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously creates a secondary index on the specified property.
     /// </summary>
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public async Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         string? name = null,
@@ -208,6 +215,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously creates a vector (HNSW) index for similarity search.
     /// </summary>
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public async Task<ICollectionIndex<TId, T>> CreateVectorIndexAsync<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         int dimensions,
@@ -231,6 +239,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// If the index already exists, it is returned without modification (idempotent).
     /// If it doesn't exist, it is created and populated.
     /// </summary>
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public async Task<ICollectionIndex<TId, T>> EnsureIndexAsync<TKey>(
         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
         string? name = null,
@@ -283,6 +292,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return _indexManager.GetIndexInfo();
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     internal void ApplyIndexBuilder(Metadata.IndexBuilder<T> builder)
     {
         // Use the IndexManager directly to ensure the index exists
@@ -683,6 +693,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// Gets a queryable interface for this collection.
     /// Supports LINQ queries that are translated to optimized BTree scans or index lookups.
     /// </summary>
+    [RequiresDynamicCode("LINQ queries over BLite collections use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ queries over BLite collections use reflection to resolve methods at runtime. Ensure all entity types and their members are preserved.")]
     public IBLiteQueryable<T> AsQueryable()
     {
         return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this, ConverterRegistry));
@@ -2023,6 +2035,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     ///         a <c>List&lt;T&gt;</c>.</item>
     /// </list>
     /// </summary>
+    [RequiresDynamicCode("Count-by-predicate uses index optimization and Expression.Compile() which require dynamic code generation.")]
+    [RequiresUnreferencedCode("Count-by-predicate uses reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     internal async Task<int> CountByPredicateAsync(
         System.Linq.Expressions.LambdaExpression whereClause,
         CancellationToken ct = default)
@@ -2080,6 +2094,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// terminal operators (<c>FirstOrDefaultAsync</c>, <c>ToListAsync</c>, etc.) can inject
     /// limits before materialisation.
     /// </summary>
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     public IAsyncEnumerable<T> FindAsync(
         System.Linq.Expressions.Expression<Func<T, bool>> predicate,
         CancellationToken ct = default)
@@ -2089,6 +2105,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
     /// Stops reading from the storage engine as soon as one document is found (fetchLimit = 1).
     /// </summary>
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     public async Task<T?> FindOneAsync(
         System.Linq.Expressions.Expression<Func<T, bool>> predicate,
         CancellationToken ct = default)
@@ -2135,6 +2153,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <param name="fetchLimit">
     /// Maximum number of documents to yield.  Pass <see cref="int.MaxValue"/> for no limit.
     /// </param>
+    [RequiresDynamicCode("LINQ-style fetch operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style fetch operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     internal async IAsyncEnumerable<T> FetchAsync(
         System.Linq.Expressions.LambdaExpression? whereClause,
         int fetchLimit,

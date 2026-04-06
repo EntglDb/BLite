@@ -57,15 +57,24 @@ namespace BLite.SourceGenerators
             var privateSetterProps = entity.Properties.Where(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter).ToList();
             if (privateSetterProps.Any())
             {
-                sb.AppendLine($"        // Cached Expression Tree setters for private properties");
+                sb.AppendLine($"        // Cached Expression Tree setters for private/init-only properties.");
+                sb.AppendLine($"        // NOTE: CreateSetter uses Expression.Compile() and reflection fallback for properties");
+                sb.AppendLine($"        // from referenced assemblies that have private setters. This path is not AOT-safe");
+                sb.AppendLine($"        // when the entity type has private setters from an external referenced assembly.");
+                sb.AppendLine($"        // See: https://github.com/EntglDb/BLite/blob/main/AOT_LIMITATIONS.md");
                 foreach (var prop in privateSetterProps)
                 {
                     var entityType = $"global::{entity.FullTypeName}";
                     var propType = QualifyType(prop.TypeName);
+                    sb.AppendLine($"#pragma warning disable IL3050, IL2026, IL2072, IL2111");
                     sb.AppendLine($"        private static readonly global::System.Action<{entityType}, {propType}> _setter_{prop.Name} = CreateSetter<{entityType}, {propType}>(\"{prop.Name}\");");
+                    sb.AppendLine($"#pragma warning restore IL3050, IL2026, IL2072, IL2111");
                 }
                 sb.AppendLine();
                 
+                sb.AppendLine($"#pragma warning disable IL3050, IL2026, IL2072, IL2075, IL2111");
+                sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresDynamicCode(\"Private/init-only property setters are set using Expression.Compile() and reflection fallback, which require dynamic code generation. Avoid using types with private setters from referenced assemblies in AOT scenarios.\")]");
+                sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"The reflection fallback for private setters from referenced assemblies walks the type hierarchy and invokes setters via MethodInfo.Invoke, which requires type metadata to be preserved.\")]");
                 sb.AppendLine($"        private static global::System.Action<TObj, TVal> CreateSetter<TObj, TVal>(string propertyName)");
                 sb.AppendLine($"        {{");
                 sb.AppendLine($"            try");
@@ -97,6 +106,7 @@ namespace BLite.SourceGenerators
                 sb.AppendLine($"                return (obj, val) => {{ }};");
                 sb.AppendLine($"            }}");
                 sb.AppendLine($"        }}");
+                sb.AppendLine($"#pragma warning restore IL3050, IL2026, IL2072, IL2075, IL2111");
                 sb.AppendLine();
             }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
 
@@ -11,5 +12,7 @@ namespace BLite.Core.Query;
 /// </summary>
 internal interface IAsyncQueryProvider : IQueryProvider
 {
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     Task<TResult> ExecuteAsync<TResult>(Expression expression, CancellationToken ct);
 }

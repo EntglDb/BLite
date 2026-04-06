@@ -1,5 +1,10 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using BLite.Bson;
+// NOTE: BsonProjectionCompiler uses Expression.Compile(), MakeGenericMethod, and Activator.CreateInstance
+// for projector compilation. These require dynamic code. Warnings are suppressed file-wide
+// because this class is only used via annotated APIs (TryCompile is [RequiresDynamicCode]).
+#pragma warning disable IL3050, IL2026, IL2072
 
 namespace BLite.Core.Query;
 
@@ -30,6 +35,7 @@ internal static class BsonProjectionCompiler
     ///   Optional WHERE predicate.  When supplied the projector returns <c>null</c> (= skipped) for
     ///   documents that fail the predicate, so the caller's scan loop naturally omits them.
     /// </param>
+    [RequiresDynamicCode("Projection compilation uses Expression.Compile() which requires dynamic code generation.")]
     public static BsonReaderProjector<TResult>? TryCompile<T, TResult>(
         LambdaExpression selectLambda,
         LambdaExpression? whereLambda = null)

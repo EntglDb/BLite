@@ -1,3 +1,7 @@
+// NOTE: BsonExpressionEvaluator uses Expression.Lambda and Compile() as a fallback
+// for complex expression evaluation. These calls require dynamic code and are
+// suppressed here because this class is used internally from annotated execution paths.
+#pragma warning disable IL3050
 using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;

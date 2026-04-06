@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;
@@ -91,6 +92,7 @@ internal static class IndexOptimizer
         PartialAnd,
     }
 
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
     public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
     {
         if (model.WhereClause == null) return null;
@@ -102,6 +104,7 @@ internal static class IndexOptimizer
     /// Overload that works directly on a WHERE lambda, without a full <see cref="QueryModel"/>.
     /// Used by <c>DocumentCollection.FetchAsync</c> so the index-selection logic lives in one place.
     /// </summary>
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
     public static OptimizationResult? TryOptimize<T>(LambdaExpression whereClause, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
         => OptimizeExpression(whereClause.Body, whereClause.Parameters[0], indexes, registry);
 
@@ -148,6 +151,7 @@ internal static class IndexOptimizer
         };
     }
 
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
     private static OptimizationResult? OptimizeExpression(Expression expression, ParameterExpression parameter, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
     {
         // ... (Existing AndAlso logic remains the same) ...
@@ -379,6 +383,7 @@ internal static class IndexOptimizer
         return prefix.Substring(0, prefix.Length - 1) + (char)(lastChar + 1);
     }
 
+    [RequiresDynamicCode("Fallback expression evaluation uses Expression.Compile() which requires dynamic code generation.")]
     private static T EvaluateExpression<T>(Expression expression)
     {
         if (expression is ConstantExpression constant)
@@ -456,6 +461,7 @@ internal static class IndexOptimizer
         return Normalize(indexPath).Equals(Normalize(propertyName), StringComparison.OrdinalIgnoreCase);
     }
 
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
     private static (string? propertyName, object? value, ExpressionType op) ParseSimplePredicate(Expression expression, ParameterExpression parameter, ValueConverterRegistry? registry = null)
     {
         if (expression is BinaryExpression binary)

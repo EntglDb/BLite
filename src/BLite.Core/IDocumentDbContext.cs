@@ -3,6 +3,7 @@ using BLite.Core.Collections;
 using BLite.Core.KeyValue;
 using BLite.Core.Transactions;
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -31,6 +32,8 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     /// <summary>
     /// Creates a document collection bound to an explicit <paramref name="holder"/>.
     /// </summary>
+    [RequiresDynamicCode("Collection creation uses Expression.Compile() via CollectionIndexManager and ValueConverterRegistry which require dynamic code generation.")]
+    [RequiresUnreferencedCode("Index creation uses reflection to access type members. Ensure all entity types and their members are preserved.")]
     IDocumentCollection<TId, T> CreateSessionCollection<TId, T>(IDocumentMapper<TId, T> mapper, ITransactionHolder holder)
         where T : class;
 

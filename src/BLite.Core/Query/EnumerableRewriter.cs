@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -8,10 +9,12 @@ internal class EnumerableRewriter : ExpressionVisitor
 {
     // ── Static caches (per AppDomain) ───────────────────────────────────────────────────
     // All public static Enumerable methods grouped by name — built once, zero per-call GetMethods().
+#pragma warning disable IL2026
     private static readonly ILookup<string, MethodInfo> s_enumerableMethods =
         typeof(Enumerable)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .ToLookup(m => m.Name);
+#pragma warning restore IL2026
 
     // ── Instance ──────────────────────────────────────────────────────────────────
     private readonly IQueryable _source;
@@ -42,6 +45,10 @@ internal class EnumerableRewriter : ExpressionVisitor
         return base.VisitConstant(node);
     }
 
+    // NOTE: VisitMethodCall overrides ExpressionVisitor.VisitMethodCall which cannot be
+    // annotated. The method uses reflection to find Enumerable methods at runtime.
+    // Warnings are suppressed because this rewriter is only called from annotated paths.
+#pragma warning disable IL3050, IL2026, IL2060, IL2072
     protected override Expression VisitMethodCall(MethodCallExpression node)
     {
         if (node.Method.DeclaringType == typeof(Queryable))
@@ -81,6 +88,7 @@ internal class EnumerableRewriter : ExpressionVisitor
 
         return base.VisitMethodCall(node);
     }
+#pragma warning restore IL3050, IL2026, IL2060, IL2072
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 }
