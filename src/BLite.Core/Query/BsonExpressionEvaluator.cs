@@ -57,8 +57,13 @@ internal static class BsonExpressionEvaluator
         }
 
         // ── OrElse ─────────────────────────────────────────────────────────────
-        // BsonSpanReader is a ref struct passed by value — each predicate call receives
-        // its own copy, so lp and rp independently scan from the document start.
+        // <see cref="BsonReaderPredicate"/> is declared as
+        // <c>delegate bool BsonReaderPredicate(BsonSpanReader reader)</c>.
+        // Because <see cref="BsonSpanReader"/> is a ref struct and the parameter
+        // is <em>not</em> passed by <c>ref</c>, every invocation receives its own
+        // value-copy of the reader.  This means both sides of the OR always start
+        // scanning from the same position (the beginning of the document), making
+        // independent compilation of lp and rp correct without any seek/reset.
         if (body is BinaryExpression orElse && orElse.NodeType == ExpressionType.OrElse)
         {
             bool leftTouches  = TouchesParameter(orElse.Left,  parameter);

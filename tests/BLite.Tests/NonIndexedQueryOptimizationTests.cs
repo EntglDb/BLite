@@ -4,9 +4,9 @@ using BLite.Shared;
 namespace BLite.Tests;
 
 /// <summary>
-/// Integration tests for the non-indexed query optimisation work (Phases 1-4).
+/// Integration tests for the non-indexed query optimization work (Phases 1-4).
 ///
-/// Phase 2: CountScanAsync — counts via BSON predicates, no T materialisation.
+/// Phase 2: CountScanAsync — counts via BSON predicates, no T materialization.
 /// Phase 3: OLAP (Sum/Avg/Min/Max) with WHERE; Min/Max detection.
 /// Phase 4: ProjectionAnalyzer allows string-method WHERE in push-down SELECT.
 /// </summary>
