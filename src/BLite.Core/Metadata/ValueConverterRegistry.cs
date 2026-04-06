@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 
@@ -16,8 +17,12 @@ public sealed class ValueConverterRegistry
     // propertyName (case-insensitive) → Func<object, object> that calls ConvertToProvider
     private readonly Dictionary<string, Func<object, object?>> _toProvider;
 
+#pragma warning disable IL3050, IL2026
     public static readonly ValueConverterRegistry Empty = new(new Dictionary<string, Type>());
+#pragma warning restore IL3050, IL2026
 
+    [RequiresDynamicCode("Value converter registration uses Expression.Compile() which requires dynamic code generation.")]
+    [RequiresUnreferencedCode("Value converter registration uses reflection to resolve ConvertToProvider methods. Ensure converter types and their members are preserved.")]
     public ValueConverterRegistry(Dictionary<string, Type> converterTypes)
     {
         _toProvider = new Dictionary<string, Func<object, object?>>(StringComparer.OrdinalIgnoreCase);
@@ -75,6 +80,7 @@ public sealed class ValueConverterRegistry
     /// Finds the concrete <c>ConvertToProvider</c> method on a
     /// <see cref="ValueConverter{TModel,TProvider}"/> subclass via reflection.
     /// </summary>
+    [RequiresUnreferencedCode("Finds ConvertToProvider via reflection.")]
     private static MethodInfo? FindConvertToProvider(Type converterType)
     {
         var baseType = FindValueConverterBase(converterType);

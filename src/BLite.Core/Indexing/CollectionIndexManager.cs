@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using BLite.Bson;
 using BLite.Core.Collections;
@@ -25,6 +26,8 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     private CollectionMetadata _metadata;
     private volatile IReadOnlyList<CollectionIndexInfo>? _cachedIndexInfo;
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
+    [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
     public CollectionIndexManager(StorageEngine storage, IDocumentMapper<TId, T> mapper, string? collectionName = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
@@ -108,6 +111,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     /// <param name="name">Optional index name (auto-generated if null)</param>
     /// <param name="unique">Enforce uniqueness constraint</param>
     /// <returns>The created secondary index</returns>
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public CollectionSecondaryIndex<TId, T> CreateIndex<TKey>(
         Expression<Func<T, TKey>> keySelector,
         string? name = null,
@@ -137,6 +141,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         return CreateIndex(definition);
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public CollectionSecondaryIndex<TId, T> CreateVectorIndex<TKey>(Expression<Func<T, TKey>> keySelector, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
     {
         var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(keySelector);
@@ -156,6 +161,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         }
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public CollectionSecondaryIndex<TId, T> EnsureIndex(
         Expression<Func<T, object>> keySelector,
         string? name = null,
@@ -173,6 +179,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         }
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     internal CollectionSecondaryIndex<TId, T> EnsureIndexUntyped(
         LambdaExpression keySelector,
         string? name = null,
@@ -190,6 +197,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         return EnsureIndex(lambda, name, unique);
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public CollectionSecondaryIndex<TId, T> CreateVectorIndexUntyped(
         LambdaExpression keySelector,
         int dimensions,
@@ -217,6 +225,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         }
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     public CollectionSecondaryIndex<TId, T> CreateSpatialIndexUntyped(
         LambdaExpression keySelector,
         string? name = null)
@@ -445,6 +454,8 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         return $"idx_{string.Join("_", propertyPaths)}";
     }
 
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
+    [RequiresUnreferencedCode("Index creation uses Expression.PropertyOrField which requires type metadata to be preserved.")]
     private CollectionIndexDefinition<T> RebuildDefinition(string name, string[] paths, bool isUnique, IndexType type, int dimensions = 0, VectorMetric metric = VectorMetric.Cosine)
     {
         var param = Expression.Parameter(typeof(T), "u");
@@ -472,6 +483,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     /// Builds nested property access expression from dot-notation path.
     /// Example: "MainAddress.City.Name" -> param.MainAddress.City.Name
     /// </summary>
+    [RequiresUnreferencedCode("Builds nested property access using Expression.PropertyOrField which requires type member metadata to be preserved.")]
     private static Expression BuildNestedPropertyAccess(Expression param, string path)
     {
         var parts = path.Split('.');

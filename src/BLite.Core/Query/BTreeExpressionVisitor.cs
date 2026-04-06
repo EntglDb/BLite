@@ -1,3 +1,7 @@
+// NOTE: BTreeExpressionVisitor builds expression trees and uses Expression.Lambda
+// which requires dynamic code. Warnings are suppressed here because this class
+// is used internally from annotated LINQ execution paths.
+#pragma warning disable IL3050
 using System.Linq.Expressions;
 
 namespace BLite.Core.Query;

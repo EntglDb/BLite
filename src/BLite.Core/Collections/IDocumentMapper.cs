@@ -3,6 +3,7 @@ using BLite.Core.Indexing;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace BLite.Core.Collections;
 
@@ -13,6 +14,7 @@ public interface IDocumentMapper
 {
     string CollectionName { get; }
     IEnumerable<string> UsedKeys { get; }
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields. Ensure all entity types and their members are preserved.")]
     BsonSchema GetSchema();
 }
 

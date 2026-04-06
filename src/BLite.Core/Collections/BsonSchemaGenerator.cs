@@ -3,6 +3,7 @@ using System.Linq;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
 using System;
 using System.Threading;
@@ -16,16 +17,19 @@ public static class BsonSchemaGenerator
     // Thread-local stack to track types currently being processed to prevent infinite recursion
     private static readonly ThreadLocal<HashSet<Type>> _processingStack = new(() => new HashSet<Type>());
 
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields. Ensure all entity types and their members are preserved.")]
     public static BsonSchema FromType<T>()
     {
         return FromType(typeof(T));
     }
 
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields. Ensure all entity types and their members are preserved.")]
     public static BsonSchema FromType(Type type)
     {
         return _cache.GetOrAdd(type, GenerateSchema);
     }
 
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields.")]
     private static BsonSchema GenerateSchema(Type type)
     {
         // Check if we're already processing this type in the current call stack
@@ -64,6 +68,7 @@ public static class BsonSchemaGenerator
         }
     }
 
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields.")]
     private static void AddField(BsonSchema schema, string name, Type type)
     {
         var lowerName = name.ToLowerInvariant();
@@ -97,6 +102,7 @@ public static class BsonSchemaGenerator
         }
     }
 
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields.")]
     private static (BsonType type, BsonSchema? nested, BsonType? itemType) GetBsonType(Type type)
     {
         // Handle Nullable<T>
@@ -163,8 +169,10 @@ public static class BsonSchemaGenerator
             return type.GetGenericArguments()[0];
         }
 
+#pragma warning disable IL2070
         var enumerableType = type.GetInterfaces()
             .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
+#pragma warning restore IL2070
             
         return enumerableType?.GetGenericArguments()[0] ?? typeof(object);
     }

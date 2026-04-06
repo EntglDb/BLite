@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using System.Linq;
@@ -20,8 +21,11 @@ public abstract class DocumentMapperBase<TId, T> : IDocumentMapper<TId, T> where
 
     public virtual IndexKey ToIndexKey(TId id) => IndexKey.Create(id);
     public virtual TId FromIndexKey(IndexKey key) => key.As<TId>();
-    
+
+#pragma warning disable IL2026
     public virtual IEnumerable<string> UsedKeys => GetSchema().GetAllKeys();
+#pragma warning restore IL2026
+    [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields. Ensure all entity types and their members are preserved.")]
     public virtual BsonSchema GetSchema() => BsonSchemaGenerator.FromType<T>();
 }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using BLite.Bson;
 
@@ -63,6 +64,7 @@ public sealed class CollectionIndexDefinition<T> where T : class
     /// <param name="isUnique">Enforce uniqueness</param>
     /// <param name="type">Index structure type (BTree or Hash)</param>
     /// <param name="isPrimary">Is this the primary key index</param>
+    [RequiresDynamicCode("Index key selectors are compiled using Expression.Compile() which requires dynamic code generation.")]
     public CollectionIndexDefinition(
         string name,
         string[] propertyPaths,

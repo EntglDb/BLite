@@ -1,3 +1,8 @@
+// NOTE: BTreeQueryable is the LINQ queryable implementation for BLite collections.
+// It extensively uses Expression.Call and IAsyncQueryProvider.ExecuteAsync (which requires
+// dynamic code) to build and execute expression trees. All warnings are suppressed here
+// because this class is inherently dynamic and only used via annotated APIs.
+#pragma warning disable IL3050, IL2026
 using System.Collections;
 using System.Linq;
 using System.Linq.Expressions;

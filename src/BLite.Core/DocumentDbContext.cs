@@ -3,6 +3,7 @@ using BLite.Core.KeyValue;
 using BLite.Core.Metadata;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System;
 using System.Collections.Generic;
@@ -123,6 +124,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// Use together with sessions from <see cref="OpenSession"/> so that the resulting
     /// collection's operations run inside the session's independent transaction context.
     /// </summary>
+    [RequiresDynamicCode("Collection creation uses Expression.Compile() via CollectionIndexManager and ValueConverterRegistry which require dynamic code generation.")]
+    [RequiresUnreferencedCode("Index creation uses reflection to access type members. Ensure all entity types and their members are preserved.")]
     public IDocumentCollection<TId, T> CreateSessionCollection<TId, T>(IDocumentMapper<TId, T> mapper, ITransactionHolder holder)
         where T : class
     {
@@ -190,6 +193,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// Helper to create a DocumentCollection instance with custom TId.
     /// Used by derived classes in InitializeCollections for typed primary keys.
     /// </summary>
+    [RequiresDynamicCode("Collection creation uses Expression.Compile() via CollectionIndexManager and ValueConverterRegistry which require dynamic code generation.")]
+    [RequiresUnreferencedCode("Index creation uses reflection to access type members. Ensure all entity types and their members are preserved.")]
     protected virtual IDocumentCollection<TId, T> CreateCollection<TId, T>(IDocumentMapper<TId, T> mapper)
         where T : class
     {
