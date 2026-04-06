@@ -290,10 +290,21 @@ internal static class BsonExpressionEvaluator
 
     /// <summary>
     /// Creates a predicate for <c>x.Prop.Contains(pattern)</c>, <c>StartsWith</c>, or <c>EndsWith</c>.
-    /// The comparison is always ordinal (matching .NET's default string comparison).
+    /// The match is performed directly on the raw UTF-8 bytes stored in the BSON buffer —
+    /// no managed string is allocated for the field value at eval-time.
     /// </summary>
+    /// <remarks>
+    /// The pattern is encoded to UTF-8 once at plan-time and captured in the closure.
+    /// Ordinal string comparison is semantically equivalent to ordinal UTF-8 byte comparison
+    /// (UTF-8 is a prefix-free, bijective encoding of Unicode code points), so this is
+    /// semantically identical to <c>string.Contains(pattern, StringComparison.Ordinal)</c>.
+    /// </remarks>
     private static BsonReaderPredicate CreateStringMethodPredicate(string fieldName, string methodName, string pattern)
-        => reader =>
+    {
+        // Pre-encode the pattern to UTF-8 bytes once at plan-time.
+        var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
+
+        return reader =>
         {
             try
             {
@@ -306,12 +317,13 @@ internal static class BsonExpressionEvaluator
                     if (name == fieldName)
                     {
                         if (type != BsonType.String) { reader.SkipValue(type); return false; }
-                        var val = reader.ReadString();
+                        // Read the UTF-8 bytes directly — zero managed-string allocation.
+                        var valueBytes = reader.ReadStringRawBytes();
                         return methodName switch
                         {
-                            "Contains"   => val.Contains(pattern, StringComparison.Ordinal),
-                            "StartsWith" => val.StartsWith(pattern, StringComparison.Ordinal),
-                            "EndsWith"   => val.EndsWith(pattern, StringComparison.Ordinal),
+                            "Contains"   => valueBytes.IndexOf(patternBytes) >= 0,
+                            "StartsWith" => valueBytes.StartsWith(patternBytes),
+                            "EndsWith"   => valueBytes.EndsWith(patternBytes),
                             _            => false
                         };
                     }
@@ -321,6 +333,7 @@ internal static class BsonExpressionEvaluator
             catch { return false; }
             return false;
         };
+    }
 
     /// <summary>
     /// Creates a predicate for <c>string.IsNullOrEmpty(x.Prop)</c> or

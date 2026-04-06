@@ -388,6 +388,62 @@ public class BsonExpressionEvaluatorTests : IDisposable
         Assert.All(results, u => Assert.EndsWith("e", u.Name));
     }
 
+    [Fact]
+    public void BsonLevel_StringContains_WorksWithUnicodePattern()
+    {
+        // Confirms the UTF-8 byte-level matching is semantically correct for
+        // non-ASCII characters (multi-byte UTF-8 sequences).
+        var keyMap     = new Dictionary<string, ushort> { ["name"] = 1 };
+        var reverseMap = new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>(
+            new Dictionary<ushort, string> { [1] = "name" });
+
+        var matchDoc  = BsonDocument.Create(keyMap, reverseMap, b => b.AddString("name", "Héloïse"));
+        var noMatchDoc = BsonDocument.Create(keyMap, reverseMap, b => b.AddString("name", "Alice"));
+
+        Expression<Func<User, bool>> lambda = x => x.Name.Contains("ïse");
+        var predicate = BsonExpressionEvaluator.TryCompile<User>(lambda);
+        Assert.NotNull(predicate);
+
+        Assert.True(predicate!(matchDoc.GetReader()),  "Should match document containing 'ïse'");
+        Assert.False(predicate!(noMatchDoc.GetReader()), "Should not match document without 'ïse'");
+    }
+
+    [Fact]
+    public void BsonLevel_StringStartsWith_WorksWithUnicodePattern()
+    {
+        var keyMap     = new Dictionary<string, ushort> { ["name"] = 1 };
+        var reverseMap = new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>(
+            new Dictionary<ushort, string> { [1] = "name" });
+
+        var matchDoc   = BsonDocument.Create(keyMap, reverseMap, b => b.AddString("name", "Ångström"));
+        var noMatchDoc = BsonDocument.Create(keyMap, reverseMap, b => b.AddString("name", "Angstrom"));
+
+        Expression<Func<User, bool>> lambda = x => x.Name.StartsWith("Å");
+        var predicate = BsonExpressionEvaluator.TryCompile<User>(lambda);
+        Assert.NotNull(predicate);
+
+        Assert.True(predicate!(matchDoc.GetReader()),   "Should match document starting with 'Å'");
+        Assert.False(predicate!(noMatchDoc.GetReader()), "Should not match document starting with 'A'");
+    }
+
+    [Fact]
+    public void BsonLevel_StringEndsWith_WorksWithUnicodePattern()
+    {
+        var keyMap     = new Dictionary<string, ushort> { ["name"] = 1 };
+        var reverseMap = new System.Collections.Concurrent.ConcurrentDictionary<ushort, string>(
+            new Dictionary<ushort, string> { [1] = "name" });
+
+        var matchDoc   = BsonDocument.Create(keyMap, reverseMap, b => b.AddString("name", "Üniversität"));
+        var noMatchDoc = BsonDocument.Create(keyMap, reverseMap, b => b.AddString("name", "University"));
+
+        Expression<Func<User, bool>> lambda = x => x.Name.EndsWith("ät");
+        var predicate = BsonExpressionEvaluator.TryCompile<User>(lambda);
+        Assert.NotNull(predicate);
+
+        Assert.True(predicate!(matchDoc.GetReader()),   "Should match document ending with 'ät'");
+        Assert.False(predicate!(noMatchDoc.GetReader()), "Should not match document ending with 'ty'");
+    }
+
     // ─── Phase 1: static string.IsNullOrEmpty ────────────────────────────────
 
     [Fact]
