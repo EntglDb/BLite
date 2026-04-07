@@ -46,6 +46,10 @@ public readonly struct BLiteDiagnostic
             "BLITE003", "BLite Duplicate Collection Name", "{0}",
             "BLite.SourceGenerators", DiagnosticSeverity.Error, isEnabledByDefault: true);
 
+        private static readonly DiagnosticDescriptor DiagUnresolvableConstructor = new DiagnosticDescriptor(
+            "BLITE010", "BLite Unresolvable Constructor", "{0}",
+            "BLite.SourceGenerators", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
             // Find all classes that inherit from DocumentDbContext
@@ -65,7 +69,8 @@ public readonly struct BLiteDiagnostic
                 // ── Emit collected diagnostics ─────────────────────────────────
                 foreach (var diag in dbContext.Diagnostics)
                 {
-                    var descriptor = diag.Id == "BLITE003" ? DiagDuplicateCollection
+                    var descriptor = diag.Id == "BLITE010" ? DiagUnresolvableConstructor
+                                   : diag.Id == "BLITE003" ? DiagDuplicateCollection
                                    : diag.IsError ? DiagError
                                    : DiagWarning;
                     spc.ReportDiagnostic(Diagnostic.Create(descriptor, Location.None, diag.Message));
@@ -148,6 +153,8 @@ public readonly struct BLiteDiagnostic
                             IsNestedTypeMapper = true,
                             HasPrivateOrNoConstructor = nested.HasPrivateOrNoConstructor,
                             HasPrivateSetters = nested.HasPrivateSetters,
+                            SelectedConstructorParameters = nested.SelectedConstructorParameters,
+                            SelectedConstructorIsPublic = nested.SelectedConstructorIsPublic,
                         };
                         nestedEntity.Properties.AddRange(nested.Properties);
                         
@@ -588,10 +595,9 @@ public readonly struct BLiteDiagnostic
                         // e.g. modelBuilder.Entity<T>().ToCollection("name").Property(...).HasConversion<TC>()
                         // propertyCall.Expression is a MemberAccessExpressionSyntax (the ".Property" part);
                         // its own Expression is the invocation that precedes ".Property".
-                        const int maxChainDepth = 20; // guard against pathological chains
                         var entityCallCandidate = (propertyCall.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
                         int chainDepth = 0;
-                        while (entityCallCandidate != null && chainDepth < maxChainDepth)
+                        while (entityCallCandidate != null && chainDepth < BLiteConventions.MaxFluentChainDepth)
                         {
                             if (entityCallCandidate.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var methodText } } } &&
                                 methodText == BLiteConventions.EntityMethodName)

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.Query;
 using BLite.Studio.Data;
 using BLite.Studio.Models;
 
@@ -25,13 +26,13 @@ public sealed class ConnectionHistoryService : IDisposable
     /// Returns up to <paramref name="max"/> most-recently-opened connections,
     /// sorted newest-first.
     /// </summary>
-    public List<RecentConnection> GetRecent(int max = 10)
+    public async Task<List<RecentConnection>> GetRecentAsync(int max = 10)
     {
-        return _db.RecentConnections
+        return await _db.RecentConnections
             .AsQueryable()
             .OrderByDescending(r => r.LastOpenedAt)
             .Take(max)
-            .ToList();
+            .ToListAsync();
     }
 
     /// <summary>
@@ -41,9 +42,9 @@ public sealed class ConnectionHistoryService : IDisposable
     public async Task AddOrUpdate(string filePath, int presetValue, bool isReadOnly, bool isMultiFile = false)
     {
         // Look for an existing record for this file path
-        var existing = _db.RecentConnections
+        var existing = await _db.RecentConnections
             .AsQueryable()
-            .FirstOrDefault(r => r.FilePath == filePath);
+            .FirstOrDefaultAsync(r => r.FilePath == filePath);
 
         if (existing is not null)
         {
