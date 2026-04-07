@@ -1200,7 +1200,6 @@ internal static class BsonExpressionEvaluator
             if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)val;
             if (typeof(TResult) == typeof(double)) return (TResult)(object)(double)val;
             if (typeof(TResult) == typeof(decimal)) return (TResult)(object)(decimal)val;
-            reader.SkipValue(BsonType.Null); // already read
             return default;
         }
         if (type == BsonType.Int64)

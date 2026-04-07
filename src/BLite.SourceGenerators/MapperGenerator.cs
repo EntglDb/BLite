@@ -484,7 +484,7 @@ public readonly struct BLiteDiagnostic
         private static bool IsLikelyBLiteTerminalCall(SyntaxNode node)
         {
             if (node is not InvocationExpressionSyntax inv) return false;
-            if (node.SyntaxTree.FilePath.EndsWith(BLiteConventions.GeneratedFileSuffix)) return false;
+            if (node.SyntaxTree.FilePath?.EndsWith(BLiteConventions.GeneratedFileSuffix) == true) return false;
             if (inv.Expression is not MemberAccessExpressionSyntax member) return false;
             return s_interceptedMethodNames.Contains(member.Name.Identifier.Text);
         }
