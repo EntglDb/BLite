@@ -39,6 +39,13 @@ internal static class BsonProjectionCompiler
     public static BsonReaderProjector<TResult>? TryCompile<T, TResult>(
         LambdaExpression selectLambda,
         LambdaExpression? whereLambda = null)
+        => TryCompile<T, TResult>(selectLambda, whereLambda, null);
+
+    [RequiresDynamicCode("Projection compilation uses Expression.Compile() which requires dynamic code generation.")]
+    public static BsonReaderProjector<TResult>? TryCompile<T, TResult>(
+        LambdaExpression selectLambda,
+        LambdaExpression? whereLambda,
+        IReadOnlyDictionary<string, ushort>? keyMap)
     {
         // ── 1. Analyse access patterns ────────────────────────────────────────
         var selAnalysis = ProjectionAnalyzer.Analyze(selectLambda);
@@ -96,12 +103,65 @@ internal static class BsonProjectionCompiler
         var sel = selectorFromArray;
         var pred = predicateFromArray;
 
+        // Resolve field IDs once at plan time for offset-table fast path.
+        // If any name is missing from keyMap, fall back to sequential scan.
+        var capturedFieldIds = (ushort[]?)null;
+        if (keyMap != null)
+        {
+            var ids = new ushort[n];
+            bool allResolved = true;
+            for (int i = 0; i < n; i++)
+            {
+                if (keyMap.TryGetValue(fieldNames[i], out var fid))
+                    ids[i] = fid;
+                else { allResolved = false; break; }
+            }
+            if (allResolved) capturedFieldIds = ids;
+        }
+
         return reader =>
         {
             var values = new object?[n];
             try
             {
                 reader.ReadDocumentSize();
+                if (capturedFieldIds != null)
+                {
+                    // Fast path: O(1) seek per projected field via offset table.
+                    // Each TrySeekToField is independent — no need to advance between fields.
+                    // If any seek fails (field ID outside the offset table's contiguous range),
+                    // reset and fall through to the sequential scan below.
+                    var elementsStart = reader.Position;
+                    bool allSought = true;
+                    for (int i = 0; i < n; i++)
+                    {
+                        if (!reader.TrySeekToField(capturedFieldIds[i], out var bsonType))
+                        {
+                            allSought = false;
+                            break;
+                        }
+                        values[i] = bsonType switch
+                        {
+                            BsonType.Double     => (object?)reader.ReadDouble(),
+                            BsonType.String     => reader.ReadString(),
+                            BsonType.ObjectId   => reader.ReadObjectId(),
+                            BsonType.Boolean    => reader.ReadBoolean(),
+                            BsonType.DateTime   => reader.ReadDateTime(),
+                            BsonType.Int32      => reader.ReadInt32(),
+                            BsonType.Int64      => reader.ReadInt64(),
+                            BsonType.Decimal128 => reader.ReadDecimal128(),
+                            _                   => null, // Null or complex type
+                        };
+                    }
+                    if (allSought) goto applyPredicate;
+
+                    // Seek failed for at least one field — reset and fall back to sequential.
+                    Array.Clear(values, 0, n);
+                    reader.Seek(elementsStart);
+                }
+
+                // Sequential fallback: no offset table, field name not in keyMap,
+                // or field ID outside the offset table's contiguous range.
                 while (reader.Remaining > 1)
                 {
                     var bsonType = reader.ReadBsonType();
@@ -134,6 +194,8 @@ internal static class BsonProjectionCompiler
                         reader.SkipValue(bsonType);
                     }
                 }
+
+                applyPredicate:;
             }
             catch
             {
@@ -191,7 +253,8 @@ internal static class BsonProjectionCompiler
     /// </summary>
     public static BsonReaderProjector<(TKey, TValue)>? TryCompilePair<T, TKey, TValue>(
         Expression<Func<T, TKey>> keySelector,
-        Expression<Func<T, TValue>> valueSelector)
+        Expression<Func<T, TValue>> valueSelector,
+        IReadOnlyDictionary<string, ushort>? keyMap = null)
     {
         var param = keySelector.Parameters[0];
 
@@ -208,7 +271,7 @@ internal static class BsonProjectionCompiler
         var combined = Expression.Lambda<Func<T, (TKey, TValue)>>(
             Expression.New(ctor, keySelector.Body, valBody), param);
 
-        return TryCompile<T, (TKey, TValue)>(combined);
+        return TryCompile<T, (TKey, TValue)>(combined, null, keyMap);
     }
 
     // ─── ParameterReplacer ───────────────────────────────────────────────────────

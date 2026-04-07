@@ -72,6 +72,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         ConverterRegistry = registry ?? ValueConverterRegistry.Empty;
 
     /// <summary>
+    /// Exposes the storage key map (field name → field ID) so that query components
+    /// in the same assembly (e.g. <see cref="BTreeQueryProvider{TId,T}"/>) can pass
+    /// it to projection/predicate compilers for offset-table fast paths.
+    /// </summary>
+    internal IReadOnlyDictionary<string, ushort> GetKeyMap() => _storage.GetKeyMap();
+
+    /// <summary>
     /// Configures this collection as a TimeSeries with automatic TTL-based pruning.
     /// Must be called before the first insert. Persists configuration to storage metadata.
     /// </summary>
@@ -411,7 +418,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (valueSelector is null) throw new ArgumentNullException(nameof(valueSelector));
 
         var projector = BsonProjectionCompiler.TryCompilePair<T, TKey, TValue>(
-            keySelector, valueSelector);
+            keySelector, valueSelector, _storage.GetKeyMap());
 
         if (projector is not null)
         {
@@ -1341,7 +1348,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         {
             // Wrap the already-serialized BSON bytes in a BsonDocument so InsertTimeSeries
             // can read the timestamp field and manage TimeSeriesPage allocation/pruning.
-            var bsonDoc = new BsonDocument(docData.ToArray(), _storage.GetKeyReverseMap());
+            var bsonDoc = new BsonDocument(docData.ToArray(), _storage.GetKeyReverseMap(), _storage.GetKeyMap());
             var loc = _storage.InsertTimeSeries(_collectionName, bsonDoc, transaction);
             location = new DocumentLocation(loc.PageId, (ushort)loc.SlotIndex);
         }
@@ -2071,7 +2078,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         // Strategy 2: BSON-level count — evaluates the predicate on raw BSON bytes without
         // deserialising T.  Combined with the Phase 1 widening of BsonExpressionEvaluator
         // this covers the vast majority of real-world WHERE predicates.
-        if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry) is { } bsonPred)
+        if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry, _storage.GetKeyMap()) is { } bsonPred)
             return await CountScanAsync(bsonPred, ct).ConfigureAwait(false);
 
         // Strategy 3: Stream matching documents via FetchAsync and count without
@@ -2200,7 +2207,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             // ── Strategy 2: BSON-level predicate scan ─────────────────────────
             // Filters at raw-BSON level before deserializing — no compiled Func<T,bool> needed.
-            if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry) is { } bsonPred)
+            if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry, _storage.GetKeyMap()) is { } bsonPred)
             {
                 await foreach (var item in ScanAsync(bsonPred, ct))
                 {

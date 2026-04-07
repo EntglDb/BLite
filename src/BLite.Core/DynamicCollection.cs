@@ -313,7 +313,7 @@ public sealed class DynamicCollection : IDisposable
 
         writer.EndDocument(sizePos);
 
-        return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap());
+        return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap(), _storage.GetKeyMap());
     }
 
     /// <summary>
@@ -1031,7 +1031,7 @@ public sealed class DynamicCollection : IDisposable
                     return null;
 
                 var data = buffer.AsSpan(offset, size).ToArray();
-                return new BsonDocument(data, _storage.GetKeyReverseMap());
+                return new BsonDocument(data, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
             }
 
             var header = SlottedPageHeader.ReadFrom(buffer);
@@ -1047,7 +1047,7 @@ public sealed class DynamicCollection : IDisposable
 
             // Copy document data (buffer is pooled, data must outlive it)
             var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
-            return new BsonDocument(docData, _storage.GetKeyReverseMap());
+            return new BsonDocument(docData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
         }
         finally
         {
@@ -1080,7 +1080,7 @@ public sealed class DynamicCollection : IDisposable
 
                 // ToArray() copies before buffer is returned to the pool
                 var tsData = buffer.AsSpan(offset, size).ToArray();
-                return new BsonDocument(tsData, _storage.GetKeyReverseMap());
+                return new BsonDocument(tsData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
             }
 
             var header = SlottedPageHeader.ReadFrom(buffer);
@@ -1092,7 +1092,7 @@ public sealed class DynamicCollection : IDisposable
 
             // Span created after the only await — safe; ToArray() copies before buffer is returned
             var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
-            return new BsonDocument(docData, _storage.GetKeyReverseMap());
+            return new BsonDocument(docData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
         }
         finally
         {
@@ -1388,7 +1388,7 @@ public sealed class DynamicCollection : IDisposable
     /// </param>
     public IObservable<BsonChangeEvent> Watch(bool capturePayload = false) =>
         new DynamicChangeStreamObservable(
-            _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap());
+            _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
 
     private async Task NotifyCdcAsync(OperationType type, BsonId id, ReadOnlyMemory<byte> docData = default)
     {

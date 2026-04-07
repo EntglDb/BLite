@@ -20,17 +20,20 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
     private readonly string _collectionName;
     private readonly bool _capturePayload;
     private readonly ConcurrentDictionary<ushort, string> _keyReverseMap;
+    private readonly ConcurrentDictionary<string, ushort>? _forwardKeyMap;
 
     public DynamicChangeStreamObservable(
         ChangeStreamDispatcher dispatcher,
         string collectionName,
         bool capturePayload,
-        ConcurrentDictionary<ushort, string> keyReverseMap)
+        ConcurrentDictionary<ushort, string> keyReverseMap,
+        ConcurrentDictionary<string, ushort>? forwardKeyMap = null)
     {
         _dispatcher = dispatcher;
         _collectionName = collectionName;
         _capturePayload = capturePayload;
         _keyReverseMap = keyReverseMap;
+        _forwardKeyMap = forwardKeyMap;
     }
 
     public IDisposable Subscribe(IObserver<BsonChangeEvent> observer)
@@ -63,7 +66,7 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
                 {
                     BsonDocument? payload = null;
                     if (e.PayloadBytes.HasValue)
-                        payload = new BsonDocument(e.PayloadBytes.Value.ToArray(), _keyReverseMap);
+                        payload = new BsonDocument(e.PayloadBytes.Value.ToArray(), _keyReverseMap, _forwardKeyMap);
 
                     observer.OnNext(new BsonChangeEvent
                     {
