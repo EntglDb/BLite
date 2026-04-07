@@ -221,7 +221,8 @@ public sealed partial class StorageEngine
 
     public void SaveCollectionMetadata(CollectionMetadata metadata)
     {
-        _metadataLock.Wait();
+        if (!_metadataLock.Wait(_config.LockTimeout.WriteTimeoutMs))
+            throw new TimeoutException("Timed out acquiring metadata lock (SaveCollectionMetadata).");
         try
         {
         using var stream = new MemoryStream();
@@ -433,7 +434,8 @@ public sealed partial class StorageEngine
     /// </summary>
     public void DeleteCollectionMetadata(string name)
     {
-        _metadataLock.Wait();
+        if (!_metadataLock.Wait(_config.LockTimeout.WriteTimeoutMs))
+            throw new TimeoutException("Timed out acquiring metadata lock (DeleteCollectionMetadata).");
         try
         {
         var buffer = new byte[PageSize];

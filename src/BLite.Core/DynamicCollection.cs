@@ -42,6 +42,7 @@ public sealed class DynamicCollection : IDisposable
     private readonly string _collectionName;
     private readonly BsonIdType _idType;
     private readonly SemaphoreSlim _collectionLock = new(1, 1);
+    private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
     private readonly Dictionary<uint, ushort> _freeSpaceMap = new();
     private readonly int _maxDocumentSizeForSinglePage;
     private uint _currentDataPage;
@@ -326,7 +327,8 @@ public sealed class DynamicCollection : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Insert).");
         try
         {
             return await InsertCore(document, transaction);
@@ -351,7 +353,8 @@ public sealed class DynamicCollection : IDisposable
         if (documents == null) throw new ArgumentNullException(nameof(documents));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (InsertBulk).");
         try
         {
             var ids = new List<BsonId>();
@@ -561,7 +564,8 @@ public sealed class DynamicCollection : IDisposable
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Update).");
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -620,7 +624,8 @@ public sealed class DynamicCollection : IDisposable
         if (updates == null) throw new ArgumentNullException(nameof(updates));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (UpdateBulk).");
         try
         {
             var count = 0;
@@ -682,7 +687,8 @@ public sealed class DynamicCollection : IDisposable
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Delete).");
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -722,7 +728,8 @@ public sealed class DynamicCollection : IDisposable
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (DeleteBulk).");
         try
         {
             var count = 0;

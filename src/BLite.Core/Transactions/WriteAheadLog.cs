@@ -22,11 +22,12 @@ public sealed class WriteAheadLog : IDisposable
     private FileStream? _walStream;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _disposed;
-    private const int LockTimeoutMs = 5_000;
+    private readonly int _writeTimeoutMs;
 
-    public WriteAheadLog(string walPath)
+    public WriteAheadLog(string walPath, int writeTimeoutMs = 5_000)
     {
         _walPath = walPath ?? throw new ArgumentNullException(nameof(walPath));
+        _writeTimeoutMs = writeTimeoutMs;
         
         _walStream = new FileStream(
             _walPath,
@@ -40,7 +41,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteBeginRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
-        if (!await _lock.WaitAsync(LockTimeoutMs, ct))
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -68,7 +69,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteCommitRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
-        if (!await _lock.WaitAsync(LockTimeoutMs, ct))
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -95,7 +96,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteAbortRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
-        if (!await _lock.WaitAsync(LockTimeoutMs, ct))
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -122,7 +123,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteDataRecordAsync(ulong transactionId, uint pageId, ReadOnlyMemory<byte> afterImage, CancellationToken ct = default)
     {
-        if (!await _lock.WaitAsync(LockTimeoutMs, ct))
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -179,7 +180,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task FlushAsync(CancellationToken ct = default)
     {
-        if (!await _lock.WaitAsync(LockTimeoutMs, ct))
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -208,7 +209,7 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public long GetCurrentSize()
     {
-        if (!_lock.Wait(LockTimeoutMs))
+        if (!_lock.Wait(_writeTimeoutMs))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -227,7 +228,7 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public async Task TruncateAsync(CancellationToken ct = default)
     {
-        if (!await _lock.WaitAsync(LockTimeoutMs, ct))
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
@@ -249,7 +250,7 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public List<WalRecord> ReadAll()
     {
-        if (!_lock.Wait(LockTimeoutMs))
+        if (!_lock.Wait(_writeTimeoutMs))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {

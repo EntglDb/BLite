@@ -40,13 +40,23 @@ public readonly struct PageFileConfig
     public string? CollectionDataDirectory { get; init; }
 
     /// <summary>
+    /// Lock acquisition timeouts for read and write operations.
+    /// Controls how long the engine waits for a contended lock before throwing
+    /// <see cref="System.TimeoutException"/> (analogous to SQLite's <c>SQLITE_BUSY</c>).
+    /// Defaults to <see cref="LockTimeout.Default"/> (1 s read / 5 s write).
+    /// Use <see cref="LockTimeout.Immediate"/> for fail-fast behaviour.
+    /// </summary>
+    public LockTimeout LockTimeout { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()
     {
         PageSize = 8192,          // 8KB pages
         GrowthBlockSize = 512 * 1024,  // grow by 512KB at a time
-        Access = MemoryMappedFileAccess.ReadWrite
+        Access = MemoryMappedFileAccess.ReadWrite,
+        LockTimeout = LockTimeout.Default
     };
 
     /// <summary>
@@ -56,7 +66,8 @@ public readonly struct PageFileConfig
     {
         PageSize = 16384,         // 16KB pages
         GrowthBlockSize = 1024 * 1024, // grow by 1MB at a time
-        Access = MemoryMappedFileAccess.ReadWrite
+        Access = MemoryMappedFileAccess.ReadWrite,
+        LockTimeout = LockTimeout.Default
     };
 
     /// <summary>
@@ -66,7 +77,8 @@ public readonly struct PageFileConfig
     {
         PageSize = 32768,              // 32KB pages
         GrowthBlockSize = 2 * 1024 * 1024, // grow by 2MB at a time
-        Access = MemoryMappedFileAccess.ReadWrite
+        Access = MemoryMappedFileAccess.ReadWrite,
+        LockTimeout = LockTimeout.Default
     };
 
     /// <summary>
@@ -138,7 +150,8 @@ public readonly struct PageFileConfig
             {
                 PageSize = detectedPageSize,
                 GrowthBlockSize = detectedPageSize * 64,
-                Access = MemoryMappedFileAccess.ReadWrite
+                Access = MemoryMappedFileAccess.ReadWrite,
+                LockTimeout = LockTimeout.Default
             }
         };
 
@@ -196,6 +209,10 @@ public sealed class PageFile : IDisposable
     // while ReadPage() (read lock) is creating a view accessor from it.
     private readonly ReaderWriterLockSlim _rwLock = new(LockRecursionPolicy.NoRecursion);
 
+    // Derived from config — distinct read/write timeouts.
+    private int ReadLockTimeoutMs => _config.LockTimeout.ReadTimeoutMs;
+    private int WriteLockTimeoutMs => _config.LockTimeout.WriteTimeoutMs;
+
     // _asyncLock serialises FlushAsync() and BackupAsync(), which must hold exclusive
     // access across an await boundary and therefore cannot use ReaderWriterLockSlim.
     private readonly SemaphoreSlim _asyncLock = new(1, 1);
@@ -230,7 +247,8 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public void Open()
     {
-        _rwLock.EnterWriteLock();
+        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile write lock (Open).");
         try
         {
             if (_fileStream != null)
@@ -447,7 +465,8 @@ public sealed class PageFile : IDisposable
         if (_mappedFile == null)
             throw new InvalidOperationException("File not open");
 
-        _rwLock.EnterReadLock();
+        if (!_rwLock.TryEnterReadLock(ReadLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile read lock (ReadPage).");
         try
         {
             ReadPageCore(pageId, destination);
@@ -479,7 +498,8 @@ public sealed class PageFile : IDisposable
         if (_mappedFile == null)
             throw new InvalidOperationException("File not open");
 
-        _rwLock.EnterReadLock();
+        if (!_rwLock.TryEnterReadLock(ReadLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile read lock (ReadPageAsync).");
         try
         {
             ReadPageCore(pageId, destination.Span[.._config.PageSize]);
@@ -517,7 +537,8 @@ public sealed class PageFile : IDisposable
         // Fast path: file is already large enough — share the mapping with readers.
         if (offset + _config.PageSize <= _fileStream!.Length)
         {
-            _rwLock.EnterReadLock();
+            if (!_rwLock.TryEnterReadLock(ReadLockTimeoutMs))
+                throw new TimeoutException("Timed out acquiring PageFile read lock (WritePage).");
             try
             {
                 WritePageCore(pageId, source);
@@ -531,7 +552,8 @@ public sealed class PageFile : IDisposable
 
         // Slow path: the file must grow.  Exclusively lock so that no reader
         // can hold a reference to the old _mappedFile while we dispose it.
-        _rwLock.EnterWriteLock();
+        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile write lock (WritePage-grow).");
         try
         {
             // Double-check: another writer may have grown the file already.
@@ -552,7 +574,8 @@ public sealed class PageFile : IDisposable
     public uint AllocatePage()
     {
         ThrowIfDisposed();
-        _rwLock.EnterWriteLock();
+        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile write lock (AllocatePage).");
         try
         {
             if (_fileStream == null)
@@ -598,7 +621,8 @@ public sealed class PageFile : IDisposable
     public void FreePage(uint pageId)
     {
         ThrowIfDisposed();
-        _rwLock.EnterWriteLock();
+        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile write lock (FreePage).");
         try
         {
             if (_fileStream == null) throw new InvalidOperationException("File not open");
@@ -656,7 +680,8 @@ public sealed class PageFile : IDisposable
     public void Flush()
     {
         ThrowIfDisposed();
-        _rwLock.EnterWriteLock();
+        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile write lock (Flush).");
         try
         {
             _fileStream?.Flush(flushToDisk: true);
@@ -674,7 +699,8 @@ public sealed class PageFile : IDisposable
     /// </summary>
     public async Task FlushAsync(CancellationToken ct = default)
     {
-        await _asyncLock.WaitAsync(ct).ConfigureAwait(false);
+        if (!await _asyncLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring PageFile async lock (FlushAsync).");
         try
         {
             if (_fileStream != null)
@@ -704,7 +730,8 @@ public sealed class PageFile : IDisposable
             throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationPath));
 #endif
 
-        await _asyncLock.WaitAsync(ct).ConfigureAwait(false);
+        if (!await _asyncLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring PageFile async lock (BackupAsync).");
         try
         {
             if (_fileStream == null)
@@ -747,8 +774,13 @@ public sealed class PageFile : IDisposable
         // Acquire _asyncLock first to drain any in-flight FlushAsync / BackupAsync,
         // then acquire _rwLock write lock to block all concurrent reads and writes.
         // Lock order (_asyncLock before _rwLock) must be respected everywhere.
-        _asyncLock.Wait();
-        _rwLock.EnterWriteLock();
+        if (!_asyncLock.Wait(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile async lock (Dispose).");
+        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+        {
+            _asyncLock.Release();
+            throw new TimeoutException("Timed out acquiring PageFile write lock (Dispose).");
+        }
         try
         {
             if (_disposed)

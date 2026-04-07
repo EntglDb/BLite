@@ -271,9 +271,13 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         
-        _transactionLock.Wait();
+        bool lockAcquired = false;
         try
         {
+            if (!_transactionLock.Wait(_storage.LockTimeout.WriteTimeoutMs))
+                throw new TimeoutException("Timed out acquiring transaction lock (BeginTransaction).");
+            lockAcquired = true;
+
             if (CurrentTransaction != null)
                 return CurrentTransaction; // Return existing active transaction
             CurrentTransaction = _storage.BeginTransaction();
@@ -281,7 +285,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         }
         finally
         {
-            _transactionLock.Release();
+            if (lockAcquired)
+                _transactionLock.Release();
         }
     }
 
@@ -302,7 +307,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         bool lockAcquired = false;
         try
         {
-            await _transactionLock.WaitAsync(ct);
+            if (!await _transactionLock.WaitAsync(_storage.LockTimeout.WriteTimeoutMs, ct))
+                throw new TimeoutException("Timed out acquiring transaction lock (BeginTransactionAsync).");
             lockAcquired = true;
             
             if (CurrentTransaction != null)

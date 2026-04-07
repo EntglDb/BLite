@@ -16,15 +16,18 @@ public sealed partial class StorageEngine
 
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
-        // Same reasoning as CommitTransactionAsync(Transaction) above: no outer lock,
-        // no separate PrepareTransactionAsync call.
-
         if (!_activeTransactions.ContainsKey(transaction.TransactionId))
             throw new InvalidOperationException($"Transaction {transaction.TransactionId} is not active.");
 
-        await CommitTransactionAsync(transaction.TransactionId, ct);
-
-        _activeTransactions.TryRemove(transaction.TransactionId, out _);
+        try
+        {
+            await CommitTransactionAsync(transaction.TransactionId, ct);
+        }
+        finally
+        {
+            // Always clean up, even if the commit throws (timeout, etc.).
+            _activeTransactions.TryRemove(transaction.TransactionId, out _);
+        }
     }
 
     public async Task RollbackTransactionAsync(Transaction transaction)
@@ -101,9 +104,13 @@ public sealed partial class StorageEngine
     /// <param name="writeSet">All writes performed in this transaction (unused, kept for compatibility)</param>
     public async Task CommitTransactionAsync(ulong transactionId)
     {
+        // NOTE: No admission gate here — the caller (CommitTransactionAsync(Transaction, ct))
+        // already acquired the gate. This method is also called from the group commit writer
+        // which should not be gated.
         bool needsCheckpoint = false;
 
-        await _commitLock.WaitAsync();
+        if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
+            throw new TimeoutException("Timed out acquiring commit lock (CommitTransaction).");
         try
         {
             // Get ALL pages from WAL cache (includes both data and index pages)
@@ -117,7 +124,7 @@ public sealed partial class StorageEngine
 
             // 1. Write all changes to WAL (from cache, not writeSet!)
             await _wal.WriteBeginRecordAsync(transactionId);
-            
+
             foreach (var (pageId, data) in pages)
             {
                 await _wal.WriteDataRecordAsync(transactionId, pageId, data);
@@ -126,7 +133,7 @@ public sealed partial class StorageEngine
             // 2. Write commit record and flush
             await _wal.WriteCommitRecordAsync(transactionId);
             await _wal.FlushAsync(); // Durability: ensure WAL is on disk
-            
+
             // 3. Move pages from cache to WAL index (for reads)
             _walCache.TryRemove(transactionId, out _);
             foreach (var kvp in pages)
@@ -152,13 +159,28 @@ public sealed partial class StorageEngine
 
     public async Task CommitTransactionAsync(ulong transactionId, CancellationToken ct = default)
     {
-        // Group commit path: post to the background writer and await its TCS.
-        // The writer batches this commit with any other pending ones, issues one
-        // WAL flush for the entire batch, then signals all waiters.
-        _walCache.TryGetValue(transactionId, out var pages);
-        var pending = new PendingCommit(transactionId, pages);
-        await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
-        await pending.Completion.Task.ConfigureAwait(false);
+        // Admission gate: wait up to half the write timeout before rejecting.
+        // Gives a slot time to free up without blocking for the full write budget,
+        // preventing deep queues on the WAL/commit locks that cause latency spikes.
+        int gateTimeoutMs = _config.LockTimeout.WriteTimeoutMs > 0
+            ? _config.LockTimeout.WriteTimeoutMs / 16
+            : 0;
+        if (_writerGate != null && !_writerGate.Wait(gateTimeoutMs))
+            throw new TimeoutException("Too many concurrent writers — admission gate full.");
+        try
+        {
+            // Group commit path: post to the background writer and await its TCS.
+            // The writer batches this commit with any other pending ones, issues one
+            // WAL flush for the entire batch, then signals all waiters.
+            _walCache.TryGetValue(transactionId, out var pages);
+            var pending = new PendingCommit(transactionId, pages);
+            await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
+            await pending.Completion.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            _writerGate?.Release();
+        }
     }
     
     /// <summary>

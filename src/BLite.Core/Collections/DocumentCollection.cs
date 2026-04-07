@@ -55,6 +55,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     // Concurrency control for write operations (B-Tree and Page modifications)
     private readonly SemaphoreSlim _collectionLock = new(1, 1);
+    private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
 
     private readonly int _maxDocumentSizeForSinglePage;
 
@@ -1195,7 +1196,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Insert).");
         try
         {
             try
@@ -1226,7 +1228,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var entityList = entities.ToList();
         var ids = new List<TId>(entityList.Count);
 
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (InsertBulk).");
         try
         {
             try
@@ -1703,7 +1706,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Update).");
         try
         {
             var result = await UpdateCore(entity);
@@ -1725,7 +1729,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var entityList = entities.ToList();
         int updateCount = 0;
 
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (UpdateBulk).");
         try
         {
             updateCount = await UpdateBulkInternal(entityList);
@@ -1883,7 +1888,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async Task<bool> DeleteAsync(TId id, CancellationToken ct = default)
     {
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Delete).");
         try
         {
             var result = await DeleteCore(id);
@@ -1903,7 +1909,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         int deleteCount = 0;
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (DeleteBulk).");
         try
         {
             deleteCount = await DeleteBulkInternal(ids);
