@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.2.0"></a>
+## [4.2.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.2.0) (2026-04-07)
+
+### Features
+
+* add IDocumentDbContext interface and make DocumentDbContext implement it ([#36](https://www.github.com/EntglDb/BLite/issues/36)) ([8f50a57](https://www.github.com/EntglDb/BLite/commit/8f50a578087f29bebd9f07dcc008b6911a2dd2cf))
+* non-indexed query optimization — BSON-level scan for count, OLAP, and wider predicate coverage ([#46](https://www.github.com/EntglDb/BLite/issues/46)) ([b1c20d0](https://www.github.com/EntglDb/BLite/commit/b1c20d0cb0c9d6d82fb90a36a7aac8d8beac4ffc))
+
 <a name="4.1.6"></a>
 ## [4.1.6](https://www.github.com/EntglDb/BLite/releases/tag/v4.1.6) (2026-04-05)
 
