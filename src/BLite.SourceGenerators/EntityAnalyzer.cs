@@ -378,6 +378,8 @@ namespace BLite.SourceGenerators
                         Accessibility.Public or
                         Accessibility.Protected or
                         Accessibility.ProtectedOrInternal or
+                        Accessibility.ProtectedAndInternal or
+                        Accessibility.Internal or
                         Accessibility.Private)
                 .OrderBy(c => VisibilityPriority(c.DeclaredAccessibility))
                 .ThenBy(c => c.Parameters.Length)
@@ -428,10 +430,13 @@ namespace BLite.SourceGenerators
 
         private static int VisibilityPriority(Accessibility a) => a switch
         {
-            Accessibility.Protected or Accessibility.ProtectedOrInternal => 0,
+            Accessibility.Protected
+                or Accessibility.ProtectedOrInternal
+                or Accessibility.ProtectedAndInternal => 0,
             Accessibility.Public => 1,
-            Accessibility.Private => 2,
-            _ => 3
+            Accessibility.Internal => 2,
+            Accessibility.Private => 3,
+            _ => 4
         };
     }
 }

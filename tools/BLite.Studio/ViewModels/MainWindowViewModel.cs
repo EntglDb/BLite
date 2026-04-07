@@ -63,12 +63,19 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task LoadRecentConnectionsAsync()
     {
-        var items = await _history.GetRecentAsync();
-        RecentConnections.Clear();
-        foreach (var item in items)
-            RecentConnections.Add(new RecentConnectionViewModel(item));
+        try
+        {
+            var items = await _history.GetRecentAsync();
+            RecentConnections.Clear();
+            foreach (var item in items)
+                RecentConnections.Add(new RecentConnectionViewModel(item));
 
-        RecentCount = RecentConnections.Count;   // triggers HasRecentConnections notify
+            RecentCount = RecentConnections.Count;   // triggers HasRecentConnections notify
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Failed to load recent connections: {ex.Message}";
+        }
     }
 
     // ── Database path ──────────────────────────────────────────────────────────
