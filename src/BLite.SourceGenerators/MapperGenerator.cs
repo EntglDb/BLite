@@ -294,6 +294,50 @@ public readonly struct BLiteDiagnostic
                 spc.AddSource($"{dbContext.Namespace}.{safeName}.Mappers.g.cs", sb.ToString());
             });
 
+            // ── Filter pipeline: emit exactly one {Entity}Filter per unique entity type ──
+            // This separate pipeline aggregates entities from ALL DbContext registrations and
+            // groups by FullTypeName so that the same entity registered in multiple DbContexts
+            // produces a single filter class rather than duplicate definitions.
+            var allEntityFilters = dbContextClasses
+                .SelectMany(static (DbContextInfo? ctx, System.Threading.CancellationToken _) =>
+                {
+                    if (ctx == null) return System.Collections.Immutable.ImmutableArray<EntityInfo>.Empty;
+                    var result = new System.Collections.Generic.List<EntityInfo>();
+                    foreach (var e in ctx.Entities)
+                    {
+                        if (!e.IsNestedTypeMapper && e.Properties.Count > 0)
+                            result.Add(e);
+                    }
+                    return System.Collections.Immutable.ImmutableArray.CreateRange(result);
+                })
+                .Collect()
+                .SelectMany(static (System.Collections.Immutable.ImmutableArray<EntityInfo> entities, System.Threading.CancellationToken _) =>
+                    System.Collections.Immutable.ImmutableArray.CreateRange(
+                        entities.GroupBy(e => e.FullTypeName).Select(g => g.First())));
+
+            context.RegisterSourceOutput(allEntityFilters, static (spc, entity) =>
+            {
+                if (entity == null) return;
+
+                // Filter class lives in the entity's own namespace to avoid name collisions
+                // across entities that share the same short CLR name (e.g. ModuleA.Widget vs
+                // ModuleB.Widget → each gets its own {ns}.Filters.WidgetFilter).
+                var filterNamespace = string.IsNullOrEmpty(entity.Namespace)
+                    ? "Filters"
+                    : $"{entity.Namespace}.Filters";
+
+                var filterSource = CodeGenerator.GenerateFilterClass(entity, filterNamespace);
+                if (!string.IsNullOrEmpty(filterSource))
+                {
+                    // Use the same double-underscore encoding as GetMapperName so that e.g.
+                    // BLite.Shared.Module_A.Gadget and BLite.Shared.Module.A_Gadget produce
+                    // unique hint names.
+                    var hintKey = CodeGenerator.GetMapperName(entity.FullTypeName)
+                        .Replace(BLiteConventions.MapperClassSuffix, BLiteConventions.FilterClassSuffix);
+                    spc.AddSource($"{hintKey}.g.cs", filterSource);
+                }
+            });
+
             // ── Second pipeline: [DocumentMapper] attribute on a standalone class ──
             var directMapperClasses = context.SyntaxProvider
                 .CreateSyntaxProvider(
@@ -650,6 +694,71 @@ public readonly struct BLiteDiagnostic
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Analyze OnModelCreating for HasIndex
+            // Pattern: modelBuilder.Entity<T>()...HasIndex(x => x.PropertyName)
+            //      or: modelBuilder.Entity<T>()...HasIndex(x => x.PropertyName, name: "idx_name")
+            if (onModelCreating != null)
+            {
+                var hasIndexCalls = SyntaxHelper.FindMethodInvocations(onModelCreating, BLiteConventions.HasIndexMethodName);
+                foreach (var call in hasIndexCalls)
+                {
+                    if (call.ArgumentList.Arguments.Count == 0) continue;
+
+                    // Extract property path from the lambda argument.
+                    var lambdaExpr = call.ArgumentList.Arguments[0].Expression;
+                    var propertyPath = SyntaxHelper.GetPropertyName(lambdaExpr);
+                    if (string.IsNullOrEmpty(propertyPath)) continue;
+
+                    // Extract optional explicit index name (named arg "name:")
+                    string? indexName = null;
+                    foreach (var arg in call.ArgumentList.Arguments.Skip(1))
+                    {
+                        if (arg.NameColon?.Name?.Identifier.Text == "name")
+                        {
+                            var cv = semanticModel.GetConstantValue(arg.Expression);
+                            if (cv.HasValue && cv.Value is string nameStr)
+                                indexName = nameStr;
+                        }
+                    }
+
+                    // Walk up the fluent chain to find Entity<T>()
+                    var entityCallCandidate2 = (call.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
+                    int depth2 = 0;
+                    while (entityCallCandidate2 != null && depth2 < BLiteConventions.MaxFluentChainDepth)
+                    {
+                        if (entityCallCandidate2.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var m2 } } } &&
+                            m2 == BLiteConventions.EntityMethodName)
+                            break;
+                        entityCallCandidate2 = (entityCallCandidate2.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
+                        depth2++;
+                    }
+                    if (entityCallCandidate2 == null) continue;
+
+                    // Resolve entity type via semantic model
+                    INamedTypeSymbol? idxEntityType = null;
+                    if (entityCallCandidate2.Expression is MemberAccessExpressionSyntax idxEntityMember &&
+                        idxEntityMember.Name is GenericNameSyntax idxGenericName &&
+                        idxGenericName.TypeArgumentList.Arguments.Count > 0)
+                    {
+                        var typeArgSyntax2 = idxGenericName.TypeArgumentList.Arguments[0];
+                        idxEntityType = semanticModel.GetSymbolInfo(typeArgSyntax2).Symbol as INamedTypeSymbol;
+                    }
+                    if (idxEntityType == null) continue;
+
+                    var fullTypeName2 = SyntaxHelper.GetFullName(idxEntityType);
+                    var entityForIndex = info.Entities.FirstOrDefault(e => e.FullTypeName == fullTypeName2);
+                    if (entityForIndex == null) continue;
+
+                    // Avoid duplicating the same index
+                    if (!entityForIndex.Indexes.Any(idx => idx.PropertyPaths.Count == 1 && idx.PropertyPaths[0] == propertyPath))
+                    {
+                        var indexInfo = new IndexInfo { Name = indexName };
+                        indexInfo.PropertyPaths.Add(propertyPath!);
+                        entityForIndex.Indexes.Add(indexInfo);
                     }
                 }
             }

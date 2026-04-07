@@ -112,6 +112,19 @@ public interface IDocumentCollection<TId, T> where T : class
 
     IAsyncEnumerable<T> ScanAsync(BsonReaderPredicate predicate, CancellationToken ct = default);
 
+    /// <summary>
+    /// Executes a query described by an <see cref="IndexQueryPlan"/>.
+    /// If the plan targets an index, the collection's B-Tree is scanned between the plan's
+    /// min and max keys. If the plan is a full-scan fallback (index absent or plan was built
+    /// with <see cref="IndexQueryPlan.Scan"/>), every document is evaluated against the
+    /// plan's <c>ScanPredicate</c>.
+    ///
+    /// An optional <see cref="IndexQueryPlan.ResiduePredicate"/> (attached via
+    /// <see cref="IndexQueryPlan.And"/>) is applied as a BSON-level post-filter on every
+    /// document returned by the index or scan before yielding it to the caller.
+    /// </summary>
+    IAsyncEnumerable<T> ScanAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
     IAsyncEnumerable<TResult> ScanAsync<TResult>(
         BsonReaderProjector<TResult> projector,
         CancellationToken ct = default);

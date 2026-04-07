@@ -19,6 +19,7 @@ namespace BLite.SourceGenerators.Helpers
         public const string EntityMethodName = "Entity";
         public const string PropertyMethodName = "Property";
         public const string HasConversionMethodName = "HasConversion";
+        public const string HasIndexMethodName = "HasIndex";
         public const string ValueConverterBaseName = "ValueConverter";
 
         // ── DocumentCollection generic shape ──────────────────────────────────
@@ -45,6 +46,7 @@ namespace BLite.SourceGenerators.Helpers
         public const string FallbackMapperNamespace = "Mappers";
         public const string ConverterFieldName = "_idConverter";
         public const string SetterFieldPrefix = "_setter_";
+        public const string FilterClassSuffix = "Filter";
 
         // ── Write-method name helpers ─────────────────────────────────────────
         /// <summary>Prefix shared by all BsonSpanWriter write methods.</summary>

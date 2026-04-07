@@ -50,7 +50,37 @@ namespace BLite.SourceGenerators.Models
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();
         public HashSet<string> IgnoredProperties { get; } = new HashSet<string>();
+
+        /// <summary>
+        /// Index declarations parsed from <c>OnModelCreating</c> for this entity.
+        /// Each entry represents one <c>HasIndex(lambda)</c> call.
+        /// Used by the source generator to emit the <c>{Entity}Filter</c> class.
+        /// </summary>
+        public List<IndexInfo> Indexes { get; } = new List<IndexInfo>();
+
         public List<BLiteDiagnostic> Diagnostics { get; } = new List<BLiteDiagnostic>();
+    }
+
+    /// <summary>
+    /// Metadata for a single index declaration captured from <c>HasIndex</c> in
+    /// <c>OnModelCreating</c>.  The source generator uses this to decide which
+    /// filter methods return an <see cref="IndexQueryPlan"/> (B-Tree seek) vs. a
+    /// <see cref="BsonReaderPredicate"/> (full scan).
+    /// </summary>
+    public class IndexInfo
+    {
+        /// <summary>
+        /// The CLR property name used as the B-Tree index key, as extracted from
+        /// the <c>HasIndex(x =&gt; x.PropertyName)</c> lambda.
+        /// For simple (single-property) indexes this is a single element.
+        /// </summary>
+        public List<string> PropertyPaths { get; } = new List<string>();
+
+        /// <summary>
+        /// Optional explicit index name supplied via <c>HasIndex(lambda, name: "...")</c>.
+        /// <c>null</c> means the engine will auto-derive the name from the property path(s).
+        /// </summary>
+        public string? Name { get; set; }
     }
 
     public class PropertyInfo

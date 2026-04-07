@@ -352,7 +352,7 @@ internal static class BsonExpressionEvaluator
     /// (or absent from the document). When <paramref name="expectNull"/> is false the
     /// predicate returns true for any non-null value.
     /// </summary>
-    private static BsonReaderPredicate CreateNullCheckPredicate(string fieldName, bool expectNull, IReadOnlyDictionary<string, ushort>? keyMap = null)
+    internal static BsonReaderPredicate CreateNullCheckPredicate(string fieldName, bool expectNull, IReadOnlyDictionary<string, ushort>? keyMap = null)
     {
         ushort fieldId_ = 0;
         var hasFieldId = keyMap != null && keyMap.TryGetValue(fieldName, out fieldId_);
@@ -397,7 +397,7 @@ internal static class BsonExpressionEvaluator
     /// (UTF-8 is a prefix-free, bijective encoding of Unicode code points), so this is
     /// semantically identical to <c>string.Contains(pattern, StringComparison.Ordinal)</c>.
     /// </remarks>
-    private static BsonReaderPredicate CreateStringMethodPredicate(string fieldName, string methodName, string pattern, IReadOnlyDictionary<string, ushort>? keyMap = null)
+    internal static BsonReaderPredicate CreateStringMethodPredicate(string fieldName, string methodName, string pattern, IReadOnlyDictionary<string, ushort>? keyMap = null)
     {
         // Pre-encode the pattern to UTF-8 bytes once at plan-time.
         var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
@@ -587,6 +587,62 @@ internal static class BsonExpressionEvaluator
         };
     }
 
+    /// <summary>
+    /// Creates an IN predicate from a field name and a pre-built set of normalised values.
+    /// Used by <see cref="BsonPredicateBuilder.In{T}"/> to avoid LINQ expression-tree overhead.
+    /// </summary>
+    internal static BsonReaderPredicate CreateInPredicateDirect(
+        string fieldName,
+        System.Collections.Generic.HashSet<object?> items,
+        bool hasLong,
+        IReadOnlyDictionary<string, ushort>? keyMap = null)
+    {
+        ushort fieldId_ = 0;
+        var hasFieldId = keyMap != null && keyMap.TryGetValue(fieldName, out fieldId_);
+        var capturedId = hasFieldId ? fieldId_ : (ushort)0;
+        var capturedItems = items;
+        var capturedHasLong = hasLong;
+
+        return reader =>
+        {
+            try
+            {
+                reader.ReadDocumentSize();
+
+                BsonType typeToRead;
+                if (hasFieldId && reader.TrySeekToField(capturedId, out typeToRead))
+                    goto readValue;
+
+                while (reader.Remaining > 0)
+                {
+                    var scanType = reader.ReadBsonType();
+                    if (scanType == 0) break;
+                    var name = reader.ReadElementHeader();
+                    if (name == fieldName) { typeToRead = scanType; goto readValue; }
+                    reader.SkipValue(scanType);
+                }
+                return capturedItems.Contains(null);
+
+                readValue:
+                object? readValue = typeToRead switch
+                {
+                    BsonType.Int32   => capturedHasLong ? (object)System.Convert.ToInt64(reader.ReadInt32()) : reader.ReadInt32(),
+                    BsonType.Int64   => reader.ReadInt64(),
+                    BsonType.String  => reader.ReadString(),
+                    BsonType.Double  => reader.ReadDouble(),
+                    BsonType.Decimal128 => reader.ReadDecimal128(),
+                    BsonType.Boolean => reader.ReadBoolean(),
+                    BsonType.ObjectId => reader.ReadObjectId(),
+                    BsonType.DateTime => reader.ReadDateTime(),
+                    BsonType.Null    => null,
+                    _                => null
+                };
+                return capturedItems.Contains(readValue);
+            }
+            catch { return false; }
+        };
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -738,7 +794,7 @@ internal static class BsonExpressionEvaluator
         _ => type
     };
 
-    private static BsonReaderPredicate? CreatePredicate(string propertyName, object? targetValue, ExpressionType op, IReadOnlyDictionary<string, ushort>? keyMap = null)
+    internal static BsonReaderPredicate? CreatePredicate(string propertyName, object? targetValue, ExpressionType op, IReadOnlyDictionary<string, ushort>? keyMap = null)
     {
         ushort fieldId_ = 0;
         var hasFieldId = keyMap != null && keyMap.TryGetValue(propertyName, out fieldId_);
