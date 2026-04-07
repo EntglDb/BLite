@@ -1498,6 +1498,22 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"               ?? global::BLite.Core.Query.IndexQueryPlan.Scan(global::BLite.Core.Query.BsonPredicateBuilder.In(\"{f}\", vs));");
             sb.AppendLine();
 
+            // Min/Max boundary (only for non-string, non-nullable comparable types)
+            if (!isString)
+            {
+                sb.AppendLine($"        // ── {p}: B-Tree boundary reads for Min/Max ──────────────────────────");
+                sb.AppendLine($"        public static global::BLite.Core.Query.IndexMinMax {p}Min(");
+                sb.AppendLine($"            global::System.Collections.Generic.IReadOnlyList<global::BLite.Core.Indexing.CollectionIndexInfo> indexes)");
+                sb.AppendLine($"            => Resolve(indexes, \"{p}\")?.First()");
+                sb.AppendLine($"               ?? global::BLite.Core.Query.IndexMinMax.Scan(global::BLite.Core.Query.BsonAggregator.Min(\"{f}\"));");
+                sb.AppendLine();
+                sb.AppendLine($"        public static global::BLite.Core.Query.IndexMinMax {p}Max(");
+                sb.AppendLine($"            global::System.Collections.Generic.IReadOnlyList<global::BLite.Core.Indexing.CollectionIndexInfo> indexes)");
+                sb.AppendLine($"            => Resolve(indexes, \"{p}\")?.Last()");
+                sb.AppendLine($"               ?? global::BLite.Core.Query.IndexMinMax.Scan(global::BLite.Core.Query.BsonAggregator.Max(\"{f}\"));");
+                sb.AppendLine();
+            }
+
             if (isString)
             {
                 // EmitStringPredicateMethods already includes IsNull/IsNotNull

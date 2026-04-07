@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using BLite.SourceGenerators.Helpers;
 using BLite.SourceGenerators.Models;
@@ -338,6 +339,19 @@ public readonly struct BLiteDiagnostic
                 }
             });
 
+            // ── Interceptor pipeline: AOT-safe LINQ call-site interception ────────
+            // Finds all invocations of BLiteQueryableExtensions terminal methods and emits
+            // C# 13 interceptors that route through the AOT-safe ScanAsync(IndexQueryPlan) path.
+            var interceptorTargets = context.SyntaxProvider
+                .CreateSyntaxProvider(
+                    predicate: static (node, _) => IsLikelyBLiteTerminalCall(node),
+                    transform: static (ctx, ct) => TryGetInterceptorTarget(ctx, ct))
+                .Where(static t => t != null)
+                .Collect();
+
+            context.RegisterSourceOutput(interceptorTargets, static (spc, targets) =>
+                EmitInterceptors(spc, targets!));
+
             // ── Second pipeline: [DocumentMapper] attribute on a standalone class ──
             var directMapperClasses = context.SyntaxProvider
                 .CreateSyntaxProvider(
@@ -457,6 +471,262 @@ public readonly struct BLiteDiagnostic
                    classDecl.BaseList != null && 
                    classDecl.Identifier.Text.EndsWith(BLiteConventions.DbContextClassSuffix);
         }
+
+        // ── Interceptor helpers ───────────────────────────────────────────────────
+
+        private static readonly System.Collections.Generic.HashSet<string> s_interceptedMethodNames
+            = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal)
+            {
+                "ToListAsync", "FirstOrDefaultAsync", "FirstAsync",
+                "SingleOrDefaultAsync", "SingleAsync", "CountAsync", "AnyAsync",
+            };
+
+        private static bool IsLikelyBLiteTerminalCall(SyntaxNode node)
+        {
+            if (node is not InvocationExpressionSyntax inv) return false;
+            if (node.SyntaxTree.FilePath.EndsWith(BLiteConventions.GeneratedFileSuffix)) return false;
+            if (inv.Expression is not MemberAccessExpressionSyntax member) return false;
+            return s_interceptedMethodNames.Contains(member.Name.Identifier.Text);
+        }
+
+        private sealed class InterceptorTarget
+        {
+            public string MethodName { get; }
+            public string EntityTypeFullyQualified { get; }
+            public int LocationVersion { get; }
+            public string LocationData { get; }
+
+            public InterceptorTarget(string methodName, string entityType, int locationVersion, string locationData)
+            {
+                MethodName = methodName;
+                EntityTypeFullyQualified = entityType;
+                LocationVersion = locationVersion;
+                LocationData = locationData;
+            }
+        }
+
+        private static InterceptorTarget? TryGetInterceptorTarget(GeneratorSyntaxContext ctx, System.Threading.CancellationToken ct)
+        {
+            var invocation = (InvocationExpressionSyntax)ctx.Node;
+            var model = ctx.SemanticModel;
+
+            if (model.GetSymbolInfo(invocation, ct).Symbol is not IMethodSymbol method)
+                return null;
+
+            // Must be a BLiteQueryableExtensions extension method
+            if (method.ContainingType.Name != "BLiteQueryableExtensions") return null;
+            if (!s_interceptedMethodNames.Contains(method.Name)) return null;
+
+            // Must be the (IQueryable<T>, CancellationToken) overload — not the IndexQueryPlan overload
+            bool hasIndexQueryPlanParam = false;
+            foreach (var p in method.Parameters)
+            {
+                if (p.Type.Name == "IndexQueryPlan" || p.Type.Name == "IndexMinMax")
+                { hasIndexQueryPlanParam = true; break; }
+            }
+            if (hasIndexQueryPlanParam) return null;
+
+            // Get the generic type argument T
+            if (method.TypeArguments.Length == 0) return null;
+            var typeArg = method.TypeArguments[0];
+            var entityTypeName = typeArg.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+            // Get the interceptable location
+            var location = Microsoft.CodeAnalysis.CSharp.CSharpExtensions.GetInterceptableLocation(model, invocation, ct);
+            if (location == null) return null;
+
+            return new InterceptorTarget(method.Name, entityTypeName, location.Version, location.Data);
+        }
+
+        private static void EmitInterceptors(
+            SourceProductionContext spc,
+            System.Collections.Immutable.ImmutableArray<InterceptorTarget> targets)
+        {
+            if (targets.IsDefaultOrEmpty) return;
+
+            // Group by (EntityType, MethodName)
+            var groups = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<InterceptorTarget>>();
+            foreach (var t in targets)
+            {
+                var key = $"{t.EntityTypeFullyQualified}::{t.MethodName}";
+                if (!groups.TryGetValue(key, out var list))
+                    groups[key] = list = new System.Collections.Generic.List<InterceptorTarget>();
+                list.Add(t);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("// <auto-generated/>");
+            sb.AppendLine("// BLite Phase 3 interceptors: AOT-safe LINQ terminal call routing.");
+            sb.AppendLine("#nullable enable");
+            sb.AppendLine("#pragma warning disable CS9113 // InterceptsLocationAttribute constructor parameter unused");
+            sb.AppendLine();
+            sb.AppendLine("#if !NET9_0_OR_GREATER");
+            sb.AppendLine("namespace System.Runtime.CompilerServices");
+            sb.AppendLine("{");
+            sb.AppendLine("    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]");
+            sb.AppendLine("    file sealed class InterceptsLocationAttribute : global::System.Attribute");
+            sb.AppendLine("    {");
+            sb.AppendLine("        public InterceptsLocationAttribute(int version, string data) { }");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+            sb.AppendLine("#endif");
+            sb.AppendLine();
+            sb.AppendLine("namespace BLite.Generated.Interceptors");
+            sb.AppendLine("{");
+            sb.AppendLine("    [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]");
+            sb.AppendLine("    file static class BLiteInterceptors");
+            sb.AppendLine("    {");
+
+            foreach (var kvp in groups)
+            {
+                var first = kvp.Value[0];
+                EmitInterceptorMethod(sb, first.MethodName, first.EntityTypeFullyQualified, kvp.Value);
+            }
+
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            spc.AddSource("BLite.Interceptors.g.cs", sb.ToString());
+        }
+
+        private static void EmitInterceptorMethod(
+            StringBuilder sb,
+            string methodName,
+            string entityType,
+            System.Collections.Generic.List<InterceptorTarget> callSites)
+        {
+            // Emit [InterceptsLocation] for all call sites
+            foreach (var site in callSites)
+            {
+                sb.AppendLine($"        [global::System.Runtime.CompilerServices.InterceptsLocation({site.LocationVersion}, \"{EscapeString(site.LocationData)}\")]");
+            }
+
+            switch (methodName)
+            {
+                case "ToListAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<global::System.Collections.Generic.List<{entityType}>>");
+                    sb.AppendLine($"            BLite_Intercept_ToListAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.ToListAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).ToListAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "FirstOrDefaultAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}?>");
+                    sb.AppendLine($"            BLite_Intercept_FirstOrDefaultAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.FirstOrDefaultAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).FirstOrDefaultAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "FirstAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}>");
+                    sb.AppendLine($"            BLite_Intercept_FirstAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.FirstAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).FirstAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "SingleOrDefaultAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}?>");
+                    sb.AppendLine($"            BLite_Intercept_SingleOrDefaultAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.SingleOrDefaultAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).SingleOrDefaultAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "SingleAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}>");
+                    sb.AppendLine($"            BLite_Intercept_SingleAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.SingleAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).SingleAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "CountAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<int>");
+                    sb.AppendLine($"            BLite_Intercept_CountAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.CountAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).CountAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "AnyAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<bool>");
+                    sb.AppendLine($"            BLite_Intercept_AnyAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.AnyAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).AnyAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+            }
+
+            sb.AppendLine();
+        }
+
+        private static void EmitInterceptorBody(
+            StringBuilder sb,
+            string entityType,
+            string aotExpression,
+            string fallbackExpression)
+        {
+            sb.AppendLine($"            var chain = source.Expression as global::System.Linq.Expressions.MethodCallExpression;");
+            sb.AppendLine($"            if (chain?.Method.Name == \"Where\" && chain.Arguments.Count >= 2)");
+            sb.AppendLine($"            {{");
+            sb.AppendLine($"                var quotedLambda = chain.Arguments[1] as global::System.Linq.Expressions.UnaryExpression;");
+            sb.AppendLine($"                var lambda = quotedLambda?.Operand as global::System.Linq.Expressions.LambdaExpression;");
+            sb.AppendLine($"                if (lambda != null)");
+            sb.AppendLine($"                {{");
+            sb.AppendLine($"                    var pred = global::BLite.Core.Query.BLiteAotHelper.TryCompileWherePredicate<{entityType}>(lambda);");
+            sb.AppendLine($"                    if (pred != null)");
+            sb.AppendLine($"                    {{");
+            sb.AppendLine($"                        var baseQ = (global::BLite.Core.Query.IBLiteQueryable<{entityType}>)source.Provider.CreateQuery<{entityType}>(chain.Arguments[0]);");
+            sb.AppendLine($"                        return {aotExpression};");
+            sb.AppendLine($"                    }}");
+            sb.AppendLine($"                }}");
+            sb.AppendLine($"            }}");
+            sb.AppendLine($"            #pragma warning disable IL3050, IL2026");
+            sb.AppendLine($"            return {fallbackExpression};");
+            sb.AppendLine($"            #pragma warning restore IL3050, IL2026");
+        }
+
+        private static string MakeMethodSuffix(string entityType)
+        {
+            // Turn "global::BLite.Shared.MockDb.Person" → "BLite_Shared_MockDb_Person"
+            var name = entityType
+                .Replace("global::", "")
+                .Replace(".", "_")
+                .Replace("<", "_")
+                .Replace(">", "_")
+                .Replace(",", "_")
+                .Replace(" ", "");
+            // Trim trailing underscores
+            return name.TrimEnd('_');
+        }
+
+        private static string EscapeString(string s)
+            => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
         
         private static DbContextInfo? GetDbContextInfo(GeneratorSyntaxContext context)
         {

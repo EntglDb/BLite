@@ -47,4 +47,10 @@ public sealed class IndexPlanBuilder
     /// </summary>
     public IndexQueryPlan In(IEnumerable<IndexKey> keys)
         => IndexQueryPlan.ForIn(_indexName, keys.ToList());
+
+    /// <summary>Returns an <see cref="IndexMinMax"/> that reads the first (minimum-valued) B-Tree key.</summary>
+    public IndexMinMax First() => IndexMinMax.ForIndex(_indexName, isMin: true);
+
+    /// <summary>Returns an <see cref="IndexMinMax"/> that reads the last (maximum-valued) B-Tree key.</summary>
+    public IndexMinMax Last() => IndexMinMax.ForIndex(_indexName, isMin: false);
 }

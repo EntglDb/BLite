@@ -1,3 +1,4 @@
+using BLite.Core.Indexing;
 using System.Linq;
 using System.Linq.Expressions;
 
@@ -276,4 +277,88 @@ public static class BLiteQueryableExtensions
         Expression<Func<T, TResult>> selector,
         CancellationToken ct = default)
         => ((IBLiteQueryable<T>)source).MaxAsync(selector, ct);
+
+    // ─── Phase 3: AOT-safe IndexQueryPlan / IndexMinMax overloads ────────────
+
+    /// <summary>Returns the indexes of the underlying collection.</summary>
+    public static IEnumerable<CollectionIndexInfo> GetIndexes<T>(this IQueryable<T> source)
+        => ((IBLiteQueryable<T>)source).GetIndexes();
+
+    /// <summary>Executes the query using a pre-built <see cref="IndexQueryPlan"/> and returns all results as a list.</summary>
+    public static Task<List<T>> ToListAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).ToListAsync(plan, ct);
+
+    /// <summary>Returns the first element matching the plan, or <c>default</c> if none.</summary>
+    public static Task<T?> FirstOrDefaultAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).FirstOrDefaultAsync(plan, ct);
+
+    /// <summary>Returns the first element matching the plan. Throws if none matches.</summary>
+    public static Task<T> FirstAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).FirstAsync(plan, ct);
+
+    /// <summary>Returns the single element matching the plan, or <c>default</c>. Throws if more than one.</summary>
+    public static Task<T?> SingleOrDefaultAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).SingleOrDefaultAsync(plan, ct);
+
+    /// <summary>Returns the single element matching the plan. Throws if none or more than one.</summary>
+    public static Task<T> SingleAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).SingleAsync(plan, ct);
+
+    /// <summary>Returns <c>true</c> if any element matches the plan.</summary>
+    public static Task<bool> AnyAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).AnyAsync(plan, ct);
+
+    /// <summary>Counts elements matching the plan.</summary>
+    public static Task<int> CountAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).CountAsync(plan, ct);
+
+    /// <summary>Executes the query using a pre-built <see cref="IndexQueryPlan"/> and returns results as an array.</summary>
+    public static Task<T[]> ToArrayAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).ToArrayAsync(plan, ct);
+
+    /// <summary>Executes <paramref name="action"/> for each element matching the plan.</summary>
+    public static Task ForEachAsync<T>(
+        this IQueryable<T> source,
+        IndexQueryPlan plan,
+        Action<T> action,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).ForEachAsync(plan, action, ct);
+
+    /// <summary>Returns the minimum field value using the given <see cref="IndexMinMax"/> plan.</summary>
+    public static Task<TResult> MinAsync<T, TResult>(
+        this IQueryable<T> source,
+        IndexMinMax plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).MinAsync<TResult>(plan, ct);
+
+    /// <summary>Returns the maximum field value using the given <see cref="IndexMinMax"/> plan.</summary>
+    public static Task<TResult> MaxAsync<T, TResult>(
+        this IQueryable<T> source,
+        IndexMinMax plan,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).MaxAsync<TResult>(plan, ct);
 }

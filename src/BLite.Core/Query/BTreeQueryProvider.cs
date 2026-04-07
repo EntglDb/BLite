@@ -5,12 +5,13 @@ using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;
 using BLite.Core.Collections;
+using BLite.Core.Indexing;
 using BLite.Core.Metadata;
 using static BLite.Core.Query.IndexOptimizer;
 
 namespace BLite.Core.Query;
 
-public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider where T : class
+public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, IBTreeQueryCore<T> where T : class
 {
     private readonly DocumentCollection<TId, T> _collection;
     private readonly ValueConverterRegistry _converterRegistry;
@@ -608,4 +609,26 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
             return base.VisitConstant(node);
         }
     }
+
+    // ─── IBTreeQueryCore<T> implementation ───────────────────────────────────
+
+    internal DocumentCollection<TId, T> Collection => _collection;
+
+    IAsyncEnumerable<T> IBTreeQueryCore<T>.ScanAsync(BsonReaderPredicate predicate, CancellationToken ct)
+        => _collection.ScanAsync(predicate, ct);
+
+    IAsyncEnumerable<T> IBTreeQueryCore<T>.ScanAsync(IndexQueryPlan plan, CancellationToken ct)
+        => _collection.ScanAsync(plan, ct);
+
+    IEnumerable<CollectionIndexInfo> IBTreeQueryCore<T>.GetIndexes()
+        => _collection.GetIndexes();
+
+    Task<int> IBTreeQueryCore<T>.CountAsync(CancellationToken ct)
+        => _collection.CountAsync(ct);
+
+    ValueTask<TResult> IBTreeQueryCore<T>.MinBoundaryAsync<TResult>(IndexMinMax plan, CancellationToken ct)
+        => _collection.MinBoundaryAsync<TResult>(plan, ct);
+
+    ValueTask<TResult> IBTreeQueryCore<T>.MaxBoundaryAsync<TResult>(IndexMinMax plan, CancellationToken ct)
+        => _collection.MaxBoundaryAsync<TResult>(plan, ct);
 }
