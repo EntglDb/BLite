@@ -42,6 +42,7 @@ public sealed class DynamicCollection : IDisposable
     private readonly string _collectionName;
     private readonly BsonIdType _idType;
     private readonly SemaphoreSlim _collectionLock = new(1, 1);
+    private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
     private readonly Dictionary<uint, ushort> _freeSpaceMap = new();
     private readonly int _maxDocumentSizeForSinglePage;
     private uint _currentDataPage;
@@ -313,7 +314,7 @@ public sealed class DynamicCollection : IDisposable
 
         writer.EndDocument(sizePos);
 
-        return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap());
+        return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap(), _storage.GetKeyMap());
     }
 
     /// <summary>
@@ -326,7 +327,8 @@ public sealed class DynamicCollection : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Insert).");
         try
         {
             return await InsertCore(document, transaction);
@@ -351,7 +353,8 @@ public sealed class DynamicCollection : IDisposable
         if (documents == null) throw new ArgumentNullException(nameof(documents));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (InsertBulk).");
         try
         {
             var ids = new List<BsonId>();
@@ -561,7 +564,8 @@ public sealed class DynamicCollection : IDisposable
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Update).");
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -620,7 +624,8 @@ public sealed class DynamicCollection : IDisposable
         if (updates == null) throw new ArgumentNullException(nameof(updates));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (UpdateBulk).");
         try
         {
             var count = 0;
@@ -682,7 +687,8 @@ public sealed class DynamicCollection : IDisposable
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Delete).");
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -722,7 +728,8 @@ public sealed class DynamicCollection : IDisposable
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        await _collectionLock.WaitAsync(ct);
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (DeleteBulk).");
         try
         {
             var count = 0;
@@ -1031,7 +1038,7 @@ public sealed class DynamicCollection : IDisposable
                     return null;
 
                 var data = buffer.AsSpan(offset, size).ToArray();
-                return new BsonDocument(data, _storage.GetKeyReverseMap());
+                return new BsonDocument(data, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
             }
 
             var header = SlottedPageHeader.ReadFrom(buffer);
@@ -1047,7 +1054,7 @@ public sealed class DynamicCollection : IDisposable
 
             // Copy document data (buffer is pooled, data must outlive it)
             var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
-            return new BsonDocument(docData, _storage.GetKeyReverseMap());
+            return new BsonDocument(docData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
         }
         finally
         {
@@ -1080,7 +1087,7 @@ public sealed class DynamicCollection : IDisposable
 
                 // ToArray() copies before buffer is returned to the pool
                 var tsData = buffer.AsSpan(offset, size).ToArray();
-                return new BsonDocument(tsData, _storage.GetKeyReverseMap());
+                return new BsonDocument(tsData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
             }
 
             var header = SlottedPageHeader.ReadFrom(buffer);
@@ -1092,7 +1099,7 @@ public sealed class DynamicCollection : IDisposable
 
             // Span created after the only await — safe; ToArray() copies before buffer is returned
             var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
-            return new BsonDocument(docData, _storage.GetKeyReverseMap());
+            return new BsonDocument(docData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
         }
         finally
         {
@@ -1388,7 +1395,7 @@ public sealed class DynamicCollection : IDisposable
     /// </param>
     public IObservable<BsonChangeEvent> Watch(bool capturePayload = false) =>
         new DynamicChangeStreamObservable(
-            _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap());
+            _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
 
     private async Task NotifyCdcAsync(OperationType type, BsonId id, ReadOnlyMemory<byte> docData = default)
     {

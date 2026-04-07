@@ -110,7 +110,8 @@ public sealed partial class StorageEngine
             throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationDbPath));
 #endif
 
-        await _commitLock.WaitAsync(ct);
+        if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring commit lock (Backup).");
         try
         {
             // 1. CheckpointAsync: push committed WAL pages into the PageFile.
@@ -133,7 +134,8 @@ public sealed partial class StorageEngine
     /// </summary>
     public async Task RecoverAsync(CancellationToken ct = default)
     {
-        await _commitLock.WaitAsync();
+        if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
+            throw new TimeoutException("Timed out acquiring commit lock (Recovery).");
         try
         {
             // 1. Read WAL and identify committed transactions

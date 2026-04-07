@@ -14,7 +14,8 @@ using System.Text.Json;
 
 namespace BLite.Benchmark;
 
-[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "Read")]
+[SimpleJob]
+[InProcess]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]

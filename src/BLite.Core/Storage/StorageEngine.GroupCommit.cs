@@ -64,7 +64,17 @@ public sealed partial class StorageEngine
             while (batch.Count < 64 && _commitChannel.Reader.TryRead(out var next))
                 batch.Add(next);
 
-            await ProcessBatchAsync(batch).ConfigureAwait(false);
+            try
+            {
+                await ProcessBatchAsync(batch).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Safety net: if ProcessBatchAsync throws for any unforeseen reason,
+                // signal all pending commits with the exception so callers don't hang.
+                foreach (var commit in batch)
+                    commit.Completion.TrySetException(ex);
+            }
         }
 
         // Shutdown drain: process everything still sitting in the channel.
@@ -74,21 +84,46 @@ public sealed partial class StorageEngine
             batch.Add(pending);
             if (batch.Count >= 64)
             {
-                await ProcessBatchAsync(batch).ConfigureAwait(false);
+                try
+                {
+                    await ProcessBatchAsync(batch).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    foreach (var commit in batch)
+                        commit.Completion.TrySetException(ex);
+                }
                 batch.Clear();
             }
         }
         if (batch.Count > 0)
-            await ProcessBatchAsync(batch).ConfigureAwait(false);
+        {
+            try
+            {
+                await ProcessBatchAsync(batch).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                foreach (var commit in batch)
+                    commit.Completion.TrySetException(ex);
+            }
+        }
     }
 
     private async Task ProcessBatchAsync(List<PendingCommit> batch)
     {
         bool needsCheckpoint = false;
+        Exception? failure = null;
 
         // Acquire the commit lock once for the entire batch.
-        await _commitLock.WaitAsync().ConfigureAwait(false);
-        Exception? failure = null;
+        // If this times out, signal all waiters with the exception so they don't hang.
+        if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs).ConfigureAwait(false))
+        {
+            failure = new TimeoutException("Timed out acquiring commit lock (GroupCommit).");
+            foreach (var commit in batch)
+                commit.Completion.TrySetException(failure);
+            return;
+        }
         try
         {
             foreach (var commit in batch)

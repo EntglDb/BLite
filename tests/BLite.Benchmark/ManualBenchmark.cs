@@ -138,6 +138,57 @@ public class ManualBenchmark
         r.Cleanup();
 
         // ════════════════════════════════════════════════════════════
+        // INSERT MICRO-BENCHMARK (repeated iterations, fresh DB each)
+        // Baseline BenchmarkDotNet: BLite Batch 13 495 μs, Single 113 μs
+        // ════════════════════════════════════════════════════════════
+        Log("── Insert Micro-Benchmark (fresh DB per iteration) ─────────────────────────\n");
+        Log("  (Baseline BenchmarkDotNet pre-feature: BLite Batch 13 495 μs, Single 113 μs)\n");
+
+        const int insertIters = 30;
+
+        double insertBatchBlite = 0, insertBatchLite = 0, insertBatchSql = 0;
+        double insertSingleBlite = 0, insertSingleLite = 0, insertSingleSql = 0;
+        long singleTicksBlite = 0, singleTicksLite = 0, singleTicksSql = 0;
+
+        for (int iter = 0; iter < insertIters; iter++)
+        {
+            var ib = new InsertBenchmarks(); ib.Setup(); ib.IterationSetup();
+            sw.Restart(); MeasureAsync(ib.BLite_Insert_Batch); insertBatchBlite  += sw.ElapsedMilliseconds; ib.Cleanup();
+
+            var il = new InsertBenchmarks(); il.Setup(); il.IterationSetup();
+            sw.Restart(); il.LiteDb_Insert_Batch();                             insertBatchLite   += sw.ElapsedMilliseconds; il.Cleanup();
+
+            var isq = new InsertBenchmarks(); isq.Setup(); isq.IterationSetup();
+            sw.Restart(); isq.Sqlite_Insert_Batch();                            insertBatchSql    += sw.ElapsedMilliseconds; isq.Cleanup();
+
+            var sb2 = new InsertBenchmarks(); sb2.Setup(); sb2.IterationSetup();
+            sw.Restart(); MeasureAsync(sb2.BLite_Insert_Single); singleTicksBlite += sw.ElapsedTicks; sb2.Cleanup();
+
+            var sl = new InsertBenchmarks(); sl.Setup(); sl.IterationSetup();
+            sw.Restart(); sl.LiteDb_Insert_Single();                            singleTicksLite  += sw.ElapsedTicks; sl.Cleanup();
+
+            var ssq = new InsertBenchmarks(); ssq.Setup(); ssq.IterationSetup();
+            sw.Restart(); ssq.Sqlite_Insert_Single();                           singleTicksSql   += sw.ElapsedTicks; ssq.Cleanup();
+        }
+
+        double ticksPerUs = Stopwatch.Frequency / 1_000_000.0;
+        double batchBliteUs  = insertBatchBlite  * 1000.0 / insertIters;
+        double batchLiteUs   = insertBatchLite   * 1000.0 / insertIters;
+        double batchSqlUs    = insertBatchSql    * 1000.0 / insertIters;
+        double singleBliteUs = singleTicksBlite / ticksPerUs / insertIters;
+        double singleLiteUs  = singleTicksLite  / ticksPerUs / insertIters;
+        double singleSqlUs   = singleTicksSql   / ticksPerUs / insertIters;
+
+        Log($"10. Batch Insert 1000  [{insertIters} iters]");
+        Log($"   BLite:        {batchBliteUs,10:F0} μs/op   [baseline pre-feature: 13 495 μs]");
+        Log($"   LiteDB:       {batchLiteUs,10:F0} μs/op   [baseline: 26 793 μs]");
+        Log($"   SQLite+JSON:  {batchSqlUs,10:F0} μs/op   [baseline: 22 863 μs]");
+        Log($"11. Single Insert  [{insertIters} iters]");
+        Log($"   BLite:        {singleBliteUs,10:F1} μs/op   [baseline pre-feature: 113 μs]");
+        Log($"   LiteDB:       {singleLiteUs,10:F1} μs/op   [baseline: 716 μs]");
+        Log($"   SQLite+JSON:  {singleSqlUs,10:F1} μs/op   [baseline: 2 546 μs]\n");
+
+        // ════════════════════════════════════════════════════════════
         // OLAP SECTION  (10 000 documents, single run each)
         // ════════════════════════════════════════════════════════════
         Log("── OLAP Analytical Operations (10 000 documents) ──────────────────────────\n");
@@ -174,6 +225,49 @@ public class ManualBenchmark
 
         olap.Cleanup();
 
+        // ════════════════════════════════════════════════════════════
+        // FIELD OFFSET VECTOR — non-indexed predicate micro-benchmark
+        // Tests O(1) field seek vs sequential scan.
+        // Baseline (BenchmarkDotNet, pre-offset-table): 2 464 μs/op
+        // ════════════════════════════════════════════════════════════
+        Log("── Field Offset Vector — non-indexed predicate (10 000 documents) ─────────\n");
+        Log("  (Baseline BenchmarkDotNet pre-feature: BLite 2 464 μs/op, SQLite 327 μs/op)\n");
+
+        var fov = new CountBenchmarks();
+        fov.Setup().GetAwaiter().GetResult();
+
+        // warm up
+        for (int w = 0; w < 5; w++) fov.BLite_CountNonIndexed().GetAwaiter().GetResult();
+
+        const int fovIters = 200;
+
+        long fovBlite, fovLite, fovSql, fovDuck;
+
+        sw.Restart();
+        for (int i = 0; i < fovIters; i++) fov.BLite_CountNonIndexed().GetAwaiter().GetResult();
+        fovBlite = sw.ElapsedMilliseconds;
+
+        sw.Restart();
+        for (int i = 0; i < fovIters; i++) fov.LiteDb_CountNonIndexed();
+        fovLite = sw.ElapsedMilliseconds;
+
+        sw.Restart();
+        for (int i = 0; i < fovIters; i++) fov.Sqlite_CountNonIndexed();
+        fovSql = sw.ElapsedMilliseconds;
+
+        sw.Restart();
+        for (int i = 0; i < fovIters; i++) fov.DuckDb_CountNonIndexed();
+        fovDuck = sw.ElapsedMilliseconds;
+
+        fov.Cleanup();
+
+        Log($"9. CountAsync(Currency == \"EUR\")  [{fovIters} iterations × 10 000 docs]");
+        Log($"   BLite:        {fovBlite * 1000.0 / fovIters,8:F0} μs/op   ({fovBlite} ms total)");
+        Log($"   LiteDB:       {fovLite  * 1000.0 / fovIters,8:F0} μs/op   ({fovLite} ms total)");
+        Log($"   SQLite+JSON:  {fovSql   * 1000.0 / fovIters,8:F0} μs/op   ({fovSql} ms total)");
+        Log($"   DuckDB:       {fovDuck  * 1000.0 / fovIters,8:F0} μs/op   ({fovDuck} ms total)");
+        Log($"   [Baseline pre-feature: BLite 2464 μs/op, SQLite 327 μs/op]\n");
+
         // ── Results ─────────────────────────────────────────────────
         Log("============================================================================");
         Log("RESULTS SUMMARY — OLTP");
@@ -196,7 +290,25 @@ public class ManualBenchmark
         Log($"  {"Range Total > 4000",-30} {oBliteRng,8} ms {oLiteRng,8} ms {oSqlRng,12} ms {oCblRng,13} ms {oDuckRng,8} ms");
         Log($"  {"Top-10 by Total",-30} {oBliteTop,8} ms {oLiteTop,8} ms {oSqlTop,12} ms {oCblTop,13} ms {oDuckTop,8} ms");
         Log("============================================================================");
-
+        Log("");
+        Log("============================================================================");
+        Log("RESULTS SUMMARY — FIELD OFFSET VECTOR (μs/op, 10 000 docs, 200 iters)");
+        Log("============================================================================");
+        Log($"  {"Operation",-35} {"BLite",10} {"LiteDB",10} {"SQLite",10} {"DuckDB",10}");
+        Log($"  {new string('-', 77)}");
+        Log($"  {"CountNonIndexed (Currency=EUR)",-35} {fovBlite * 1000.0 / fovIters,9:F0} {fovLite * 1000.0 / fovIters,9:F0} {fovSql * 1000.0 / fovIters,9:F0} {fovDuck * 1000.0 / fovIters,9:F0} μs");
+        Log($"  {"  Baseline (pre-feature)",-35} {"2464",10} {"13630",10} {"327",10} {"12043",10} μs");
+        Log("============================================================================");        Log("");
+        Log("============================================================================");
+        Log("RESULTS SUMMARY — INSERT MICRO-BENCHMARK (μs/op, fresh DB)");
+        Log("============================================================================");
+        Log($"  {"Operation",-28} {"BLite",12} {"LiteDB",12} {"SQLite",12}");
+        Log($"  {new string('-', 66)}");
+        Log($"  {"Batch Insert 1000",-28} {batchBliteUs,10:F0} μs {batchLiteUs,10:F0} μs {batchSqlUs,10:F0} μs");
+        Log($"  {"  Baseline (pre-feature)",-28} {"13495",12} {"26793",12} {"22863",12} μs");
+        Log($"  {"Single Insert",-28} {singleBliteUs,10:F1} μs {singleLiteUs,10:F1} μs {singleSqlUs,10:F1} μs");
+        Log($"  {"  Baseline (pre-feature)",-28} {"113",12} {"716",12} {"2546",12} μs");
+        Log("============================================================================");
         var artifactsDir = Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts", "results");
         if (!Directory.Exists(artifactsDir)) Directory.CreateDirectory(artifactsDir);
         var filePath = Path.Combine(artifactsDir, "manual_report.txt");

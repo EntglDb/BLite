@@ -59,6 +59,11 @@ public sealed partial class StorageEngine : IDisposable
     // Only one checkpoint runs at a time; additional callers skip.
     private int _checkpointRunning;
 
+    // Admission gate: limits how many threads can simultaneously enter the commit path.
+    // Prevents deep queues on internal WAL/commit locks that cause latency spikes.
+    // null when MaxConcurrentWriters == 0 (admission control disabled).
+    private readonly SemaphoreSlim? _writerGate;
+
     // Group commit writer infrastructure.
     private readonly Channel<PendingCommit> _commitChannel;
     private readonly CancellationTokenSource _writerCts = new();
@@ -72,6 +77,12 @@ public sealed partial class StorageEngine : IDisposable
     private const long MaxWalSize = 4 * 1024 * 1024; // 4MB
 
     private volatile bool _disposed;
+
+    /// <summary>
+    /// The lock timeout configuration for this engine, as specified in the <see cref="PageFileConfig"/>.
+    /// Exposed so that higher-level components (collections, engine, sessions) can read the same settings.
+    /// </summary>
+    internal LockTimeout LockTimeout => _config.LockTimeout;
 
     public StorageEngine(string databasePath, PageFileConfig config)
     {
@@ -110,11 +121,16 @@ public sealed partial class StorageEngine : IDisposable
             LoadCollectionSlots();
         }
 
-        _wal = new WriteAheadLog(walPath);
+        _wal = new WriteAheadLog(walPath, config.LockTimeout.WriteTimeoutMs);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
         _nextTransactionId = 0; // Interlocked.Increment pre-increments, so first txnId == 1.
+
+        // Admission gate: limits concurrent commit pressure on WAL/commit locks.
+        _writerGate = config.LockTimeout.MaxConcurrentWriters > 0
+            ? new SemaphoreSlim(config.LockTimeout.MaxConcurrentWriters, config.LockTimeout.MaxConcurrentWriters)
+            : null;
 
         // Start the group commit writer.
         _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
@@ -208,6 +224,7 @@ public sealed partial class StorageEngine : IDisposable
 
         _commitLock?.Dispose();
         _metadataLock?.Dispose();
+        _writerGate?.Dispose();
     }
 
     internal void RegisterCdc(CDC.ChangeStreamDispatcher cdc)

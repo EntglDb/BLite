@@ -15,11 +15,27 @@ public ref struct BsonSpanWriter
     private int _position;
     private readonly IReadOnlyDictionary<string, ushort> _keyMap;
 
+    // ── C-BSON v2 offset table state ────────────────────────────────────────────
+    // _offsetTableBasePos: absolute position in _buffer of offset[0].
+    //   -1 = no offset table active for this writer instance.
+    // _offsetTableFieldIdMin: first fieldId in the contiguous range; 0xFFFF = not yet discovered.
+    // _offsetTableCount: number of entries reserved in the table.
+    // _offsetPatchingDepth: 0 = no table / disabled; 1 = at root level (patch enabled);
+    //   >1 = inside a nested sub-document (patching suspended).
+    private int _offsetTableBasePos;
+    private ushort _offsetTableFieldIdMin;
+    private byte _offsetTableCount;
+    private int _offsetPatchingDepth;
+
     public BsonSpanWriter(Span<byte> buffer, IReadOnlyDictionary<string, ushort> keyMap)
     {
         _buffer = buffer;
         _keyMap = keyMap;
         _position = 0;
+        _offsetTableBasePos = -1;
+        _offsetTableFieldIdMin = 0xFFFF;
+        _offsetTableCount = 0;
+        _offsetPatchingDepth = 0;
     }
 
     public int Position => _position;
@@ -46,17 +62,76 @@ public ref struct BsonSpanWriter
     }
 
     /// <summary>
+    /// Begins a root document with a C-BSON v2 offset table header.
+    /// The offset table allows O(1) seeks to top-level fields during predicate evaluation,
+    /// avoiding a sequential scan through preceding fields.
+    /// </summary>
+    /// <param name="fieldCount">
+    /// Number of top-level fields that will be written into this document.
+    /// Must equal the number of <see cref="WriteElementHeader"/> calls at the root level.
+    /// </param>
+    /// <returns>The size-placeholder position to pass to <see cref="EndDocument"/>.</returns>
+    public int BeginDocumentWithOffsets(byte fieldCount)
+    {
+        var docSizePos = WriteDocumentSizePlaceholder();
+
+        // Write offset table header: [flag:1][fieldCount:1][fieldIdMin:2]
+        _buffer[_position++] = 0xCB; // C-BSON v2 magic
+        _buffer[_position++] = fieldCount;
+        // fieldIdMin is not yet known — placeholder 0xFFFF, patched on first WriteElementHeader.
+        BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), 0xFFFF);
+        _position += 2;
+
+        // Reserve offset entries, all initialized to 0xFFFF (= absent).
+        _offsetTableBasePos = _position;
+        _offsetTableCount = fieldCount;
+        _offsetTableFieldIdMin = 0xFFFF;
+        for (int i = 0; i < fieldCount; i++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), 0xFFFF);
+            _position += 2;
+        }
+
+        _offsetPatchingDepth = 1; // root level — patching is active
+        return docSizePos;
+    }
+
+    /// <summary>
     /// Writes a BSON element header (type + name)
     /// </summary>
     public void WriteElementHeader(BsonType type, string name)
     {
-        _buffer[_position] = (byte)type;
-        _position++;
-
         if (!_keyMap.TryGetValue(name, out var id))
         {
             throw new InvalidOperationException($"BSON Key '{name}' not found in dictionary cache. Ensure all keys are registered before serialization.");
         }
+
+        // Patch the offset table if we are at root level (depth == 1).
+        if (_offsetPatchingDepth == 1)
+        {
+            if (_offsetTableFieldIdMin == 0xFFFF)
+            {
+                // First field written: discover fieldIdMin and back-patch it.
+                _offsetTableFieldIdMin = id;
+                // fieldIdMin lives 2 bytes before _offsetTableBasePos.
+                BinaryPrimitives.WriteUInt16LittleEndian(
+                    _buffer.Slice(_offsetTableBasePos - 2, 2), id);
+            }
+
+            int idx = (int)id - (int)_offsetTableFieldIdMin;
+            if ((uint)idx < (uint)_offsetTableCount && _position <= ushort.MaxValue)
+            {
+                // Store the absolute buffer position of this element's type byte.
+                // Only written when position fits in a ushort; entries beyond 64 KB
+                // stay at their zero-initialised sentinel so the reader skips them.
+                BinaryPrimitives.WriteUInt16LittleEndian(
+                    _buffer.Slice(_offsetTableBasePos + idx * 2, 2),
+                    (ushort)_position);
+            }
+        }
+
+        _buffer[_position] = (byte)type;
+        _position++;
 
         BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_position, 2), id);
         _position += 2;
@@ -252,6 +327,8 @@ public ref struct BsonSpanWriter
     public int BeginDocument(string name)
     {
         WriteElementHeader(BsonType.Document, name);
+        // Suspend offset patching while inside this sub-document.
+        if (_offsetPatchingDepth > 0) _offsetPatchingDepth++;
         return WriteDocumentSizePlaceholder();
     }
 
@@ -270,6 +347,8 @@ public ref struct BsonSpanWriter
     {
         WriteEndOfDocument();
         PatchDocumentSize(sizePosition);
+        // Restore patching depth when returning from a sub-document.
+        if (_offsetPatchingDepth > 0) _offsetPatchingDepth--;
     }
 
     /// <summary>
@@ -300,6 +379,8 @@ public ref struct BsonSpanWriter
     public int BeginArrayDocument(int index)
     {
         WriteArrayElementHeader(BsonType.Document, index);
+        // Suspend offset patching while inside this array-element sub-document.
+        if (_offsetPatchingDepth > 0) _offsetPatchingDepth++;
         return WriteDocumentSizePlaceholder();
     }
 

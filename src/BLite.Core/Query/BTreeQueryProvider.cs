@@ -17,11 +17,14 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
 
     // ── Reflection cache (computed once per TId+T combination) ────────────────
     // BsonProjectionCompiler.TryCompile<T, TResult> generic method definition.
+    // Targets the 3-parameter overload (selectLambda, whereLambda, keyMap) so that
+    // the key map can be threaded in for offset-table fast paths.
 #pragma warning disable IL2026, IL2075
     private static readonly MethodInfo s_tryCompileMethod =
         typeof(BsonProjectionCompiler)
-            .GetMethod(nameof(BsonProjectionCompiler.TryCompile),
-                       BindingFlags.Static | BindingFlags.Public)!;
+            .GetMethods(BindingFlags.Static | BindingFlags.Public)
+            .Single(m => m.Name == nameof(BsonProjectionCompiler.TryCompile)
+                         && m.GetParameters().Length == 3);
 
     // DocumentCollection<TId,T>.ScanAsync<TResult>(BsonReaderProjector<TResult>, CancellationToken) — generic overload.
     private static readonly MethodInfo s_scanProjectorMethod =
@@ -382,7 +385,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
         {
             var compileMethod = s_compiledSelectMethods.GetOrAdd(
                 fieldType, t => s_tryCompileMethod.MakeGenericMethod(typeof(T), t));
-            projector = compileMethod.Invoke(null, [selector, whereClause]);
+            projector = compileMethod.Invoke(null, [selector, whereClause, _collection.GetKeyMap()]);
         }
         catch { return false; }
 
@@ -535,7 +538,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider wh
             var compileMethod = s_compiledSelectMethods.GetOrAdd(
                 projType,
                 t => s_tryCompileMethod.MakeGenericMethod(typeof(T), t));
-            projector = compileMethod.Invoke(null, [selectLambda, whereLambda]);
+            projector = compileMethod.Invoke(null, [selectLambda, whereLambda, _collection.GetKeyMap()]);
         }
         catch { return default; }
 

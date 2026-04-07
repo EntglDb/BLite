@@ -229,7 +229,8 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         bool lockAcquired = false;
         try
         {
-            await _transactionLock.WaitAsync(ct);
+            if (!await _transactionLock.WaitAsync(_storage.LockTimeout.WriteTimeoutMs, ct))
+                throw new TimeoutException("Timed out acquiring transaction lock (BeginTransaction).");
             lockAcquired = true;
 
             if (CurrentTransaction != null)

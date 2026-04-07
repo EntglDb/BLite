@@ -14,19 +14,35 @@ public ref struct BsonSpanReader
     private int _position;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, string> _keys;
 
+    // ── C-BSON v2 offset table state ────────────────────────────────────────────
+    // _offsetTableBasePos: absolute position in _buffer of offset[0], or -1 if no table.
+    // _offsetTableFieldIdMin: first fieldId in the contiguous range.
+    // _offsetTableCount: number of entries in the table.
+    private int _offsetTableBasePos;
+    private ushort _offsetTableFieldIdMin;
+    private byte _offsetTableCount;
+
     public BsonSpanReader(ReadOnlySpan<byte> buffer, System.Collections.Concurrent.ConcurrentDictionary<ushort, string> keys)
     {
         _buffer = buffer;
         _position = 0;
         _keys = keys;
+        _offsetTableBasePos = -1;
+        _offsetTableFieldIdMin = 0;
+        _offsetTableCount = 0;
     }
 
     public int Position => _position;
     public int Remaining => _buffer.Length - _position;
     public System.Collections.Concurrent.ConcurrentDictionary<ushort, string> Keys => _keys;
 
+    /// <summary>Moves the reader to the specified absolute byte position within the buffer.</summary>
+    public void Seek(int position) => _position = position;
+
     /// <summary>
-    /// Reads the document size (first 4 bytes of a BSON document)
+    /// Reads the document size (first 4 bytes of a BSON document) and, if present,
+    /// parses the C-BSON v2 offset table header (flag byte 0xCB) that immediately follows.
+    /// After this call the reader is positioned at the first BSON element.
     /// </summary>
     public int ReadDocumentSize()
     {
@@ -35,7 +51,57 @@ public ref struct BsonSpanReader
 
         var size = BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position, 4));
         _position += 4;
+
+        // Detect C-BSON v2 offset table: flag byte 0xCB immediately after docSize.
+        // 0xCB is not a valid BSON element type, so this is unambiguous.
+        if (Remaining >= 1 && _buffer[_position] == 0xCB)
+        {
+            _position++;                    // skip flag
+            _offsetTableCount = _buffer[_position++];
+            _offsetTableFieldIdMin = BinaryPrimitives.ReadUInt16LittleEndian(_buffer.Slice(_position, 2));
+            _position += 2;
+            _offsetTableBasePos = _position;  // offset[0] starts here
+            _position += _offsetTableCount * 2; // skip past the whole table
+        }
+        else
+        {
+            _offsetTableBasePos = -1;
+        }
+
         return size;
+    }
+
+    /// <summary>
+    /// Attempts to seek directly to a field by its C-BSON field ID using the offset table.
+    /// When this returns <c>true</c>, <paramref name="type"/> is populated and the reader
+    /// is positioned at the start of the field value (type byte and fieldId already consumed).
+    /// When this returns <c>false</c>, the caller should fall back to a sequential scan;
+    /// the reader position is unchanged.
+    /// </summary>
+    /// <remarks>
+    /// Requires that <see cref="ReadDocumentSize"/> has already been called and the document
+    /// was written with <see cref="BsonSpanWriter.BeginDocumentWithOffsets"/>.
+    /// </remarks>
+    public bool TrySeekToField(ushort fieldId, out BsonType type)
+    {
+        type = default;
+        if (_offsetTableBasePos < 0 || _offsetTableFieldIdMin == 0xFFFF)
+            return false;
+
+        int idx = (int)fieldId - (int)_offsetTableFieldIdMin;
+        if ((uint)idx >= (uint)_offsetTableCount)
+            return false; // field ID outside the contiguous range — sequential fallback
+
+        var offset = BinaryPrimitives.ReadUInt16LittleEndian(
+            _buffer.Slice(_offsetTableBasePos + idx * 2, 2));
+
+        if (offset == 0xFFFF)
+            return false; // field confirmed absent — sequential fallback (will also not find it)
+
+        _position = offset;
+        type = (BsonType)_buffer[_position++]; // read type byte
+        _position += 2;                        // skip fieldId (already known)
+        return true;
     }
 
     /// <summary>

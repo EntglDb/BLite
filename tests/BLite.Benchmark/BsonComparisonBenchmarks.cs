@@ -20,7 +20,7 @@ namespace BLite.Benchmark;
 /// Use this benchmark to measure the baseline and the impact of each optimization step
 /// without the overhead of setting up LiteDB / SQLite / CouchbaseLite / DuckDB.
 /// </summary>
-[SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 10, id: "BsonComparison")]
+[InProcess]
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [HtmlExporter]

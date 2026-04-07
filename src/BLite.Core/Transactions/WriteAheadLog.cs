@@ -22,10 +22,12 @@ public sealed class WriteAheadLog : IDisposable
     private FileStream? _walStream;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _disposed;
+    private readonly int _writeTimeoutMs;
 
-    public WriteAheadLog(string walPath)
+    public WriteAheadLog(string walPath, int writeTimeoutMs = 5_000)
     {
         _walPath = walPath ?? throw new ArgumentNullException(nameof(walPath));
+        _writeTimeoutMs = writeTimeoutMs;
         
         _walStream = new FileStream(
             _walPath,
@@ -39,7 +41,8 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteBeginRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct);
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             // Use ArrayPool for async I/O compatibility (cannot use stackalloc with async)
@@ -66,7 +69,8 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteCommitRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct);
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(17);
@@ -92,7 +96,8 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteAbortRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct);
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(17);
@@ -118,7 +123,8 @@ public sealed class WriteAheadLog : IDisposable
 
     public async ValueTask WriteDataRecordAsync(ulong transactionId, uint pageId, ReadOnlyMemory<byte> afterImage, CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct);
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             var headerSize = 17;
@@ -174,7 +180,8 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task FlushAsync(CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct);
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             if (_walStream != null)
@@ -202,7 +209,8 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public long GetCurrentSize()
     {
-        _lock.Wait();
+        if (!_lock.Wait(_writeTimeoutMs))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             return _walStream?.Length ?? 0;
@@ -220,7 +228,8 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public async Task TruncateAsync(CancellationToken ct = default)
     {
-        await _lock.WaitAsync(ct);
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             if (_walStream != null)
@@ -241,7 +250,8 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public List<WalRecord> ReadAll()
     {
-        _lock.Wait();
+        if (!_lock.Wait(_writeTimeoutMs))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
         {
             var records = new List<WalRecord>();
@@ -357,15 +367,24 @@ public sealed class WriteAheadLog : IDisposable
         if (_disposed)
             return;
 
-        _lock.Wait();
-        try
+        if (_lock.Wait(5_000))
         {
+            try
+            {
+                _walStream?.Dispose();
+                _disposed = true;
+            }
+            finally
+            {
+                _lock.Release();
+                _lock.Dispose();
+            }
+        }
+        else
+        {
+            // Best-effort: dispose stream even without lock to avoid resource leak
             _walStream?.Dispose();
             _disposed = true;
-        }
-        finally
-        {
-            _lock.Release();
             _lock.Dispose();
         }
 

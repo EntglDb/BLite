@@ -16,6 +16,7 @@ public sealed class BsonDocument
 {
     private readonly Memory<byte> _rawData;
     private readonly ConcurrentDictionary<ushort, string>? _keys;
+    private readonly ConcurrentDictionary<string, ushort>? _forwardKeys;
     
     public BsonDocument(Memory<byte> rawBsonData, ConcurrentDictionary<ushort, string>? keys = null)
     {
@@ -27,6 +28,20 @@ public sealed class BsonDocument
     {
         _rawData = rawBsonData;
         _keys = keys;
+    }
+
+    public BsonDocument(Memory<byte> rawBsonData, ConcurrentDictionary<ushort, string>? keys, ConcurrentDictionary<string, ushort>? forwardKeys)
+    {
+        _rawData = rawBsonData;
+        _keys = keys;
+        _forwardKeys = forwardKeys;
+    }
+
+    public BsonDocument(byte[] rawBsonData, ConcurrentDictionary<ushort, string>? keys, ConcurrentDictionary<string, ushort>? forwardKeys)
+    {
+        _rawData = rawBsonData;
+        _keys = keys;
+        _forwardKeys = forwardKeys;
     }
 
     /// <summary>
@@ -45,6 +60,24 @@ public sealed class BsonDocument
     public BsonSpanReader GetReader() => new BsonSpanReader(_rawData.Span, _keys ?? new ConcurrentDictionary<ushort, string>());
 
     /// <summary>
+    /// Attempts an O(1) field seek via the C-BSON v2 offset table.
+    /// Returns <c>true</c> and the <paramref name="type"/> when the field is found;
+    /// <c>false</c> when the fast path is unavailable and the caller should fall back
+    /// to a sequential scan (reader position is then after <see cref="BsonSpanReader.ReadDocumentSize"/>).
+    /// </summary>
+    private bool TrySeekField(string fieldName, ref BsonSpanReader reader, out BsonType type)
+    {
+        type = default;
+        reader.ReadDocumentSize();
+        if (_forwardKeys != null && _forwardKeys.TryGetValue(fieldName, out var fieldId))
+        {
+            if (reader.TrySeekToField(fieldId, out type))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Tries to get a field value by name.
     /// Returns false if field not found.
     /// </summary>
@@ -52,8 +85,14 @@ public sealed class BsonDocument
     {
         value = null;
         var reader = GetReader();
-        reader.ReadDocumentSize();
         fieldName = fieldName.ToLowerInvariant();
+
+        if (TrySeekField(fieldName, ref reader, out var seekType))
+        {
+            if (seekType == BsonType.String) { value = reader.ReadString(); return true; }
+            return false;
+        }
+
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
@@ -81,8 +120,14 @@ public sealed class BsonDocument
     {
         value = 0;
         var reader = GetReader();
-        reader.ReadDocumentSize();
         fieldName = fieldName.ToLowerInvariant();
+
+        if (TrySeekField(fieldName, ref reader, out var seekType))
+        {
+            if (seekType == BsonType.Int32) { value = reader.ReadInt32(); return true; }
+            return false;
+        }
+
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
@@ -110,8 +155,14 @@ public sealed class BsonDocument
     {
         value = default;
         var reader = GetReader();
-        reader.ReadDocumentSize();
         fieldName = fieldName.ToLowerInvariant();
+
+        if (TrySeekField(fieldName, ref reader, out var seekType))
+        {
+            if (seekType == BsonType.ObjectId) { value = reader.ReadObjectId(); return true; }
+            return false;
+        }
+
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
@@ -139,7 +190,13 @@ public sealed class BsonDocument
     {
         id = default;
         var reader = GetReader();
-        reader.ReadDocumentSize();
+
+        if (TrySeekField("_id", ref reader, out var seekType))
+        {
+            id = BsonId.ReadFrom(ref reader, seekType);
+            return true;
+        }
+
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();
@@ -175,7 +232,13 @@ public sealed class BsonDocument
         value = BsonValue.Null;
         var reader = GetReader();
         fieldName = fieldName.ToLowerInvariant();
-        reader.ReadDocumentSize();
+
+        if (TrySeekField(fieldName, ref reader, out var seekType))
+        {
+            value = BsonValue.ReadFrom(ref reader, seekType);
+            return true;
+        }
+
         while (reader.Remaining > 1)
         {
             var type = reader.ReadBsonType();

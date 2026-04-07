@@ -187,7 +187,13 @@ namespace BLite.SourceGenerators
 
             sb.AppendLine($"        {methodSig}");
             sb.AppendLine($"        {{");
-            sb.AppendLine($"            var startingPos = writer.BeginDocument();");
+            // Use BeginDocumentWithOffsets for root entities only: writes a C-BSON v2 offset table
+            // header that allows O(1) field seeks during non-indexed predicate evaluation.
+            // Nested type mappers call SerializeFields directly (no wrapper) so they are excluded.
+            if (isRoot)
+                sb.AppendLine($"            var startingPos = writer.BeginDocumentWithOffsets(checked((byte){entity.Properties.Count}));");
+            else
+                sb.AppendLine($"            var startingPos = writer.BeginDocument();");
             sb.AppendLine();
             GenerateFieldWritesCore(sb, entity, mapperNamespace);
             sb.AppendLine();
