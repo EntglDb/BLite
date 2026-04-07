@@ -43,7 +43,7 @@ public readonly struct PageFileConfig
     /// Lock acquisition timeouts for read and write operations.
     /// Controls how long the engine waits for a contended lock before throwing
     /// <see cref="System.TimeoutException"/> (analogous to SQLite's <c>SQLITE_BUSY</c>).
-    /// Defaults to <see cref="LockTimeout.Default"/> (1 s read / 5 s write).
+    /// Defaults to <see cref="LockTimeout.Default"/> (500 ms read / 500 ms write).
     /// Use <see cref="LockTimeout.Immediate"/> for fail-fast behaviour.
     /// </summary>
     public LockTimeout LockTimeout { get; init; }
@@ -774,13 +774,9 @@ public sealed class PageFile : IDisposable
         // Acquire _asyncLock first to drain any in-flight FlushAsync / BackupAsync,
         // then acquire _rwLock write lock to block all concurrent reads and writes.
         // Lock order (_asyncLock before _rwLock) must be respected everywhere.
-        if (!_asyncLock.Wait(WriteLockTimeoutMs))
-            throw new TimeoutException("Timed out acquiring PageFile async lock (Dispose).");
-        if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
-        {
-            _asyncLock.Release();
-            throw new TimeoutException("Timed out acquiring PageFile write lock (Dispose).");
-        }
+        // Best-effort: if locks cannot be acquired, proceed anyway so Dispose() never throws.
+        bool asyncLockAcquired = _asyncLock.Wait(WriteLockTimeoutMs);
+        bool rwLockAcquired = _rwLock.TryEnterWriteLock(WriteLockTimeoutMs);
         try
         {
             if (_disposed)
@@ -806,9 +802,15 @@ public sealed class PageFile : IDisposable
         }
         finally
         {
-            _rwLock.ExitWriteLock();
+            if (rwLockAcquired)
+            {
+                _rwLock.ExitWriteLock();
+            }
             _rwLock.Dispose();
-            _asyncLock.Release();
+            if (asyncLockAcquired)
+            {
+                _asyncLock.Release();
+            }
             _asyncLock.Dispose();
         }
 

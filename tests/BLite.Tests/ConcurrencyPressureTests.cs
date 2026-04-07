@@ -48,32 +48,50 @@ public class ConcurrencyPressureTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"pressure_{Guid.NewGuid():N}.db");
     }
 
-    [Fact]
+    [Fact(Skip = "Long-running stress test. Run explicitly in a dedicated stress run.")]
     public async Task FindConcurrencyBreakingPoint_ServerLayout()
     {
         _output.WriteLine("Insert-only (Server layout)");
         await RunSuite(useServerLayout: true, assertAt4: true);
     }
 
-    [Fact]
+    [Fact(Skip = "Long-running stress test. Run explicitly in a dedicated stress run.")]
     public async Task FindConcurrencyBreakingPoint_DefaultLayout()
     {
         _output.WriteLine("Default layout (single-file) — expected to saturate earlier");
         await RunSuite(useServerLayout: false, assertAt4: false);
     }
 
-    [Fact]
+    [Fact(Skip = "Long-running stress test. Run explicitly in a dedicated stress run.")]
     public async Task ReadModifyWrite_ServerLayout()
     {
         _output.WriteLine("Read-Modify-Write on shared hot set (Server layout)");
         await RunSuite(useServerLayout: true, assertAt4: true, mode: WorkloadMode.ReadModifyWrite);
     }
 
-    [Fact]
+    [Fact(Skip = "Long-running stress test. Run explicitly in a dedicated stress run.")]
     public async Task ReadModifyWrite_DefaultLayout()
     {
         _output.WriteLine("Read-Modify-Write on shared hot set (Default layout)");
         await RunSuite(useServerLayout: false, assertAt4: false, mode: WorkloadMode.ReadModifyWrite);
+    }
+
+    /// <summary>CI-friendly smoke test: 4 concurrent writers must have &lt; 1% timeout rate.</summary>
+    [Fact]
+    public async Task LowConcurrency_Insert_HasNegligibleTimeoutRate_ServerLayout()
+    {
+        var result = await RunLevel(4, useServerLayout: true);
+        var rate = result.TotalOps == 0 ? 1.0 : (double)result.Timeouts / result.TotalOps;
+        Assert.True(rate < 0.01, $"At concurrency 4 timeout rate should be < 1%, was {rate:P2}");
+    }
+
+    /// <summary>CI-friendly smoke test: 4 concurrent RMW writers must have &lt; 1% timeout rate.</summary>
+    [Fact]
+    public async Task LowConcurrency_ReadModifyWrite_HasNegligibleTimeoutRate_ServerLayout()
+    {
+        var result = await RunLevel(4, useServerLayout: true, mode: WorkloadMode.ReadModifyWrite);
+        var rate = result.TotalOps == 0 ? 1.0 : (double)result.Timeouts / result.TotalOps;
+        Assert.True(rate < 0.01, $"At concurrency 4 RMW timeout rate should be < 1%, was {rate:P2}");
     }
 
     // ── Shared suite runner ─────────────────────────────────────────────
@@ -137,8 +155,9 @@ public class ConcurrencyPressureTests : IDisposable
         var levelPath = Path.Combine(Path.GetTempPath(), $"pressure_{Guid.NewGuid():N}.db");
         var config = useServerLayout ? PageFileConfig.Server(levelPath) : PageFileConfig.Default;
 
-        using var db = new TestDbContext(levelPath, config);
-
+        LevelResult levelResult;
+        using (var db = new TestDbContext(levelPath, config))
+        {
         // Seed documents for read-modify-write
         BsonId[] seedIds = [];
         if (mode == WorkloadMode.ReadModifyWrite)
@@ -228,10 +247,7 @@ public class ConcurrencyPressureTests : IDisposable
         var sorted = latencies.OrderBy(x => x).ToArray();
         int total = successes + timeouts + otherErrors;
 
-        // 'using var db' handles Dispose — just clean up temp files after scope ends.
-        // DeleteDb is called from the using-block's finally via the method return.
-
-        return new LevelResult
+        levelResult = new LevelResult
         {
             TotalOps = total,
             Successes = successes,
@@ -243,6 +259,12 @@ public class ConcurrencyPressureTests : IDisposable
             Throughput = total / sw.Elapsed.TotalSeconds,
             ErrorSamples = errorSamples.Keys.ToArray()
         };
+        } // end using — disposes db, releasing file handles
+
+        // Dispose closes file handles; clean up per-level temp artifacts now.
+        DeleteDb(levelPath);
+
+        return levelResult;
     }
 
     private static double Percentile(double[] sorted, double p)
@@ -268,6 +290,7 @@ public class ConcurrencyPressureTests : IDisposable
 
     private static void DeleteDb(string path)
     {
+        // Delete main db file and its single-file companions (.wal, .idx)
         foreach (var ext in new[] { "", ".wal", ".idx" })
         {
             try
@@ -277,10 +300,16 @@ public class ConcurrencyPressureTests : IDisposable
             }
             catch { }
         }
-        // Server layout directory
-        var dir = path + ".collections";
-        if (Directory.Exists(dir))
-            try { Directory.Delete(dir, true); } catch { }
+        // Server layout: WAL lives in a sibling "wal/" directory and collections in
+        // "collections/<dbName>/" — matching PageFileConfig.Server() conventions.
+        var dir = Path.GetDirectoryName(path) ?? ".";
+        var name = Path.GetFileNameWithoutExtension(path);
+        var walDir = Path.Combine(dir, "wal");
+        var collectionsDir = Path.Combine(dir, "collections", name);
+        if (Directory.Exists(walDir))
+            try { Directory.Delete(walDir, true); } catch { }
+        if (Directory.Exists(collectionsDir))
+            try { Directory.Delete(collectionsDir, true); } catch { }
     }
 
     public void Dispose()

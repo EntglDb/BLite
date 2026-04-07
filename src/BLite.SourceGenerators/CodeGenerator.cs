@@ -191,7 +191,7 @@ namespace BLite.SourceGenerators
             // header that allows O(1) field seeks during non-indexed predicate evaluation.
             // Nested type mappers call SerializeFields directly (no wrapper) so they are excluded.
             if (isRoot)
-                sb.AppendLine($"            var startingPos = writer.BeginDocumentWithOffsets({entity.Properties.Count});");
+                sb.AppendLine($"            var startingPos = writer.BeginDocumentWithOffsets(checked((byte){entity.Properties.Count}));");
             else
                 sb.AppendLine($"            var startingPos = writer.BeginDocument();");
             sb.AppendLine();

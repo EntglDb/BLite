@@ -159,13 +159,16 @@ public sealed partial class StorageEngine
 
     public async Task CommitTransactionAsync(ulong transactionId, CancellationToken ct = default)
     {
-        // Admission gate: wait up to half the write timeout before rejecting.
+        // Admission gate: wait up to 1/16 of the write timeout before rejecting.
         // Gives a slot time to free up without blocking for the full write budget,
         // preventing deep queues on the WAL/commit locks that cause latency spikes.
-        int gateTimeoutMs = _config.LockTimeout.WriteTimeoutMs > 0
-            ? _config.LockTimeout.WriteTimeoutMs / 16
-            : 0;
-        if (_writerGate != null && !_writerGate.Wait(gateTimeoutMs))
+        int gateTimeoutMs = _config.LockTimeout.WriteTimeoutMs switch
+        {
+            > 0 => Math.Max(1, _config.LockTimeout.WriteTimeoutMs / 16),
+            -1 => -1,
+            _ => 0
+        };
+        if (_writerGate != null && !await _writerGate.WaitAsync(gateTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Too many concurrent writers — admission gate full.");
         try
         {

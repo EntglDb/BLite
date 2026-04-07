@@ -119,9 +119,11 @@ public ref struct BsonSpanWriter
             }
 
             int idx = (int)id - (int)_offsetTableFieldIdMin;
-            if ((uint)idx < (uint)_offsetTableCount)
+            if ((uint)idx < (uint)_offsetTableCount && _position <= ushort.MaxValue)
             {
                 // Store the absolute buffer position of this element's type byte.
+                // Only written when position fits in a ushort; entries beyond 64 KB
+                // stay at their zero-initialised sentinel so the reader skips them.
                 BinaryPrimitives.WriteUInt16LittleEndian(
                     _buffer.Slice(_offsetTableBasePos + idx * 2, 2),
                     (ushort)_position);

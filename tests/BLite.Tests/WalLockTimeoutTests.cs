@@ -9,6 +9,12 @@ public class WalLockTimeoutTests : IDisposable
     private readonly string _walPath;
     private readonly ITestOutputHelper _output;
 
+    /// <summary>
+    /// Small WAL write timeout used in all tests so they complete quickly instead of waiting
+    /// the production default of 5 s per operation.
+    /// </summary>
+    private const int TestWriteTimeoutMs = 100;
+
     public WalLockTimeoutTests(ITestOutputHelper output)
     {
         _output = output;
@@ -29,7 +35,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public async Task WriteBeginRecord_ThrowsTimeoutException_WhenLockIsHeld()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         // Simulate a stuck writer holding the lock
@@ -42,8 +48,10 @@ public class WalLockTimeoutTests : IDisposable
             sw.Stop();
 
             _output.WriteLine($"TimeoutException after {sw.ElapsedMilliseconds} ms: {ex.Message}");
-            Assert.True(sw.ElapsedMilliseconds >= 4_500, $"Should wait ~5 s, was {sw.ElapsedMilliseconds} ms");
-            Assert.True(sw.ElapsedMilliseconds < 10_000, $"Should not wait much longer than 5 s, was {sw.ElapsedMilliseconds} ms");
+            Assert.True(sw.ElapsedMilliseconds >= TestWriteTimeoutMs - 20,
+                $"Should wait ~{TestWriteTimeoutMs} ms, was {sw.ElapsedMilliseconds} ms");
+            Assert.True(sw.ElapsedMilliseconds < TestWriteTimeoutMs * 5,
+                $"Should not wait much longer than {TestWriteTimeoutMs} ms, was {sw.ElapsedMilliseconds} ms");
         }
         finally
         {
@@ -54,7 +62,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public async Task WriteCommitRecord_ThrowsTimeoutException_WhenLockIsHeld()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         await semaphore.WaitAsync();
@@ -74,7 +82,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public async Task WriteDataRecord_ThrowsTimeoutException_WhenLockIsHeld()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         await semaphore.WaitAsync();
@@ -95,7 +103,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public async Task FlushAsync_ThrowsTimeoutException_WhenLockIsHeld()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         await semaphore.WaitAsync();
@@ -115,7 +123,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public void GetCurrentSize_ThrowsTimeoutException_WhenLockIsHeld()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         semaphore.Wait();
@@ -126,7 +134,8 @@ public class WalLockTimeoutTests : IDisposable
             sw.Stop();
 
             _output.WriteLine($"TimeoutException after {sw.ElapsedMilliseconds} ms: {ex.Message}");
-            Assert.True(sw.ElapsedMilliseconds >= 4_500, $"Should wait ~5 s, was {sw.ElapsedMilliseconds} ms");
+            Assert.True(sw.ElapsedMilliseconds >= TestWriteTimeoutMs - 20,
+                $"Should wait ~{TestWriteTimeoutMs} ms, was {sw.ElapsedMilliseconds} ms");
         }
         finally
         {
@@ -137,7 +146,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public void ReadAll_ThrowsTimeoutException_WhenLockIsHeld()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         semaphore.Wait();
@@ -155,22 +164,23 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public async Task CancellationToken_AbortsBeforeTimeout()
     {
-        using var wal = new WriteAheadLog(_walPath);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         await semaphore.WaitAsync();
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            // Should throw OperationCanceledException well before the 5 s timeout
+            // Should throw OperationCanceledException well before the timeout
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => wal.WriteBeginRecordAsync(1, cts.Token).AsTask());
             sw.Stop();
 
             _output.WriteLine($"Cancelled after {sw.ElapsedMilliseconds} ms");
-            Assert.True(sw.ElapsedMilliseconds < 3_000, $"Cancellation should fire quickly, was {sw.ElapsedMilliseconds} ms");
+            Assert.True(sw.ElapsedMilliseconds < TestWriteTimeoutMs,
+                $"Cancellation should fire before the timeout, was {sw.ElapsedMilliseconds} ms");
         }
         finally
         {

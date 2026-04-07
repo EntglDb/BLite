@@ -61,7 +61,7 @@ public readonly struct LockTimeout : IEquatable<LockTimeout>
 
     /// <summary>
     /// Balanced default: 500 ms write timeout, 500 ms read timeout,
-    /// 64 max concurrent writers.
+    /// 96 max concurrent writers.
     /// <para>
     /// 500 ms is long enough for commits under normal load (observed p99 well under 500 ms)
     /// but short enough to fail-fast when the engine is saturated rather than leaving
