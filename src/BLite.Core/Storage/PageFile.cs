@@ -803,15 +803,21 @@ public sealed class PageFile : IDisposable
         finally
         {
             if (rwLockAcquired)
-            {
                 _rwLock.ExitWriteLock();
+
+            // Dispose only if we hold the write lock; if another thread still holds
+            // a read/write lock, disposing ReaderWriterLockSlim would produce undefined
+            // behaviour or SynchronizationLockException — violating "Dispose never throws".
+            if (rwLockAcquired)
+            {
+                try { _rwLock.Dispose(); } catch { /* best-effort */ }
             }
-            _rwLock.Dispose();
+
             if (asyncLockAcquired)
             {
                 _asyncLock.Release();
+                try { _asyncLock.Dispose(); } catch { /* best-effort */ }
             }
-            _asyncLock.Dispose();
         }
 
         GC.SuppressFinalize(this);
