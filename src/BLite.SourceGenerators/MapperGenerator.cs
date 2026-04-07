@@ -726,31 +726,31 @@ public readonly struct BLiteDiagnostic
                     }
 
                     // Walk up the fluent chain to find Entity<T>()
-                    var entityCallCandidate2 = (call.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
-                    int depth2 = 0;
-                    while (entityCallCandidate2 != null && depth2 < BLiteConventions.MaxFluentChainDepth)
+                    var indexEntityCallCandidate = (call.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
+                    int indexChainDepth = 0;
+                    while (indexEntityCallCandidate != null && indexChainDepth < BLiteConventions.MaxFluentChainDepth)
                     {
-                        if (entityCallCandidate2.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var m2 } } } &&
-                            m2 == BLiteConventions.EntityMethodName)
+                        if (indexEntityCallCandidate.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier: { Text: var indexMethodName } } } &&
+                            indexMethodName == BLiteConventions.EntityMethodName)
                             break;
-                        entityCallCandidate2 = (entityCallCandidate2.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
-                        depth2++;
+                        indexEntityCallCandidate = (indexEntityCallCandidate.Expression as MemberAccessExpressionSyntax)?.Expression as InvocationExpressionSyntax;
+                        indexChainDepth++;
                     }
-                    if (entityCallCandidate2 == null) continue;
+                    if (indexEntityCallCandidate == null) continue;
 
                     // Resolve entity type via semantic model
-                    INamedTypeSymbol? idxEntityType = null;
-                    if (entityCallCandidate2.Expression is MemberAccessExpressionSyntax idxEntityMember &&
-                        idxEntityMember.Name is GenericNameSyntax idxGenericName &&
-                        idxGenericName.TypeArgumentList.Arguments.Count > 0)
+                    INamedTypeSymbol? indexedEntityType = null;
+                    if (indexEntityCallCandidate.Expression is MemberAccessExpressionSyntax indexEntityMember &&
+                        indexEntityMember.Name is GenericNameSyntax indexGenericName &&
+                        indexGenericName.TypeArgumentList.Arguments.Count > 0)
                     {
-                        var typeArgSyntax2 = idxGenericName.TypeArgumentList.Arguments[0];
-                        idxEntityType = semanticModel.GetSymbolInfo(typeArgSyntax2).Symbol as INamedTypeSymbol;
+                        var indexTypeArgSyntax = indexGenericName.TypeArgumentList.Arguments[0];
+                        indexedEntityType = semanticModel.GetSymbolInfo(indexTypeArgSyntax).Symbol as INamedTypeSymbol;
                     }
-                    if (idxEntityType == null) continue;
+                    if (indexedEntityType == null) continue;
 
-                    var fullTypeName2 = SyntaxHelper.GetFullName(idxEntityType);
-                    var entityForIndex = info.Entities.FirstOrDefault(e => e.FullTypeName == fullTypeName2);
+                    var indexedEntityFullName = SyntaxHelper.GetFullName(indexedEntityType);
+                    var entityForIndex = info.Entities.FirstOrDefault(e => e.FullTypeName == indexedEntityFullName);
                     if (entityForIndex == null) continue;
 
                     // Avoid duplicating the same index

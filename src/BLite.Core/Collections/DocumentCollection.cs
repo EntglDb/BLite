@@ -432,28 +432,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 await foreach (var doc in QueryIndexAsync(plan.IndexName!, plan.MinKey, plan.MaxKey, ct: ct))
                 {
                     ct.ThrowIfCancellationRequested();
-                    if (plan.ResiduePredicate == null)
-                    {
+                    if (MatchesResidue(doc, plan.ResiduePredicate))
                         yield return doc;
-                    }
-                    else
-                    {
-                        // Serialise back to BSON to evaluate the residue predicate.
-                        // This is uncommon (strict-inequality boundary, compound AND) so the
-                        // serialisation cost is acceptable relative to the index savings.
-                        var buf = ArrayPool<byte>.Shared.Rent(_maxDocumentSizeForSinglePage + 128);
-                        try
-                        {
-                            int written = _mapper.Serialize(doc, new BsonSpanWriter(buf, _storage.GetFrozenKeyMap()));
-                            var reader = new BsonSpanReader(buf.AsSpan(0, written), _storage.GetKeyReverseMap());
-                            if (plan.ResiduePredicate(reader))
-                                yield return doc;
-                        }
-                        finally
-                        {
-                            ArrayPool<byte>.Shared.Return(buf);
-                        }
-                    }
                 }
                 break;
             }
@@ -467,25 +447,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                         await foreach (var doc in QueryIndexAsync(plan.IndexName!, (object?)key, (object?)key, ct: ct))
                         {
                             ct.ThrowIfCancellationRequested();
-                            if (plan.ResiduePredicate == null)
-                            {
+                            if (MatchesResidue(doc, plan.ResiduePredicate))
                                 yield return doc;
-                            }
-                            else
-                            {
-                                var buf = ArrayPool<byte>.Shared.Rent(_maxDocumentSizeForSinglePage + 128);
-                                try
-                                {
-                                    int written = _mapper.Serialize(doc, new BsonSpanWriter(buf, _storage.GetFrozenKeyMap()));
-                                    var reader = new BsonSpanReader(buf.AsSpan(0, written), _storage.GetKeyReverseMap());
-                                    if (plan.ResiduePredicate(reader))
-                                        yield return doc;
-                                }
-                                finally
-                                {
-                                    ArrayPool<byte>.Shared.Return(buf);
-                                }
-                            }
                         }
                     }
                 }
@@ -502,6 +465,30 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 }
                 break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Evaluates <paramref name="residue"/> against a serialised form of <paramref name="doc"/>.
+    /// Returns <c>true</c> when <paramref name="residue"/> is <c>null</c> (no post-filter).
+    ///
+    /// Serialisation is done into a pooled buffer to avoid heap pressure; the buffer is
+    /// returned to the pool in the finally block before the caller receives the result.
+    /// </summary>
+    private bool MatchesResidue(T doc, BsonReaderPredicate? residue)
+    {
+        if (residue == null) return true;
+
+        var buf = ArrayPool<byte>.Shared.Rent(_maxDocumentSizeForSinglePage + 128);
+        try
+        {
+            int written = _mapper.Serialize(doc, new BsonSpanWriter(buf, _storage.GetFrozenKeyMap()));
+            var reader = new BsonSpanReader(buf.AsSpan(0, written), _storage.GetKeyReverseMap());
+            return residue(reader);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
         }
     }
 
