@@ -448,6 +448,35 @@ public sealed class BsonDocumentBuilder
         return this;
     }
 
+    public BsonDocumentBuilder AddTimeSpan(string name, TimeSpan value)
+    {
+        EnsureCapacity(64);
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
+        writer.WriteTimeSpan(name, value);
+        _position += writer.Position;
+        return this;
+    }
+
+#if NET6_0_OR_GREATER
+    public BsonDocumentBuilder AddDateOnly(string name, DateOnly value)
+    {
+        EnsureCapacity(64);
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
+        writer.WriteDateOnly(name, value);
+        _position += writer.Position;
+        return this;
+    }
+
+    public BsonDocumentBuilder AddTimeOnly(string name, TimeOnly value)
+    {
+        EnsureCapacity(64);
+        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
+        writer.WriteTimeOnly(name, value);
+        _position += writer.Position;
+        return this;
+    }
+#endif
+
     public BsonDocumentBuilder AddNull(string name)
     {
         EnsureCapacity(64);
