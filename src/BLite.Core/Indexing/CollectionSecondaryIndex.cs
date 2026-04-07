@@ -455,6 +455,9 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     {
         return value switch
         {
+            // Pre-encoded IndexKey (passed from generated filter code via IndexPlanBuilder/IndexQueryPlan)
+            IndexKey ik => ik,
+
             DBNull => IndexKey.NullSentinel, // explicit null equality query
             ObjectId objectId => new IndexKey(objectId),
             string str => new IndexKey(str),

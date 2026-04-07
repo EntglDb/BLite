@@ -401,9 +401,98 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     }
 
     /// <summary>
-    /// Scans all documents returning only two flat fields per document as a
-    /// <c>(TKey, TValue)</c> pair, without deserialising the full entity
-    /// <typeparamref name="T"/>.
+    /// Executes a query described by an <see cref="IndexQueryPlan"/>.
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <b>Index range</b> – the collection's B-Tree index named
+    ///     <see cref="IndexQueryPlan.IndexName"/> is seeked between
+    ///     <see cref="IndexQueryPlan.MinKey"/> and <see cref="IndexQueryPlan.MaxKey"/> (both inclusive).
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>Index IN</b> – each key in <c>InKeys</c> is looked up as an exact match.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>Full scan</b> – every document is evaluated against
+    ///     <see cref="IndexQueryPlan.ScanPredicate"/>.
+    ///   </description></item>
+    /// </list>
+    /// An optional <see cref="IndexQueryPlan.ResiduePredicate"/> is applied as a BSON-level
+    /// post-filter on every candidate before it is deserialised and yielded.
+    /// </summary>
+    public async IAsyncEnumerable<T> ScanAsync(
+        IndexQueryPlan plan,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (plan == null) throw new ArgumentNullException(nameof(plan));
+
+        switch (plan.Kind)
+        {
+            case IndexQueryPlan.PlanKind.IndexRange:
+            {
+                await foreach (var doc in QueryIndexAsync(plan.IndexName!, plan.MinKey, plan.MaxKey, ct: ct))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (MatchesResidue(doc, plan.ResiduePredicate))
+                        yield return doc;
+                }
+                break;
+            }
+
+            case IndexQueryPlan.PlanKind.IndexIn:
+            {
+                if (plan.InKeys != null)
+                {
+                    foreach (var key in plan.InKeys)
+                    {
+                        await foreach (var doc in QueryIndexAsync(plan.IndexName!, (object?)key, (object?)key, ct: ct))
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            if (MatchesResidue(doc, plan.ResiduePredicate))
+                                yield return doc;
+                        }
+                    }
+                }
+                break;
+            }
+
+            case IndexQueryPlan.PlanKind.Scan:
+            default:
+            {
+                var predicate = plan.ScanPredicate ?? (_ => true);
+                await foreach (var doc in ScanAsync(predicate, ct))
+                {
+                    yield return doc;
+                }
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Evaluates <paramref name="residue"/> against a serialised form of <paramref name="doc"/>.
+    /// Returns <c>true</c> when <paramref name="residue"/> is <c>null</c> (no post-filter).
+    ///
+    /// Serialisation is done into a pooled buffer to avoid heap pressure; the buffer is
+    /// returned to the pool in the finally block before the caller receives the result.
+    /// </summary>
+    private bool MatchesResidue(T doc, BsonReaderPredicate? residue)
+    {
+        if (residue == null) return true;
+
+        var buf = ArrayPool<byte>.Shared.Rent(_maxDocumentSizeForSinglePage + 128);
+        try
+        {
+            int written = _mapper.Serialize(doc, new BsonSpanWriter(buf, _storage.GetFrozenKeyMap()));
+            var reader = new BsonSpanReader(buf.AsSpan(0, written), _storage.GetKeyReverseMap());
+            return residue(reader);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+
     /// </summary>
     /// <remarks>
     /// When both selectors access a single flat, scalar property
