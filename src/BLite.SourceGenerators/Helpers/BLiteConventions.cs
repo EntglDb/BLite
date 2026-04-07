@@ -89,9 +89,16 @@ namespace BLite.SourceGenerators.Helpers
         public const string SchemaNamedArg = "Schema";
         public const string TypeNameNamedArg = "TypeName";
 
-        // ── Recursion limit ───────────────────────────────────────────────────
+        // ── Recursion / chain limits ──────────────────────────────────────────
         /// <summary>Maximum depth for recursive nested-type traversal during entity analysis.</summary>
         public const int DefaultMaxNestedTypeDepth = 20;
+        /// <summary>
+        /// Maximum steps to walk backwards through a fluent builder chain when searching for
+        /// <c>Entity&lt;T&gt;()</c> from a <c>HasConversion&lt;TC&gt;()</c> call.
+        /// Realistic depth is ≤ 3 (Entity → ToCollection → Property → HasConversion);
+        /// 20 is a generous safety cap against pathological or generated chains.
+        /// </summary>
+        public const int MaxFluentChainDepth = 20;
 
         // ── AutoId type names ─────────────────────────────────────────────────
         public const string AutoIdTypeInt = "int";

@@ -24,6 +24,21 @@ namespace BLite.SourceGenerators.Models
         public bool AutoId { get; set; }
         public bool HasPrivateSetters { get; set; }
         public bool HasPrivateOrNoConstructor { get; set; }
+
+        /// <summary>
+        /// Null = no viable constructor; use GetUninitializedObject (field initializers won't run).
+        /// Empty list = use parameterless constructor.
+        /// Non-empty = use N-param constructor; each entry maps a ctor param to a property.
+        /// </summary>
+        public List<ConstructorParameterInfo>? SelectedConstructorParameters { get; set; }
+
+        /// <summary>
+        /// True when the selected constructor is public, allowing <c>new T(...)</c>.
+        /// False = non-public; use [UnsafeAccessor(Constructor)] (NET8+) or Activator.CreateInstance (netstandard2.1).
+        /// Also false for public parameterless ctors on types that have C# 11 <c>required</c> members
+        /// (to avoid CS9035 in the generated <c>new T()</c> call site).
+        /// </summary>
+        public bool SelectedConstructorIsPublic { get; set; } = true;
         
         /// <summary>
         /// True when this EntityInfo represents a nested type (not a root DocumentCollection entity).
@@ -53,6 +68,12 @@ namespace BLite.SourceGenerators.Models
         public string? BackingFieldName { get; set; }
 
         /// <summary>
+        /// The fully-qualified name (without global:: prefix) of the type that declares this property.
+        /// Used to generate [UnsafeAccessor] setters correctly when the property is inherited.
+        /// </summary>
+        public string DeclaringTypeName { get; set; } = "";
+
+        /// <summary>
         /// True when this is a getter-only property backed by a conventional private field
         /// following the DDD pattern: <c>private List&lt;T&gt; _items</c> + <c>public IReadOnlyCollection&lt;T&gt; Items =&gt; _items.AsReadOnly()</c>.
         /// The <see cref="BackingFieldName"/> holds the private field name (e.g. <c>_items</c>).
@@ -61,6 +82,8 @@ namespace BLite.SourceGenerators.Models
         
         public bool IsKey { get; set; }
         public bool IsRequired { get; set; }
+        /// <summary>True when the property has the C# 11 <c>required</c> keyword (not the [Required] DataAnnotations attribute).</summary>
+        public bool HasCSharpRequiredKeyword { get; set; }
         public int? MaxLength { get; set; }
         public int? MinLength { get; set; }
         public double? RangeMin { get; set; }
@@ -99,8 +122,23 @@ namespace BLite.SourceGenerators.Models
         public int Depth { get; set; }
         public bool HasPrivateOrNoConstructor { get; set; }
         public bool HasPrivateSetters { get; set; }
+        public List<ConstructorParameterInfo>? SelectedConstructorParameters { get; set; }
+        public bool SelectedConstructorIsPublic { get; set; } = true;
         
         public List<PropertyInfo> Properties { get; } = new List<PropertyInfo>();
         public Dictionary<string, NestedTypeInfo> NestedTypes { get; } = new Dictionary<string, NestedTypeInfo>();
+    }
+
+    /// <summary>Maps a constructor parameter to the entity property it was matched to (by name, case-insensitive).</summary>
+    public sealed class ConstructorParameterInfo
+    {
+        public string Name { get; }
+        public string TypeName { get; }
+        public string MatchedPropertyName { get; }
+        public bool IsNullable { get; }
+        public ConstructorParameterInfo(string name, string typeName, string matchedPropertyName, bool isNullable)
+        {
+            Name = name; TypeName = typeName; MatchedPropertyName = matchedPropertyName; IsNullable = isNullable;
+        }
     }
 }

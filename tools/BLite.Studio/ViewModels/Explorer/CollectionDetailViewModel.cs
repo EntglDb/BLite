@@ -254,7 +254,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
     private async Task NextPage() { CurrentPage++; await LoadPage(); }
 
     [RelayCommand]
-    private void RunBlqlQuery()
+    private async Task RunBlqlQuery()
     {
         BlqlStatusMessage = "";
         BlqlIsError       = false;
@@ -276,7 +276,7 @@ public sealed partial class CollectionDetailViewModel : ObservableObject
             if (BlqlSkip > 0)  query = query.Skip(BlqlSkip);
             if (BlqlTake > 0)  query = query.Take(BlqlTake);
 
-            foreach (var doc in query.AsEnumerable())
+            await foreach (var doc in query.AsAsyncEnumerable())
             {
                 var fields = doc.EnumerateFields();
                 doc.TryGetId(out var bsonId);

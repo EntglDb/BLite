@@ -42,10 +42,22 @@ namespace BLite.SourceGenerators
             entityInfo.HasPrivateSetters = entityInfo.Properties.Any(p =>
                 (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter || p.HasPrivateBackingFieldAccess);
             
-            // Check if entity has public parameterless constructor
-            var hasPublicParameterlessConstructor = entityType.Constructors
-                .Any(c => c.DeclaredAccessibility == Accessibility.Public && c.Parameters.Length == 0);
-            entityInfo.HasPrivateOrNoConstructor = !hasPublicParameterlessConstructor;
+            // Constructor selection: priority queue (protected > public > private, 0-params > N-params)
+            var hasRequiredMembers = entityInfo.Properties.Any(p => p.HasCSharpRequiredKeyword);
+            var (selectedParams, ctorIsPublic) = SelectConstructor(entityType, entityInfo.Properties, hasRequiredMembers);
+            entityInfo.SelectedConstructorParameters = selectedParams;
+            entityInfo.SelectedConstructorIsPublic = ctorIsPublic;
+            // Derive HasPrivateOrNoConstructor for code paths that still check it
+            entityInfo.HasPrivateOrNoConstructor = selectedParams == null || !ctorIsPublic;
+            if (selectedParams == null)
+            {
+                diagnostics?.Add(new BLiteDiagnostic(
+                    "BLITE010",
+                    $"BLite: no viable constructor found for '{entityInfo.Name}'. " +
+                     "GetUninitializedObject will be used — field initializers will NOT run. " +
+                     "Consider adding a public or protected constructor.",
+                    isError: false));
+            }
 
             // Analyze nested types recursively
             // We use a dictionary for nested types to ensure uniqueness by name
@@ -160,6 +172,7 @@ namespace BLite.SourceGenerators
                         IsNullable = SyntaxHelper.IsNullableType(prop.Type),
                         IsKey = AttributeHelper.IsKey(prop),
                         IsRequired = AttributeHelper.HasAttribute(prop, BLiteConventions.RequiredAttribute),
+                        HasCSharpRequiredKeyword = prop.IsRequired,
                         
                         HasPublicSetter = prop.SetMethod?.DeclaredAccessibility == Accessibility.Public,
                         HasInitOnlySetter = prop.SetMethod?.IsInitOnly == true,
@@ -172,7 +185,10 @@ namespace BLite.SourceGenerators
                             ? conventionalBackingField.Name
                             : (prop.SetMethod?.DeclaredAccessibility != Accessibility.Public)
                                 ? $"<{prop.Name}{BLiteConventions.CompilerBackingFieldSuffix}"
-                                : null
+                                : null,
+                        // Track the declaring type so [UnsafeAccessor] setters can reference the correct type
+                        // even when the property is inherited (e.g. from an auditable base class).
+                        DeclaringTypeName = SyntaxHelper.GetFullName(prop.ContainingType),
                     };
 
                 // MaxLength / MinLength
@@ -326,10 +342,12 @@ namespace BLite.SourceGenerators
                  // Analyze properties of this nested type (pass symbolCache for further generics)
                  AnalyzeProperties(nestedTypeSymbol, nestedInfo.Properties, symbolCache);
                  
-                 // Check if nested type needs reflection-based deserialization
-                 var hasPublicParameterlessCtor = nestedTypeSymbol.Constructors
-                     .Any(c => c.DeclaredAccessibility == Accessibility.Public && c.Parameters.Length == 0);
-                 nestedInfo.HasPrivateOrNoConstructor = !hasPublicParameterlessCtor;
+                 // Constructor selection for nested type
+                 var nestedHasRequired = nestedInfo.Properties.Any(p => p.HasCSharpRequiredKeyword);
+                 var (nestedCtorParams, nestedCtorIsPublic) = SelectConstructor(nestedTypeSymbol, nestedInfo.Properties, nestedHasRequired);
+                 nestedInfo.SelectedConstructorParameters = nestedCtorParams;
+                 nestedInfo.SelectedConstructorIsPublic = nestedCtorIsPublic;
+                 nestedInfo.HasPrivateOrNoConstructor = nestedCtorParams == null || !nestedCtorIsPublic;
                  nestedInfo.HasPrivateSetters = nestedInfo.Properties.Any(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter);
                  
                  targetNestedTypes[fullTypeName] = nestedInfo;
@@ -338,5 +356,82 @@ namespace BLite.SourceGenerators
                  AnalyzeNestedTypesRecursive(nestedInfo.Properties, nestedInfo.NestedTypes, semanticModel, analyzedTypes, currentDepth + 1, maxDepth, symbolCache, diagnostics);
              }
         }
+
+        /// <summary>
+        /// Selects the best constructor for deserialization using a priority queue:
+        /// protected (0-param) &gt; protected (N-param) &gt; public (0-param) &gt; public (N-param) &gt; private (0-param) &gt; private (N-param).
+        /// For N-param ctors, all parameters must match an entity property by name (case-insensitive).
+        /// Returns (null, false) when no viable ctor is found — caller should fall back to GetUninitializedObject.
+        /// </summary>
+        private static (List<ConstructorParameterInfo>? selectedParams, bool isPublic) SelectConstructor(
+            INamedTypeSymbol typeSymbol,
+            IReadOnlyList<PropertyInfo> properties,
+            bool hasRequiredMembers)
+        {
+            var propsByLower = new System.Collections.Generic.Dictionary<string, PropertyInfo>();
+            foreach (var p in properties)
+                propsByLower[p.Name.ToLowerInvariant()] = p;
+
+            var candidates = typeSymbol.Constructors
+                .Where(c => !c.IsStatic
+                    && c.DeclaredAccessibility is
+                        Accessibility.Public or
+                        Accessibility.Protected or
+                        Accessibility.ProtectedOrInternal or
+                        Accessibility.Private)
+                .OrderBy(c => VisibilityPriority(c.DeclaredAccessibility))
+                .ThenBy(c => c.Parameters.Length)
+                .ToList();
+
+            foreach (var ctor in candidates)
+            {
+                bool isPublicCtor = ctor.DeclaredAccessibility == Accessibility.Public;
+
+                if (ctor.Parameters.Length == 0)
+                {
+                    // For public parameterless ctors on types with required members, avoid emitting
+                    // `new T()` at the call site (CS9035). Mark as non-public so code generator uses
+                    // [UnsafeAccessor(Constructor)] (NET8+) or Activator.CreateInstance (netstandard2.1).
+                    bool effectivelyPublic = isPublicCtor && !hasRequiredMembers;
+                    return (new List<ConstructorParameterInfo>(), effectivelyPublic);
+                }
+
+                // N-param: try to match every parameter to a property by name (case-insensitive).
+                var matched = new List<ConstructorParameterInfo>();
+                bool allMatched = true;
+                foreach (var param in ctor.Parameters)
+                {
+                    if (!propsByLower.TryGetValue(param.Name.ToLowerInvariant(), out var matchedProp))
+                    {
+                        allMatched = false;
+                        break;
+                    }
+                    matched.Add(new ConstructorParameterInfo(
+                        param.Name,
+                        SyntaxHelper.GetTypeName(param.Type),
+                        matchedProp.Name,
+                        SyntaxHelper.IsNullableType(param.Type)));
+                }
+                if (!allMatched) continue;
+
+                // For public N-param ctors: if any required member is NOT among the ctor params,
+                // emitting `new T(p1, p2)` still triggers CS9035 for the unset required member.
+                bool hasUnmatchedRequired = hasRequiredMembers && properties.Any(p =>
+                    p.HasCSharpRequiredKeyword &&
+                    !matched.Any(m => string.Equals(m.MatchedPropertyName, p.Name, System.StringComparison.Ordinal)));
+                bool effectivelyPublicNParam = isPublicCtor && !hasUnmatchedRequired;
+                return (matched, effectivelyPublicNParam);
+            }
+
+            return (null, false); // No viable constructor found
+        }
+
+        private static int VisibilityPriority(Accessibility a) => a switch
+        {
+            Accessibility.Protected or Accessibility.ProtectedOrInternal => 0,
+            Accessibility.Public => 1,
+            Accessibility.Private => 2,
+            _ => 3
+        };
     }
 }

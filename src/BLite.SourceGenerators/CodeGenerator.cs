@@ -53,60 +53,54 @@ namespace BLite.SourceGenerators
                 sb.AppendLine();
             }
 
-            // Generate static setters for private properties (Expression Trees)
+            // Generate accessors for private/init-only property setters.
+            // NET8+: [UnsafeAccessor(UnsafeAccessorKind.Method)] — AOT-safe, trimmer-safe, zero-overhead, no Expression.Compile().
+            // netstandard2.1 fallback: MethodInfo.Invoke via FindSetter — reflection, not AOT-safe but functional.
+            // DeclaringTypeName is used as the UnsafeAccessor parameter type so inherited setters resolve correctly.
             var privateSetterProps = entity.Properties.Where(p => (!p.HasPublicSetter && p.HasAnySetter) || p.HasInitOnlySetter).ToList();
             if (privateSetterProps.Any())
             {
-                sb.AppendLine($"        // Cached Expression Tree setters for private/init-only properties.");
-                sb.AppendLine($"        // NOTE: CreateSetter uses Expression.Compile() and reflection fallback for properties");
-                sb.AppendLine($"        // from referenced assemblies that have private setters. This path is not AOT-safe");
-                sb.AppendLine($"        // when the entity type has private setters from an external referenced assembly.");
-                sb.AppendLine($"        // See AOT_LIMITATIONS.md in the BLite repository for details.");
+                sb.AppendLine($"        // Private/init-only property setter accessors.");
+                sb.AppendLine($"        // NET8+: [UnsafeAccessor] — AOT-safe, no reflection.");
+                sb.AppendLine($"        // netstandard2.1: MethodInfo.Invoke fallback — see AOT_LIMITATIONS.md.");
                 foreach (var prop in privateSetterProps)
                 {
-                    var entityType = $"global::{entity.FullTypeName}";
+                    var declaringType = $"global::{(string.IsNullOrEmpty(prop.DeclaringTypeName) ? entity.FullTypeName : prop.DeclaringTypeName)}";
                     var propType = QualifyType(prop.TypeName);
-                    sb.AppendLine($"#pragma warning disable IL3050, IL2026, IL2072, IL2111");
-                    sb.AppendLine($"        private static readonly global::System.Action<{entityType}, {propType}> _setter_{prop.Name} = CreateSetter<{entityType}, {propType}>(\"{prop.Name}\");");
-                    sb.AppendLine($"#pragma warning restore IL3050, IL2026, IL2072, IL2111");
+                    sb.AppendLine($"#if NET8_0_OR_GREATER");
+                    sb.AppendLine($"        [global::System.Runtime.CompilerServices.UnsafeAccessor(");
+                    sb.AppendLine($"            global::System.Runtime.CompilerServices.UnsafeAccessorKind.Method, Name = \"set_{prop.Name}\")]");
+                    sb.AppendLine($"        private static extern void __UnsafeSetter_{prop.Name}({declaringType} obj, {propType} value);");
+                    sb.AppendLine($"#else");
+                    sb.AppendLine($"#pragma warning disable IL2075, IL2026, IL2111");
+                    sb.AppendLine($"        private static readonly global::System.Reflection.MethodInfo? _mi_{prop.Name} = FindSetter<{declaringType}>(\"{prop.Name}\");");
+                    sb.AppendLine($"#pragma warning restore IL2075, IL2026, IL2111");
+                    sb.AppendLine($"#endif");
                 }
                 sb.AppendLine();
-                
-                sb.AppendLine($"#pragma warning disable IL3050, IL2026, IL2072, IL2075, IL2111");
-                sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresDynamicCode(\"Private/init-only property setters are set using Expression.Compile() and reflection fallback, which require dynamic code generation. Avoid using types with private setters from referenced assemblies in AOT scenarios.\")]");
-                sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"The reflection fallback for private setters from referenced assemblies walks the type hierarchy and invokes setters via MethodInfo.Invoke, which requires type metadata to be preserved.\")]");
-                sb.AppendLine($"        private static global::System.Action<TObj, TVal> CreateSetter<TObj, TVal>(string propertyName)");
+
+                // Emit FindSetter only for netstandard2.1 (NET8+ uses UnsafeAccessor)
+                sb.AppendLine($"#if !NET8_0_OR_GREATER");
+                sb.AppendLine($"#pragma warning disable IL2075, IL2026, IL2111");
+                sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"MethodInfo lookup for private/init-only setters requires type metadata to be preserved.\")]");
+                sb.AppendLine($"        private static global::System.Reflection.MethodInfo? FindSetter<T>(string propertyName)");
                 sb.AppendLine($"        {{");
-                sb.AppendLine($"            try");
+                sb.AppendLine($"            global::System.Type? t = typeof(T);");
+                sb.AppendLine($"            while (t != null)");
                 sb.AppendLine($"            {{");
-                sb.AppendLine($"                var param = global::System.Linq.Expressions.Expression.Parameter(typeof(TObj), \"obj\");");
-                sb.AppendLine($"                var value = global::System.Linq.Expressions.Expression.Parameter(typeof(TVal), \"val\");");
-                sb.AppendLine($"                var prop = global::System.Linq.Expressions.Expression.Property(param, propertyName);");
-                sb.AppendLine($"                var assign = global::System.Linq.Expressions.Expression.Assign(prop, value);");
-                sb.AppendLine($"                return global::System.Linq.Expressions.Expression.Lambda<global::System.Action<TObj, TVal>>(assign, param, value).Compile();");
+                sb.AppendLine($"                var pi = t.GetProperty(propertyName,");
+                sb.AppendLine($"                    global::System.Reflection.BindingFlags.DeclaredOnly |");
+                sb.AppendLine($"                    global::System.Reflection.BindingFlags.Instance |");
+                sb.AppendLine($"                    global::System.Reflection.BindingFlags.Public |");
+                sb.AppendLine($"                    global::System.Reflection.BindingFlags.NonPublic);");
+                sb.AppendLine($"                var setter = pi?.GetSetMethod(nonPublic: true);");
+                sb.AppendLine($"                if (setter != null) return setter;");
+                sb.AppendLine($"                t = t.BaseType;");
                 sb.AppendLine($"            }}");
-                sb.AppendLine($"            catch");
-                sb.AppendLine($"            {{");
-                sb.AppendLine($"                // Expression Trees cannot compile assignments to private setters declared in a base class.");
-                sb.AppendLine($"                // Walk the hierarchy and fall back to MethodInfo.Invoke which bypasses C# access modifiers.");
-                sb.AppendLine($"                global::System.Type? t = typeof(TObj);");
-                sb.AppendLine($"                while (t != null)");
-                sb.AppendLine($"                {{");
-                sb.AppendLine($"                    var pi = t.GetProperty(propertyName,");
-                sb.AppendLine($"                        global::System.Reflection.BindingFlags.DeclaredOnly |");
-                sb.AppendLine($"                        global::System.Reflection.BindingFlags.Instance |");
-                sb.AppendLine($"                        global::System.Reflection.BindingFlags.Public |");
-                sb.AppendLine($"                        global::System.Reflection.BindingFlags.NonPublic);");
-                sb.AppendLine($"                    var setter = pi?.GetSetMethod(nonPublic: true);");
-                sb.AppendLine($"                    if (setter != null)");
-                sb.AppendLine($"                        return (obj, val) => setter.Invoke(obj, new object?[] {{ val }});");
-                sb.AppendLine($"                    t = t.BaseType;");
-                sb.AppendLine($"                }}");
-                sb.AppendLine($"                // True getter-only property — skip silently.");
-                sb.AppendLine($"                return (obj, val) => {{ }};");
-                sb.AppendLine($"            }}");
+                sb.AppendLine($"            return null;");
                 sb.AppendLine($"        }}");
-                sb.AppendLine($"#pragma warning restore IL3050, IL2026, IL2072, IL2075, IL2111");
+                sb.AppendLine($"#pragma warning restore IL2075, IL2026, IL2111");
+                sb.AppendLine($"#endif");
                 sb.AppendLine();
             }
 
@@ -134,6 +128,26 @@ namespace BLite.SourceGenerators
                     sb.AppendLine($"            typeof({entityType}).GetField(\"{prop.BackingFieldName}\", global::System.Reflection.BindingFlags.Instance | global::System.Reflection.BindingFlags.NonPublic)!;");
                     sb.AppendLine($"#endif");
                 }
+                sb.AppendLine();
+            }
+
+            // Non-public constructor accessor (NET8+: [UnsafeAccessor(Constructor)] — AOT-safe, no reflection).
+            // Generated when the selected constructor is non-public (or when required members force
+            // bypassing the `new T()` call-site syntax even for a public ctor).
+            if (entity.SelectedConstructorParameters != null && !entity.SelectedConstructorIsPublic)
+            {
+                var entityType2 = $"global::{entity.FullTypeName}";
+                var ctorParams = entity.SelectedConstructorParameters;
+                // Build the parameter list for the UnsafeAccessor method signature.
+                var paramList = string.Join(", ", ctorParams.Select(p => $"{QualifyType(p.TypeName)} {p.Name}"));
+                sb.AppendLine($"        // Non-public constructor accessor.");
+                sb.AppendLine($"        // NET8+: [UnsafeAccessor(Constructor)] — AOT-safe, bypasses visibility and CS9035.");
+                sb.AppendLine($"        // netstandard2.1: Activator.CreateInstance — reflection, not AOT-safe but functional.");
+                sb.AppendLine($"#if NET8_0_OR_GREATER");
+                sb.AppendLine($"        [global::System.Runtime.CompilerServices.UnsafeAccessor(");
+                sb.AppendLine($"            global::System.Runtime.CompilerServices.UnsafeAccessorKind.Constructor)]");
+                sb.AppendLine($"        private static extern {entityType2} __CreateInstance({paramList});");
+                sb.AppendLine($"#endif");
                 sb.AppendLine();
             }
 
@@ -484,7 +498,10 @@ namespace BLite.SourceGenerators
         private static void GenerateDeserializeMethod(StringBuilder sb, EntityInfo entity, bool isRoot, string mapperNamespace)
         {
              var entityType = $"global::{entity.FullTypeName}";
-             var needsReflection = entity.HasPrivateSetters || entity.HasPrivateOrNoConstructor;
+             var needsReflection = entity.HasPrivateSetters
+                 || entity.SelectedConstructorParameters == null  // GetUninitializedObject path
+                 || !entity.SelectedConstructorIsPublic           // non-public ctor path
+                 || (entity.SelectedConstructorParameters.Count == 0 && entity.HasPrivateOrNoConstructor);
              
              // Always generate a public Deserialize method that accepts ref (for nested/internal usage)
              GenerateDeserializeCore(sb, entity, entityType, needsReflection, mapperNamespace);
@@ -571,146 +588,154 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"            }}");
             sb.AppendLine();
             
-            // Construct object - different approach if needs reflection
-            if (needsReflection)
+            // ── Object construction ───────────────────────────────────────────────────
+            if (entity.SelectedConstructorParameters == null)
             {
-                // Use RuntimeHelpers.GetUninitializedObject + Expression Trees for private setters
-                sb.AppendLine($"            // Creating instance without calling constructor (has private members)");
+                // No viable constructor found — last resort: GetUninitializedObject.
+                // Field initializers do NOT run. BLITE010 warning was already emitted by the analyzer.
+                sb.AppendLine($"            // BLITE010: No viable constructor — using GetUninitializedObject (field initializers will NOT run).");
                 sb.AppendLine($"            var entity = (global::{entity.FullTypeName})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(global::{entity.FullTypeName}));");
-                sb.AppendLine();
-                
-                // Set properties using setters (Expression Trees for private, direct for public)
-                foreach(var prop in entity.Properties)
+            }
+            else if (entity.SelectedConstructorParameters.Count == 0)
+            {
+                // Parameterless constructor.
+                if (entity.SelectedConstructorIsPublic)
                 {
-                    var varName = prop.Name.ToLower();
-                    var propValue = varName;
-                    
-                    if (prop.IsCollection)
-                    {
-                        // Convert to appropriate collection type
-                        if (prop.IsArray)
-                        {
-                            propValue += ".ToArray()";
-                        }
-                        else if (prop.HasPrivateBackingFieldAccess)
-                        {
-                            // DDD backing field is List<T> — no conversion; assign temp List<T> directly to the field.
-                        }
-                        else if (prop.CollectionConcreteTypeName != null)
-                        {
-                            var concreteType = prop.CollectionConcreteTypeName;
-                            var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
-                            
-                            if (concreteType.Contains("HashSet"))
-                                propValue = $"new global::System.Collections.Generic.HashSet<{itemType}>({propValue})";
-                            else if (concreteType.Contains("ISet"))
-                                propValue = $"new global::System.Collections.Generic.HashSet<{itemType}>({propValue})";
-                            else if (concreteType.Contains("LinkedList"))
-                                propValue = $"new global::System.Collections.Generic.LinkedList<{itemType}>({propValue})";
-                            else if (concreteType.Contains("Queue"))
-                                propValue = $"new global::System.Collections.Generic.Queue<{itemType}>({propValue})";
-                            else if (concreteType.Contains("Stack"))
-                                propValue = $"new global::System.Collections.Generic.Stack<{itemType}>({propValue})";
-                            else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
-                                propValue += ".AsReadOnly()";
-                        }
-                    }
-                    
-                    // Use appropriate setter
-                    if (prop.HasPrivateBackingFieldAccess && prop.IsCollection)
-                    {
-                        // DDD pattern: write directly to the private backing field.
-                        // NET8+: UnsafeAccessor ref-return — one instruction, AOT-safe.
-                        // netstandard2.1: FieldInfo.SetValue fallback.
-                        sb.AppendLine($"#if NET8_0_OR_GREATER");
-                        sb.AppendLine($"            __UnsafeField_{prop.Name}(entity) = {propValue};");
-                        sb.AppendLine($"#else");
-                        sb.AppendLine($"            _fi_{prop.Name}.SetValue(entity, {propValue});");
-                        sb.AppendLine($"#endif");
-                    }
-                    else if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
-                    {
-                        // Use Expression Tree setter (for private or init-only setters)
-                        // Preserve null only when the property is truly Nullable<T> (TypeName ends with '?').
-                        // Unconstrained T? generic parameters have IsNullable=true but TypeName has no '?'.
-                        if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
-                            sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue});");
-                        else
-                            sb.AppendLine($"            _setter_{prop.Name}(entity, {propValue} ?? default!);");
-                    }
-                    else
-                    {
-                        // Direct property assignment
-                        if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
-                            sb.AppendLine($"            entity.{prop.Name} = {propValue};");
-                        else
-                            sb.AppendLine($"            entity.{prop.Name} = {propValue} ?? default!;");
-                    }
+                    // public — straightforward new().
+                    sb.AppendLine($"            var entity = new {entityType}();");
                 }
-                sb.AppendLine();
-                sb.AppendLine($"            return entity;");
+                else
+                {
+                    // Non-public: NET8+ uses [UnsafeAccessor(Constructor)], netstandard2.1 uses Activator.
+                    sb.AppendLine($"            // Non-public parameterless constructor.");
+                    sb.AppendLine($"#if NET8_0_OR_GREATER");
+                    sb.AppendLine($"            var entity = __CreateInstance();");
+                    sb.AppendLine($"#else");
+                    sb.AppendLine($"#pragma warning disable IL2072, IL2026");
+                    sb.AppendLine($"            var entity = (global::{entity.FullTypeName})global::System.Activator.CreateInstance(typeof(global::{entity.FullTypeName}), nonPublic: true)!;");
+                    sb.AppendLine($"#pragma warning restore IL2072, IL2026");
+                    sb.AppendLine($"#endif");
+                }
             }
             else
             {
-                // Standard object initializer approach
-                sb.AppendLine($"            return new {entityType}");
-                sb.AppendLine($"            {{");
-                foreach(var prop in entity.Properties)
+                // N-param constructor: pass matched properties as arguments.
+                var ctorArgs = string.Join(", ",
+                    entity.SelectedConstructorParameters.Select(p =>
+                    {
+                        var varName = p.MatchedPropertyName.ToLower();
+                        var isNullableValueType = p.IsNullable && p.TypeName.TrimEnd('?') != p.TypeName;
+                        return isNullableValueType ? varName : $"{varName} ?? default!";
+                    }));
+                if (entity.SelectedConstructorIsPublic)
                 {
-                    var val = prop.Name.ToLower();
-                    if (prop.IsCollection)
+                    sb.AppendLine($"            var entity = new {entityType}({ctorArgs});");
+                }
+                else
+                {
+                    sb.AppendLine($"            // Non-public N-param constructor.");
+                    sb.AppendLine($"#if NET8_0_OR_GREATER");
+                    sb.AppendLine($"            var entity = __CreateInstance({ctorArgs});");
+                    sb.AppendLine($"#else");
+                    sb.AppendLine($"#pragma warning disable IL2072, IL2026");
+                    var argTypesArr = string.Join(", ", entity.SelectedConstructorParameters.Select(p => $"typeof({QualifyType(p.TypeName)})"));
+                    var argsArr = string.Join(", ", entity.SelectedConstructorParameters.Select(p =>
                     {
-                        // Convert to appropriate collection type
-                        if (prop.IsArray)
-                        {
-                            val += ".ToArray()";
-                        }
-                        else if (prop.CollectionConcreteTypeName != null)
-                        {
-                            var concreteType = prop.CollectionConcreteTypeName;
-                            var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
-                            
-                            // Check if it needs conversion from List
-                            if (concreteType.Contains("HashSet"))
-                            {
-                                val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
-                            }
-                            else if (concreteType.Contains("ISet"))
-                            {
-                                val = $"new global::System.Collections.Generic.HashSet<{itemType}>({val})";
-                            }
-                            else if (concreteType.Contains("LinkedList"))
-                            {
-                                val = $"new global::System.Collections.Generic.LinkedList<{itemType}>({val})";
-                            }
-                            else if (concreteType.Contains("Queue"))
-                            {
-                                val = $"new global::System.Collections.Generic.Queue<{itemType}>({val})";
-                            }
-                            else if (concreteType.Contains("Stack"))
-                            {
-                                val = $"new global::System.Collections.Generic.Stack<{itemType}>({val})";
-                            }
-                            else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
-                            {
-                                val += ".AsReadOnly()";
-                            }
-                            // Otherwise keep as List (works for List<T>, IList<T>, ICollection<T>, IEnumerable<T>)
-                        }
+                        var varName = p.MatchedPropertyName.ToLower();
+                        var isNullableValueType = p.IsNullable && p.TypeName.TrimEnd('?') != p.TypeName;
+                        return isNullableValueType ? varName : $"{varName} ?? default!";
+                    }));
+                    sb.AppendLine($"            var ctor__ = typeof(global::{entity.FullTypeName}).GetConstructor(");
+                    sb.AppendLine($"                global::System.Reflection.BindingFlags.Instance | global::System.Reflection.BindingFlags.NonPublic | global::System.Reflection.BindingFlags.Public,");
+                    sb.AppendLine($"                null, new global::System.Type[] {{ {argTypesArr} }}, null)!;");
+                    sb.AppendLine($"            var entity = (global::{entity.FullTypeName})ctor__.Invoke(new object?[] {{ {argsArr} }});");
+                    sb.AppendLine($"#pragma warning restore IL2072, IL2026");
+                    sb.AppendLine($"#endif");
+                }
+            }
+            sb.AppendLine();
+
+            // ── Post-construction property assignment ─────────────────────────────────
+            // For N-param ctors, only assign properties NOT already set via constructor.
+            var ctorMatchedPropNames = entity.SelectedConstructorParameters != null
+                ? new System.Collections.Generic.HashSet<string>(entity.SelectedConstructorParameters.Select(p => p.MatchedPropertyName))
+                : new System.Collections.Generic.HashSet<string>();
+
+            // Set remaining properties via setters.
+            foreach (var prop in entity.Properties)
+            {
+                // Properties already initialised through the constructor don't need to be set again.
+                if (ctorMatchedPropNames.Contains(prop.Name)) continue;
+
+                var varName = prop.Name.ToLower();
+                var propValue = varName;
+                
+                if (prop.IsCollection)
+                {
+                    // Convert to appropriate collection type
+                    if (prop.IsArray)
+                    {
+                        propValue += ".ToArray()";
                     }
-                    // Use direct assignment only for truly nullable types (TypeName ends with '?').
-                    // Unconstrained T? generic parameters have IsNullable=true but TypeName has no '?'.
-                    if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
+                    else if (prop.HasPrivateBackingFieldAccess)
                     {
-                        sb.AppendLine($"                {prop.Name} = {val},");
+                        // DDD backing field is List<T> — no conversion; assign temp List<T> directly to the field.
                     }
-                    else
+                    else if (prop.CollectionConcreteTypeName != null)
                     {
-                        sb.AppendLine($"                {prop.Name} = {val} ?? default!,");
+                        var concreteType = prop.CollectionConcreteTypeName;
+                        var itemType = prop.IsCollectionItemNested ? $"global::{prop.NestedTypeFullName}" : prop.CollectionItemType;
+                        
+                        if (concreteType.Contains("HashSet"))
+                            propValue = $"new global::System.Collections.Generic.HashSet<{itemType}>({propValue})";
+                        else if (concreteType.Contains("ISet"))
+                            propValue = $"new global::System.Collections.Generic.HashSet<{itemType}>({propValue})";
+                        else if (concreteType.Contains("LinkedList"))
+                            propValue = $"new global::System.Collections.Generic.LinkedList<{itemType}>({propValue})";
+                        else if (concreteType.Contains("Queue"))
+                            propValue = $"new global::System.Collections.Generic.Queue<{itemType}>({propValue})";
+                        else if (concreteType.Contains("Stack"))
+                            propValue = $"new global::System.Collections.Generic.Stack<{itemType}>({propValue})";
+                        else if (concreteType.Contains("IReadOnlyList") || concreteType.Contains("IReadOnlyCollection"))
+                            propValue += ".AsReadOnly()";
                     }
                 }
-                sb.AppendLine($"            }};");
+                
+                // Use appropriate setter
+                if (prop.HasPrivateBackingFieldAccess && prop.IsCollection)
+                {
+                    // DDD pattern: write directly to the private backing field.
+                    // NET8+: UnsafeAccessor ref-return — one instruction, AOT-safe.
+                    // netstandard2.1: FieldInfo.SetValue fallback.
+                    sb.AppendLine($"#if NET8_0_OR_GREATER");
+                    sb.AppendLine($"            __UnsafeField_{prop.Name}(entity) = {propValue};");
+                    sb.AppendLine($"#else");
+                    sb.AppendLine($"            _fi_{prop.Name}.SetValue(entity, {propValue});");
+                    sb.AppendLine($"#endif");
+                }
+                else if ((!prop.HasPublicSetter && prop.HasAnySetter) || prop.HasInitOnlySetter)
+                {
+                    // NET8+: call the [UnsafeAccessor] static extern setter — AOT-safe, no reflection.
+                    // netstandard2.1: call via MethodInfo.Invoke — reflection, not AOT-safe but functional.
+                    var isNullableValueType = prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName;
+                    var setterArg = isNullableValueType ? propValue : $"{propValue} ?? default!";
+                    sb.AppendLine($"#if NET8_0_OR_GREATER");
+                    sb.AppendLine($"            __UnsafeSetter_{prop.Name}(entity, {setterArg});");
+                    sb.AppendLine($"#else");
+                    sb.AppendLine($"            _mi_{prop.Name}?.Invoke(entity, new object?[] {{ {setterArg} }});");
+                    sb.AppendLine($"#endif");
+                }
+                else
+                {
+                    // Direct property assignment
+                    if (prop.IsNullable && prop.TypeName.TrimEnd('?') != prop.TypeName)
+                        sb.AppendLine($"            entity.{prop.Name} = {propValue};");
+                    else
+                        sb.AppendLine($"            entity.{prop.Name} = {propValue} ?? default!;");
+                }
             }
+            sb.AppendLine();
+            sb.AppendLine($"            return entity;");
             sb.AppendLine($"        }}");
         }
 
@@ -1005,10 +1030,17 @@ namespace BLite.SourceGenerators
                 sb.AppendLine($"        public override {qualifiedKeyType} GetId({entityType} entity) => entity.{propName};");
             }
             
-            // If the ID property has a private or init-only setter, use the compiled setter
+            // If the ID property has a private or init-only setter, use the AOT-safe accessor
             if (entity.HasPrivateSetters && keyProp != null && (!keyProp.HasPublicSetter || keyProp.HasInitOnlySetter))
             {
-                sb.AppendLine($"        public override void SetId({entityType} entity, {qualifiedKeyType} id) => _setter_{propName}(entity, id);");
+                sb.AppendLine($"        public override void SetId({entityType} entity, {qualifiedKeyType} id)");
+                sb.AppendLine($"        {{");
+                sb.AppendLine($"#if NET8_0_OR_GREATER");
+                sb.AppendLine($"            __UnsafeSetter_{propName}(entity, id);");
+                sb.AppendLine($"#else");
+                sb.AppendLine($"            _mi_{propName}?.Invoke(entity, new object?[] {{ id }});");
+                sb.AppendLine($"#endif");
+                sb.AppendLine($"        }}");
             }
             else
             {

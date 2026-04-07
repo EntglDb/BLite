@@ -22,7 +22,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public MainWindowViewModel()
     {
         _history = new ConnectionHistoryService();
-        LoadRecentConnections();
+        _ = LoadRecentConnectionsAsync();
     }
 
     // ── App info (version + license) ──────────────────────────────────────────
@@ -61,10 +61,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public bool HasRecentConnections => RecentConnections.Count > 0;
 
-    private void LoadRecentConnections()
+    private async Task LoadRecentConnectionsAsync()
     {
+        var items = await _history.GetRecentAsync();
         RecentConnections.Clear();
-        foreach (var item in _history.GetRecent())
+        foreach (var item in items)
             RecentConnections.Add(new RecentConnectionViewModel(item));
 
         RecentCount = RecentConnections.Count;   // triggers HasRecentConnections notify
@@ -259,7 +260,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
             // Persist to history
             await _history.AddOrUpdate(path, (int)SelectedPreset, readOnly, IsMultiFile);
-            LoadRecentConnections();
+            await LoadRecentConnectionsAsync();
 
             OpenDatabaseName = Path.GetFileName(path);
             StatusMessage    = null;
