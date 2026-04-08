@@ -2128,6 +2128,100 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     }
 
     /// <summary>
+    /// Returns the minimum field value from this collection using an <see cref="IndexMinMax"/> plan.
+    /// When the plan targets a B-Tree index, the O(log n) index boundary read is used.
+    /// Falls back to a BSON-level full collection scan when no index is available.
+    /// </summary>
+    public async ValueTask<TResult> MinBoundaryAsync<TResult>(IndexMinMax plan, CancellationToken ct = default)
+    {
+        if (plan.Kind == IndexMinMax.PlanKind.IndexBoundary)
+        {
+            var index = _indexManager.GetIndex(plan.IndexName!);
+            if (index != null)
+            {
+                T? doc = null;
+                await foreach (var d in QueryIndexAsync(plan.IndexName!, null, null, ascending: true, skip: 0, take: 1, ct: ct).ConfigureAwait(false))
+                {
+                    doc = d;
+                    break;
+                }
+                if (doc != null)
+                {
+                    var keyValue = index.Definition.KeySelector(doc);
+                    if (keyValue is TResult r) return r;
+                }
+                return default!;
+            }
+            // Index was not found; cannot fall back (no BsonAggregator stored for IndexBoundary plans).
+            return default!;
+        }
+
+        // BsonAggregate fallback: scan the collection using BSON field reads.
+        var agg = plan.Fallback!;
+        return await BsonAggregateFieldAsync<TResult>(agg, isMin: true, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the maximum field value from this collection using an <see cref="IndexMinMax"/> plan.
+    /// When the plan targets a B-Tree index, the O(log n) index boundary read is used.
+    /// Falls back to a BSON-level full collection scan when no index is available.
+    /// </summary>
+    public async ValueTask<TResult> MaxBoundaryAsync<TResult>(IndexMinMax plan, CancellationToken ct = default)
+    {
+        if (plan.Kind == IndexMinMax.PlanKind.IndexBoundary)
+        {
+            var index = _indexManager.GetIndex(plan.IndexName!);
+            if (index != null)
+            {
+                T? doc = null;
+                await foreach (var d in QueryIndexAsync(plan.IndexName!, null, null, ascending: false, skip: 0, take: 1, ct: ct).ConfigureAwait(false))
+                {
+                    doc = d;
+                    break;
+                }
+                if (doc != null)
+                {
+                    var keyValue = index.Definition.KeySelector(doc);
+                    if (keyValue is TResult r) return r;
+                }
+                return default!;
+            }
+            return default!;
+        }
+
+        var agg = plan.Fallback!;
+        return await BsonAggregateFieldAsync<TResult>(agg, isMin: false, ct).ConfigureAwait(false);
+    }
+
+    private async Task<TResult> BsonAggregateFieldAsync<TResult>(BsonAggregator agg, bool isMin, CancellationToken ct)
+    {
+        var projector = BsonExpressionEvaluator.CreateFieldProjector<TResult>(agg.FieldName, _storage.GetKeyMap());
+        TResult result = default!;
+        bool found = false;
+        var comparer = Comparer<TResult>.Default;
+
+        await foreach (var value in ScanAsync(projector, ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!found)
+            {
+                result = value;
+                found = true;
+            }
+            else if (isMin)
+            {
+                if (comparer.Compare(value, result) < 0) result = value;
+            }
+            else
+            {
+                if (comparer.Compare(value, result) > 0) result = value;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Counts documents matching <paramref name="whereClause"/> without fully materializing
     /// the result set in memory.
     /// <list type="number">

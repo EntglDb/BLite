@@ -1,3 +1,4 @@
+using BLite.Core.Indexing;
 using System.Linq.Expressions;
 
 namespace BLite.Core.Query;
@@ -72,6 +73,9 @@ public interface IBLiteQueryable<T> : IOrderedQueryable<T>
     /// <summary>Returns the number of elements matching <paramref name="predicate"/> asynchronously.</summary>
     Task<int> CountAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
+    /// <summary>Returns the number of elements as a <see cref="long"/> asynchronously.</summary>
+    Task<long> LongCountAsync(CancellationToken ct = default);
+
     /// <summary>Returns <c>true</c> if the sequence contains any elements.</summary>
     Task<bool> AnyAsync(CancellationToken ct = default);
 
@@ -133,4 +137,42 @@ public interface IBLiteQueryable<T> : IOrderedQueryable<T>
 
     /// <summary>Returns the maximum projected value.</summary>
     Task<TResult> MaxAsync<TResult>(Expression<Func<T, TResult>> selector, CancellationToken ct = default);
+
+    // ─── Phase 3: AOT-safe filter overloads (IndexQueryPlan / IndexMinMax) ──────
+
+    /// <summary>Returns the indexes of the underlying collection.</summary>
+    IEnumerable<CollectionIndexInfo> GetIndexes();
+
+    /// <summary>Executes the query using a pre-built <see cref="IndexQueryPlan"/> and returns all results as a list.</summary>
+    Task<List<T>> ToListAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Returns the first element matching the plan, or <c>default</c> if none.</summary>
+    Task<T?> FirstOrDefaultAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Returns the first element matching the plan. Throws if none matches.</summary>
+    Task<T> FirstAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Returns the single element matching the plan, or <c>default</c>. Throws if more than one.</summary>
+    Task<T?> SingleOrDefaultAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Returns the single element matching the plan. Throws if none or more than one.</summary>
+    Task<T> SingleAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Returns <c>true</c> if any element matches the plan.</summary>
+    Task<bool> AnyAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Counts elements matching the plan.</summary>
+    Task<int> CountAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Executes the query using a pre-built <see cref="IndexQueryPlan"/> and returns results as an array.</summary>
+    Task<T[]> ToArrayAsync(IndexQueryPlan plan, CancellationToken ct = default);
+
+    /// <summary>Executes <paramref name="action"/> for each element matching the plan.</summary>
+    Task ForEachAsync(IndexQueryPlan plan, Action<T> action, CancellationToken ct = default);
+
+    /// <summary>Returns the minimum field value using the given <see cref="IndexMinMax"/> plan.</summary>
+    Task<TResult> MinAsync<TResult>(IndexMinMax plan, CancellationToken ct = default);
+
+    /// <summary>Returns the maximum field value using the given <see cref="IndexMinMax"/> plan.</summary>
+    Task<TResult> MaxAsync<TResult>(IndexMinMax plan, CancellationToken ct = default);
 }

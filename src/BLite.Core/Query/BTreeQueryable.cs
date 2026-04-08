@@ -3,6 +3,7 @@
 // dynamic code) to build and execute expression trees. All warnings are suppressed here
 // because this class is inherently dynamic and only used via annotated APIs.
 #pragma warning disable IL3050, IL2026
+using BLite.Core.Indexing;
 using System.Collections;
 using System.Linq;
 using System.Linq.Expressions;
@@ -133,6 +134,21 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
     /// <inheritdoc />
     public async Task<bool> AllAsync(Expression<Func<T, bool>> predicate, CancellationToken ct)
     {
+        // AOT-safe fast path: compile the inverted predicate at the BSON level and
+        // scan for the first non-matching document (limit:1). No POCO deserialization.
+        var inversePred = BsonExpressionEvaluator.TryCompileInverse<T>(predicate);
+        if (inversePred != null)
+        {
+            var core = (IBTreeQueryCore<T>)Provider;
+            await foreach (var _ in core.ScanAsync(IndexQueryPlan.Scan(inversePred), ct).ConfigureAwait(false))
+                return false; // found one document that violates the predicate
+            return true;
+        }
+
+        // Fallback for expression patterns BsonExpressionEvaluator cannot handle:
+        // stream all documents and evaluate with a compiled delegate.
+        // Note: this path uses Expression.Compile() and is not AOT-friendly.
+        // Track as follow-up: extend BsonExpressionEvaluator to cover remaining patterns.
         var compiled = predicate.Compile();
         var results = await AsyncProvider.ExecuteAsync<IEnumerable<T>>(Expression, ct).ConfigureAwait(false);
         foreach (var item in results)
@@ -171,6 +187,17 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
             typeof(Queryable), nameof(Queryable.Count), new[] { typeof(T) },
             filtered.Expression);
         return AsyncProvider.ExecuteAsync<int>(countExpr, ct);
+    }
+
+    /// <inheritdoc />
+    public Task<long> LongCountAsync(CancellationToken ct)
+    {
+        // Build Queryable.LongCount<T>(source) so the provider can push it down to the
+        // native key-only scan, mirroring the CountAsync fast path.
+        var countExpr = Expression.Call(
+            typeof(Queryable), nameof(Queryable.LongCount), new[] { typeof(T) },
+            Expression);
+        return AsyncProvider.ExecuteAsync<long>(countExpr, ct);
     }
 
     /// <inheritdoc />
@@ -360,6 +387,120 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
             typeof(Queryable), nameof(Queryable.Max), new[] { typeof(T), typeof(TResult) },
             Expression, Expression.Quote(selector));
         return AsyncProvider.ExecuteAsync<TResult>(maxExpr, ct);
+    }
+
+    // ─── Phase 3: AOT-safe filter overloads (IndexQueryPlan / IndexMinMax) ─────
+
+    /// <inheritdoc />
+    public IEnumerable<CollectionIndexInfo> GetIndexes()
+        => ((IBTreeQueryCore<T>)Provider).GetIndexes();
+
+    /// <inheritdoc />
+    public async Task<List<T>> ToListAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        var list = new List<T>();
+        await foreach (var item in core.ScanAsync(plan, ct).ConfigureAwait(false))
+            list.Add(item);
+        return list;
+    }
+
+    /// <inheritdoc />
+    public async Task<T?> FirstOrDefaultAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        await foreach (var item in core.ScanAsync(plan, ct).ConfigureAwait(false))
+            return item;
+        return default;
+    }
+
+    /// <inheritdoc />
+    public async Task<T> FirstAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        await foreach (var item in core.ScanAsync(plan, ct).ConfigureAwait(false))
+            return item;
+        throw new InvalidOperationException("Sequence contains no elements.");
+    }
+
+    /// <inheritdoc />
+    public async Task<T?> SingleOrDefaultAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        T? found = default;
+        int count = 0;
+        await foreach (var item in core.ScanAsync(plan, ct).ConfigureAwait(false))
+        {
+            if (count++ == 0) found = item;
+            else throw new InvalidOperationException("Sequence contains more than one element.");
+        }
+        return found;
+    }
+
+    /// <inheritdoc />
+    public async Task<T> SingleAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        T? found = default;
+        int count = 0;
+        await foreach (var item in core.ScanAsync(plan, ct).ConfigureAwait(false))
+        {
+            if (count++ == 0) found = item;
+            else throw new InvalidOperationException("Sequence contains more than one element.");
+        }
+        if (count == 0) throw new InvalidOperationException("Sequence contains no elements.");
+        return found!;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> AnyAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        await foreach (var _ in core.ScanAsync(plan, ct).ConfigureAwait(false))
+            return true;
+        return false;
+    }
+
+    /// <inheritdoc />
+    public async Task<int> CountAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        int count = 0;
+        await foreach (var _ in core.ScanAsync(plan, ct).ConfigureAwait(false))
+            count++;
+        return count;
+    }
+
+    /// <inheritdoc />
+    public async Task<T[]> ToArrayAsync(IndexQueryPlan plan, CancellationToken ct)
+    {
+        var list = await ToListAsync(plan, ct).ConfigureAwait(false);
+        return list.ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task ForEachAsync(IndexQueryPlan plan, Action<T> action, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        await foreach (var item in core.ScanAsync(plan, ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            action(item);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<TResult> MinAsync<TResult>(IndexMinMax plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        return await core.MinBoundaryAsync<TResult>(plan, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TResult> MaxAsync<TResult>(IndexMinMax plan, CancellationToken ct)
+    {
+        var core = (IBTreeQueryCore<T>)Provider;
+        return await core.MaxBoundaryAsync<TResult>(plan, ct).ConfigureAwait(false);
     }
 
     public IEnumerator<T> GetEnumerator()

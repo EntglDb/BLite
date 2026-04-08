@@ -38,6 +38,24 @@ internal static class BsonExpressionEvaluator
         => TryCompileBody(expression.Body, expression.Parameters[0], registry, keyMap);
 
     /// <summary>
+    /// Attempts to compile the logical negation of <paramref name="expression"/> into a BSON-level predicate.
+    /// Returns <c>null</c> if the inner expression cannot be compiled.
+    /// Used by <see cref="BTreeQueryable{T}.AllAsync"/> to find the first document that violates
+    /// the predicate (early-exit O(1) instead of full scan).
+    /// </summary>
+    public static BsonReaderPredicate? TryCompileInverse<T>(
+        LambdaExpression expression,
+        ValueConverterRegistry? registry = null,
+        IReadOnlyDictionary<string, ushort>? keyMap = null)
+    {
+        var inner = TryCompileBody(expression.Body, expression.Parameters[0], registry, keyMap);
+        if (inner == null) return null;
+        // Capture inner to avoid closure over mutable variable.
+        var captured = inner;
+        return reader => !captured(reader);
+    }
+
+    /// <summary>
     /// Recursively compiles an expression node into a <see cref="BsonReaderPredicate"/>.
     /// Handles:
     /// - <c>AndAlso</c> / <c>OrElse</c>: skips sides that don't touch the parameter
@@ -1138,5 +1156,101 @@ internal static class BsonExpressionEvaluator
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="BsonReaderProjector{TResult}"/> that reads the value of
+    /// <paramref name="fieldName"/> from a BSON document and returns it as <typeparamref name="TResult"/>.
+    /// Returns <c>null</c> from the projector when the field is absent or the type cannot be converted.
+    /// No <c>Expression.Compile()</c> is used — the projector is built from direct BSON reads.
+    /// </summary>
+    internal static BsonReaderProjector<TResult> CreateFieldProjector<TResult>(
+        string fieldName,
+        IReadOnlyDictionary<string, ushort>? keyMap = null)
+    {
+        ushort fieldId_ = 0;
+        var hasFieldId = keyMap != null && keyMap.TryGetValue(fieldName, out fieldId_);
+        var capturedId = hasFieldId ? fieldId_ : (ushort)0;
+
+        return reader =>
+        {
+            try
+            {
+                reader.ReadDocumentSize();
+
+                BsonType type;
+                bool found;
+
+                if (hasFieldId && reader.TrySeekToField(capturedId, out type))
+                {
+                    found = true;
+                }
+                else
+                {
+                    type = BsonType.Null;
+                    found = false;
+                    while (reader.Remaining > 0)
+                    {
+                        var t = reader.ReadBsonType();
+                        if (t == 0) break;
+                        var name = reader.ReadElementHeader();
+                        if (name == fieldName) { type = t; found = true; break; }
+                        reader.SkipValue(t);
+                    }
+                }
+
+                if (!found) return default;
+                return ReadBsonFieldAs<TResult>(ref reader, type);
+            }
+            catch
+            {
+                return default;
+            }
+        };
+    }
+
+    private static TResult? ReadBsonFieldAs<TResult>(ref BsonSpanReader reader, BsonType type)
+    {
+        if (type == BsonType.Int32)
+        {
+            var val = reader.ReadInt32();
+            if (typeof(TResult) == typeof(int)) return (TResult)(object)val;
+            if (typeof(TResult) == typeof(long)) return (TResult)(object)(long)val;
+            if (typeof(TResult) == typeof(double)) return (TResult)(object)(double)val;
+            if (typeof(TResult) == typeof(decimal)) return (TResult)(object)(decimal)val;
+            return default;
+        }
+        if (type == BsonType.Int64)
+        {
+            var val = reader.ReadInt64();
+            if (typeof(TResult) == typeof(long)) return (TResult)(object)val;
+            if (typeof(TResult) == typeof(int)) return (TResult)(object)(int)val;
+            if (typeof(TResult) == typeof(double)) return (TResult)(object)(double)val;
+            if (typeof(TResult) == typeof(decimal)) return (TResult)(object)(decimal)val;
+            return default;
+        }
+        if (type == BsonType.Double)
+        {
+            var val = reader.ReadDouble();
+            if (typeof(TResult) == typeof(double)) return (TResult)(object)val;
+            if (typeof(TResult) == typeof(float)) return (TResult)(object)(float)val;
+            if (typeof(TResult) == typeof(decimal)) return (TResult)(object)(decimal)val;
+            return default;
+        }
+        if (type == BsonType.Decimal128)
+        {
+            var val = reader.ReadDecimal128();
+            if (typeof(TResult) == typeof(decimal)) return (TResult)(object)val;
+            if (typeof(TResult) == typeof(double)) return (TResult)(object)(double)val;
+            return default;
+        }
+        if (type == BsonType.String)
+        {
+            var val = reader.ReadString();
+            if (typeof(TResult) == typeof(string)) return (TResult)(object)val;
+            return default;
+        }
+        reader.SkipValue(type);
+        return default;
     }
 }
