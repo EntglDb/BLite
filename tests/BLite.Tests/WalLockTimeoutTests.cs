@@ -170,7 +170,7 @@ public class WalLockTimeoutTests : IDisposable
         await semaphore.WaitAsync();
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             // Should throw OperationCanceledException well before the timeout
