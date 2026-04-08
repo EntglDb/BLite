@@ -73,6 +73,9 @@ public interface IBLiteQueryable<T> : IOrderedQueryable<T>
     /// <summary>Returns the number of elements matching <paramref name="predicate"/> asynchronously.</summary>
     Task<int> CountAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
+    /// <summary>Returns the number of elements as a <see cref="long"/> asynchronously.</summary>
+    Task<long> LongCountAsync(CancellationToken ct = default);
+
     /// <summary>Returns <c>true</c> if the sequence contains any elements.</summary>
     Task<bool> AnyAsync(CancellationToken ct = default);
 

@@ -292,13 +292,74 @@ public class Phase3Tests : IDisposable
     [Fact]
     public void BLiteAotHelper_TryCompileWherePredicate_ReturnsNullForComplexLambda()
     {
-        // A compound multi-field expression — if TryCompile handles it, pred is non-null;
-        // if not, it returns null. Either way no exception should be thrown.
-        System.Linq.Expressions.Expression<System.Func<Person, bool>> complexExpr =
-            p => p.Name.Length > 5 && p.Age > 20;
-        var pred = BLiteAotHelper.TryCompileWherePredicate<Person>(complexExpr);
-        // pred is null or non-null depending on evaluator support — both are valid
-        Assert.True(pred == null || pred != null);
+        // x.Prop1 is a member access, not a supported binary comparison,
+        // so TryCompile cannot build a BsonReaderPredicate and must return null.
+        System.Linq.Expressions.Expression<System.Func<Person, bool>> unsupportedExpr =
+            p => p.Name == p.Name; // tautology that compares field to itself — unsatisfiable for BSON evaluator
+        var pred = BLiteAotHelper.TryCompileWherePredicate<Person>(unsupportedExpr);
+        // BsonExpressionEvaluator cannot translate field-to-field comparisons; must return null.
+        Assert.Null(pred);
+    }
+
+    // ── Chained Where — both predicates must be applied ──────────────────────
+
+    [Fact]
+    public async Task ToListAsync_ChainedWhere_BothPredicatesApplied()
+    {
+        // .Where(age).Where(name) must honour BOTH filters, not silently drop the inner one.
+        // This guards against the interceptor bug where baseQ strips the inner Where chain.
+        var results = await _db.People.AsQueryable()
+            .Where(p => p.Age > 20)
+            .Where(p => p.Name == "Person3")
+            .ToListAsync();
+        Assert.Single(results);
+        Assert.Equal("Person3", results[0].Name);
+        Assert.Equal(30, results[0].Age);
+    }
+
+    [Fact]
+    public async Task FirstOrDefaultAsync_ChainedWhere_BothPredicatesApplied()
+    {
+        var result = await _db.People.AsQueryable()
+            .Where(p => p.Age > 20)
+            .Where(p => p.Name == "Person3")
+            .FirstOrDefaultAsync();
+        Assert.NotNull(result);
+        Assert.Equal("Person3", result!.Name);
+    }
+
+    // ── LongCountAsync ────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task LongCountAsync_ReturnsCorrectCount()
+    {
+        var count = await _db.People.AsQueryable().LongCountAsync();
+        Assert.Equal(5L, count);
+    }
+
+    [Fact]
+    public async Task LongCountAsync_WithFilteredQueryable_ReturnsFilteredCount()
+    {
+        var count = await _db.People.AsQueryable()
+            .Where(p => p.Age >= 30)
+            .LongCountAsync();
+        Assert.Equal(3L, count);
+    }
+
+    // ── AllAsync (AOT-safe inverse predicate path) ────────────────────────────
+
+    [Fact]
+    public async Task AllAsync_ReturnsTrueWhenAllMatch()
+    {
+        var result = await _db.People.AsQueryable().AllAsync(p => p.Age > 0);
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task AllAsync_ReturnsFalseWhenAnyDoesNotMatch()
+    {
+        var result = await _db.People.AsQueryable().AllAsync(p => p.Age > 30);
+        Assert.False(result); // Ages 10, 20, 30 do not satisfy Age > 30
     }
 }
 

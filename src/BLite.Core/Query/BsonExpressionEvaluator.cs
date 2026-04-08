@@ -38,6 +38,24 @@ internal static class BsonExpressionEvaluator
         => TryCompileBody(expression.Body, expression.Parameters[0], registry, keyMap);
 
     /// <summary>
+    /// Attempts to compile the logical negation of <paramref name="expression"/> into a BSON-level predicate.
+    /// Returns <c>null</c> if the inner expression cannot be compiled.
+    /// Used by <see cref="BTreeQueryable{T}.AllAsync"/> to find the first document that violates
+    /// the predicate (early-exit O(1) instead of full scan).
+    /// </summary>
+    public static BsonReaderPredicate? TryCompileInverse<T>(
+        LambdaExpression expression,
+        ValueConverterRegistry? registry = null,
+        IReadOnlyDictionary<string, ushort>? keyMap = null)
+    {
+        var inner = TryCompileBody(expression.Body, expression.Parameters[0], registry, keyMap);
+        if (inner == null) return null;
+        // Capture inner to avoid closure over mutable variable.
+        var captured = inner;
+        return reader => !captured(reader);
+    }
+
+    /// <summary>
     /// Recursively compiles an expression node into a <see cref="BsonReaderPredicate"/>.
     /// Handles:
     /// - <c>AndAlso</c> / <c>OrElse</c>: skips sides that don't touch the parameter

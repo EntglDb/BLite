@@ -142,6 +142,12 @@ public static class BLiteQueryableExtensions
         CancellationToken ct = default)
         => ((IBLiteQueryable<T>)source).CountAsync(predicate, ct);
 
+    /// <summary>Returns the number of elements as a <see cref="long"/> asynchronously.</summary>
+    public static Task<long> LongCountAsync<T>(
+        this IQueryable<T> source,
+        CancellationToken ct = default)
+        => ((IBLiteQueryable<T>)source).LongCountAsync(ct);
+
     /// <summary>Returns <c>true</c> if the sequence contains any elements.</summary>
     public static Task<bool> AnyAsync<T>(
         this IQueryable<T> source,

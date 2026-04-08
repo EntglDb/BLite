@@ -134,6 +134,21 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
     /// <inheritdoc />
     public async Task<bool> AllAsync(Expression<Func<T, bool>> predicate, CancellationToken ct)
     {
+        // AOT-safe fast path: compile the inverted predicate at the BSON level and
+        // scan for the first non-matching document (limit:1). No POCO deserialization.
+        var inversePred = BsonExpressionEvaluator.TryCompileInverse<T>(predicate);
+        if (inversePred != null)
+        {
+            var core = (IBTreeQueryCore<T>)Provider;
+            await foreach (var _ in core.ScanAsync(IndexQueryPlan.Scan(inversePred), ct).ConfigureAwait(false))
+                return false; // found one document that violates the predicate
+            return true;
+        }
+
+        // Fallback for expression patterns BsonExpressionEvaluator cannot handle:
+        // stream all documents and evaluate with a compiled delegate.
+        // Note: this path uses Expression.Compile() and is not AOT-friendly.
+        // Track as follow-up: extend BsonExpressionEvaluator to cover remaining patterns.
         var compiled = predicate.Compile();
         var results = await AsyncProvider.ExecuteAsync<IEnumerable<T>>(Expression, ct).ConfigureAwait(false);
         foreach (var item in results)
@@ -172,6 +187,17 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
             typeof(Queryable), nameof(Queryable.Count), new[] { typeof(T) },
             filtered.Expression);
         return AsyncProvider.ExecuteAsync<int>(countExpr, ct);
+    }
+
+    /// <inheritdoc />
+    public Task<long> LongCountAsync(CancellationToken ct)
+    {
+        // Build Queryable.LongCount<T>(source) so the provider can push it down to the
+        // native key-only scan, mirroring the CountAsync fast path.
+        var countExpr = Expression.Call(
+            typeof(Queryable), nameof(Queryable.LongCount), new[] { typeof(T) },
+            Expression);
+        return AsyncProvider.ExecuteAsync<long>(countExpr, ct);
     }
 
     /// <inheritdoc />

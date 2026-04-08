@@ -477,7 +477,8 @@ public readonly struct BLiteDiagnostic
         private static readonly System.Collections.Generic.HashSet<string> s_interceptedMethodNames
             = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal)
             {
-                "ToListAsync", "FirstOrDefaultAsync", "FirstAsync",
+                "ToListAsync", "ToArrayAsync", "ForEachAsync",
+                "FirstOrDefaultAsync", "FirstAsync",
                 "SingleOrDefaultAsync", "SingleAsync", "CountAsync", "AnyAsync",
             };
 
@@ -495,13 +496,15 @@ public readonly struct BLiteDiagnostic
             public string EntityTypeFullyQualified { get; }
             public int LocationVersion { get; }
             public string LocationData { get; }
+            public bool HasActionParam { get; }
 
-            public InterceptorTarget(string methodName, string entityType, int locationVersion, string locationData)
+            public InterceptorTarget(string methodName, string entityType, int locationVersion, string locationData, bool hasActionParam = false)
             {
                 MethodName = methodName;
                 EntityTypeFullyQualified = entityType;
                 LocationVersion = locationVersion;
                 LocationData = locationData;
+                HasActionParam = hasActionParam;
             }
         }
 
@@ -517,12 +520,15 @@ public readonly struct BLiteDiagnostic
             if (method.ContainingType.Name != "BLiteQueryableExtensions") return null;
             if (!s_interceptedMethodNames.Contains(method.Name)) return null;
 
-            // Must be the (IQueryable<T>, CancellationToken) overload — not the IndexQueryPlan overload
+            // Must be the plain (IQueryable<T>, [Action<T>,] CancellationToken) overload — not the IndexQueryPlan overload
             bool hasIndexQueryPlanParam = false;
+            bool hasActionParam = false;
             foreach (var p in method.Parameters)
             {
                 if (p.Type.Name == "IndexQueryPlan" || p.Type.Name == "IndexMinMax")
                 { hasIndexQueryPlanParam = true; break; }
+                if (p.Type.Name == "Action")
+                    hasActionParam = true;
             }
             if (hasIndexQueryPlanParam) return null;
 
@@ -535,7 +541,7 @@ public readonly struct BLiteDiagnostic
             var location = Microsoft.CodeAnalysis.CSharp.CSharpExtensions.GetInterceptableLocation(model, invocation, ct);
             if (location == null) return null;
 
-            return new InterceptorTarget(method.Name, entityTypeName, location.Version, location.Data);
+            return new InterceptorTarget(method.Name, entityTypeName, location.Version, location.Data, hasActionParam);
         }
 
         private static void EmitInterceptors(
@@ -679,6 +685,49 @@ public readonly struct BLiteDiagnostic
                     EmitInterceptorBody(sb, entityType, "await baseQ.AnyAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).AnyAsync(ct).ConfigureAwait(false)");
                     sb.AppendLine($"        }}");
                     break;
+
+                case "ToArrayAsync":
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}[]>");
+                    sb.AppendLine($"            BLite_Intercept_ToArrayAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    EmitInterceptorBody(sb, entityType, "await baseQ.ToArrayAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).ToArrayAsync(ct).ConfigureAwait(false)");
+                    sb.AppendLine($"        }}");
+                    break;
+
+                case "ForEachAsync":
+                    // ForEachAsync has an extra Action<T> parameter and returns a void Task.
+                    sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
+                    sb.AppendLine($"        public static async global::System.Threading.Tasks.Task");
+                    sb.AppendLine($"            BLite_Intercept_ForEachAsync_{MakeMethodSuffix(entityType)}(");
+                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                global::System.Action<{entityType}> action,");
+                    sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
+                    sb.AppendLine($"        {{");
+                    sb.AppendLine($"            var chain = source.Expression as global::System.Linq.Expressions.MethodCallExpression;");
+                    sb.AppendLine($"            if (chain?.Method.Name == \"Where\" && chain.Arguments.Count >= 2");
+                    sb.AppendLine($"                && chain.Arguments[0] is global::System.Linq.Expressions.ConstantExpression)");
+                    sb.AppendLine($"            {{");
+                    sb.AppendLine($"                var quotedLambda = chain.Arguments[1] as global::System.Linq.Expressions.UnaryExpression;");
+                    sb.AppendLine($"                var lambda = quotedLambda?.Operand as global::System.Linq.Expressions.LambdaExpression;");
+                    sb.AppendLine($"                if (lambda != null)");
+                    sb.AppendLine($"                {{");
+                    sb.AppendLine($"                    var pred = global::BLite.Core.Query.BLiteAotHelper.TryCompileWherePredicate<{entityType}>(lambda);");
+                    sb.AppendLine($"                    if (pred != null)");
+                    sb.AppendLine($"                    {{");
+                    sb.AppendLine($"                        var baseQ = (global::BLite.Core.Query.IBLiteQueryable<{entityType}>)source.Provider.CreateQuery<{entityType}>(chain.Arguments[0]);");
+                    sb.AppendLine($"                        await baseQ.ForEachAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), action, ct).ConfigureAwait(false);");
+                    sb.AppendLine($"                        return;");
+                    sb.AppendLine($"                    }}");
+                    sb.AppendLine($"                }}");
+                    sb.AppendLine($"            }}");
+                    sb.AppendLine($"            #pragma warning disable IL3050, IL2026");
+                    sb.AppendLine($"            await ((global::BLite.Core.Query.IBLiteQueryable<{entityType}>)source).ForEachAsync(action, ct).ConfigureAwait(false);");
+                    sb.AppendLine($"            #pragma warning restore IL3050, IL2026");
+                    sb.AppendLine($"        }}");
+                    break;
             }
 
             sb.AppendLine();
@@ -691,7 +740,8 @@ public readonly struct BLiteDiagnostic
             string fallbackExpression)
         {
             sb.AppendLine($"            var chain = source.Expression as global::System.Linq.Expressions.MethodCallExpression;");
-            sb.AppendLine($"            if (chain?.Method.Name == \"Where\" && chain.Arguments.Count >= 2)");
+            sb.AppendLine($"            if (chain?.Method.Name == \"Where\" && chain.Arguments.Count >= 2");
+            sb.AppendLine($"                && chain.Arguments[0] is global::System.Linq.Expressions.ConstantExpression)");
             sb.AppendLine($"            {{");
             sb.AppendLine($"                var quotedLambda = chain.Arguments[1] as global::System.Linq.Expressions.UnaryExpression;");
             sb.AppendLine($"                var lambda = quotedLambda?.Operand as global::System.Linq.Expressions.LambdaExpression;");
