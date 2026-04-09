@@ -160,7 +160,7 @@ internal sealed class MetricsDispatcher : IDisposable
 
     private void Aggregate(MetricEvent evt)
     {
-        long micros = (long)(evt.ElapsedMicros); // already in µs
+        long micros = evt.ElapsedMicros;
 
         switch (evt.Type)
         {

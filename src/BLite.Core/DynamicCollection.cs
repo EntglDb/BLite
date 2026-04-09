@@ -359,12 +359,15 @@ public sealed class DynamicCollection : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
 
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Insert).");
         try
         {
-            return await InsertCore(document, transaction);
+            var result = await InsertCore(document, transaction);
+            success = true;
+            return result;
         }
         catch
         {
@@ -383,7 +386,7 @@ public sealed class DynamicCollection : IDisposable
                     Type           = Metrics.MetricEventType.CollectionInsert,
                     ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
                     CollectionName = _collectionName,
-                    Success        = true,
+                    Success        = success,
                 });
             }
         }
@@ -609,6 +612,7 @@ public sealed class DynamicCollection : IDisposable
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Update).");
@@ -648,6 +652,7 @@ public sealed class DynamicCollection : IDisposable
             }
 
             await NotifyCdcAsync(OperationType.Update, id, newDocument.RawData);
+            success = true;
             return true;
         }
         catch
@@ -667,7 +672,7 @@ public sealed class DynamicCollection : IDisposable
                     Type           = Metrics.MetricEventType.CollectionUpdate,
                     ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
                     CollectionName = _collectionName,
-                    Success        = true,
+                    Success        = success,
                 });
             }
         }
@@ -745,6 +750,7 @@ public sealed class DynamicCollection : IDisposable
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Delete).");
@@ -765,6 +771,7 @@ public sealed class DynamicCollection : IDisposable
 
             DeleteSlot(location, transaction);
             await NotifyCdcAsync(OperationType.Delete, id);
+            success = true;
             return true;
         }
         catch
@@ -784,7 +791,7 @@ public sealed class DynamicCollection : IDisposable
                     Type           = Metrics.MetricEventType.CollectionDelete,
                     ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
                     CollectionName = _collectionName,
-                    Success        = true,
+                    Success        = success,
                 });
             }
         }

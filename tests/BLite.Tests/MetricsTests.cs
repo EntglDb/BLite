@@ -89,7 +89,7 @@ public class MetricsTests : IDisposable
     }
 
     [Fact]
-    public async Task Metrics_AvgCommitLatency_IsPositive()
+    public async Task Metrics_AvgCommitLatency_IsNonNegative()
     {
         _engine.EnableMetrics();
 
