@@ -983,7 +983,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
 
         // Search FSI: O(BucketCount) = O(1) regardless of the number of tracked pages.
-        return _fsi.FindPage(requiredBytes, _storage, txnId);
+        return _fsi.FindPage(requiredBytes, pid => _storage.IsPageLocked(pid, txnId));
     }
 
     private async Task<uint> AllocateNewDataPage()

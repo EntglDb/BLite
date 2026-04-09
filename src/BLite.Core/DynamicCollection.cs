@@ -1183,7 +1183,7 @@ public sealed class DynamicCollection : IDisposable
                 return _currentDataPage;
         }
 
-        return _fsi.FindPage(requiredBytes, _storage, txnId);
+        return _fsi.FindPage(requiredBytes, pid => _storage.IsPageLocked(pid, txnId));
     }
 
     private uint AllocateNewDataPage(ITransaction transaction)
