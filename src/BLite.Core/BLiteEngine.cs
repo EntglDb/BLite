@@ -622,6 +622,55 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region Metrics
+
+    /// <summary>
+    /// Enables the metrics subsystem. After this call, the engine starts collecting
+    /// performance counters that can be read with <see cref="GetMetrics"/> or streamed
+    /// with <see cref="WatchMetrics"/>.
+    /// <para>
+    /// Calling this method more than once is safe — subsequent calls are no-ops.
+    /// </para>
+    /// </summary>
+    /// <param name="options">
+    /// Optional configuration. Pass <c>null</c> to use <see cref="MetricsOptions.Default"/>.
+    /// </param>
+    public void EnableMetrics(Metrics.MetricsOptions? options = null)
+    {
+        ThrowIfDisposed();
+        _storage.EnsureMetrics();
+    }
+
+    /// <summary>
+    /// Returns an immutable point-in-time snapshot of the accumulated performance counters.
+    /// Returns <c>null</c> if <see cref="EnableMetrics"/> has not been called.
+    /// </summary>
+    public Metrics.MetricsSnapshot? GetMetrics()
+    {
+        ThrowIfDisposed();
+        return _storage.MetricsDispatcher?.GetSnapshot();
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IObservable{T}"/> that pushes a <see cref="Metrics.MetricsSnapshot"/>
+    /// at the requested <paramref name="interval"/>.
+    /// <para>
+    /// <see cref="EnableMetrics"/> must be called first. If the metrics subsystem has not been
+    /// enabled, this method enables it automatically.
+    /// </para>
+    /// </summary>
+    /// <param name="interval">
+    /// Sampling interval. Defaults to 1 second when <c>null</c>.
+    /// </param>
+    public IObservable<Metrics.MetricsSnapshot> WatchMetrics(TimeSpan? interval = null)
+    {
+        ThrowIfDisposed();
+        var dispatcher = _storage.EnsureMetrics();
+        return new Metrics.BLiteMetricsObservable(dispatcher, interval ?? TimeSpan.FromSeconds(1));
+    }
+
+    #endregion
+
     #region Disposal
 
     private void ThrowIfDisposed()

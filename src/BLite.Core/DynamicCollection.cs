@@ -358,6 +358,7 @@ public sealed class DynamicCollection : IDisposable
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
+        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Insert).");
@@ -373,6 +374,18 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
+            var m = _storage.MetricsDispatcher;
+            if (m != null)
+            {
+                m.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = t0,
+                    Type           = Metrics.MetricEventType.CollectionInsert,
+                    ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
+            }
         }
     }
 
@@ -595,6 +608,7 @@ public sealed class DynamicCollection : IDisposable
     {
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
+        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Update).");
@@ -644,6 +658,18 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
+            var m = _storage.MetricsDispatcher;
+            if (m != null)
+            {
+                m.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = t0,
+                    Type           = Metrics.MetricEventType.CollectionUpdate,
+                    ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
+            }
         }
     }
 
@@ -718,6 +744,7 @@ public sealed class DynamicCollection : IDisposable
     /// </summary>
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
+        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Delete).");
@@ -748,6 +775,18 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
+            var m = _storage.MetricsDispatcher;
+            if (m != null)
+            {
+                m.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = t0,
+                    Type           = Metrics.MetricEventType.CollectionDelete,
+                    ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
+            }
         }
     }
 
