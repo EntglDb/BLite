@@ -7,7 +7,7 @@ namespace BLite.Core.Collections;
 
 /// <summary>
 /// 16-bucket Free Space Index (FSI) for data pages.
-/// Divides the page's usable space into 16 equal categories (nibble encoding).
+/// Divides the page's <em>usable</em> space into 16 equal categories (nibble encoding).
 /// Provides O(1) page lookup and amortised O(1) updates in steady state.
 /// Memory usage: ~16 bytes per tracked page (bucket array + free-space map).
 /// </summary>
@@ -26,12 +26,16 @@ internal sealed class FreeSpaceIndex
     // bucket without reading the page from disk.
     private readonly Dictionary<uint, ushort> _freeMap;
 
-    // Width of each bucket in bytes (pageSize / BucketCount).
+    // Width of each bucket in bytes, computed from the *usable* page space so that
+    // bucket boundaries reflect real available room (not header overhead).
     private readonly int _bucketWidth;
 
     public FreeSpaceIndex(int pageSize)
     {
-        _bucketWidth = Math.Max(1, pageSize / BucketCount);
+        // Subtract the fixed page-header size so that bucket boundaries are aligned to
+        // actual free bytes a caller would observe in SlottedPageHeader.AvailableFreeSpace.
+        int usableSpace = pageSize - SlottedPageHeader.Size;
+        _bucketWidth = Math.Max(1, usableSpace / BucketCount);
         _buckets = new uint[BucketCount][];
         _counts = new int[BucketCount];
         _freeMap = new Dictionary<uint, ushort>();
@@ -87,8 +91,9 @@ internal sealed class FreeSpaceIndex
     /// and is not locked by another transaction.
     /// Returns 0 if no suitable page is found.
     /// Complexity: O(BucketCount) = O(1) regardless of the number of tracked pages.
+    /// <paramref name="storage"/> may be null (e.g. in unit tests) to skip the locked-page check.
     /// </summary>
-    public uint FindPage(int requiredBytes, StorageEngine storage, ulong txnId)
+    public uint FindPage(int requiredBytes, StorageEngine? storage, ulong txnId)
     {
         int minBucket = GetBucket(requiredBytes);
 
@@ -100,7 +105,7 @@ internal sealed class FreeSpaceIndex
             var count = _counts[b];
             for (int i = count - 1; i >= 0; i--)
             {
-                if (!storage.IsPageLocked(arr[i], txnId))
+                if (storage == null || !storage.IsPageLocked(arr[i], txnId))
                     return arr[i];
             }
         }
@@ -115,7 +120,7 @@ internal sealed class FreeSpaceIndex
                 uint pid = arr[i];
                 if (_freeMap.TryGetValue(pid, out var fb) &&
                     fb >= requiredBytes &&
-                    !storage.IsPageLocked(pid, txnId))
+                    (storage == null || !storage.IsPageLocked(pid, txnId)))
                     return pid;
             }
         }

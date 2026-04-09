@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.Collections;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -119,5 +120,128 @@ public class FreeSpaceIndexTests : IDisposable
             int expectedCount = initialCount + (session - 1);
             Assert.Equal(expectedCount, await db.Users.CountAsync());
         }
+    }
+}
+
+/// <summary>
+/// Unit tests for <see cref="FreeSpaceIndex"/> core methods:
+/// <c>Update</c>, <c>TryGetFreeBytes</c>, and <c>FindPage</c>.
+/// FreeSpaceIndex is internal; accessible via InternalsVisibleTo("BLite.Tests").
+/// </summary>
+public class FreeSpaceIndexUnitTests
+{
+    // Simulate a 16 KB page so bucket width = (16384 - 24) / 16 = 1022 bytes.
+    private const int PageSize = 16_384;
+    private readonly FreeSpaceIndex _fsi = new(PageSize);
+
+    [Fact]
+    public void TryGetFreeBytes_Returns_False_When_Not_Tracked()
+    {
+        Assert.False(_fsi.TryGetFreeBytes(99, out _));
+    }
+
+    [Fact]
+    public void Update_And_TryGetFreeBytes_Round_Trip()
+    {
+        _fsi.Update(1, 5000);
+        Assert.True(_fsi.TryGetFreeBytes(1, out var fb));
+        Assert.Equal(5000, fb);
+    }
+
+    [Fact]
+    public void Update_SameBucket_UpdatesFreeBytes()
+    {
+        // Both values should land in the same bucket.
+        _fsi.Update(2, 3000);
+        _fsi.Update(2, 3500); // still bucket 3 (3000/1022=2, 3500/1022=3 – actually different; pick values in same bucket)
+
+        // Use values that definitely share a bucket: 1024..2045 → bucket 1
+        _fsi.Update(3, 1100);
+        _fsi.Update(3, 1900);
+        Assert.True(_fsi.TryGetFreeBytes(3, out var fb));
+        Assert.Equal(1900, fb);
+    }
+
+    [Fact]
+    public void Update_CrossBucket_MovesEntry()
+    {
+        // Start in a high bucket (lots of free space), then "fill" the page (low free bytes).
+        _fsi.Update(10, 14000); // bucket ~13
+        Assert.True(_fsi.TryGetFreeBytes(10, out var before));
+        Assert.Equal(14000, before);
+
+        _fsi.Update(10, 500);   // bucket 0
+        Assert.True(_fsi.TryGetFreeBytes(10, out var after));
+        Assert.Equal(500, after);
+    }
+
+    [Fact]
+    public void FindPage_Returns_0_When_No_Pages_Tracked()
+    {
+        // Use a dedicated instance to avoid interference.
+        var fsi = new FreeSpaceIndex(PageSize);
+        Assert.Equal(0u, fsi.FindPage(100, null!, 0));
+    }
+
+    [Fact]
+    public void FindPage_Returns_PageId_When_Enough_Space()
+    {
+        var fsi = new FreeSpaceIndex(PageSize);
+        fsi.Update(42, 8000);
+
+        var found = fsi.FindPage(4000, null!, 0);
+        Assert.Equal(42u, found);
+    }
+
+    [Fact]
+    public void FindPage_Returns_0_When_No_Page_Has_Enough_Space()
+    {
+        var fsi = new FreeSpaceIndex(PageSize);
+        fsi.Update(5, 200); // very little free space
+
+        var found = fsi.FindPage(5000, null!, 0);
+        Assert.Equal(0u, found);
+    }
+
+    [Fact]
+    public void FindPage_Prefers_Pages_With_More_Free_Space()
+    {
+        var fsi = new FreeSpaceIndex(PageSize);
+        fsi.Update(1, 2000);  // low bucket
+        fsi.Update(2, 12000); // high bucket
+
+        // Both satisfy 1000 bytes; bucket scan starts from the highest bucket,
+        // so page 2 (more free space) should be returned first.
+        var found = fsi.FindPage(1000, null!, 0);
+        Assert.Equal(2u, found);
+    }
+
+    [Fact]
+    public void Update_ManyPages_AllRetrievable()
+    {
+        var fsi = new FreeSpaceIndex(PageSize);
+        for (uint i = 1; i <= 50; i++)
+            fsi.Update(i, (int)(i * 200)); // spread across buckets
+
+        for (uint i = 1; i <= 50; i++)
+        {
+            Assert.True(fsi.TryGetFreeBytes(i, out var fb));
+            Assert.Equal((ushort)(i * 200), fb);
+        }
+    }
+
+    [Fact]
+    public void Update_Remove_And_Re_Add_Works()
+    {
+        var fsi = new FreeSpaceIndex(PageSize);
+        fsi.Update(7, 10000);
+        fsi.Update(7, 50);    // page "fills up" → moves to bucket 0
+        fsi.Update(7, 9000);  // page "freed" → back to high bucket
+
+        Assert.True(fsi.TryGetFreeBytes(7, out var fb));
+        Assert.Equal(9000, fb);
+
+        var found = fsi.FindPage(8000, null!, 0);
+        Assert.Equal(7u, found);
     }
 }
