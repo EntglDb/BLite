@@ -611,7 +611,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<global::System.Collections.Generic.List<{entityType}>>");
                     sb.AppendLine($"            BLite_Intercept_ToListAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.ToListAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).ToListAsync(ct).ConfigureAwait(false)");
@@ -622,7 +622,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}?>");
                     sb.AppendLine($"            BLite_Intercept_FirstOrDefaultAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.FirstOrDefaultAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).FirstOrDefaultAsync(ct).ConfigureAwait(false)");
@@ -633,7 +633,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}>");
                     sb.AppendLine($"            BLite_Intercept_FirstAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.FirstAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).FirstAsync(ct).ConfigureAwait(false)");
@@ -644,7 +644,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}?>");
                     sb.AppendLine($"            BLite_Intercept_SingleOrDefaultAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.SingleOrDefaultAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).SingleOrDefaultAsync(ct).ConfigureAwait(false)");
@@ -655,7 +655,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}>");
                     sb.AppendLine($"            BLite_Intercept_SingleAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.SingleAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).SingleAsync(ct).ConfigureAwait(false)");
@@ -666,7 +666,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<int>");
                     sb.AppendLine($"            BLite_Intercept_CountAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.CountAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).CountAsync(ct).ConfigureAwait(false)");
@@ -677,7 +677,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<bool>");
                     sb.AppendLine($"            BLite_Intercept_AnyAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.AnyAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).AnyAsync(ct).ConfigureAwait(false)");
@@ -688,7 +688,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task<{entityType}[]>");
                     sb.AppendLine($"            BLite_Intercept_ToArrayAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
                     EmitInterceptorBody(sb, entityType, "await baseQ.ToArrayAsync(global::BLite.Core.Query.IndexQueryPlan.Scan(pred), ct).ConfigureAwait(false)", "await ((global::BLite.Core.Query.IBLiteQueryable<" + entityType + ">)source).ToArrayAsync(ct).ConfigureAwait(false)");
@@ -700,7 +700,7 @@ public readonly struct BLiteDiagnostic
                     sb.AppendLine($"        [global::System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(\"BLite interceptor fallback uses dynamic query path.\")]");
                     sb.AppendLine($"        public static async global::System.Threading.Tasks.Task");
                     sb.AppendLine($"            BLite_Intercept_ForEachAsync_{MakeMethodSuffix(entityType)}(");
-                    sb.AppendLine($"                global::System.Linq.IQueryable<{entityType}> source,");
+                    sb.AppendLine($"                this global::System.Linq.IQueryable<{entityType}> source,");
                     sb.AppendLine($"                global::System.Action<{entityType}> action,");
                     sb.AppendLine($"                global::System.Threading.CancellationToken ct = default)");
                     sb.AppendLine($"        {{");
