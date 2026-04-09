@@ -58,7 +58,7 @@ public class CdcTests : IDisposable
 
         using (var txn = await _db.BeginTransactionAsync())
         {
-            await _db.People.InsertAsync(new Person { Id = 1, Name = "John" });
+            await _db.People.InsertAsync(new Person { Id = 1, Name = "John" }, txn);
             await Task.Delay(50);
             Assert.Empty(events); // Not committed yet
 
@@ -70,7 +70,7 @@ public class CdcTests : IDisposable
 
         using (var txn = await _db.BeginTransactionAsync())
         {
-            await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane" });
+            await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane" }, txn);
             await txn.CommitAsync();
         }
 

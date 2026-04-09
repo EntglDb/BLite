@@ -48,7 +48,8 @@ public class AsyncTests : IDisposable
         using var db = new TestDbContext(_dbPath);
         using (var txn = await db.BeginTransactionAsync())
         {
-            await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 3, Name = "RollbackMe" });
+            await db.AsyncDocs.InsertAsync(new AsyncDoc { Id = 3, Name = "RollbackMe" }, txn);
+            await txn.RollbackAsync();
         }
 
         var doc = await db.AsyncDocs.FindByIdAsync(3);

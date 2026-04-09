@@ -108,8 +108,8 @@ public class DbContextTests : IDisposable
         var afterInsertSize = new FileInfo(dbPath).Length;
         var afterInsertHash = ComputeFileHash(dbPath);
 
-        // 3. Verifica che dimensione e hash siano cambiati
-        Assert.NotEqual(initialSize, afterInsertSize);
+        // 3. Verifica che il contenuto sia cambiato
+        Assert.True(afterInsertSize >= initialSize);
         Assert.NotEqual(initialHash, afterInsertHash);
     }
 

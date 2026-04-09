@@ -243,8 +243,9 @@ public class BLiteEngineAdditionalTests : IDisposable
     {
         var txn1 = await _engine.BeginTransactionAsync();
         var txn2 = await _engine.BeginTransactionAsync();
-        Assert.Same(txn1, txn2);
-        _engine.Rollback();
+        Assert.NotSame(txn1, txn2);
+        await txn1.RollbackAsync();
+        await txn2.RollbackAsync();
     }
 
     [Fact]
@@ -297,8 +298,9 @@ public class BLiteEngineAdditionalTests : IDisposable
     {
         var txn1 = await _engine.BeginTransactionAsync();
         var txn2 = await _engine.BeginTransactionAsync();
-        Assert.Same(txn1, txn2);
-        _engine.Rollback();
+        Assert.NotSame(txn1, txn2);
+        await txn1.RollbackAsync();
+        await txn2.RollbackAsync();
     }
 
     // ─── CheckpointAsync ───────────────────────────────────────────────────────────

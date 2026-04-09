@@ -168,8 +168,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var id = await col.InsertAsync(document, ct);
-        await CommitAsync(ct);
+        var id = await col.InsertAsync(document, CurrentTransaction, ct);
+        if (CurrentTransaction == null) await CommitAsync(ct);
         return id;
     }
 
@@ -179,8 +179,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var ids = await col.InsertBulkAsync(documents, ct);
-        await CommitAsync(ct);
+        var ids = await col.InsertBulkAsync(documents, CurrentTransaction, ct);
+        if (CurrentTransaction == null) await CommitAsync(ct);
         return ids;
     }
 
@@ -214,8 +214,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var result = await col.UpdateAsync(id, document, ct);
-        await CommitAsync(ct);
+        var result = await col.UpdateAsync(id, document, CurrentTransaction, ct);
+        if (CurrentTransaction == null) await CommitAsync(ct);
         return result;
     }
 
@@ -227,8 +227,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var count = await col.UpdateBulkAsync(updates, ct);
-        await CommitAsync(ct);
+        var count = await col.UpdateBulkAsync(updates, CurrentTransaction, ct);
+        if (CurrentTransaction == null) await CommitAsync(ct);
         return count;
     }
 
@@ -238,8 +238,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var result = await col.DeleteAsync(id, ct);
-        await CommitAsync(ct);
+        var result = await col.DeleteAsync(id, CurrentTransaction, ct);
+        if (CurrentTransaction == null) await CommitAsync(ct);
         return result;
     }
 
@@ -249,8 +249,8 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     {
         ThrowIfDisposed();
         var col = GetOrCreateCollection(collectionName);
-        var count = await col.DeleteBulkAsync(ids, ct);
-        await CommitAsync(ct);
+        var count = await col.DeleteBulkAsync(ids, CurrentTransaction, ct);
+        if (CurrentTransaction == null) await CommitAsync(ct);
         return count;
     }
 

@@ -109,7 +109,7 @@ public class BulkOperationsTests : IDisposable
 
         using (var txn = _dbContext.BeginTransaction())
         {
-            await _dbContext.Users.DeleteBulkAsync(new[] { user.Id });
+            await _dbContext.Users.DeleteBulkAsync(new[] { user.Id }, txn);
             await txn.RollbackAsync();
         }
 

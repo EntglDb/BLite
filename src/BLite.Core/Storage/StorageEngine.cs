@@ -20,6 +20,7 @@ public sealed partial class StorageEngine : IDisposable
     private readonly PageFile? _indexFile;              // indices: Index, Vector, Spatial (null = uses _pageFile)
     private readonly WriteAheadLog _wal;
     private CDC.ChangeStreamDispatcher? _cdc;
+    private volatile Metrics.MetricsDispatcher? _metrics;
     
     // WAL cache: TransactionId → (PageId → PageData)
     // Stores uncommitted writes for "Read Your Own Writes" isolation
@@ -225,6 +226,7 @@ public sealed partial class StorageEngine : IDisposable
         _commitLock?.Dispose();
         _metadataLock?.Dispose();
         _writerGate?.Dispose();
+        _metrics?.Dispose();
     }
 
     internal void RegisterCdc(CDC.ChangeStreamDispatcher cdc)
@@ -241,6 +243,24 @@ public sealed partial class StorageEngine : IDisposable
     internal CDC.ChangeStreamDispatcher EnsureCdc()
     {
         return _cdc ??= new CDC.ChangeStreamDispatcher();
+    }
+
+    // ── Metrics ──────────────────────────────────────────────────────────────
+
+    internal void RegisterMetrics(Metrics.MetricsDispatcher metrics)
+    {
+        _metrics = metrics;
+    }
+
+    internal Metrics.MetricsDispatcher? MetricsDispatcher => _metrics;
+
+    /// <summary>
+    /// Ensures the metrics dispatcher is initialized. No-op if already active.
+    /// Called by <c>BLiteEngine.EnableMetrics()</c> before the first metric is published.
+    /// </summary>
+    internal Metrics.MetricsDispatcher EnsureMetrics()
+    {
+        return _metrics ??= new Metrics.MetricsDispatcher();
     }
 
     /// <summary>

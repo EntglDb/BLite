@@ -310,7 +310,7 @@ public sealed class DynamicCollection : IDisposable
         foreach (var (_, idx) in _secondaryIndexes)
             IndexInsert(idx, document, location, transaction);
 
-        await NotifyCdcAsync(OperationType.Insert, id, document.RawData);
+        await NotifyCdcAsync(OperationType.Insert, id, transaction, document.RawData);
         return id;
     }
 
@@ -349,21 +349,33 @@ public sealed class DynamicCollection : IDisposable
         return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap(), _storage.GetKeyMap());
     }
 
+    public Task<BsonId> InsertAsync(BsonDocument document, CancellationToken ct = default)
+    {
+        return InsertAsync(document, null, ct);
+    }
     /// <summary>
     /// Inserts a BsonDocument into the collection asynchronously.
     /// If the document has no _id field, one is auto-generated.
     /// Returns the BsonId of the inserted document.
     /// </summary>
-    public async Task<BsonId> InsertAsync(BsonDocument document, CancellationToken ct = default)
+    public async Task<BsonId> InsertAsync(BsonDocument document, ITransaction? transaction, CancellationToken ct = default)
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool autoCommit = transaction == null;
+
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Insert).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            return await InsertCore(document, transaction);
+            var result = await InsertCore(document, transaction);
+            if (autoCommit) await transaction.CommitAsync(ct);
+            success = true;
+            return result;
         }
         catch
         {
@@ -373,20 +385,36 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = Metrics.MetricEventType.CollectionInsert,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
         }
+    }
+
+    public Task<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+    {
+        return InsertBulkAsync(documents, null, ct);
     }
 
     /// <summary>
     /// Inserts multiple BsonDocuments asynchronously in a single transaction.
     /// Returns the list of generated/existing BsonIds in insertion order.
     /// </summary>
-    public async Task<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+    public async Task<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, ITransaction? transaction, CancellationToken ct = default)
     {
         if (documents == null) throw new ArgumentNullException(nameof(documents));
+        bool autoCommit = transaction == null;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (InsertBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             var ids = new List<BsonId>();
@@ -395,6 +423,7 @@ public sealed class DynamicCollection : IDisposable
                 ct.ThrowIfCancellationRequested();
                 ids.Add(await InsertCore(doc, transaction));
             }
+            if (autoCommit) await transaction.CommitAsync(ct);
             return ids;
         }
         catch
@@ -588,16 +617,25 @@ public sealed class DynamicCollection : IDisposable
     #endregion
 
     #region Update
+    public Task<bool> UpdateAsync(BsonId id, BsonDocument newDocument, CancellationToken ct = default)
+    {
+        return UpdateAsync(id, newDocument, null, ct);
+    }
     /// <summary>
     /// Updates a document by its BsonId asynchronously. Replaces the entire document.
     /// </summary>
-    public async Task<bool> UpdateAsync(BsonId id, BsonDocument newDocument, CancellationToken ct = default)
+    public async Task<bool> UpdateAsync(BsonId id, BsonDocument newDocument, ITransaction? transaction, CancellationToken ct = default)
     {
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool autoCommit = transaction == null;
+
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Update).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -633,7 +671,9 @@ public sealed class DynamicCollection : IDisposable
                 IndexInsert(idx, newDocument, newLocation, transaction);
             }
 
-            await NotifyCdcAsync(OperationType.Update, id, newDocument.RawData);
+            await NotifyCdcAsync(OperationType.Update, id, transaction, newDocument.RawData);
+            if (autoCommit) await transaction.CommitAsync(ct);
+            success = true;
             return true;
         }
         catch
@@ -644,20 +684,35 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = Metrics.MetricEventType.CollectionUpdate,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
         }
     }
 
+    public Task<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
+    {
+        return UpdateBulkAsync(updates, null, ct);
+    }
     /// <summary>
     /// Updates multiple documents asynchronously in a single transaction.
     /// Returns the number of documents successfully updated.
     /// </summary>
-    public async Task<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
+    public async Task<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, ITransaction? transaction, CancellationToken ct = default)
     {
         if (updates == null) throw new ArgumentNullException(nameof(updates));
+        bool autoCommit = transaction == null;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (UpdateBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             var count = 0;
@@ -693,9 +748,10 @@ public sealed class DynamicCollection : IDisposable
                     IndexInsert(idx, newDoc, newLocation, transaction);
                 }
 
-                await NotifyCdcAsync(OperationType.Update, id, newDoc.RawData);
+                await NotifyCdcAsync(OperationType.Update, id, transaction, newDoc.RawData);
                 count++;
             }
+            if (autoCommit) await transaction.CommitAsync(ct);
             return count;
         }
         catch
@@ -713,14 +769,24 @@ public sealed class DynamicCollection : IDisposable
 
     #region Delete
 
+    public Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
+    {
+        return DeleteAsync(id, null, ct);
+    }
+
     /// <summary>
     /// Deletes a document by its BsonId asynchronously.
     /// </summary>
-    public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(BsonId id, ITransaction? transaction, CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool autoCommit = transaction == null;
+
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Delete).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             var key = new IndexKey(id.ToBytes());
@@ -737,7 +803,9 @@ public sealed class DynamicCollection : IDisposable
             }
 
             DeleteSlot(location, transaction);
-            await NotifyCdcAsync(OperationType.Delete, id);
+            await NotifyCdcAsync(OperationType.Delete, id, transaction);
+            if (autoCommit) await transaction.CommitAsync(ct);
+            success = true;
             return true;
         }
         catch
@@ -748,20 +816,35 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = Metrics.MetricEventType.CollectionDelete,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
         }
     }
 
+    public async Task<int> DeleteBulkAsync(IEnumerable<BsonId> ids, CancellationToken ct = default)
+    {
+        return await DeleteBulkAsync(ids, null, ct);
+    }
     /// <summary>
     /// Deletes multiple documents asynchronously in a single transaction.
     /// Returns the number of documents successfully deleted.
     /// </summary>
-    public async Task<int> DeleteBulkAsync(IEnumerable<BsonId> ids, CancellationToken ct = default)
+    public async Task<int> DeleteBulkAsync(IEnumerable<BsonId> ids, ITransaction? transaction, CancellationToken ct = default)
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
+        bool autoCommit = transaction == null;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (DeleteBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             var count = 0;
@@ -782,9 +865,10 @@ public sealed class DynamicCollection : IDisposable
                 }
 
                 DeleteSlot(location, transaction);
-                await NotifyCdcAsync(OperationType.Delete, id);
+                await NotifyCdcAsync(OperationType.Delete, id, transaction);
                 count++;
             }
+            if (autoCommit) await transaction.CommitAsync(ct);
             return count;
         }
         catch
@@ -822,12 +906,13 @@ public sealed class DynamicCollection : IDisposable
         var entry = new DynamicSecondaryIndex(btree, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
             if (doc != null) IndexInsert(entry, doc, e.Location, transaction);
         }
+        await transaction.CommitAsync();
 
         PersistIndexMetadata();
     }
@@ -853,12 +938,13 @@ public sealed class DynamicCollection : IDisposable
         var entry = new DynamicSecondaryIndex(vector, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
             if (doc != null) IndexInsert(entry, doc, e.Location, transaction);
         }
+        await transaction.CommitAsync();
 
         PersistIndexMetadata();
     }
@@ -884,12 +970,13 @@ public sealed class DynamicCollection : IDisposable
         var entry = new DynamicSecondaryIndex(spatial, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
         {
             var doc = ReadDocumentAt(e.Location, transaction.TransactionId);
             if (doc != null) IndexInsert(entry, doc, e.Location, transaction);
         }
+        await transaction.CommitAsync();
 
         PersistIndexMetadata();
     }
@@ -1425,12 +1512,10 @@ public sealed class DynamicCollection : IDisposable
         new DynamicChangeStreamObservable(
             _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
 
-    private async Task NotifyCdcAsync(OperationType type, BsonId id, ReadOnlyMemory<byte> docData = default)
+    private Task NotifyCdcAsync(OperationType type, BsonId id, ITransaction transaction, ReadOnlyMemory<byte> docData = default)
     {
-        if (_storage.Cdc == null) return;
-        if (!_storage.Cdc.HasAnyWatchers(_collectionName)) return;
-
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        if (_storage.Cdc == null) return Task.CompletedTask;
+        if (!_storage.Cdc.HasAnyWatchers(_collectionName)) return Task.CompletedTask;
 
         ReadOnlyMemory<byte>? payload = null;
         if (!docData.IsEmpty && _storage.Cdc.HasPayloadWatchers(_collectionName))
@@ -1449,6 +1534,8 @@ public sealed class DynamicCollection : IDisposable
                 PayloadBytes = payload
             });
         }
+
+        return Task.CompletedTask;
     }
 
     public void Dispose()

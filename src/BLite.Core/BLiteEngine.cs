@@ -24,10 +24,8 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 {
     private readonly StorageEngine _storage;
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _transactionLock = new(1, 1);
     private readonly BLiteKvStore _kvStore;
     private bool _disposed;
-    private ITransaction? _currentTransaction;
 
     /// <summary>
     /// Exposes the underlying storage engine to session instances created by this engine.
@@ -35,18 +33,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     internal StorageEngine Storage => _storage;
 
     /// <summary>
-    /// Gets or sets the current transaction. Returns null if no active transaction exists.
+    /// Always returns <c>null</c>. Transaction state is no longer tracked at the engine level.
+    /// Callers that need explicit transactions should use <see cref="BeginTransaction"/> or
+    /// <see cref="BeginTransactionAsync"/> and pass the returned transaction to each operation.
     /// </summary>
-    public ITransaction? CurrentTransaction
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _currentTransaction != null && _currentTransaction.State == TransactionState.Active
-                ? _currentTransaction : null;
-        }
-        private set => _currentTransaction = value;
-    }
+    public ITransaction? CurrentTransaction => null;
 
     #region Constructors
 
@@ -211,78 +202,45 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     #region Transactions
 
     /// <summary>
-    /// Begins a new transaction asynchronously or returns the current one.
+    /// Creates a new caller-owned transaction.
+    /// The caller must pass this transaction to every collection method and
+    /// call <see cref="ITransaction.CommitAsync"/> to commit.
+    /// </summary>
+    public ITransaction BeginTransaction()
+    {
+        ThrowIfDisposed();
+        return _storage.BeginTransaction();
+    }
+
+    /// <summary>
+    /// Creates a new caller-owned transaction asynchronously.
     /// </summary>
     public Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
-
-        // Fast path: reuse the existing transaction without touching the semaphore.
-        if (CurrentTransaction != null)
-            return Task.FromResult(CurrentTransaction);
-
-        return SlowBeginTransactionAsync(ct);
-    }
-
-    private async Task<ITransaction> SlowBeginTransactionAsync(CancellationToken ct)
-    {
-        bool lockAcquired = false;
-        try
-        {
-            if (!await _transactionLock.WaitAsync(_storage.LockTimeout.WriteTimeoutMs, ct))
-                throw new TimeoutException("Timed out acquiring transaction lock (BeginTransaction).");
-            lockAcquired = true;
-
-            if (CurrentTransaction != null)
-                return CurrentTransaction;
-            CurrentTransaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
-            return CurrentTransaction;
-        }
-        finally
-        {
-            if (lockAcquired)
-                _transactionLock.Release();
-        }
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<ITransaction>(_storage.BeginTransaction(IsolationLevel.ReadCommitted));
     }
 
     /// <summary>
-    /// Commits the current transaction asynchronously.
+    /// No-op when called without a transaction.
+    /// Exists for API compatibility — auto-commit write operations commit immediately.
     /// </summary>
-    public async Task CommitAsync(CancellationToken ct = default)
+    public Task CommitAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
         foreach (var col in _collections.Values)
             col.PersistIndexMetadata();
-        if (CurrentTransaction != null)
-        {
-            try
-            {
-                await CurrentTransaction.CommitAsync(ct);
-            }
-            finally
-            {
-                CurrentTransaction = null;
-            }
-        }
+        return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Rolls back the current transaction, discarding all changes.
+    /// No-op. Exists for API compatibility.
+    /// Use <see cref="ITransaction.RollbackAsync"/> on a caller-owned transaction instead.
     /// </summary>
     public void Rollback()
     {
         ThrowIfDisposed();
-        if (CurrentTransaction != null)
-        {
-            try
-            {
-                CurrentTransaction.RollbackAsync();
-            }
-            finally
-            {
-                CurrentTransaction = null;
-            }
-        }
     }
 
     /// <summary>
@@ -300,13 +258,13 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #region ITransactionHolder
 
+    /// <summary>
+    /// Creates an ephemeral read transaction for internal use by collection read paths.
+    /// Write paths create their own auto-commit transactions when no caller-owned tx is provided.
+    /// </summary>
     ValueTask<ITransaction> ITransactionHolder.GetCurrentTransactionOrStartAsync()
     {
-        var current = CurrentTransaction;
-        if (current != null)
-            return new ValueTask<ITransaction>(current);
-
-        return new ValueTask<ITransaction>(SlowBeginTransactionAsync(default));
+        return new ValueTask<ITransaction>(_storage.BeginTransaction(IsolationLevel.ReadCommitted));
     }
 
     #endregion
@@ -417,49 +375,40 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
-    /// Inserts a document and commits asynchronously.
-    /// The BTree write stays in-memory (WAL cache); only the WAL flush is async.
+    /// Inserts a document and auto-commits asynchronously.
     /// </summary>
     public async ValueTask<BsonId> InsertAsync(string collectionName, BsonDocument document, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
-        var id = await collection.InsertAsync(document, ct);
-        await CommitAsync(ct);
-        return id;
+        return await collection.InsertAsync(document, null, ct);
     }
 
-    /// <summary>Updates a document and commits asynchronously.</summary>
+    /// <summary>Updates a document and auto-commits asynchronously.</summary>
     public async ValueTask<bool> UpdateAsync(string collectionName, BsonId id, BsonDocument document, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
-        var result = await collection.UpdateAsync(id, document, ct);
-        await CommitAsync(ct);
-        return result;
+        return await collection.UpdateAsync(id, document, null, ct);
     }
 
-    /// <summary>Deletes a document and commits asynchronously.</summary>
+    /// <summary>Deletes a document and auto-commits asynchronously.</summary>
     public async ValueTask<bool> DeleteAsync(string collectionName, BsonId id, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
-        var result = await collection.DeleteAsync(id, ct);
-        await CommitAsync(ct);
-        return result;
+        return await collection.DeleteAsync(id, null, ct);
     }
 
     /// <summary>
-    /// Inserts multiple documents asynchronously and commits.
+    /// Inserts multiple documents asynchronously and auto-commits.
     /// Returns the list of generated/existing BsonIds in insertion order.
     /// </summary>
     public async Task<List<BsonId>> InsertBulkAsync(string collectionName, IEnumerable<BsonDocument> documents, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
-        var ids = await collection.InsertBulkAsync(documents, ct);
-        await CommitAsync(ct);
-        return ids;
+        return await collection.InsertBulkAsync(documents, null, ct);
     }
 
     /// <summary>Asynchronously yields documents in the named collection matching the specified predicate.</summary>
@@ -471,29 +420,25 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
-    /// Updates multiple documents asynchronously and commits.
+    /// Updates multiple documents asynchronously and auto-commits.
     /// Returns the number of documents successfully updated.
     /// </summary>
     public async Task<int> UpdateBulkAsync(string collectionName, IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
-        var count = await collection.UpdateBulkAsync(updates, ct);
-        await CommitAsync(ct);
-        return count;
+        return await collection.UpdateBulkAsync(updates, null, ct);
     }
 
     /// <summary>
-    /// Deletes multiple documents asynchronously and commits.
+    /// Deletes multiple documents asynchronously and auto-commits.
     /// Returns the number of documents successfully deleted.
     /// </summary>
     public async Task<int> DeleteBulkAsync(string collectionName, IEnumerable<BsonId> ids, CancellationToken ct = default)
     {
         ThrowIfDisposed();
         var collection = GetOrCreateCollection(collectionName);
-        var count = await collection.DeleteBulkAsync(ids, ct);
-        await CommitAsync(ct);
-        return count;
+        return await collection.DeleteBulkAsync(ids, null, ct);
     }
 
     #endregion
@@ -622,6 +567,55 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region Metrics
+
+    /// <summary>
+    /// Enables the metrics subsystem. After this call, the engine starts collecting
+    /// performance counters that can be read with <see cref="GetMetrics"/> or streamed
+    /// with <see cref="WatchMetrics"/>.
+    /// <para>
+    /// Calling this method more than once is safe — subsequent calls are no-ops.
+    /// </para>
+    /// </summary>
+    /// <param name="options">
+    /// Optional configuration. Pass <c>null</c> to use <see cref="MetricsOptions.Default"/>.
+    /// </param>
+    public void EnableMetrics(Metrics.MetricsOptions? options = null)
+    {
+        ThrowIfDisposed();
+        _storage.EnsureMetrics();
+    }
+
+    /// <summary>
+    /// Returns an immutable point-in-time snapshot of the accumulated performance counters.
+    /// Returns <c>null</c> if <see cref="EnableMetrics"/> has not been called.
+    /// </summary>
+    public Metrics.MetricsSnapshot? GetMetrics()
+    {
+        ThrowIfDisposed();
+        return _storage.MetricsDispatcher?.GetSnapshot();
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IObservable{T}"/> that pushes a <see cref="Metrics.MetricsSnapshot"/>
+    /// at the requested <paramref name="interval"/>.
+    /// <para>
+    /// <see cref="EnableMetrics"/> must be called first. If the metrics subsystem has not been
+    /// enabled, this method enables it automatically.
+    /// </para>
+    /// </summary>
+    /// <param name="interval">
+    /// Sampling interval. Defaults to 1 second when <c>null</c>.
+    /// </param>
+    public IObservable<Metrics.MetricsSnapshot> WatchMetrics(TimeSpan? interval = null)
+    {
+        ThrowIfDisposed();
+        var dispatcher = _storage.EnsureMetrics();
+        return new Metrics.BLiteMetricsObservable(dispatcher, interval ?? TimeSpan.FromSeconds(1));
+    }
+
+    #endregion
+
     #region Disposal
 
     private void ThrowIfDisposed()
@@ -640,7 +634,6 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _collections.Clear();
         _storage.Dispose();
 
-        _transactionLock.Dispose();
         GC.SuppressFinalize(this);
     }
 

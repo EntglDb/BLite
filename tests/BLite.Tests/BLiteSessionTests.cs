@@ -247,10 +247,10 @@ public class BLiteSessionTests : IDisposable
         using var reader = _engine.OpenSession();
 
         var col = session.GetOrCreateCollection("kv");
-        await session.BeginTransactionAsync();
+        var txn = await session.BeginTransactionAsync();
         var doc = _engine.CreateDocument(["k"], b => b.AddInt32("k", 99));
-        var id = await col.InsertAsync(doc);
-        session.Rollback();
+        var id = await col.InsertAsync(doc, txn);
+        await txn.RollbackAsync();
 
         // After rollback the document must not be visible from another session
         var found = await reader.FindByIdAsync("kv", id);

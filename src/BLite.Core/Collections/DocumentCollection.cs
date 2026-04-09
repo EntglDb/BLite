@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
+using BLite.Core.Metrics;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System.Runtime.CompilerServices;
@@ -925,24 +926,33 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     private async Task RebuildIndexAsync(CollectionSecondaryIndex<TId, T> index, CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        // Iterate all documents in the collection via primary index
-        foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            try
+            // Iterate all documents in the collection via primary index
+            foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId))
             {
-                var document = await FindByLocationAsync(entry.Location, transaction.TransactionId, ct);
-                if (document != null)
+                ct.ThrowIfCancellationRequested();
+                try
                 {
-                    index.Insert(document, entry.Location, transaction);
+                    var document = await FindByLocationAsync(entry.Location, transaction.TransactionId, ct);
+                    if (document != null)
+                    {
+                        index.Insert(document, entry.Location, transaction);
+                    }
+                }
+                catch
+                {
+                    // Skip documents that fail to load or index
+                    // Production: should log errors
                 }
             }
-            catch
-            {
-                // Skip documents that fail to load or index
-                // Production: should log errors
-            }
+            await transaction.CommitAsync(ct);
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
         }
     }
 
@@ -950,9 +960,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     #region Data Page Management
 
-    private async Task<uint> FindPageWithSpace(int requiredBytes)
+    private Task<uint> FindPageWithSpace(int requiredBytes, ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
         // Fast path: try current page first (avoids a full FSI scan on the common case).
@@ -961,7 +970,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             if (_fsi.TryGetFreeBytes(_currentDataPage, out var freeBytes))
             {
                 if (freeBytes >= requiredBytes && !_storage.IsPageLocked(_currentDataPage, txnId))
-                    return _currentDataPage;
+                    return Task.FromResult(_currentDataPage);
             }
             else
             {
@@ -974,20 +983,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 {
                     _fsi.Update(_currentDataPage, header.AvailableFreeSpace);
                     if (!_storage.IsPageLocked(_currentDataPage, txnId))
-                        return _currentDataPage;
+                        return Task.FromResult(_currentDataPage);
                 }
             }
         }
 
         // Search FSI: O(BucketCount) = O(1) regardless of the number of tracked pages.
         // Use the cached _isPageLocked delegate to avoid per-call closure allocation.
-        return _fsi.FindPage(requiredBytes, txnId, _isPageLocked);
+        return Task.FromResult(_fsi.FindPage(requiredBytes, txnId, _isPageLocked));
     }
 
-    private async Task<uint> AllocateNewDataPage()
+    private Task<uint> AllocateNewDataPage(ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-
         var pageId = _storage.AllocateCollectionPage(_collectionName);
 
         // Initialize slotted page header
@@ -1030,12 +1037,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             ArrayPool<byte>.Shared.Return(buffer);
         }
 
-        return pageId;
+        return Task.FromResult(pageId);
     }
 
-    private async Task<ushort> InsertIntoPage(uint pageId, byte[] data)
+    private async Task<ushort> InsertIntoPage(uint pageId, byte[] data, ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
@@ -1178,9 +1184,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task<(uint pageId, ushort slotIndex)> InsertWithOverflow(byte[] data)
+    private async Task<(uint pageId, ushort slotIndex)> InsertWithOverflow(byte[] data, ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         // 1. Calculate Primary Chunk Size
         // We need 8 bytes for metadata (TotalLength: 4, NextOverflowPage: 4)
         const int MetadataSize = 8;
@@ -1236,9 +1241,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         int totalSlotSize = MetadataSize + primaryPayloadSize;
 
         // Allocate primary page
-        var primaryPageId = await FindPageWithSpace(totalSlotSize + SlotEntry.Size);
+        var primaryPageId = await FindPageWithSpace(totalSlotSize + SlotEntry.Size, transaction);
         if (primaryPageId == 0)
-            primaryPageId = await AllocateNewDataPage();
+            primaryPageId = await AllocateNewDataPage(transaction);
 
         // 4. Write to Primary Page
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1307,18 +1312,25 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously inserts a new document into the collection
     /// </summary>
-    public async Task<TId> InsertAsync(T entity, CancellationToken ct = default)
+    public async Task<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool autoCommit = transaction == null;
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Insert).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             try
             {
-                var id = await InsertCore(entity);
+                var id = await InsertCore(entity, transaction);
+                if (autoCommit) await transaction.CommitAsync(ct);
+                success = true;
                 return id;
             }
             catch
@@ -1330,15 +1342,23 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionInsert,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
         }
     }
 
     /// <summary>
     /// Asynchronously inserts multiple documents in a single transaction.
     /// </summary>
-    public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+    public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
@@ -1346,11 +1366,15 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (InsertBulk).");
+
+        bool autoCommit = transaction == null;
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
             try
             {
-                await InsertBulkInternal(entityList, ids);
+                await InsertBulkInternal(entityList, ids, transaction);
+                if (autoCommit) await transaction.CommitAsync(ct);
                 return ids;
             }
             catch
@@ -1365,10 +1389,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task InsertBulkInternal(List<T> entityList, List<TId> ids)
+    private async Task InsertBulkInternal(List<T> entityList, List<TId> ids, ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-
         // Scale batch size with available cores: more parallelism on multi-core machines.
         // Clamped to [32, 200] to avoid pathological cases on very high-core-count machines.
         int BATCH_SIZE = Math.Max(32, Math.Min(Environment.ProcessorCount * 4, 200));
@@ -1397,7 +1419,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
                 try
                 {
-                    await InsertDataCore(id, entity, buffer, length);
+                    await InsertDataCore(id, entity, buffer, transaction, length);
                     ids.Add(id);
                 }
                 finally
@@ -1442,13 +1464,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return id;
     }
 
-    private async Task<TId> InsertCore(T entity)
+    private async Task<TId> InsertCore(T entity, ITransaction transaction)
     {
         var id = EnsureId(entity);
         var length = SerializeWithRetry(entity, out var buffer);
         try
         {
-            await InsertDataCore(id, entity, buffer, length);
+            await InsertDataCore(id, entity, buffer, transaction, length);
             return id;
         }
         finally
@@ -1457,11 +1479,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task InsertDataCore(TId id, T entity, byte[] docData, int docLength = -1)
+    private async Task InsertDataCore(TId id, T entity, byte[] docData, ITransaction transaction, int docLength = -1)
     {
         if (docLength >= 0 && docLength < docData.Length)
             docData = docData[..docLength]; // trim to actual serialized size
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         DocumentLocation location;
         if (_isTimeSeries)
         {
@@ -1473,14 +1494,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
         else if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
         {
-            var pageId = await FindPageWithSpace(docData.Length + SlotEntry.Size);
-            if (pageId == 0) pageId = await AllocateNewDataPage();
-            var slotIndex = await InsertIntoPage(pageId, docData);
+            var pageId = await FindPageWithSpace(docData.Length + SlotEntry.Size, transaction);
+            if (pageId == 0) pageId = await AllocateNewDataPage(transaction);
+            var slotIndex = await InsertIntoPage(pageId, docData, transaction);
             location = new DocumentLocation(pageId, slotIndex);
         }
         else
         {
-            var (pageId, slotIndex) = await InsertWithOverflow(docData);
+            var (pageId, slotIndex) = await InsertWithOverflow(docData, transaction);
             location = new DocumentLocation(pageId, slotIndex);
         }
 
@@ -1489,7 +1510,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         _indexManager.InsertIntoAll(entity, location, transaction);
 
         // Notify CDC
-        await NotifyCdc(OperationType.Insert, id, docData);
+        await NotifyCdc(OperationType.Insert, id, transaction, docData);
     }
 
     /// <summary>
@@ -1558,11 +1579,30 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default)
     {
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var key = _mapper.ToIndexKey(id);
-        var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct).ConfigureAwait(false);
-        if (!found) return default;
-        return await FindByLocationAsync(location, transaction.TransactionId, ct).ConfigureAwait(false);
+        try
+        {
+            var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct).ConfigureAwait(false);
+            if (!found) return default;
+            var result = await FindByLocationAsync(location, transaction.TransactionId, ct).ConfigureAwait(false);
+            success = result != null;
+            return result;
+        }
+        finally
+        {
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionFind,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
+        }
     }
 
     /// <summary>
@@ -1602,9 +1642,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    internal async Task<T?> FindByLocation(DocumentLocation location)
+    internal async Task<T?> FindByLocation(DocumentLocation location, ITransaction? transaction = null)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        transaction ??= await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction?.TransactionId ?? 0;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
@@ -1818,38 +1858,59 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously updates an existing document in the collection
     /// </summary>
-    public async Task<bool> UpdateAsync(T entity, CancellationToken ct = default)
+    public async Task<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool autoCommit = transaction == null;
+
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Update).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var result = await UpdateCore(entity);
+            var result = await UpdateCore(entity, transaction);
+            if (autoCommit && result) await transaction.CommitAsync(ct);
+            success = result;
             return result;
         }
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionUpdate,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
         }
     }
 
     /// <summary>
     /// Asynchronously updates multiple documents in a single transaction.
     /// </summary>
-    public async Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+    public async Task<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
     {
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
         int updateCount = 0;
+        bool autoCommit = transaction == null;
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (UpdateBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            updateCount = await UpdateBulkInternal(entityList);
+            updateCount = await UpdateBulkInternal(entityList, transaction);
+            if (autoCommit) await transaction.CommitAsync(ct);
             return updateCount;
         }
         finally
@@ -1858,9 +1919,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task<int> UpdateBulkInternal(List<T> entityList)
+    private async Task<int> UpdateBulkInternal(List<T> entityList, ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         int updateCount = 0;
         const int BATCH_SIZE = 50;
 
@@ -1900,7 +1960,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 var entity = entityList[batchStart + i];
                 try
                 {
-                    if (await UpdateDataCore(id, entity, docData, length))
+                    if (await UpdateDataCore(id, entity, docData, transaction, length))
                         updateCount++;
                 }
                 finally
@@ -1912,13 +1972,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return updateCount;
     }
 
-    private async Task<bool> UpdateCore(T entity)
+    private async Task<bool> UpdateCore(T entity, ITransaction transaction)
     {
         var id = _mapper.GetId(entity);
         var length = SerializeWithRetry(entity, out var buffer);
         try
         {
-            return await UpdateDataCore(id, entity, buffer, length);
+            return await UpdateDataCore(id, entity, buffer, transaction, length);
         }
         finally
         {
@@ -1926,11 +1986,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task<bool> UpdateDataCore(TId id, T entity, byte[] docData, int docLength = -1)
+    private async Task<bool> UpdateDataCore(TId id, T entity, byte[] docData, ITransaction transaction, int docLength = -1)
     {
         if (docLength >= 0 && docLength < docData.Length)
             docData = docData[..docLength]; // trim to actual serialized size
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var key = _mapper.ToIndexKey(id);
         var bytesWritten = docData.Length;
 
@@ -1938,7 +1997,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             return false;
 
         // Retrieve old version for index updates
-        var oldEntity = await FindByLocation(oldLocation);
+        var oldEntity = await FindByLocation(oldLocation, transaction);
         if (oldEntity == null) return false;
 
         // Read old page
@@ -1963,25 +2022,25 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 _indexManager.UpdateInAll(oldEntity, entity, oldLocation, oldLocation, transaction);
 
                 // Notify CDC
-                await NotifyCdc(OperationType.Update, id, docData);
+                await NotifyCdc(OperationType.Update, id, transaction, docData);
                 return true;
             }
             else
             {
                 // Delete old + insert new
-                await DeleteCore(id, notifyCdc: false);
+                await DeleteCore(id, transaction, notifyCdc: false);
 
                 DocumentLocation newLocation;
                 if (bytesWritten + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
                 {
-                    var newPageId = await FindPageWithSpace(bytesWritten + SlotEntry.Size);
-                    if (newPageId == 0) newPageId = await AllocateNewDataPage();
-                    var newSlotIndex = await InsertIntoPage(newPageId, docData);
+                    var newPageId = await FindPageWithSpace(bytesWritten + SlotEntry.Size, transaction);
+                    if (newPageId == 0) newPageId = await AllocateNewDataPage(transaction);
+                    var newSlotIndex = await InsertIntoPage(newPageId, docData, transaction);
                     newLocation = new DocumentLocation(newPageId, newSlotIndex);
                 }
                 else
                 {
-                    var (newPageId, newSlotIndex) = await InsertWithOverflow(docData);
+                    var (newPageId, newSlotIndex) = await InsertWithOverflow(docData, transaction);
                     newLocation = new DocumentLocation(newPageId, newSlotIndex);
                 }
 
@@ -1989,7 +2048,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 _indexManager.UpdateInAll(oldEntity, entity, oldLocation, newLocation, transaction);
 
                 // Notify CDC
-                await NotifyCdc(OperationType.Update, id, docData);
+                await NotifyCdc(OperationType.Update, id, transaction, docData);
                 return true;
             }
         }
@@ -2002,34 +2061,56 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously deletes a document by its primary key.
     /// </summary>
-    public async Task<bool> DeleteAsync(TId id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default)
     {
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool autoCommit = transaction == null;
+
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Delete).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var result = await DeleteCore(id);
+            var result = await DeleteCore(id, transaction);
+            if (autoCommit && result) await transaction.CommitAsync(ct);
+            success = result;
             return result;
         }
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionDelete,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
         }
     }
 
     /// <summary>
     /// Asynchronously deletes multiple documents in a single transaction.
     /// </summary>
-    public async Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default)
+    public async Task<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default)
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         int deleteCount = 0;
+        bool autoCommit = transaction == null;
+
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (DeleteBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            deleteCount = await DeleteBulkInternal(ids);
+            deleteCount = await DeleteBulkInternal(ids, transaction);
+            if (autoCommit) await transaction.CommitAsync(ct);
             return deleteCount;
         }
         finally
@@ -2038,26 +2119,25 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task<int> DeleteBulkInternal(IEnumerable<TId> ids)
+    private async Task<int> DeleteBulkInternal(IEnumerable<TId> ids, ITransaction transaction)
     {
         int deleteCount = 0;
         foreach (var id in ids)
         {
-            if (await DeleteCore(id))
+            if (await DeleteCore(id, transaction))
                 deleteCount++;
         }
         return deleteCount;
     }
 
-    private async Task<bool> DeleteCore(TId id, bool notifyCdc = true)
+    private async Task<bool> DeleteCore(TId id, ITransaction transaction, bool notifyCdc = true)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var key = _mapper.ToIndexKey(id);
         if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
             return false;
 
         // Notify secondary indexes BEFORE deleting document from storage
-        var entity = await FindByLocation(location);
+        var entity = await FindByLocation(location, transaction);
         if (entity != null)
         {
             _indexManager.DeleteFromAll(entity, location, transaction);
@@ -2077,7 +2157,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             {
                 var nextOverflowPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
                     buffer.AsSpan(slot.Offset + 4, 4));
-                await FreeOverflowChain(nextOverflowPage);
+                await FreeOverflowChain(nextOverflowPage, transaction);
             }
 
             // Mark slot as deleted
@@ -2100,7 +2180,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             // Notify CDC
             if (notifyCdc) 
-                await NotifyCdc(OperationType.Delete, id);
+                await NotifyCdc(OperationType.Delete, id, transaction);
 
             return true;
         }
@@ -2110,9 +2190,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task FreeOverflowChain(uint overflowPageId)
+    private async Task FreeOverflowChain(uint overflowPageId, ITransaction transaction)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var tempBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
@@ -2658,13 +2737,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return new ChangeStreamObservable<TId, T>(_storage.Cdc, _collectionName, capturePayload, _mapper, _storage.GetKeyReverseMap());
     }
 
-    private async Task NotifyCdc(OperationType type, TId id, ReadOnlyMemory<byte> docData = default)
+    private Task NotifyCdc(OperationType type, TId id, ITransaction transaction, ReadOnlyMemory<byte> docData = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        if (_storage.Cdc == null) return;
+        if (_storage.Cdc == null) return Task.CompletedTask;
 
         // Early exit if no watchers for this collection - avoid allocations
-        if (!_storage.Cdc.HasAnyWatchers(_collectionName)) return;
+        if (!_storage.Cdc.HasAnyWatchers(_collectionName)) return Task.CompletedTask;
 
         ReadOnlyMemory<byte>? payload = null;
         if (!docData.IsEmpty && _storage.Cdc.HasPayloadWatchers(_collectionName))
@@ -2686,6 +2764,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 PayloadBytes = payload
             });
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -2697,6 +2777,36 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         _indexManager.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    public Task<TId> InsertAsync(T entity, CancellationToken ct = default)
+    {
+        return InsertAsync(entity, null, ct);
+    }
+
+    public Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+    {
+        return InsertBulkAsync(entities, null, ct);
+    }
+
+    public Task<bool> UpdateAsync(T entity, CancellationToken ct = default)
+    {
+        return UpdateAsync(entity, null, ct);
+    }
+
+    public Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+    {
+        return UpdateBulkAsync(entities, null, ct);
+    }
+
+    public Task<bool> DeleteAsync(TId id, CancellationToken ct = default)
+    {
+        return DeleteAsync(id, null, ct);
+    }
+
+    public Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default)
+    {
+        return DeleteBulkAsync(ids, null, ct);
     }
 }
 

@@ -58,7 +58,30 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Commits the current transaction and saves all pending changes.
+    /// No-op when called without a transaction.
+    /// Auto-commit operations commit immediately; this exists for API compatibility.
     /// </summary>
     Task SaveChangesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Commits a caller-owned transaction created by <see cref="BeginTransactionAsync"/>.
+    /// </summary>
+    Task SaveChangesAsync(ITransaction transaction, CancellationToken ct = default);
+
+    /// <summary>
+    /// Enables the metrics subsystem. Safe to call multiple times — idempotent.
+    /// </summary>
+    void EnableMetrics(Metrics.MetricsOptions? options = null);
+
+    /// <summary>
+    /// Returns an immutable point-in-time snapshot of performance counters,
+    /// or <c>null</c> if <see cref="EnableMetrics"/> has not been called.
+    /// </summary>
+    Metrics.MetricsSnapshot? GetMetrics();
+
+    /// <summary>
+    /// Returns an <see cref="IObservable{T}"/> that emits a <see cref="Metrics.MetricsSnapshot"/>
+    /// at the given <paramref name="interval"/>. Enables the metrics subsystem automatically.
+    /// </summary>
+    IObservable<Metrics.MetricsSnapshot> WatchMetrics(TimeSpan? interval = null);
 }

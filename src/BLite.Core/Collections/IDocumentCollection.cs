@@ -2,6 +2,7 @@ using BLite.Bson;
 using BLite.Core.CDC;
 using BLite.Core.Indexing;
 using BLite.Core.Query;
+using BLite.Core.Transactions;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
@@ -30,8 +31,10 @@ public interface IDocumentCollection<TId, T> where T : class
     // ── Insert ────────────────────────────────────────────────────────────────
 
     Task<TId> InsertAsync(T entity, CancellationToken ct = default);
+    Task<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
 
     Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
+    Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
@@ -55,17 +58,21 @@ public interface IDocumentCollection<TId, T> where T : class
     [RequiresUnreferencedCode("LINQ queries over BLite collections use reflection to resolve methods at runtime. Ensure all entity types and their members are preserved.")]
     IBLiteQueryable<T> AsQueryable();
 
-    // ── UpdateAsync ────────────────────────────────────────────────────────────────
+    // ── Update ────────────────────────────────────────────────────────────────
 
     Task<bool> UpdateAsync(T entity, CancellationToken ct = default);
+    Task<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
 
     Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
+    Task<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
 
     // ── Delete ────────────────────────────────────────────────────────────────
 
     Task<bool> DeleteAsync(TId id, CancellationToken ct = default);
+    Task<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default);
 
     Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default);
+    Task<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default);
 
     // ── Index management ──────────────────────────────────────────────────────
     // Local engine: fully supported.

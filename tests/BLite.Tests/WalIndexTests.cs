@@ -31,7 +31,7 @@ public class WalIndexTests : IDisposable
         
         // 3. Insert a user
         var user = new User { Name = "Alice", Age = 30 };
-        await _db.Users.InsertAsync(user);
+        await _db.Users.InsertAsync(user, txn);
         
         // 4. Commit
         await txn.CommitAsync();

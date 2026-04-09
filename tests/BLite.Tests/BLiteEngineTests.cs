@@ -329,11 +329,11 @@ public class BLiteEngineTests : IDisposable
             .AddId((BsonId)1)
             .AddString("name", "WillRollback"));
 
-        await col.InsertAsync(doc);
-        _engine.Rollback();
+        var txn = _engine.BeginTransaction();
+        await col.InsertAsync(doc, txn);
+        await txn.RollbackAsync();
 
         // After rollback, the document should not be findable
-        // (Note: exact behavior depends on WAL/transaction isolation implementation)
         var count = await col.CountAsync();
         Assert.Equal(0, count);
     }
@@ -351,20 +351,16 @@ public class BLiteEngineTests : IDisposable
         var col = _engine.GetOrCreateCollection("txn_server_pattern");
 
         // Step 1: explicit begin (mirrors TransactionManager.BeginAsync)
-        await _engine.BeginTransactionAsync();
+        var txn = await _engine.BeginTransactionAsync();
 
-        // Step 2: insert via DynamicCollection.InsertAsync (mirrors session.Engine.GetOrCreateCollection.InsertAsync)
+        // Step 2: insert via DynamicCollection.InsertAsync with explicit tx
         var doc = col.CreateDocument(["name", "committed"], b => b
             .AddString("name", "TxnGhost")
             .AddBoolean("committed", false));
-        var id = await col.InsertAsync(doc);
+        var id = await col.InsertAsync(doc, txn);
 
-        // Sanity: document should be visible within the transaction
-        var duringTxn = await col.FindByIdAsync(id);
-        Assert.NotNull(duringTxn);
-
-        // Step 3: rollback (mirrors RollbackCoreAsync → engine.RollbackAsync())
-        _engine.Rollback();
+        // Step 3: rollback
+        await txn.RollbackAsync();
 
         // Step 4: document must not be visible after rollback
         var afterRollback = await col.FindByIdAsync(id);
@@ -383,16 +379,16 @@ public class BLiteEngineTests : IDisposable
         var col = _engine.GetOrCreateCollection("txn_committed_vs_rolled");
 
         // Commit one document
-        await _engine.BeginTransactionAsync();
+        var txn1 = await _engine.BeginTransactionAsync();
         var docA = col.CreateDocument(["name"], b => b.AddString("name", "Committed"));
-        var idA  = await col.InsertAsync(docA);
-        await _engine.CommitAsync();
+        var idA  = await col.InsertAsync(docA, txn1);
+        await txn1.CommitAsync();
 
-        // RollbackAsync a second document
-        await _engine.BeginTransactionAsync();
+        // Rollback a second document
+        var txn2 = await _engine.BeginTransactionAsync();
         var docB = col.CreateDocument(["name"], b => b.AddString("name", "WillRollback"));
-        await col.InsertAsync(docB);
-        _engine.Rollback();
+        await col.InsertAsync(docB, txn2);
+        await txn2.RollbackAsync();
 
         // Only the committed document must be visible
         var found = await col.FindByIdAsync(idA);

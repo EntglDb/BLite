@@ -177,6 +177,18 @@ public sealed partial class StorageEngine
                 commit.Completion.TrySetResult(true);
         }
 
+        // Emit group-commit batch metric (only real batches, not the sentinel).
+        if (_metrics != null && batch.Count > 0)
+        {
+            _metrics.Publish(new Metrics.MetricEvent
+            {
+                Timestamp = System.Diagnostics.Stopwatch.GetTimestamp(),
+                Type      = Metrics.MetricEventType.GroupCommitBatch,
+                BatchSize = batch.Count,
+                Success   = failure == null,
+            });
+        }
+
         // Run checkpoint outside _commitLock so concurrent commits aren't blocked.
         if (needsCheckpoint && failure == null)
         {

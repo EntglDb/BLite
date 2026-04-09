@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -11,6 +12,12 @@ public sealed partial class StorageEngine
         var txnId = (ulong)Interlocked.Increment(ref _nextTransactionId);
         var transaction = new Transaction(txnId, this, isolationLevel);
         _activeTransactions[txnId] = transaction;
+        _metrics?.Publish(new Metrics.MetricEvent
+        {
+            Timestamp  = Stopwatch.GetTimestamp(),
+            Type       = Metrics.MetricEventType.TransactionBegin,
+            Success    = true,
+        });
         return transaction;
     }
 
@@ -170,6 +177,9 @@ public sealed partial class StorageEngine
         };
         if (_writerGate != null && !await _writerGate.WaitAsync(gateTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Too many concurrent writers — admission gate full.");
+
+        var sw = _metrics != null ? Metrics.ValueStopwatch.StartNew() : default;
+        bool success = false;
         try
         {
             // Group commit path: post to the background writer and await its TCS.
@@ -179,10 +189,19 @@ public sealed partial class StorageEngine
             var pending = new PendingCommit(transactionId, pages);
             await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
             await pending.Completion.Task.ConfigureAwait(false);
+            success = true;
         }
         finally
         {
             _writerGate?.Release();
+            if (sw.IsActive)
+                _metrics?.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp     = sw.StartTimestamp,
+                    Type          = Metrics.MetricEventType.TransactionCommit,
+                    ElapsedMicros = sw.GetElapsedMicros(),
+                    Success       = success,
+                });
         }
     }
     
@@ -232,6 +251,12 @@ public sealed partial class StorageEngine
     {
         _walCache.TryRemove(transactionId, out _);
         await _wal.WriteAbortRecordAsync(transactionId);
+        _metrics?.Publish(new Metrics.MetricEvent
+        {
+            Timestamp = Stopwatch.GetTimestamp(),
+            Type      = Metrics.MetricEventType.TransactionRollback,
+            Success   = true,
+        });
     }
 
     /// <summary>
