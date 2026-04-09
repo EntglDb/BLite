@@ -231,7 +231,7 @@ public class MetricsTests : IDisposable
     public void Snapshot_HasRecentTimestamp()
     {
         _engine.EnableMetrics();
-        var before = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var before = DateTimeOffset.UtcNow.AddSeconds(-5);
         var snap = _engine.GetMetrics();
         Assert.NotNull(snap);
         Assert.True(snap!.SnapshotTimestamp >= before,

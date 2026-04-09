@@ -358,8 +358,7 @@ public sealed class DynamicCollection : IDisposable
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var m = _storage.MetricsDispatcher;
-        long t0 = m != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
         bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
@@ -378,17 +377,15 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
-            if (m != null)
-            {
-                m.Publish(new Metrics.MetricEvent
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
                 {
-                    Timestamp      = t0,
+                    Timestamp      = sw.StartTimestamp,
                     Type           = Metrics.MetricEventType.CollectionInsert,
-                    ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
+                    ElapsedMicros  = sw.GetElapsedMicros(),
                     CollectionName = _collectionName,
                     Success        = success,
                 });
-            }
         }
     }
 
@@ -611,8 +608,7 @@ public sealed class DynamicCollection : IDisposable
     {
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
-        var m = _storage.MetricsDispatcher;
-        long t0 = m != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
         bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
@@ -664,17 +660,15 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
-            if (m != null)
-            {
-                m.Publish(new Metrics.MetricEvent
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
                 {
-                    Timestamp      = t0,
+                    Timestamp      = sw.StartTimestamp,
                     Type           = Metrics.MetricEventType.CollectionUpdate,
-                    ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
+                    ElapsedMicros  = sw.GetElapsedMicros(),
                     CollectionName = _collectionName,
                     Success        = success,
                 });
-            }
         }
     }
 
@@ -749,8 +743,7 @@ public sealed class DynamicCollection : IDisposable
     /// </summary>
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
-        var m = _storage.MetricsDispatcher;
-        long t0 = m != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
         bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
@@ -783,17 +776,15 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
-            if (m != null)
-            {
-                m.Publish(new Metrics.MetricEvent
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
                 {
-                    Timestamp      = t0,
+                    Timestamp      = sw.StartTimestamp,
                     Type           = Metrics.MetricEventType.CollectionDelete,
-                    ElapsedMicros  = Metrics.MetricsDispatcher.TicksToMicroseconds(System.Diagnostics.Stopwatch.GetTimestamp() - t0),
+                    ElapsedMicros  = sw.GetElapsedMicros(),
                     CollectionName = _collectionName,
                     Success        = success,
                 });
-            }
         }
     }
 

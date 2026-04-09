@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Threading.Channels;
 
 namespace BLite.Core.Metrics;
@@ -22,9 +21,6 @@ namespace BLite.Core.Metrics;
 /// </summary>
 internal sealed class MetricsDispatcher : IDisposable
 {
-    private static readonly double TicksToMicros =
-        1_000_000.0 / Stopwatch.Frequency;
-
     private readonly Channel<MetricEvent> _channel;
     private readonly CancellationTokenSource _cts = new();
 
@@ -240,10 +236,6 @@ internal sealed class MetricsDispatcher : IDisposable
         _channel.Writer.TryComplete();
         _cts.Dispose();
     }
-
-    /// <summary>Helper to convert Stopwatch ticks elapsed to microseconds.</summary>
-    internal static long TicksToMicroseconds(long ticks)
-        => (long)(ticks * TicksToMicros);
 
     // ── Mutable per-collection accumulator (fields accessed via Interlocked) ─
     private sealed class CollectionCounters
