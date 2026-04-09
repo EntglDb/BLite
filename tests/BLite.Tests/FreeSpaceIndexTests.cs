@@ -180,7 +180,7 @@ public class FreeSpaceIndexUnitTests
     {
         // Use a dedicated instance to avoid interference.
         var fsi = new FreeSpaceIndex(PageSize);
-        Assert.Equal(0u, fsi.FindPage(100, null!, 0));
+        Assert.Equal(0u, fsi.FindPage(100, null));
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public class FreeSpaceIndexUnitTests
         var fsi = new FreeSpaceIndex(PageSize);
         fsi.Update(42, 8000);
 
-        var found = fsi.FindPage(4000, null!, 0);
+        var found = fsi.FindPage(4000, null);
         Assert.Equal(42u, found);
     }
 
@@ -199,7 +199,7 @@ public class FreeSpaceIndexUnitTests
         var fsi = new FreeSpaceIndex(PageSize);
         fsi.Update(5, 200); // very little free space
 
-        var found = fsi.FindPage(5000, null!, 0);
+        var found = fsi.FindPage(5000, null);
         Assert.Equal(0u, found);
     }
 
@@ -212,7 +212,7 @@ public class FreeSpaceIndexUnitTests
 
         // Both satisfy 1000 bytes; bucket scan starts from the highest bucket,
         // so page 2 (more free space) should be returned first.
-        var found = fsi.FindPage(1000, null!, 0);
+        var found = fsi.FindPage(1000, null);
         Assert.Equal(2u, found);
     }
 
@@ -241,7 +241,7 @@ public class FreeSpaceIndexUnitTests
         Assert.True(fsi.TryGetFreeBytes(7, out var fb));
         Assert.Equal(9000, fb);
 
-        var found = fsi.FindPage(8000, null!, 0);
+        var found = fsi.FindPage(8000, null);
         Assert.Equal(7u, found);
     }
 }
