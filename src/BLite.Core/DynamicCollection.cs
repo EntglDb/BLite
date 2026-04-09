@@ -358,7 +358,8 @@ public sealed class DynamicCollection : IDisposable
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        var m = _storage.MetricsDispatcher;
+        long t0 = m != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
         bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
@@ -377,7 +378,6 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
-            var m = _storage.MetricsDispatcher;
             if (m != null)
             {
                 m.Publish(new Metrics.MetricEvent
@@ -611,7 +611,8 @@ public sealed class DynamicCollection : IDisposable
     {
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
-        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        var m = _storage.MetricsDispatcher;
+        long t0 = m != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
         bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
@@ -663,7 +664,6 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
-            var m = _storage.MetricsDispatcher;
             if (m != null)
             {
                 m.Publish(new Metrics.MetricEvent
@@ -749,7 +749,8 @@ public sealed class DynamicCollection : IDisposable
     /// </summary>
     public async Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
-        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        var m = _storage.MetricsDispatcher;
+        long t0 = m != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
         bool success = false;
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
@@ -782,7 +783,6 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             _collectionLock.Release();
-            var m = _storage.MetricsDispatcher;
             if (m != null)
             {
                 m.Publish(new Metrics.MetricEvent

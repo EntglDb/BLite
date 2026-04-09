@@ -178,7 +178,8 @@ public sealed partial class StorageEngine
         if (_writerGate != null && !await _writerGate.WaitAsync(gateTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Too many concurrent writers — admission gate full.");
 
-        var t0 = Stopwatch.GetTimestamp();
+        var m = _metrics;
+        long t0 = m != null ? Stopwatch.GetTimestamp() : 0L;
         bool success = false;
         try
         {
@@ -194,10 +195,10 @@ public sealed partial class StorageEngine
         finally
         {
             _writerGate?.Release();
-            if (_metrics != null)
+            if (m != null)
             {
                 long elapsed = Metrics.MetricsDispatcher.TicksToMicroseconds(Stopwatch.GetTimestamp() - t0);
-                _metrics.Publish(new Metrics.MetricEvent
+                m.Publish(new Metrics.MetricEvent
                 {
                     Timestamp     = t0,
                     Type          = Metrics.MetricEventType.TransactionCommit,

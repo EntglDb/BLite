@@ -252,6 +252,40 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     public virtual IDocumentCollection<TId, T> Set<TId, T>() where T : class
         => throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
 
+    // ── Metrics ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Enables the metrics subsystem. After this call, the engine starts collecting
+    /// performance counters. Safe to call multiple times — idempotent.
+    /// </summary>
+    public void EnableMetrics(Metrics.MetricsOptions? options = null)
+    {
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
+        _storage.EnsureMetrics();
+    }
+
+    /// <summary>
+    /// Returns an immutable point-in-time snapshot of performance counters,
+    /// or <c>null</c> if <see cref="EnableMetrics"/> has not been called.
+    /// </summary>
+    public Metrics.MetricsSnapshot? GetMetrics()
+    {
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
+        return _storage.MetricsDispatcher?.GetSnapshot();
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IObservable{T}"/> that emits a <see cref="Metrics.MetricsSnapshot"/>
+    /// at the given <paramref name="interval"/> (default 1 s).
+    /// Enables the metrics subsystem automatically if not yet enabled.
+    /// </summary>
+    public IObservable<Metrics.MetricsSnapshot> WatchMetrics(TimeSpan? interval = null)
+    {
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
+        var dispatcher = _storage.EnsureMetrics();
+        return new Metrics.BLiteMetricsObservable(dispatcher, interval ?? TimeSpan.FromSeconds(1));
+    }
+
     public void Dispose()
     {
         if (_disposed)

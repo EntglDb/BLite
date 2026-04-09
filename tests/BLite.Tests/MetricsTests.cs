@@ -269,3 +269,83 @@ public class MetricsTests : IDisposable
         Assert.True(snapB.InsertCount >= 7, $"colB inserts: {snapB.InsertCount}");
     }
 }
+
+/// <summary>
+/// Integration tests for metrics through <see cref="DocumentDbContext"/>.
+/// </summary>
+public class MetricsViaDocumentDbContextTests : IDisposable
+{
+    private readonly string _dbPath;
+    private readonly TestDbContext _db;
+
+    public MetricsViaDocumentDbContextTests()
+    {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"blite_metrics_ctx_{Guid.NewGuid():N}.db");
+        _db = new TestDbContext(_dbPath);
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
+        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+        var wal = Path.ChangeExtension(_dbPath, ".wal");
+        if (File.Exists(wal)) File.Delete(wal);
+    }
+
+    [Fact]
+    public void DbContext_GetMetrics_BeforeEnable_ReturnsNull()
+    {
+        Assert.Null(_db.GetMetrics());
+    }
+
+    [Fact]
+    public void DbContext_EnableMetrics_Idempotent()
+    {
+        _db.EnableMetrics();
+        _db.EnableMetrics(); // must not throw
+        Assert.NotNull(_db.GetMetrics());
+    }
+
+    [Fact]
+    public async Task DbContext_Metrics_RecordsTransactionCommit()
+    {
+        _db.EnableMetrics();
+
+        var person = new Person { Id = 1, Name = "Metric User", Age = 30 };
+        await _db.People.InsertAsync(person);
+        await _db.SaveChangesAsync();
+
+        await Task.Delay(100);
+
+        var snap = _db.GetMetrics();
+        Assert.NotNull(snap);
+        Assert.True(snap!.TransactionCommitsTotal >= 1,
+            $"Expected at least 1 commit, got {snap.TransactionCommitsTotal}");
+    }
+
+    [Fact]
+    public async Task DbContext_WatchMetrics_EmitsSnapshots()
+    {
+        var snapshots = new List<MetricsSnapshot>();
+        using var sub = _db.WatchMetrics(TimeSpan.FromMilliseconds(50))
+            .Subscribe(s => snapshots.Add(s));
+
+        await Task.Delay(250);
+
+        Assert.True(snapshots.Count >= 2,
+            $"Expected at least 2 snapshots, got {snapshots.Count}");
+    }
+
+    [Fact]
+    public async Task DbContext_WatchMetrics_EnablesMetricsAutomatically()
+    {
+        Assert.Null(_db.GetMetrics());
+
+        using var sub = _db.WatchMetrics(TimeSpan.FromMilliseconds(50))
+            .Subscribe(_ => { });
+
+        await Task.Delay(100);
+
+        Assert.NotNull(_db.GetMetrics());
+    }
+}

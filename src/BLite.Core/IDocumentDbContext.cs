@@ -61,4 +61,21 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     /// Commits the current transaction and saves all pending changes.
     /// </summary>
     Task SaveChangesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Enables the metrics subsystem. Safe to call multiple times — idempotent.
+    /// </summary>
+    void EnableMetrics(Metrics.MetricsOptions? options = null);
+
+    /// <summary>
+    /// Returns an immutable point-in-time snapshot of performance counters,
+    /// or <c>null</c> if <see cref="EnableMetrics"/> has not been called.
+    /// </summary>
+    Metrics.MetricsSnapshot? GetMetrics();
+
+    /// <summary>
+    /// Returns an <see cref="IObservable{T}"/> that emits a <see cref="Metrics.MetricsSnapshot"/>
+    /// at the given <paramref name="interval"/>. Enables the metrics subsystem automatically.
+    /// </summary>
+    IObservable<Metrics.MetricsSnapshot> WatchMetrics(TimeSpan? interval = null);
 }
