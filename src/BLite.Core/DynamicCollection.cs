@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core.CDC;
+using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Indexing.Internal;
 using BLite.Core.Storage;
@@ -43,7 +44,9 @@ public sealed class DynamicCollection : IDisposable
     private readonly BsonIdType _idType;
     private readonly SemaphoreSlim _collectionLock = new(1, 1);
     private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
-    private readonly Dictionary<uint, ushort> _freeSpaceMap = new();
+    private readonly FreeSpaceIndex _fsi;
+    // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.
+    private readonly Func<uint, ulong, bool> _isPageLocked;
     private readonly int _maxDocumentSizeForSinglePage;
     private uint _currentDataPage;
     private bool _isTimeSeries;
@@ -88,6 +91,8 @@ public sealed class DynamicCollection : IDisposable
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _idType = idType;
         _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
+        _fsi = new FreeSpaceIndex(_storage.PageSize);
+        _isPageLocked = _storage.IsPageLocked;
 
         // Load or create collection metadata
         var metadata = _storage.GetCollectionMetadata(_collectionName);
@@ -157,6 +162,33 @@ public sealed class DynamicCollection : IDisposable
             metadata.PrimaryRootPageId = _primaryIndex.RootPageId;
             _storage.SaveCollectionMetadata(metadata);
         }
+
+        // Rebuild the free-space index from existing page headers on cold start.
+        RebuildFreeSpaceIndex();
+    }
+
+    private void RebuildFreeSpaceIndex()
+    {
+        // Read only the fixed-size page header (24 bytes) rather than renting a full-page
+        // buffer.  Using a stack-allocated span avoids any heap allocation and reduces
+        // memory traffic: we copy 24 bytes per page instead of the full page size.
+        Span<byte> hdrBuf = stackalloc byte[SlottedPageHeader.Size];
+        uint lastDataPage = 0;
+
+        foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+        {
+            _storage.ReadPageHeader(pageId, null, hdrBuf);
+            var hdr = SlottedPageHeader.ReadFrom(hdrBuf);
+
+            if (hdr.PageType == PageType.Data)
+            {
+                _fsi.Update(pageId, hdr.AvailableFreeSpace);
+                lastDataPage = pageId;
+            }
+        }
+
+        if (lastDataPage != 0)
+            _currentDataPage = lastDataPage;
     }
 
     /// <summary>The collection name.</summary>
@@ -1146,16 +1178,12 @@ public sealed class DynamicCollection : IDisposable
     {
         if (_currentDataPage != 0)
         {
-            if (_freeSpaceMap.TryGetValue(_currentDataPage, out var freeBytes) && freeBytes >= requiredBytes && !_storage.IsPageLocked(_currentDataPage, txnId))
+            if (_fsi.TryGetFreeBytes(_currentDataPage, out var freeBytes) && freeBytes >= requiredBytes && !_storage.IsPageLocked(_currentDataPage, txnId))
                 return _currentDataPage;
         }
 
-        foreach (var (pageId, freeBytes) in _freeSpaceMap)
-        {
-            if (freeBytes >= requiredBytes && !_storage.IsPageLocked(pageId, txnId))
-                return pageId;
-        }
-        return 0;
+        // Use the cached _isPageLocked delegate to avoid per-call closure allocation.
+        return _fsi.FindPage(requiredBytes, txnId, _isPageLocked);
     }
 
     private uint AllocateNewDataPage(ITransaction transaction)
@@ -1177,7 +1205,7 @@ public sealed class DynamicCollection : IDisposable
             };
             header.WriteTo(buffer);
             _storage.WritePage(pageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
-            _freeSpaceMap[pageId] = (ushort)header.AvailableFreeSpace;
+            _fsi.Update(pageId, header.AvailableFreeSpace);
             _currentDataPage = pageId;
         }
         finally
@@ -1248,7 +1276,7 @@ public sealed class DynamicCollection : IDisposable
             header.WriteTo(buffer);
 
             _storage.WritePage(pageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
-            _freeSpaceMap[pageId] = (ushort)header.AvailableFreeSpace;
+            _fsi.Update(pageId, header.AvailableFreeSpace);
 
             return slotIndex;
         }
