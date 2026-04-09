@@ -45,6 +45,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     // Free space tracking: 16-bucket index for O(1) FindPage
     private readonly FreeSpaceIndex _fsi;
+    // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.
+    private readonly Func<uint, ulong, bool> _isPageLocked;
     private bool _isTimeSeries;
     private string? _ttlFieldName;
 
@@ -128,6 +130,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
         _indexManager = new CollectionIndexManager<TId, T>(_storage, _mapper, _collectionName);
         _fsi = new FreeSpaceIndex(_storage.PageSize);
+        _isPageLocked = _storage.IsPageLocked;
 
         // Calculate max document size dynamically based on page size
         // Reserve space for PageHeader (24) and some safety margin
@@ -172,34 +175,28 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     private void RebuildFreeSpaceIndex()
     {
-        // ReadPage requires a full-page buffer; we rent one, populate the FSI from each
-        // page header (only the first SlottedPageHeader.Size bytes matter), then return it.
-        var buf = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-        try
-        {
-            uint lastDataPage = 0;
+        // Read only the fixed-size page header (24 bytes) rather than renting a full-page
+        // buffer.  Using a stack-allocated span avoids any heap allocation and reduces
+        // memory traffic: we copy 24 bytes per page instead of the full page size.
+        Span<byte> hdrBuf = stackalloc byte[SlottedPageHeader.Size];
+        uint lastDataPage = 0;
 
-            foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+        foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+        {
+            _storage.ReadPageHeader(pageId, null, hdrBuf);
+            var hdr = SlottedPageHeader.ReadFrom(hdrBuf);
+
+            if (hdr.PageType == PageType.Data)
             {
-                _storage.ReadPage(pageId, null, buf.AsSpan(0, _storage.PageSize));
-                var hdr = SlottedPageHeader.ReadFrom(buf);
-
-                if (hdr.PageType == PageType.Data)
-                {
-                    _fsi.Update(pageId, hdr.AvailableFreeSpace);
-                    lastDataPage = pageId;
-                }
+                _fsi.Update(pageId, hdr.AvailableFreeSpace);
+                lastDataPage = pageId;
             }
+        }
 
-            // Seed _currentDataPage with the last data page found so that the first
-            // FindPageWithSpace fast-path hits an already-known page instead of allocating.
-            if (lastDataPage != 0)
-                _currentDataPage = lastDataPage;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buf);
-        }
+        // Seed _currentDataPage with the last data page found so that the first
+        // FindPageWithSpace fast-path hits an already-known page instead of allocating.
+        if (lastDataPage != 0)
+            _currentDataPage = lastDataPage;
     }
 
     [RequiresUnreferencedCode("Schema management uses reflection to discover entity properties. Ensure all entity types and their members are preserved.")]
@@ -983,7 +980,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
 
         // Search FSI: O(BucketCount) = O(1) regardless of the number of tracked pages.
-        return _fsi.FindPage(requiredBytes, pid => _storage.IsPageLocked(pid, txnId));
+        // Use the cached _isPageLocked delegate to avoid per-call closure allocation.
+        return _fsi.FindPage(requiredBytes, txnId, _isPageLocked);
     }
 
     private async Task<uint> AllocateNewDataPage()

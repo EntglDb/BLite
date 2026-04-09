@@ -55,6 +55,8 @@ public class FreeSpaceIndexTests : IDisposable
         }
 
         // ── Session 2 (cold start): insert one more document ───────────────────
+        long fileSizeAfterSession1 = new FileInfo(_testFile).Length;
+
         {
             using var db = new TestDbContext(_testFile);
 
@@ -78,6 +80,12 @@ public class FreeSpaceIndexTests : IDisposable
             Assert.NotNull(found);
             Assert.Equal("Late User", found!.Name);
         }
+
+        // The file must not have grown: the insert was absorbed by an existing page.
+        long fileSizeAfterSession2 = new FileInfo(_testFile).Length;
+        Assert.True(
+            fileSizeAfterSession2 <= fileSizeAfterSession1,
+            $"File grew after cold-start insert: {fileSizeAfterSession1} -> {fileSizeAfterSession2} bytes.");
     }
 
     /// <summary>
@@ -103,7 +111,9 @@ public class FreeSpaceIndexTests : IDisposable
             await db.SaveChangesAsync();
         }
 
-        // Sessions 2-4: each adds one document; none should fail due to FSI being empty
+        // Sessions 2-4: each adds one document; none should fail due to FSI being empty.
+        // File size is not asserted here because index/metadata pages may grow
+        // independently of data-page reuse; the cold-start test covers page reuse directly.
         for (int session = 2; session <= 4; session++)
         {
             using var db = new TestDbContext(_testFile);
@@ -151,11 +161,7 @@ public class FreeSpaceIndexUnitTests
     [Fact]
     public void Update_SameBucket_UpdatesFreeBytes()
     {
-        // Both values should land in the same bucket.
-        _fsi.Update(2, 3000);
-        _fsi.Update(2, 3500); // still bucket 3 (3000/1022=2, 3500/1022=3 – actually different; pick values in same bucket)
-
-        // Use values that definitely share a bucket: 1024..2045 → bucket 1
+        // Use values that definitely share a bucket: 1024..2045 → bucket 1.
         _fsi.Update(3, 1100);
         _fsi.Update(3, 1900);
         Assert.True(_fsi.TryGetFreeBytes(3, out var fb));

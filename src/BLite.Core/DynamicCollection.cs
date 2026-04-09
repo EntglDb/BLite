@@ -45,6 +45,8 @@ public sealed class DynamicCollection : IDisposable
     private readonly SemaphoreSlim _collectionLock = new(1, 1);
     private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
     private readonly FreeSpaceIndex _fsi;
+    // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.
+    private readonly Func<uint, ulong, bool> _isPageLocked;
     private readonly int _maxDocumentSizeForSinglePage;
     private uint _currentDataPage;
     private bool _isTimeSeries;
@@ -90,6 +92,7 @@ public sealed class DynamicCollection : IDisposable
         _idType = idType;
         _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
         _fsi = new FreeSpaceIndex(_storage.PageSize);
+        _isPageLocked = _storage.IsPageLocked;
 
         // Load or create collection metadata
         var metadata = _storage.GetCollectionMetadata(_collectionName);
@@ -166,30 +169,26 @@ public sealed class DynamicCollection : IDisposable
 
     private void RebuildFreeSpaceIndex()
     {
-        var buf = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
-        try
-        {
-            uint lastDataPage = 0;
+        // Read only the fixed-size page header (24 bytes) rather than renting a full-page
+        // buffer.  Using a stack-allocated span avoids any heap allocation and reduces
+        // memory traffic: we copy 24 bytes per page instead of the full page size.
+        Span<byte> hdrBuf = stackalloc byte[SlottedPageHeader.Size];
+        uint lastDataPage = 0;
 
-            foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+        foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+        {
+            _storage.ReadPageHeader(pageId, null, hdrBuf);
+            var hdr = SlottedPageHeader.ReadFrom(hdrBuf);
+
+            if (hdr.PageType == PageType.Data)
             {
-                _storage.ReadPage(pageId, null, buf.AsSpan(0, _storage.PageSize));
-                var hdr = SlottedPageHeader.ReadFrom(buf);
-
-                if (hdr.PageType == PageType.Data)
-                {
-                    _fsi.Update(pageId, hdr.AvailableFreeSpace);
-                    lastDataPage = pageId;
-                }
+                _fsi.Update(pageId, hdr.AvailableFreeSpace);
+                lastDataPage = pageId;
             }
+        }
 
-            if (lastDataPage != 0)
-                _currentDataPage = lastDataPage;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buf);
-        }
+        if (lastDataPage != 0)
+            _currentDataPage = lastDataPage;
     }
 
     /// <summary>The collection name.</summary>
@@ -1183,7 +1182,8 @@ public sealed class DynamicCollection : IDisposable
                 return _currentDataPage;
         }
 
-        return _fsi.FindPage(requiredBytes, pid => _storage.IsPageLocked(pid, txnId));
+        // Use the cached _isPageLocked delegate to avoid per-call closure allocation.
+        return _fsi.FindPage(requiredBytes, txnId, _isPageLocked);
     }
 
     private uint AllocateNewDataPage(ITransaction transaction)

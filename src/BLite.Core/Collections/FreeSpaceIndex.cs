@@ -8,7 +8,8 @@ namespace BLite.Core.Collections;
 /// 16-bucket Free Space Index (FSI) for data pages.
 /// Divides the page's <em>usable</em> space into 16 equal categories (nibble encoding).
 /// Provides O(1) page lookup and amortised O(1) updates in steady state.
-/// Memory usage: ~16 bytes per tracked page (bucket array + free-space map).
+/// Memory usage is O(tracked pages); the index stores one free-space entry per tracked
+/// page plus membership in a bucket array.
 /// </summary>
 internal sealed class FreeSpaceIndex
 {
@@ -91,7 +92,8 @@ internal sealed class FreeSpaceIndex
     /// Finds a page that has at least <paramref name="requiredBytes"/> of free space
     /// and is not locked by another transaction.
     /// Returns 0 if no suitable page is found.
-    /// Complexity: O(BucketCount) = O(1) regardless of the number of tracked pages.
+    /// Complexity: O(BucketCount) bucket iterations plus O(pages_scanned) within each
+    /// bucket until an unlocked candidate is found; O(1) under no lock contention.
     /// </summary>
     /// <param name="requiredBytes">Minimum free bytes required.</param>
     /// <param name="isPageLocked">
@@ -103,8 +105,12 @@ internal sealed class FreeSpaceIndex
     {
         int minBucket = GetBucket(requiredBytes);
 
-        // Buckets above minBucket are guaranteed to hold enough free space
-        // ((b+1) * _bucketWidth > requiredBytes for every b >= minBucket+1).
+        // Buckets above minBucket are guaranteed to hold enough free space.
+        // Bucket b is zero-based and holds pages whose free bytes fall in the range
+        // [b * _bucketWidth, (b+1) * _bucketWidth).  For any b > minBucket every
+        // page in that bucket already has at least (minBucket + 1) * _bucketWidth
+        // free bytes, which is > requiredBytes by construction, so no additional
+        // _freeMap lookup is needed.
         for (int b = BucketCount - 1; b > minBucket; b--)
         {
             var arr = _buckets[b];
@@ -127,6 +133,52 @@ internal sealed class FreeSpaceIndex
                 if (_freeMap.TryGetValue(pid, out var fb) &&
                     fb >= requiredBytes &&
                     (isPageLocked == null || !isPageLocked(pid)))
+                    return pid;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Finds a page that has at least <paramref name="requiredBytes"/> of free space
+    /// and is not locked by another transaction.
+    /// This overload accepts a two-argument predicate so callers can pass a cached
+    /// method-group delegate (e.g. <c>_storage.IsPageLocked</c>) together with a
+    /// per-call <paramref name="txnId"/> without allocating a closure on each call.
+    /// Returns 0 if no suitable page is found.
+    /// </summary>
+    /// <param name="requiredBytes">Minimum free bytes required.</param>
+    /// <param name="txnId">Transaction ID to exclude from locking checks.</param>
+    /// <param name="isPageLocked">
+    ///   Optional predicate; called as <c>isPageLocked(pageId, txnId)</c> and should
+    ///   return <c>true</c> when the page is locked by another transaction.
+    ///   Pass <c>null</c> to treat every page as available.
+    /// </param>
+    public uint FindPage(int requiredBytes, ulong txnId, Func<uint, ulong, bool>? isPageLocked)
+    {
+        int minBucket = GetBucket(requiredBytes);
+
+        for (int b = BucketCount - 1; b > minBucket; b--)
+        {
+            var arr = _buckets[b];
+            var count = _counts[b];
+            for (int i = count - 1; i >= 0; i--)
+            {
+                if (isPageLocked == null || !isPageLocked(arr[i], txnId))
+                    return arr[i];
+            }
+        }
+
+        {
+            var arr = _buckets[minBucket];
+            var count = _counts[minBucket];
+            for (int i = count - 1; i >= 0; i--)
+            {
+                uint pid = arr[i];
+                if (_freeMap.TryGetValue(pid, out var fb) &&
+                    fb >= requiredBytes &&
+                    (isPageLocked == null || !isPageLocked(pid, txnId)))
                     return pid;
             }
         }

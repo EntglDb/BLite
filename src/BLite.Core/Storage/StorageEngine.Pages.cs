@@ -40,6 +40,41 @@ public sealed partial class StorageEngine
     }
 
     /// <summary>
+    /// Reads only the first <paramref name="destination"/>.Length bytes of a page
+    /// (the page header), applying the same transaction-isolation logic as
+    /// <see cref="ReadPage"/>.  Use this instead of <see cref="ReadPage"/> when only
+    /// the header fields are needed: it avoids renting a full-page buffer and reduces
+    /// the amount of data copied from the memory-mapped file, which is significant
+    /// when scanning many pages during cold-start reconstruction.
+    /// </summary>
+    /// <param name="pageId">Page to read.</param>
+    /// <param name="transactionId">Optional transaction ID for isolation.</param>
+    /// <param name="destination">
+    ///   Buffer to write header bytes into; must be at most <see cref="PageSize"/> bytes.
+    /// </param>
+    public void ReadPageHeader(uint pageId, ulong? transactionId, Span<byte> destination)
+    {
+        if (transactionId.HasValue &&
+            transactionId.Value != 0 &&
+            _walCache.TryGetValue(transactionId.Value, out var txnPages) &&
+            txnPages.TryGetValue(pageId, out var uncommittedData))
+        {
+            var length = Math.Min(uncommittedData.Length, destination.Length);
+            uncommittedData.AsSpan(0, length).CopyTo(destination);
+            return;
+        }
+
+        if (_walIndex.TryGetValue(pageId, out var committedData))
+        {
+            var length = Math.Min(committedData.Length, destination.Length);
+            committedData.AsSpan(0, length).CopyTo(destination);
+            return;
+        }
+
+        GetPageFile(pageId, out var physId).ReadPageHeader(physId, destination);
+    }
+
+    /// <summary>
     /// Writes a page within a transaction.
     /// Data goes to WAL cache immediately and becomes visible to that transaction only.
     /// Will be written to WAL on commit.

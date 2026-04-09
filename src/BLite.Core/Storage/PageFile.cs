@@ -413,6 +413,23 @@ public sealed class PageFile : IDisposable
         }
     }
 
+    private unsafe void ReadPageHeaderCore(uint pageId, Span<byte> destination)
+    {
+        // Like ReadPageCore but copies only destination.Length bytes from the page start.
+        // Used to read just the page header without copying the full page payload.
+        var offset = (long)pageId * _config.PageSize;
+        byte* basePtr = null;
+        _readAccessor!.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
+        try
+        {
+            new ReadOnlySpan<byte>(basePtr + offset, destination.Length).CopyTo(destination);
+        }
+        finally
+        {
+            _readAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
+    }
+
     private void WritePageCore(uint pageId, ReadOnlySpan<byte> source)
     {
         var offset = (long)pageId * _config.PageSize;
@@ -470,6 +487,33 @@ public sealed class PageFile : IDisposable
         try
         {
             ReadPageCore(pageId, destination);
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+    }
+
+    /// <summary>
+    /// Reads up to <paramref name="destination"/>.Length bytes from the start of a page.
+    /// Use this to read only the page header without copying the full page payload,
+    /// reducing memory traffic compared to a full <see cref="ReadPage"/> call.
+    /// <paramref name="destination"/> must not exceed <see cref="PageSize"/> bytes.
+    /// </summary>
+    public void ReadPageHeader(uint pageId, Span<byte> destination)
+    {
+        ThrowIfDisposed();
+        if (destination.Length > _config.PageSize)
+            throw new ArgumentException($"Destination must not exceed {_config.PageSize} bytes");
+
+        if (_mappedFile == null)
+            throw new InvalidOperationException("File not open");
+
+        if (!_rwLock.TryEnterReadLock(ReadLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring PageFile read lock (ReadPageHeader).");
+        try
+        {
+            ReadPageHeaderCore(pageId, destination);
         }
         finally
         {
