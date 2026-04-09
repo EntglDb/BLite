@@ -1,0 +1,18 @@
+<Project>
+  <!--
+    BLite Source Generators — build-time properties.
+    These are forwarded to the analyzer/generator via MSBuild CompilerVisibleProperty.
+
+    To enable AOT-safe LINQ interceptors, add the following to your .csproj:
+      <PropertyGroup>
+        <BLiteEnableInterceptors>true</BLiteEnableInterceptors>
+      </PropertyGroup>
+
+    Interceptors require C# 13 (LangVersion 13 or 'preview'/'latest') and
+    a project targeting .NET 9 or later.
+    Default: false (opt-in).
+  -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="BLiteEnableInterceptors" />
+  </ItemGroup>
+</Project>

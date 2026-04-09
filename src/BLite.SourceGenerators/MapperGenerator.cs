@@ -340,8 +340,15 @@ public readonly struct BLiteDiagnostic
             });
 
             // ── Interceptor pipeline: AOT-safe LINQ call-site interception ────────
-            // Finds all invocations of BLiteQueryableExtensions terminal methods and emits
-            // C# 13 interceptors that route through the AOT-safe ScanAsync(IndexQueryPlan) path.
+            // Opt-in via <BLiteEnableInterceptors>true</BLiteEnableInterceptors> in the consuming .csproj.
+            // Requires C# 13 (LangVersion 13 / latest / preview) and .NET 9+.
+            var interceptorsEnabled = context.AnalyzerConfigOptionsProvider
+                .Select(static (options, _) =>
+                {
+                    options.GlobalOptions.TryGetValue("build_property.BLiteEnableInterceptors", out var val);
+                    return string.Equals(val?.Trim(), "true", System.StringComparison.OrdinalIgnoreCase);
+                });
+
             var interceptorTargets = context.SyntaxProvider
                 .CreateSyntaxProvider(
                     predicate: static (node, _) => IsLikelyBLiteTerminalCall(node),
@@ -349,8 +356,13 @@ public readonly struct BLiteDiagnostic
                 .Where(static t => t != null)
                 .Collect();
 
-            context.RegisterSourceOutput(interceptorTargets, static (spc, targets) =>
-                EmitInterceptors(spc, targets!));
+            context.RegisterSourceOutput(
+                interceptorTargets.Combine(interceptorsEnabled),
+                static (spc, pair) =>
+                {
+                    if (!pair.Right) return;
+                    EmitInterceptors(spc, pair.Left!);
+                });
 
             // ── Second pipeline: [DocumentMapper] attribute on a standalone class ──
             var directMapperClasses = context.SyntaxProvider
