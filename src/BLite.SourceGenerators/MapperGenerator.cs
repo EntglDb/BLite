@@ -566,7 +566,6 @@ public readonly struct BLiteDiagnostic
             sb.AppendLine("#nullable enable");
             sb.AppendLine("#pragma warning disable CS9113 // InterceptsLocationAttribute constructor parameter unused");
             sb.AppendLine();
-            sb.AppendLine("#if !NET9_0_OR_GREATER");
             sb.AppendLine("namespace System.Runtime.CompilerServices");
             sb.AppendLine("{");
             sb.AppendLine("    [global::System.AttributeUsage(global::System.AttributeTargets.Method, AllowMultiple = true)]");
@@ -575,7 +574,6 @@ public readonly struct BLiteDiagnostic
             sb.AppendLine("        public InterceptsLocationAttribute(int version, string data) { }");
             sb.AppendLine("    }");
             sb.AppendLine("}");
-            sb.AppendLine("#endif");
             sb.AppendLine();
             sb.AppendLine("namespace BLite.Generated.Interceptors");
             sb.AppendLine("{");
