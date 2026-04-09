@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using BLite.Core.Storage;
 
 namespace BLite.Core.Collections;
 
@@ -21,9 +20,9 @@ internal sealed class FreeSpaceIndex
     // Live element count per bucket (actual length of valid entries in _buckets[b]).
     private readonly int[] _counts;
 
-    // Secondary map: pageId → stored free bytes.
-    // Used to (a) determine the old bucket when a page moves and (b) verify the boundary
-    // bucket without reading the page from disk.
+    // Stores the current free bytes for each tracked page.
+    // Used to (a) determine the old bucket when a page moves and
+    // (b) verify boundary-bucket entries without disk I/O.
     private readonly Dictionary<uint, ushort> _freeMap;
 
     // Width of each bucket in bytes, computed from the *usable* page space so that
@@ -34,7 +33,9 @@ internal sealed class FreeSpaceIndex
     {
         // Subtract the fixed page-header size so that bucket boundaries are aligned to
         // actual free bytes a caller would observe in SlottedPageHeader.AvailableFreeSpace.
-        int usableSpace = pageSize - SlottedPageHeader.Size;
+        // SlottedPageHeader.Size = 24 bytes.
+        const int headerSize = 24;
+        int usableSpace = pageSize - headerSize;
         _bucketWidth = Math.Max(1, usableSpace / BucketCount);
         _buckets = new uint[BucketCount][];
         _counts = new int[BucketCount];
@@ -91,9 +92,14 @@ internal sealed class FreeSpaceIndex
     /// and is not locked by another transaction.
     /// Returns 0 if no suitable page is found.
     /// Complexity: O(BucketCount) = O(1) regardless of the number of tracked pages.
-    /// <paramref name="storage"/> may be null (e.g. in unit tests) to skip the locked-page check.
     /// </summary>
-    public uint FindPage(int requiredBytes, StorageEngine? storage, ulong txnId)
+    /// <param name="requiredBytes">Minimum free bytes required.</param>
+    /// <param name="isPageLocked">
+    ///   Optional predicate that returns <c>true</c> when a page is locked by another
+    ///   transaction and should be skipped.  Pass <c>null</c> to treat every page as
+    ///   available (useful for unit testing without a real storage engine).
+    /// </param>
+    public uint FindPage(int requiredBytes, Func<uint, bool>? isPageLocked = null)
     {
         int minBucket = GetBucket(requiredBytes);
 
@@ -105,7 +111,7 @@ internal sealed class FreeSpaceIndex
             var count = _counts[b];
             for (int i = count - 1; i >= 0; i--)
             {
-                if (storage == null || !storage.IsPageLocked(arr[i], txnId))
+                if (isPageLocked == null || !isPageLocked(arr[i]))
                     return arr[i];
             }
         }
@@ -120,7 +126,7 @@ internal sealed class FreeSpaceIndex
                 uint pid = arr[i];
                 if (_freeMap.TryGetValue(pid, out var fb) &&
                     fb >= requiredBytes &&
-                    (storage == null || !storage.IsPageLocked(pid, txnId)))
+                    (isPageLocked == null || !isPageLocked(pid)))
                     return pid;
             }
         }
@@ -158,3 +164,4 @@ internal sealed class FreeSpaceIndex
         _counts[bucket]++;
     }
 }
+
