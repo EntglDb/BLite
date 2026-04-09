@@ -43,8 +43,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     private readonly CollectionIndexManager<TId, T> _indexManager;
     private readonly string _collectionName;
 
-    // Free space tracking: PageId → Free bytes
-    private readonly Dictionary<uint, ushort> _freeSpaceMap;
+    // Free space tracking: 16-bucket index for O(1) FindPage
+    private readonly FreeSpaceIndex _fsi;
     private bool _isTimeSeries;
     private string? _ttlFieldName;
 
@@ -127,7 +127,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
         _indexManager = new CollectionIndexManager<TId, T>(_storage, _mapper, _collectionName);
-        _freeSpaceMap = new Dictionary<uint, ushort>();
+        _fsi = new FreeSpaceIndex(_storage.PageSize);
 
         // Calculate max document size dynamically based on page size
         // Reserve space for PageHeader (24) and some safety margin
@@ -158,6 +158,48 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         // Register keys used by the mapper to ensure they are available for compression
         _storage.RegisterKeys(_mapper.UsedKeys);
+
+        // Rebuild the free-space index from existing page headers so that a cold-start
+        // DocumentCollection can reuse partially-filled pages instead of always allocating new ones.
+        RebuildFreeSpaceIndex();
+    }
+
+    /// <summary>
+    /// Scans the header of every data page belonging to this collection and
+    /// populates the free-space index.  This eliminates the cold-start allocation
+    /// defect where a newly-constructed DocumentCollection always allocated a fresh
+    /// page on the first insert even when existing pages had ample free space.
+    /// </summary>
+    private void RebuildFreeSpaceIndex()
+    {
+        // ReadPage requires a full-page buffer; we rent one, populate the FSI from each
+        // page header (only the first SlottedPageHeader.Size bytes matter), then return it.
+        var buf = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            uint lastDataPage = 0;
+
+            foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+            {
+                _storage.ReadPage(pageId, null, buf.AsSpan(0, _storage.PageSize));
+                var hdr = SlottedPageHeader.ReadFrom(buf);
+
+                if (hdr.PageType == PageType.Data)
+                {
+                    _fsi.Update(pageId, hdr.AvailableFreeSpace);
+                    lastDataPage = pageId;
+                }
+            }
+
+            // Seed _currentDataPage with the last data page found so that the first
+            // FindPageWithSpace fast-path hits an already-known page instead of allocating.
+            if (lastDataPage != 0)
+                _currentDataPage = lastDataPage;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 
     [RequiresUnreferencedCode("Schema management uses reflection to discover entity properties. Ensure all entity types and their members are preserved.")]
@@ -916,45 +958,32 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var txnId = transaction.TransactionId;
 
-        // Try current page first
+        // Fast path: try current page first (avoids a full FSI scan on the common case).
         if (_currentDataPage != 0)
         {
-            if (_freeSpaceMap.TryGetValue(_currentDataPage, out var freeBytes))
+            if (_fsi.TryGetFreeBytes(_currentDataPage, out var freeBytes))
             {
                 if (freeBytes >= requiredBytes && !_storage.IsPageLocked(_currentDataPage, txnId))
-                {
                     return _currentDataPage;
-                }
             }
             else
             {
-                // Load header and check - use StorageEngine
+                // Page not yet in FSI (e.g., after a rollback recovery): read header from disk.
                 Span<byte> page = stackalloc byte[SlottedPageHeader.Size];
                 _storage.ReadPage(_currentDataPage, null, page);
                 var header = SlottedPageHeader.ReadFrom(page);
 
                 if (header.AvailableFreeSpace >= requiredBytes)
                 {
-                    _freeSpaceMap[_currentDataPage] = (ushort)header.AvailableFreeSpace;
+                    _fsi.Update(_currentDataPage, header.AvailableFreeSpace);
                     if (!_storage.IsPageLocked(_currentDataPage, txnId))
                         return _currentDataPage;
                 }
             }
         }
 
-        // Search free space map
-        foreach (var (pageId, freeBytes) in _freeSpaceMap)
-        {
-            if (freeBytes >= requiredBytes)
-            {
-                if (!_storage.IsPageLocked(pageId, txnId))
-                {
-                    return pageId;
-                }
-            }
-        }
-
-        return 0; // No suitable page
+        // Search FSI: O(BucketCount) = O(1) regardless of the number of tracked pages.
+        return _fsi.FindPage(requiredBytes, _storage, txnId);
     }
 
     private async Task<uint> AllocateNewDataPage()
@@ -995,7 +1024,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             }
 
             // Track free space
-            _freeSpaceMap[pageId] = (ushort)header.AvailableFreeSpace;
+            _fsi.Update(pageId, header.AvailableFreeSpace);
             _currentDataPage = pageId;
         }
         finally
@@ -1038,7 +1067,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var requiredSpace = data.Length + SlotEntry.Size;
 
             if (freeSpace < requiredSpace)
-                throw new InvalidOperationException($"Not enough space: need {requiredSpace}, have {freeSpace} | PageId={pageId} | SlotCount={header.SlotCount} | Start={header.FreeSpaceStart} | End={header.FreeSpaceEnd} | Map={_freeSpaceMap.GetValueOrDefault(pageId)}");
+                throw new InvalidOperationException($"Not enough space: need {requiredSpace}, have {freeSpace} | PageId={pageId} | SlotCount={header.SlotCount} | Start={header.FreeSpaceStart} | End={header.FreeSpaceEnd} | FSI={(_fsi.TryGetFreeBytes(pageId, out var fb) ? fb.ToString() : "n/a")}");
 
             // Find free slot (reuse deleted or create new)
             ushort slotIndex = FindFreeSlot(buffer, ref header);
@@ -1082,8 +1111,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 _storage.WritePage(pageId, transaction.TransactionId, buffer);
             }
 
-            // UpdateAsync free space map
-            _freeSpaceMap[pageId] = (ushort)header.AvailableFreeSpace;
+            // UpdateAsync free space index
+            _fsi.Update(pageId, header.AvailableFreeSpace);
 
             return slotIndex;
         }
@@ -1266,8 +1295,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             );
             ((Transaction)transaction).AddWrite(writeOp);
 
-            // UpdateAsync free space map
-            _freeSpaceMap[primaryPageId] = (ushort)header.AvailableFreeSpace;
+            // UpdateAsync free space index
+            _fsi.Update(primaryPageId, header.AvailableFreeSpace);
 
             return (primaryPageId, slotIndex);
         }
@@ -2064,9 +2093,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             _storage.WritePage(location.PageId, transaction.TransactionId, buffer);
 
-            // UpdateAsync free space map with post-compaction free bytes
+            // UpdateAsync free space index with post-compaction free bytes
             var compactedHeader = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
-            _freeSpaceMap[location.PageId] = (ushort)compactedHeader.AvailableFreeSpace;
+            _fsi.Update(location.PageId, compactedHeader.AvailableFreeSpace);
 
             // Remove from primary index
             _primaryIndex.Delete(key, location, transaction.TransactionId);
