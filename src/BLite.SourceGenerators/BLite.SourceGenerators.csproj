@@ -7,7 +7,7 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <IsRoslynComponent>true</IsRoslynComponent>
     <PackageId>BLite.SourceGenerators</PackageId>
-    <Version>4.2.1-preview.3</Version>
+    <Version>4.3.0-preview.0</Version>
     <Authors>BLite Team</Authors>
     <Description>Source Generators for BLite High-Performance BSON Database Engine</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

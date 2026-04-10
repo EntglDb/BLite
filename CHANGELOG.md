@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.3.0-preview.0"></a>
+## [4.3.0-preview.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.3.0-preview.0) (2026-04-10)
+
+### Features
+
+* Make transactions caller-owned; add metrics ([f42b3e6](https://www.github.com/EntglDb/BLite/commit/f42b3e6624725dd748a5f79a708656015c1cf6e3))
+
 <a name="4.2.1-preview.3"></a>
 ## [4.2.1-preview.3](https://www.github.com/EntglDb/BLite/releases/tag/v4.2.1-preview.3) (2026-04-09)
 
