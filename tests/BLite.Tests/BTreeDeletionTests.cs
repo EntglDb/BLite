@@ -9,18 +9,20 @@ namespace BLite.Tests;
 ///   - MergeWithSibling
 ///   - Root collapse (tree height reduction after merge)
 ///
-/// Key constants: MaxEntriesPerNode = 100, minEntries = 50.
+/// Key constants: MaxEntriesPerNode = N, minEntries = N/2.
 ///
-/// Tree state after inserting 1..101 in ascending order:
-///   left  = [1..50]   (50 entries)
-///   right = [51..101] (51 entries)
+/// Tree state after inserting 1..N+1 in ascending order:
+///   left  = [1..N/2]       (N/2 entries)
+///   right = [N/2+1..N+1]   (N/2+1 entries)
 ///
-/// Tree state after inserting 101..1 in descending order:
-///   left  = [1..51]   (51 entries)
-///   right = [52..101] (50 entries)
+/// Tree state after inserting N+1..1 in descending order:
+///   left  = [1..N/2+1]     (N/2+1 entries)
+///   right = [N/2+2..N+1]   (N/2 entries)
 /// </summary>
 public class BTreeDeletionTests : IDisposable
 {
+    private static readonly int N = BTreeIndex.MaxEntriesPerNode;
+    private static readonly int Half = N / 2;
     private readonly string _dbPath;
     private readonly StorageEngine _storage;
 
@@ -99,34 +101,34 @@ public class BTreeDeletionTests : IDisposable
 
     // ── Borrow from right sibling (rotate-left) ─────────────────────────────
     //
-    // Setup: insert 1..101 ascending → left=[1..50] (50), right=[51..101] (51)
-    // Delete key 1 from left → left underflows to 49 → right has 51 > 50 → borrow
-    // Result: left=[2..51] (50), right=[52..101] (50)
+    // Setup: insert 1..N+1 ascending → left=[1..N/2] (N/2), right=[N/2+1..N+1] (N/2+1)
+    // Delete key 1 from left → left underflows → right has N/2+1 > N/2 → borrow
+    // Result: left=[2..N/2+1] (N/2), right=[N/2+2..N+1] (N/2)
 
     [Fact]
     public void Delete_BorrowFromRightSibling_RangeReturnsSortedRemainder()
     {
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101));
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1));
 
         // Delete key 1 (from the left leaf, which is at exactly minimum capacity).
-        // Right sibling has 51 entries (> min=50) → triggers borrow-from-right rotation.
+        // Right sibling has N/2+1 entries (> min) → triggers borrow-from-right rotation.
         var deleted = index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);
         Assert.True(deleted);
 
         var keys = AllKeys(index, txnId);
-        Assert.Equal(100, keys.Count);
-        Assert.Equal(Enumerable.Range(2, 100).ToList(), keys);
+        Assert.Equal(N, keys.Count);
+        Assert.Equal(Enumerable.Range(2, N).ToList(), keys);
     }
 
     [Fact]
     public void Delete_BorrowFromRightSibling_AllKeysStillFindable()
     {
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101));
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1));
 
         index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);
 
-        // Every key in 2..101 must be individually findable after rotation
-        for (int v = 2; v <= 101; v++)
+        // Every key in 2..N+1 must be individually findable after rotation
+        for (int v = 2; v <= N + 1; v++)
         {
             var found = index.TryFind(IndexKey.Create(v), out var loc, txnId);
             Assert.True(found, $"Key {v} not found after borrow-from-right rotation");
@@ -136,34 +138,34 @@ public class BTreeDeletionTests : IDisposable
 
     // ── Borrow from left sibling (rotate-right) ──────────────────────────────
     //
-    // Setup: insert 101..1 descending → (B+Tree still sorted) left=[1..51] (51), right=[52..101] (50)
-    // Delete key 101 from right → right underflows to 49 → no right sibling → borrow from left (51 > 50)
-    // Result: left=[1..50] (50), right=[51..100] (50)
+    // Setup: insert N+1..1 descending → left=[1..N/2+1] (N/2+1), right=[N/2+2..N+1] (N/2)
+    // Delete key N+1 from right → right underflows → no right sibling → borrow from left (N/2+1 > N/2)
+    // Result: left=[1..N/2] (N/2), right=[N/2+1..N] (N/2)
 
     [Fact]
     public void Delete_BorrowFromLeftSibling_RangeReturnsSortedRemainder()
     {
-        // Insert in descending order so left leaf ends up with 51 entries
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101).Reverse());
+        // Insert in descending order so left leaf ends up with N/2+1 entries
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1).Reverse());
 
-        // Delete key 101 (from the right leaf, which is at minimum capacity).
-        // Right leaf has no right sibling; left sibling has 51 entries (> min=50) → borrow-from-left.
-        var deleted = index.Delete(IndexKey.Create(101), new DocumentLocation(101, 0), txnId);
+        // Delete key N+1 (from the right leaf, which is at minimum capacity).
+        // Right leaf has no right sibling; left sibling has N/2+1 entries (> min) → borrow-from-left.
+        var deleted = index.Delete(IndexKey.Create(N + 1), new DocumentLocation((uint)(N + 1), 0), txnId);
         Assert.True(deleted);
 
         var keys = AllKeys(index, txnId);
-        Assert.Equal(100, keys.Count);
-        Assert.Equal(Enumerable.Range(1, 100).ToList(), keys);
+        Assert.Equal(N, keys.Count);
+        Assert.Equal(Enumerable.Range(1, N).ToList(), keys);
     }
 
     [Fact]
     public void Delete_BorrowFromLeftSibling_AllKeysStillFindable()
     {
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101).Reverse());
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1).Reverse());
 
-        index.Delete(IndexKey.Create(101), new DocumentLocation(101, 0), txnId);
+        index.Delete(IndexKey.Create(N + 1), new DocumentLocation((uint)(N + 1), 0), txnId);
 
-        for (int v = 1; v <= 100; v++)
+        for (int v = 1; v <= N; v++)
         {
             var found = index.TryFind(IndexKey.Create(v), out var loc, txnId);
             Assert.True(found, $"Key {v} not found after borrow-from-left rotation");
@@ -173,35 +175,35 @@ public class BTreeDeletionTests : IDisposable
 
     // ── Merge with sibling ───────────────────────────────────────────────────
     //
-    // Setup: insert 1..101 → left=[1..50] (50), right=[51..101] (51)
-    // Delete 1 → borrow from right → left=[2..51] (50), right=[52..101] (50)      [both at min]
-    // Delete 2 → left underflows → right has 50 = min (NOT > min) → no borrow → MERGE
-    // After merge: single leaf=[3..101] (99 entries), internal root collapses
+    // Setup: insert 1..N+1 → left=[1..N/2] (N/2), right=[N/2+1..N+1] (N/2+1)
+    // Delete 1 → borrow from right → left=[2..N/2+1] (N/2), right=[N/2+2..N+1] (N/2)  [both at min]
+    // Delete 2 → left underflows → right has N/2 = min (NOT > min) → no borrow → MERGE
+    // After merge: single leaf=[3..N+1] (N-1 entries), internal root collapses
 
     [Fact]
     public void Delete_MergeLeaves_RangeReturnsSortedRemainder()
     {
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101));
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1));
 
-        // First delete: triggers borrow-from-right (right had 51)
+        // First delete: triggers borrow-from-right (right had N/2+1)
         index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);
-        // Second delete: triggers merge (both leaves now at min=50)
+        // Second delete: triggers merge (both leaves now at min)
         index.Delete(IndexKey.Create(2), new DocumentLocation(2, 0), txnId);
 
         var keys = AllKeys(index, txnId);
-        Assert.Equal(99, keys.Count);
-        Assert.Equal(Enumerable.Range(3, 99).ToList(), keys);
+        Assert.Equal(N - 1, keys.Count);
+        Assert.Equal(Enumerable.Range(3, N - 1).ToList(), keys);
     }
 
     [Fact]
     public void Delete_MergeLeaves_AllKeysStillFindable()
     {
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101));
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1));
 
         index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);
         index.Delete(IndexKey.Create(2), new DocumentLocation(2, 0), txnId);
 
-        for (int v = 3; v <= 101; v++)
+        for (int v = 3; v <= N + 1; v++)
         {
             var found = index.TryFind(IndexKey.Create(v), out _, txnId);
             Assert.True(found, $"Key {v} not found after merge");
@@ -221,11 +223,12 @@ public class BTreeDeletionTests : IDisposable
         var index = new BTreeIndex(_storage, opts, onRootChanged: newRoot => rootChanges.Add(newRoot));
 
         var txnId = _storage.BeginTransaction().TransactionId;
-        foreach (var v in Enumerable.Range(1, 101))
+        int count = BTreeIndex.MaxEntriesPerNode + 1;
+        foreach (var v in Enumerable.Range(1, count))
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
         _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
-        // Borrow first (brings both leaves to min=50)
+        // Borrow first (brings both leaves to min)
         index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);
         // Merge + root collapse
         index.Delete(IndexKey.Create(2), new DocumentLocation(2, 0), txnId);
@@ -239,7 +242,7 @@ public class BTreeDeletionTests : IDisposable
 
         // Sanity: full scan still works
         var keys = AllKeys(index, txnId);
-        Assert.Equal(99, keys.Count);
+        Assert.Equal(count - 2, keys.Count);
     }
 
     // ── Delete all entries ───────────────────────────────────────────────────
@@ -348,7 +351,7 @@ public class BTreeDeletionTests : IDisposable
     [Fact]
     public void Insert_AfterMerge_TreeRemainsConsistent()
     {
-        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, 101));
+        var (index, txnId) = CreateIndexWithItems(Enumerable.Range(1, N + 1));
 
         // Borrow then merge
         index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);

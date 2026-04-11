@@ -112,11 +112,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var meta = _storage.GetCollectionMetadata(_collectionName);
         if (meta == null || meta.RetentionPolicyMs <= 0) return;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         _storage.PruneTimeSeries(meta, transaction);
         meta.InsertedSinceLastPruning = 0;
         meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
         _storage.SaveCollectionMetadata(meta);
+        await transaction.CommitAsync();
     }
 
     [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
@@ -374,14 +375,20 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <param name="predicate">Function to evaluate raw BSON data</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Async enumerable of matching documents</returns>
+    public IAsyncEnumerable<T> ScanAsync(
+        BsonReaderPredicate predicate,
+        CancellationToken ct = default)
+        => ScanAsync(predicate, null, ct);
+
     public async IAsyncEnumerable<T> ScanAsync(
         BsonReaderPredicate predicate,
+        ITransaction? transaction,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        var txnId = transaction?.TransactionId ?? 0UL;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
@@ -437,6 +444,15 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionQuery,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
         }
     }
 
@@ -582,8 +598,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (projector == null) throw new ArgumentNullException(nameof(projector));
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var txnId = 0UL;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
 
         try
@@ -645,8 +660,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var txnId = 0UL;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         int count = 0;
 
@@ -738,8 +752,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var txnId = 0UL;
         var allPageIds = _storage.GetCollectionPageIds(_collectionName).ToArray();
         var pageCount = allPageIds.Length;
 
@@ -868,20 +881,31 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <param name="take">Maximum number of documents to yield. Defaults to all.</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Async enumerable of matching documents</returns>
-    public async IAsyncEnumerable<T> QueryIndexAsync(
+    public IAsyncEnumerable<T> QueryIndexAsync(
         string indexName,
         object? minKey,
         object? maxKey,
         bool ascending = true,
         int skip = 0,
         int take = int.MaxValue,
+        CancellationToken ct = default)
+        => QueryIndexAsync(indexName, minKey, maxKey, ascending, skip, take, null, ct);
+
+    public async IAsyncEnumerable<T> QueryIndexAsync(
+        string indexName,
+        object? minKey,
+        object? maxKey,
+        bool ascending,
+        int skip,
+        int take,
+        ITransaction? transaction,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var index = _indexManager.GetIndex(indexName);
         if (index == null) throw new ArgumentException($"Index {indexName} not found");
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        var txnId = transaction?.TransactionId ?? 0UL;
         var direction = ascending ? IndexDirection.Forward : IndexDirection.Backward;
 
         // Per-query page cache: when multiple index entries point to the same data page
@@ -921,6 +945,15 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         {
             foreach (var buf in pageCache.Values)
                 ArrayPool<byte>.Shared.Return(buf);
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionQuery,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
         }
     }
 
@@ -1577,17 +1610,21 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// Async exact-match lookup. Uses <see cref="BTreeIndex.TryFindAsync"/> for the index
     /// traversal and <see cref="FindByLocationAsync"/> for the page read.
     /// </summary>
-    public async ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default)
+    public ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default)
+        => FindByIdAsync(id, null, ct);
+
+    /// <inheritdoc />
+    public async ValueTask<T?> FindByIdAsync(TId id, ITransaction? transaction, CancellationToken ct = default)
     {
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         bool success = false;
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var txnId = transaction?.TransactionId ?? 0UL;
         var key = _mapper.ToIndexKey(id);
         try
         {
-            var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct).ConfigureAwait(false);
+            var (found, location) = await _primaryIndex.TryFindAsync(key, txnId, ct).ConfigureAwait(false);
             if (!found) return default;
-            var result = await FindByLocationAsync(location, transaction.TransactionId, ct).ConfigureAwait(false);
+            var result = await FindByLocationAsync(location, txnId, ct).ConfigureAwait(false);
             success = result != null;
             return result;
         }
@@ -1609,10 +1646,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// Async full-collection scan. Uses <see cref="BTreeIndex.RangeAsync"/> for leaf chaining
     /// and <see cref="FindByLocationAsync"/> for each page read.
     /// </summary>
-    public async IAsyncEnumerable<T> FindAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public IAsyncEnumerable<T> FindAllAsync(CancellationToken ct = default)
+        => FindAllAsync(null, ct);
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<T> FindAllAsync(ITransaction? transaction, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction?.TransactionId ?? 0;
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        var txnId = transaction?.TransactionId ?? 0UL;
 
         var pageCache = new Dictionary<uint, byte[]>();
         try
@@ -1639,13 +1680,21 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         {
             foreach (var buf in pageCache.Values)
                 ArrayPool<byte>.Shared.Return(buf);
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionQuery,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
         }
     }
 
     internal async Task<T?> FindByLocation(DocumentLocation location, ITransaction? transaction = null)
     {
-        transaction ??= await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction?.TransactionId ?? 0;
+        var txnId = transaction?.TransactionId ?? 0UL;
         var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         try
         {
@@ -1872,10 +1921,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var result = await UpdateCore(entity, transaction);
-            if (autoCommit && result) await transaction.CommitAsync(ct);
-            success = result;
-            return result;
+            try
+            {
+                var result = await UpdateCore(entity, transaction);
+                if (autoCommit && result) await transaction.CommitAsync(ct);
+                success = result;
+                return result;
+            }
+            catch
+            {
+                if (autoCommit) await transaction.RollbackAsync();
+                throw;
+            }
         }
         finally
         {
@@ -1909,9 +1966,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            updateCount = await UpdateBulkInternal(entityList, transaction);
-            if (autoCommit) await transaction.CommitAsync(ct);
-            return updateCount;
+            try
+            {
+                updateCount = await UpdateBulkInternal(entityList, transaction);
+                if (autoCommit) await transaction.CommitAsync(ct);
+                return updateCount;
+            }
+            catch
+            {
+                if (autoCommit) await transaction.RollbackAsync();
+                throw;
+            }
         }
         finally
         {
@@ -2073,10 +2138,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var result = await DeleteCore(id, transaction);
-            if (autoCommit && result) await transaction.CommitAsync(ct);
-            success = result;
-            return result;
+            try
+            {
+                var result = await DeleteCore(id, transaction);
+                if (autoCommit && result) await transaction.CommitAsync(ct);
+                success = result;
+                return result;
+            }
+            catch
+            {
+                if (autoCommit) await transaction.RollbackAsync();
+                throw;
+            }
         }
         finally
         {
@@ -2109,9 +2182,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            deleteCount = await DeleteBulkInternal(ids, transaction);
-            if (autoCommit) await transaction.CommitAsync(ct);
-            return deleteCount;
+            try
+            {
+                deleteCount = await DeleteBulkInternal(ids, transaction);
+                if (autoCommit) await transaction.CommitAsync(ct);
+                return deleteCount;
+            }
+            catch
+            {
+                if (autoCommit) await transaction.RollbackAsync();
+                throw;
+            }
         }
         finally
         {
@@ -2223,14 +2304,29 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Number of documents</returns>
-    public async Task<int> CountAsync(CancellationToken ct = default)
+    public Task<int> CountAsync(CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        // Count all entries in primary index
-        // Use generic min/max keys for the index
-        var minKey = IndexKey.MinKey;
-        var maxKey = IndexKey.MaxKey;
-        return _primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, transaction.TransactionId).Count();
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        try
+        {
+            // Count all entries in primary index
+            // Use generic min/max keys for the index
+            var minKey = IndexKey.MinKey;
+            var maxKey = IndexKey.MaxKey;
+            return Task.FromResult(_primaryIndex.Range(minKey, maxKey, IndexDirection.Forward, (ulong?)null).Count());
+        }
+        finally
+        {
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionQuery,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = true,
+                });
+        }
     }
 
     /// <summary>
@@ -2344,8 +2440,6 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         System.Linq.Expressions.LambdaExpression whereClause,
         CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-
         // Strategy 1: Index key-only scan — no data-page reads at all.
         // Applicable whenever the predicate targets an indexed field AND the index fully
         // covers the predicate (HasResiduePredicate=false).  Strict operators (> / <) set
@@ -2367,7 +2461,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 // propagated through AND-merges, so compound predicates like
                 // x.Price > 50 && x.Price < 90 get both boundaries exclusive.
                 return index.CountRange(indexOpt.MinValue, indexOpt.MaxValue,
-                    indexOpt.StartInclusive, indexOpt.EndInclusive, transaction);
+                    indexOpt.StartInclusive, indexOpt.EndInclusive, null);
             }
         }
 
@@ -2404,37 +2498,76 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         CancellationToken ct = default)
         => FetchAsync(predicate, int.MaxValue, ct);
 
+    /// <inheritdoc />
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
+    public IAsyncEnumerable<T> FindAsync(
+        System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+        ITransaction? transaction,
+        CancellationToken ct = default)
+        => FetchAsync(predicate, int.MaxValue, transaction, ct);
+
     /// <summary>
     /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
     /// Stops reading from the storage engine as soon as one document is found (fetchLimit = 1).
     /// </summary>
     [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
     [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
-    public async Task<T?> FindOneAsync(
+    public Task<T?> FindOneAsync(
         System.Linq.Expressions.Expression<Func<T, bool>> predicate,
         CancellationToken ct = default)
-    {
-        // Fast path: equality query on an indexed field.
-        // Bypasses FetchAsync / QueryIndexAsync / page-cache Dictionary entirely.
-        // Path: IndexOptimizer → CollectionSecondaryIndex.Seek (TryFindFirst) → FindByLocationAsync.
-        var indexOpt = Query.IndexOptimizer.TryOptimize<T>(predicate, GetIndexes(), ConverterRegistry);
-        if (indexOpt != null && !indexOpt.IsRange && !indexOpt.IsVectorSearch && !indexOpt.IsSpatialSearch
-            && indexOpt.MinValue != null)
-        {
-            var index = _indexManager.GetIndex(indexOpt.IndexName);
-            if (index != null)
-            {
-                var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync().ConfigureAwait(false);
-                var location = index.Seek(indexOpt.MinValue, transaction);
-                if (location == null) return default;
-                return await FindByLocationAsync(location.Value, transaction.TransactionId, ct).ConfigureAwait(false);
-            }
-        }
+        => FindOneAsync(predicate, null, ct);
 
-        // General path: range / vector / spatial / no index.
-        await foreach (var item in FetchAsync(predicate, 1, ct).ConfigureAwait(false))
-            return item;
-        return default;
+    /// <inheritdoc />
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
+    public async Task<T?> FindOneAsync(
+        System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+        ITransaction? transaction,
+        CancellationToken ct = default)
+    {
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        bool success = false;
+        try
+        {
+            // Fast path: equality query on an indexed field.
+            // Bypasses FetchAsync / QueryIndexAsync / page-cache Dictionary entirely.
+            // Path: IndexOptimizer → CollectionSecondaryIndex.Seek (TryFindFirst) → FindByLocationAsync.
+            var indexOpt = Query.IndexOptimizer.TryOptimize<T>(predicate, GetIndexes(), ConverterRegistry);
+            if (indexOpt != null && !indexOpt.IsRange && !indexOpt.IsVectorSearch && !indexOpt.IsSpatialSearch
+                && indexOpt.MinValue != null)
+            {
+                var index = _indexManager.GetIndex(indexOpt.IndexName);
+                if (index != null)
+                {
+                    var location = index.Seek(indexOpt.MinValue, transaction);
+                    if (location == null) return default;
+                    var result = await FindByLocationAsync(location.Value, transaction?.TransactionId ?? 0UL, ct).ConfigureAwait(false);
+                    success = result != null;
+                    return result;
+                }
+            }
+
+            // General path: range / vector / spatial / no index.
+            await foreach (var item in FetchAsync(predicate, 1, transaction, ct).ConfigureAwait(false))
+            {
+                success = true;
+                return item;
+            }
+            return default;
+        }
+        finally
+        {
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = MetricEventType.CollectionQuery,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
+        }
     }
 
     /// <summary>
@@ -2458,9 +2591,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </param>
     [RequiresDynamicCode("LINQ-style fetch operations use Expression.Compile() and index optimization which require dynamic code generation.")]
     [RequiresUnreferencedCode("LINQ-style fetch operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
+    internal IAsyncEnumerable<T> FetchAsync(
+        System.Linq.Expressions.LambdaExpression? whereClause,
+        int fetchLimit,
+        CancellationToken ct = default)
+        => FetchAsync(whereClause, fetchLimit, null, ct);
+
+    [RequiresDynamicCode("LINQ-style fetch operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style fetch operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     internal async IAsyncEnumerable<T> FetchAsync(
         System.Linq.Expressions.LambdaExpression? whereClause,
         int fetchLimit,
+        ITransaction? transaction,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         int yielded = 0;
@@ -2495,7 +2637,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 }
                 else
                 {
-                    await foreach (var item in QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, ct: ct))
+                    await foreach (var item in QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, true, 0, int.MaxValue, transaction, ct))
                         if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
                 }
                 yield break;
@@ -2505,7 +2647,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             // Filters at raw-BSON level before deserializing — no compiled Func<T,bool> needed.
             if (BsonExpressionEvaluator.TryCompile<T>(whereClause, ConverterRegistry, _storage.GetKeyMap()) is { } bsonPred)
             {
-                await foreach (var item in ScanAsync(bsonPred, ct))
+                await foreach (var item in ScanAsync(bsonPred, transaction, ct))
                 {
                     yield return item;
                     if (++yielded >= fetchLimit) yield break;
@@ -2515,13 +2657,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             // ── Strategy 3: full scan + in-memory filter ──────────────────────
             // Reuses compiledWhere if Strategy 1 already triggered it; compiles otherwise.
-            await foreach (var item in FindAllAsync(ct))
+            await foreach (var item in FindAllAsync(transaction, ct))
                 if (GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
         }
         else
         {
             // ── No WHERE: plain full scan with optional limit ─────────────────
-            await foreach (var item in FindAllAsync(ct))
+            await foreach (var item in FindAllAsync(transaction, ct))
             {
                 yield return item;
                 if (++yielded >= fetchLimit) yield break;
@@ -2650,15 +2792,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         int efSearch = 100,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var index = _indexManager.GetIndex(indexName);
         if (index == null)
             throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
 
-        foreach (var result in index.VectorSearch(query, k, efSearch, transaction))
+        foreach (var result in index.VectorSearch(query, k, efSearch, null))
         {
             ct.ThrowIfCancellationRequested();
-            var doc = await FindByLocationAsync(result.Location, transaction.TransactionId, ct);
+            var doc = await FindByLocationAsync(result.Location, 0UL, ct);
             if (doc != null) yield return doc;
         }
     }
@@ -2678,15 +2819,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         double radiusKm,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var index = _indexManager.GetIndex(indexName);
         if (index == null)
             throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
 
-        foreach (var loc in index.Near(center, radiusKm, transaction))
+        foreach (var loc in index.Near(center, radiusKm, null))
         {
             ct.ThrowIfCancellationRequested();
-            var doc = await FindByLocationAsync(loc, transaction.TransactionId, ct);
+            var doc = await FindByLocationAsync(loc, 0UL, ct);
             if (doc != null) yield return doc;
         }
     }
@@ -2706,15 +2846,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         (double Latitude, double Longitude) max,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var index = _indexManager.GetIndex(indexName);
         if (index == null)
             throw new ArgumentException($"Index '{indexName}' not found.", nameof(indexName));
 
-        foreach (var loc in index.Within(min, max, transaction))
+        foreach (var loc in index.Within(min, max, null))
         {
             ct.ThrowIfCancellationRequested();
-            var doc = await FindByLocationAsync(loc, transaction.TransactionId, ct);
+            var doc = await FindByLocationAsync(loc, 0UL, ct);
             if (doc != null) yield return doc;
         }
     }

@@ -240,11 +240,12 @@ public sealed class DynamicCollection : IDisposable
         var meta = _storage.GetCollectionMetadata(_collectionName);
         if (meta == null || meta.RetentionPolicyMs <= 0) return;
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         _storage.PruneTimeSeries(meta, transaction);
         meta.InsertedSinceLastPruning = 0;
         meta.LastPruningTimestamp = DateTime.UtcNow.Ticks;
         _storage.SaveCollectionMetadata(meta);
+        await transaction.CommitAsync();
     }
 
     /// <summary>
@@ -447,8 +448,7 @@ public sealed class DynamicCollection : IDisposable
     /// </summary>
     public async IAsyncEnumerable<BsonDocument> ScanAsync(BsonReaderPredicate predicate)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var txnId = 0UL;
 
         foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId))
         {
@@ -489,8 +489,7 @@ public sealed class DynamicCollection : IDisposable
         if (entry.Kind != DynamicIndexKind.BTree || entry.BTree == null)
             throw new InvalidOperationException($"Index '{indexName}' is not a BTree index. Use VectorSearch/Near/Within for vector/spatial indexes.");
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var txnId = 0UL;
 
         // (null, null) → unbounded full-index scan: include every entry (nulls and non-nulls alike).
         // (null, upper) → open lower bound: use NullSentinelNext to skip null entries.
@@ -557,10 +556,9 @@ public sealed class DynamicCollection : IDisposable
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Vector || entry.Vector == null)
             throw new ArgumentException($"Vector index '{indexName}' not found on collection '{_collectionName}'");
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        foreach (var result in entry.Vector.Search(query, k, efSearch, transaction))
+        foreach (var result in entry.Vector.Search(query, k, efSearch, null))
         {
-            var doc = ReadDocumentAt(result.Location, transaction.TransactionId);
+            var doc = ReadDocumentAt(result.Location, 0UL);
             if (doc != null) yield return doc;
         }
     }
@@ -574,11 +572,10 @@ public sealed class DynamicCollection : IDisposable
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Spatial || entry.Spatial == null)
             throw new ArgumentException($"Spatial index '{indexName}' not found on collection '{_collectionName}'");
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var queryBox = SpatialMath.BoundingBox(center.Latitude, center.Longitude, radiusKm);
-        foreach (var loc in entry.Spatial.Search(queryBox, transaction))
+        foreach (var loc in entry.Spatial.Search(queryBox, null))
         {
-            var doc = ReadDocumentAt(loc, transaction.TransactionId);
+            var doc = ReadDocumentAt(loc, 0UL);
             if (doc != null) yield return doc;
         }
     }
@@ -592,11 +589,10 @@ public sealed class DynamicCollection : IDisposable
         if (!_secondaryIndexes.TryGetValue(indexName, out var entry) || entry.Kind != DynamicIndexKind.Spatial || entry.Spatial == null)
             throw new ArgumentException($"Spatial index '{indexName}' not found on collection '{_collectionName}'");
 
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var area = new GeoBox(min.Latitude, min.Longitude, max.Latitude, max.Longitude);
-        foreach (var loc in entry.Spatial.Search(area, transaction))
+        foreach (var loc in entry.Spatial.Search(area, null))
         {
-            var doc = ReadDocumentAt(loc, transaction.TransactionId);
+            var doc = ReadDocumentAt(loc, 0UL);
             if (doc != null) yield return doc;
         }
     }
@@ -1229,18 +1225,16 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>Async exact-match lookup.</summary>
     public async ValueTask<BsonDocument?> FindByIdAsync(BsonId id, CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
         var key = new IndexKey(id.ToBytes());
-        var (found, location) = await _primaryIndex.TryFindAsync(key, transaction.TransactionId, ct);
+        var (found, location) = await _primaryIndex.TryFindAsync(key, (ulong?)null, ct);
         if (!found) return null;
-        return await ReadDocumentAtAsync(location, transaction.TransactionId, ct);
+        return await ReadDocumentAtAsync(location, 0UL, ct);
     }
 
     /// <summary>Async full-collection scan.</summary>
     public async IAsyncEnumerable<BsonDocument> FindAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var transaction = await _transactionHolder.GetCurrentTransactionOrStartAsync();
-        var txnId = transaction.TransactionId;
+        var txnId = 0UL;
 
         await foreach (var entry in _primaryIndex
             .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)

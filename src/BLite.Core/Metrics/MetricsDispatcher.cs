@@ -43,9 +43,11 @@ internal sealed class MetricsDispatcher : IDisposable
     private long _updates;
     private long _deletes;
     private long _finds;
+    private long _queries;
     private long _insertLatencySum;
     private long _updateLatencySum;
     private long _deleteLatencySum;
+    private long _queryLatencySum;
 
     // ── Per-collection counters ─────────────────────────────────────────────
     // ConcurrentDictionary<collectionName, CollectionCounters>
@@ -87,9 +89,11 @@ internal sealed class MetricsDispatcher : IDisposable
         long updates      = Interlocked.Read(ref _updates);
         long deletes      = Interlocked.Read(ref _deletes);
         long finds        = Interlocked.Read(ref _finds);
+        long queries      = Interlocked.Read(ref _queries);
         long insLatSum    = Interlocked.Read(ref _insertLatencySum);
         long updLatSum    = Interlocked.Read(ref _updateLatencySum);
         long delLatSum    = Interlocked.Read(ref _deleteLatencySum);
+        long qryLatSum    = Interlocked.Read(ref _queryLatencySum);
 
         var colSnapshots = new Dictionary<string, CollectionMetricsSnapshot>(_collections.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var (name, c) in _collections)
@@ -98,9 +102,11 @@ internal sealed class MetricsDispatcher : IDisposable
             long cUpd = Interlocked.Read(ref c.Updates);
             long cDel = Interlocked.Read(ref c.Deletes);
             long cFnd = Interlocked.Read(ref c.Finds);
+            long cQry = Interlocked.Read(ref c.Queries);
             long cInsLat = Interlocked.Read(ref c.InsertLatencySum);
             long cUpdLat = Interlocked.Read(ref c.UpdateLatencySum);
             long cDelLat = Interlocked.Read(ref c.DeleteLatencySum);
+            long cQryLat = Interlocked.Read(ref c.QueryLatencySum);
 
             colSnapshots[name] = new CollectionMetricsSnapshot
             {
@@ -109,6 +115,7 @@ internal sealed class MetricsDispatcher : IDisposable
                 UpdateCount      = cUpd,
                 DeleteCount      = cDel,
                 FindCount        = cFnd,
+                QueryCount       = cQry,
                 AvgInsertLatencyUs = cIns > 0 ? (double)cInsLat / cIns : 0,
                 AvgUpdateLatencyUs = cUpd > 0 ? (double)cUpdLat / cUpd : 0,
                 AvgDeleteLatencyUs = cDel > 0 ? (double)cDelLat / cDel : 0,
@@ -129,9 +136,11 @@ internal sealed class MetricsDispatcher : IDisposable
             UpdatesTotal              = updates,
             DeletesTotal              = deletes,
             FindsTotal                = finds,
+            QueriesTotal              = queries,
             AvgInsertLatencyUs        = inserts > 0 ? (double)insLatSum / inserts : 0,
             AvgUpdateLatencyUs        = updates > 0 ? (double)updLatSum / updates : 0,
             AvgDeleteLatencyUs        = deletes > 0 ? (double)delLatSum / deletes : 0,
+            AvgQueryLatencyUs         = queries > 0 ? (double)qryLatSum / queries : 0,
             Collections               = colSnapshots,
             SnapshotTimestamp         = DateTimeOffset.UtcNow,
         };
@@ -224,6 +233,17 @@ internal sealed class MetricsDispatcher : IDisposable
                     Interlocked.Increment(ref c.Finds);
                 }
                 break;
+
+            case MetricEventType.CollectionQuery:
+                Interlocked.Increment(ref _queries);
+                Interlocked.Add(ref _queryLatencySum, micros);
+                if (evt.CollectionName != null)
+                {
+                    var c = GetOrAddCollection(evt.CollectionName);
+                    Interlocked.Increment(ref c.Queries);
+                    Interlocked.Add(ref c.QueryLatencySum, micros);
+                }
+                break;
         }
     }
 
@@ -244,8 +264,10 @@ internal sealed class MetricsDispatcher : IDisposable
         public long Updates;
         public long Deletes;
         public long Finds;
+        public long Queries;
         public long InsertLatencySum;
         public long UpdateLatencySum;
         public long DeleteLatencySum;
+        public long QueryLatencySum;
     }
 }

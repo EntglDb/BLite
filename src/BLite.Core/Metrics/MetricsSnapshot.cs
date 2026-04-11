@@ -51,6 +51,9 @@ public sealed class MetricsSnapshot
     /// <summary>Total find/read operations across all collections.</summary>
     public long FindsTotal { get; init; }
 
+    /// <summary>Total query/scan operations across all collections (FindAll, Scan, QueryIndex, Find, FindOne, Count).</summary>
+    public long QueriesTotal { get; init; }
+
     /// <summary>Average insert latency in microseconds across all collections. 0 if none.</summary>
     public double AvgInsertLatencyUs { get; init; }
 
@@ -59,6 +62,9 @@ public sealed class MetricsSnapshot
 
     /// <summary>Average delete latency in microseconds across all collections. 0 if none.</summary>
     public double AvgDeleteLatencyUs { get; init; }
+
+    /// <summary>Average query latency in microseconds across all collections. 0 if none.</summary>
+    public double AvgQueryLatencyUs { get; init; }
 
     // ── Per-collection statistics ───────────────────────────────────────────
 
@@ -90,6 +96,9 @@ public sealed class CollectionMetricsSnapshot
 
     /// <summary>Total find operations in this collection.</summary>
     public long FindCount { get; init; }
+
+    /// <summary>Total query/scan operations in this collection.</summary>
+    public long QueryCount { get; init; }
 
     /// <summary>Average insert latency in microseconds. 0 if none.</summary>
     public double AvgInsertLatencyUs { get; init; }

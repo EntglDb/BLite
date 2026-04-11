@@ -156,11 +156,10 @@ public sealed partial class StorageEngine
             _commitLock.Release();
         }
 
-        // Run checkpoint outside _commitLock so other commits aren't blocked.
-        // CheckpointAsync() acquires _commitLock internally for the actual I/O.
+        // Fire checkpoint on a separate task so the caller isn't blocked.
         if (needsCheckpoint)
         {
-            await CheckpointAsync();
+            _ = Task.Run(() => CheckpointAsync());
         }
     }
 
@@ -239,7 +238,7 @@ public sealed partial class StorageEngine
 
         if (needsCheckpoint)
         {
-            await CheckpointAsync();
+            _ = Task.Run(() => CheckpointAsync());
         }
     }
 

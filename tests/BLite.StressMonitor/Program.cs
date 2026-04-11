@@ -10,14 +10,15 @@ using Spectre.Console.Rendering;
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 // ── Configuration ────────────────────────────────────────────────────────────
-const int TestDurationSeconds  = 300;   // 5 minutes
-const int InsertWorkers        = 4;
-const int UpdateWorkers        = 2;
+const int TestDurationSeconds  = 60;   // 1 minute
+const int InsertWorkers        = 8;
+const int UpdateWorkers        = 6;
 const int DeleteWorkers        = 2;
-const int FindWorkers          = 3;
+const int FindWorkers          = 10;
 const int WarmupDocCount       = 2_000; // inserted before the clock starts
 const int MinPoolSizeForDelete = 500;   // don't delete if pool drops below this
 const int DashboardIntervalMs  = 1_000;
+const int MaxJitterUs          = 10000;   // max random inter-op jitter (microseconds)
 string[]  Categories           = ["alpha", "beta", "gamma", "delta", "epsilon"];
 
 // ── Database setup ───────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ var updateHistory = new FixedQueue(HistoryLength);
 var deleteHistory = new FixedQueue(HistoryLength);
 var findHistory   = new FixedQueue(HistoryLength);
 var commitHistory = new FixedQueue(HistoryLength);
+var queryHistory  = new FixedQueue(HistoryLength);
 MetricsSnapshot? prevSnap = null;
 
 // ── Warmup: populate initial documents ───────────────────────────────────────
@@ -62,7 +64,6 @@ for (int i = 0; i < WarmupDocCount; i++)
     availableIds.Enqueue(id);
 }
 await db.Docs.InsertBulkAsync(docsToAdd);
-await db.SaveChangesAsync();
 
 Console.WriteLine("Seeded warmup documents.");
 Console.Clear();
@@ -80,6 +81,7 @@ for (int w = 0; w < InsertWorkers; w++)
         var localRng = new Random();
         while (!cts.Token.IsCancellationRequested)
         {
+            await Jitter(localRng, cts.Token);
             int id = idCounter.Next();
             var doc = new StressDoc
             {
@@ -92,7 +94,6 @@ for (int w = 0; w < InsertWorkers; w++)
             try
             {
                 await db.Docs.InsertAsync(doc, cts.Token);
-                await db.SaveChangesAsync(cts.Token);
                 availableIds.Enqueue(id);
             }
             catch (OperationCanceledException) { break; }
@@ -109,9 +110,10 @@ for (int w = 0; w < UpdateWorkers; w++)
         var localRng = new Random();
         while (!cts.Token.IsCancellationRequested)
         {
+            await Jitter(localRng, cts.Token);
             if (!availableIds.TryDequeue(out int id))
             {
-                await Task.Delay(50, cts.Token).ConfigureAwait(false);
+                await Task.Delay(5, cts.Token).ConfigureAwait(false);
                 continue;
             }
 
@@ -123,7 +125,6 @@ for (int w = 0; w < UpdateWorkers; w++)
                     doc.Value   = localRng.NextDouble() * 10_000;
                     doc.Version++;
                     await db.Docs.UpdateAsync(doc, cts.Token);
-                    await db.SaveChangesAsync(cts.Token);
                 }
                 availableIds.Enqueue(id);
             }
@@ -138,24 +139,25 @@ for (int w = 0; w < DeleteWorkers; w++)
 {
     tasks.Add(Task.Run(async () =>
     {
+        var localRng = new Random();
         while (!cts.Token.IsCancellationRequested)
         {
+            await Jitter(localRng, cts.Token);
             if (availableIds.Count < MinPoolSizeForDelete)
             {
-                await Task.Delay(50, cts.Token).ConfigureAwait(false);
+                await Task.Delay(5, cts.Token).ConfigureAwait(false);
                 continue;
             }
 
             if (!availableIds.TryDequeue(out int id))
             {
-                await Task.Delay(50, cts.Token).ConfigureAwait(false);
+                await Task.Delay(5, cts.Token).ConfigureAwait(false);
                 continue;
             }
 
             try
             {
                 await db.Docs.DeleteAsync(id, cts.Token);
-                await db.SaveChangesAsync(cts.Token);
             }
             catch (OperationCanceledException) { break; }
             catch { /* doc may not exist, skip */ }
@@ -171,6 +173,7 @@ for (int w = 0; w < FindWorkers; w++)
         var localRng = new Random();
         while (!cts.Token.IsCancellationRequested)
         {
+            await Jitter(localRng, cts.Token);
             string cat = Categories[localRng.Next(Categories.Length)];
             try
             {
@@ -209,6 +212,7 @@ await AnsiConsole.Live(BuildDashboard(null, 0, TestDurationSeconds))
                 deleteHistory.Push(snap.DeletesTotal          - (prevSnap?.DeletesTotal          ?? 0));
                 findHistory  .Push(snap.FindsTotal            - (prevSnap?.FindsTotal            ?? 0));
                 commitHistory.Push(snap.TransactionCommitsTotal - (prevSnap?.TransactionCommitsTotal ?? 0));
+                queryHistory .Push(snap.QueriesTotal            - (prevSnap?.QueriesTotal            ?? 0));
                 prevSnap = snap;
             }
 
@@ -234,8 +238,11 @@ db.GetMetrics()?.Let(s =>
         $"Updates: [yellow]{s.UpdatesTotal:N0}[/]  " +
         $"Deletes: [red]{s.DeletesTotal:N0}[/]  " +
         $"Finds: [blue]{s.FindsTotal:N0}[/]  " +
+        $"Queries: [green]{s.QueriesTotal:N0}[/]  " +
         $"Commits: [grey]{s.TransactionCommitsTotal:N0}[/]");
 });
+
+db.Dispose();
 
 // Cleanup temp files
 Directory.Delete(dbDir, recursive: true);
@@ -262,40 +269,38 @@ IRenderable BuildDashboard(MetricsSnapshot? snap, int elapsedSec, int totalSec)
     grid.AddRow(header);
 
     // ── Throughput table ─────────────────────────────────────────────────────
+    double intervalSec = DashboardIntervalMs / 1000.0;
+    double eSec = Math.Max(1.0, elapsedSec);
+
     var thruTable = new Table()
         .BorderColor(Color.Grey)
         .AddColumn(new TableColumn("[grey]Metric[/]").Width(10))
         .AddColumn(new TableColumn("[grey]Last 60s history[/]").Width(62))
-        .AddColumn(new TableColumn("[grey]  /sec[/]").RightAligned().Width(8));
+        .AddColumn(new TableColumn("[grey]  /sec[/]").RightAligned().Width(8))
+        .AddColumn(new TableColumn("[grey]Avg 60s[/]").RightAligned().Width(9))
+        .AddColumn(new TableColumn("[grey]Avg all[/]").RightAligned().Width(9));
 
     thruTable.Title = new TableTitle("[bold]Throughput[/]");
 
-    var insertRate = insertHistory.Last();
-    var updateRate = updateHistory.Last();
-    var deleteRate = deleteHistory.Last();
-    var findRate   = findHistory.Last();
-    var commitRate = commitHistory.Last();
+    void ThruRow(string label, string color, FixedQueue history, Color sparkColor, long total)
+    {
+        double rate   = history.Last() / intervalSec;
+        double avg60  = history.Count > 0 ? history.Sum() / (history.Count * intervalSec) : 0;
+        double avgAll = total / eSec;
+        thruTable.AddRow(
+            new Markup($"[{color}]{label}[/]"),
+            Sparkline(history.ToArray(), sparkColor),
+            new Markup($"[{color}]{rate,6:N0}[/]"),
+            new Markup($"[{color}]{avg60,7:N0}[/]"),
+            new Markup($"[{color}]{avgAll,7:N0}[/]"));
+    }
 
-    thruTable.AddRow(
-        new Markup("[cyan]Inserts[/]"),
-        Sparkline(insertHistory.ToArray(), Color.Cyan1),
-        new Markup($"[cyan]{insertRate,6:N0}[/]"));
-    thruTable.AddRow(
-        new Markup("[yellow]Updates[/]"),
-        Sparkline(updateHistory.ToArray(), Color.Yellow),
-        new Markup($"[yellow]{updateRate,6:N0}[/]"));
-    thruTable.AddRow(
-        new Markup("[red]Deletes[/]"),
-        Sparkline(deleteHistory.ToArray(), Color.Red),
-        new Markup($"[red]{deleteRate,6:N0}[/]"));
-    thruTable.AddRow(
-        new Markup("[blue]Finds[/]"),
-        Sparkline(findHistory.ToArray(), Color.Blue),
-        new Markup($"[blue]{findRate,6:N0}[/]"));
-    thruTable.AddRow(
-        new Markup("[grey]Commits[/]"),
-        Sparkline(commitHistory.ToArray(), Color.Grey),
-        new Markup($"[grey]{commitRate,6:N0}[/]"));
+    ThruRow("Inserts", "cyan",   insertHistory, Color.Cyan1,  snap?.InsertsTotal ?? 0);
+    ThruRow("Updates", "yellow", updateHistory, Color.Yellow, snap?.UpdatesTotal ?? 0);
+    ThruRow("Deletes", "red",    deleteHistory, Color.Red,    snap?.DeletesTotal ?? 0);
+    ThruRow("Finds",   "blue",   findHistory,   Color.Blue,   snap?.FindsTotal ?? 0);
+    ThruRow("Queries", "green",  queryHistory,  Color.Green,  snap?.QueriesTotal ?? 0);
+    ThruRow("Commits", "grey",   commitHistory, Color.Grey,   snap?.TransactionCommitsTotal ?? 0);
 
     grid.AddRow(thruTable);
 
@@ -305,6 +310,7 @@ IRenderable BuildDashboard(MetricsSnapshot? snap, int elapsedSec, int totalSec)
         snap.AvgInsertLatencyUs,
         snap.AvgUpdateLatencyUs,
         snap.AvgDeleteLatencyUs,
+        snap.AvgQueryLatencyUs,
     }.Max());
 
     var latTable = new Table()
@@ -324,6 +330,9 @@ IRenderable BuildDashboard(MetricsSnapshot? snap, int elapsedSec, int totalSec)
     latTable.AddRow(new Markup("[red]Delete[/]"),
         LatencyBar(snap?.AvgDeleteLatencyUs ?? 0, maxLat, 20),
         new Markup($"[red]{snap?.AvgDeleteLatencyUs ?? 0,6:F1}[/]"));
+    latTable.AddRow(new Markup("[green]Query[/]"),
+        LatencyBar(snap?.AvgQueryLatencyUs ?? 0, maxLat, 20),
+        new Markup($"[green]{snap?.AvgQueryLatencyUs ?? 0,6:F1}[/]"));
 
     var txTable = new Table()
         .BorderColor(Color.Grey)
@@ -354,7 +363,8 @@ IRenderable BuildDashboard(MetricsSnapshot? snap, int elapsedSec, int totalSec)
         .AddColumn("[grey]Inserts[/]")
         .AddColumn("[grey]Updates[/]")
         .AddColumn("[grey]Deletes[/]")
-        .AddColumn("[grey]Finds[/]");
+        .AddColumn("[grey]Finds[/]")
+        .AddColumn("[grey]Queries[/]");
 
     totalsTable.Title = new TableTitle("[bold]Cumulative totals[/]");
 
@@ -362,7 +372,8 @@ IRenderable BuildDashboard(MetricsSnapshot? snap, int elapsedSec, int totalSec)
         new Markup($"[cyan]{snap?.InsertsTotal ?? 0:N0}[/]"),
         new Markup($"[yellow]{snap?.UpdatesTotal ?? 0:N0}[/]"),
         new Markup($"[red]{snap?.DeletesTotal ?? 0:N0}[/]"),
-        new Markup($"[blue]{snap?.FindsTotal ?? 0:N0}[/]"));
+        new Markup($"[blue]{snap?.FindsTotal ?? 0:N0}[/]"),
+        new Markup($"[green]{snap?.QueriesTotal ?? 0:N0}[/]"));
 
     grid.AddRow(totalsTable);
 
@@ -370,6 +381,15 @@ IRenderable BuildDashboard(MetricsSnapshot? snap, int elapsedSec, int totalSec)
 }
 
 // ── Rendering helpers ─────────────────────────────────────────────────────────
+
+/// <summary>Random inter-op jitter: breaks tight-loop synchronisation between workers.</summary>
+static async Task Jitter(Random rng, CancellationToken ct)
+{
+    int us = rng.Next(MaxJitterUs);
+    if (us < 50) return; // below scheduler resolution — skip entirely
+    await Task.Delay(TimeSpan.FromMicroseconds(us), ct).ConfigureAwait(false);
+}
+
 static IRenderable Sparkline(long[] values, Color color)
 {
     // Unicode block characters: index 0→space, 1→▁ … 8→█
@@ -426,6 +446,17 @@ sealed class FixedQueue(int capacity)
         if (_count < capacity) _count++;
     }
 
+    public int Count => _count;
+
+    public long Sum()
+    {
+        long s = 0;
+        int start = (_head - _count + capacity) % capacity;
+        for (int i = 0; i < _count; i++)
+            s += _buf[(start + i) % capacity];
+        return s;
+    }
+
     public long Last() => _count == 0 ? 0 : _buf[(_head - 1 + capacity) % capacity];
 
     public long[] ToArray()
@@ -447,6 +478,7 @@ static class ColorExtensions
         c == Color.Yellow  ? "yellow" :
         c == Color.Red     ? "red"    :
         c == Color.Blue    ? "blue"   :
+        c == Color.Green   ? "green"  :
         c == Color.Grey    ? "grey"   :
                              "white";
 }

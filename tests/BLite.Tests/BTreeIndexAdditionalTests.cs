@@ -187,8 +187,8 @@ public class BTreeIndexAdditionalTests : IDisposable
         uint? capturedNewRoot = null;
         var (index, txnId) = CreateBTreeIndex(onRootChanged: newRoot => capturedNewRoot = newRoot);
 
-        // Insert enough entries to force a root split (MaxEntriesPerNode = 100)
-        for (int i = 1; i <= 101; i++)
+        // Insert enough entries to force a root split
+        for (int i = 1; i <= BTreeIndex.MaxEntriesPerNode + 1; i++)
             index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
 
         _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
@@ -254,5 +254,110 @@ public class BTreeIndexAdditionalTests : IDisposable
         Assert.Equal(2, result.Count);
         Assert.Equal(IndexKey.Create(20), result[0].Key);
         Assert.Equal(IndexKey.Create(30), result[1].Key);
+    }
+
+    [Fact]
+    public void Unique_AllKeysFoundAfterSplit()
+    {
+        var (index, txnId) = CreateUniqueIndex();
+        int N = BTreeIndex.MaxEntriesPerNode;
+
+        // Insert N+10 sequential keys to force at least one split
+        for (int i = 1; i <= N + 10; i++)
+            index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
+
+        // Every key must be found
+        for (int i = 1; i <= N + 10; i++)
+        {
+            bool found = index.TryFind(IndexKey.Create(i), out var loc, txnId);
+            Assert.True(found, $"Key {i} not found after split (N={N})");
+            Assert.Equal(new DocumentLocation((uint)i, 0), loc);
+        }
+    }
+
+    [Fact]
+    public void Unique_DuplicateAfterSplit_Throws()
+    {
+        var (index, txnId) = CreateUniqueIndex();
+        int N = BTreeIndex.MaxEntriesPerNode;
+
+        // Insert N+10 sequential keys
+        for (int i = 1; i <= N + 10; i++)
+            index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
+
+        // Re-inserting any key with a different location must throw
+        for (int i = 1; i <= N + 10; i++)
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                index.Insert(IndexKey.Create(i), new DocumentLocation(999, (ushort)i), txnId));
+        }
+    }
+
+    /// <summary>
+    /// Reproduces the collection-level scenario: each insert uses a SEPARATE
+    /// auto-commit transaction (begin → insert → commit).  With N=64 this
+    /// forces a split at insert #65 and verifies that all keys are still
+    /// findable across transaction boundaries.
+    /// </summary>
+    [Fact]
+    public async Task Unique_AllKeysFoundAfterSplit_SeparateTransactions()
+    {
+        var opts = IndexOptions.CreateUnique("pk");
+        var index = new BTreeIndex(_storage, opts);
+        int N = BTreeIndex.MaxEntriesPerNode;
+        int total = N + 36; // 100 inserts with N=64
+
+        for (int i = 1; i <= total; i++)
+        {
+            var txn = _storage.BeginTransaction();
+            index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txn.TransactionId);
+            await _storage.CommitTransactionAsync(txn);
+        }
+
+        // Every key must be found after all commits
+        for (int i = 1; i <= total; i++)
+        {
+            bool found = index.TryFind(IndexKey.Create(i), out var loc);
+            Assert.True(found, $"Key {i} not found after split with separate transactions (N={N})");
+            Assert.Equal(new DocumentLocation((uint)i, 0), loc);
+        }
+    }
+
+    /// <summary>
+    /// Same as above but with TWO indexes (primary unique + secondary non-unique)
+    /// to simulate what DocumentCollection does with a secondary index on Age.
+    /// </summary>
+    [Fact]
+    public async Task TwoIndexes_AllKeysFoundAfterSplit_SeparateTransactions()
+    {
+        var primaryOpts = IndexOptions.CreateUnique("pk");
+        var primary = new BTreeIndex(_storage, primaryOpts);
+
+        var secondaryOpts = IndexOptions.CreateBTree("age");
+        var secondary = new BTreeIndex(_storage, secondaryOpts);
+
+        int N = BTreeIndex.MaxEntriesPerNode;
+        int total = N + 36; // 100 inserts
+
+        for (int i = 1; i <= total; i++)
+        {
+            var txn = _storage.BeginTransaction();
+            var loc = new DocumentLocation((uint)i, 0);
+
+            // Primary: unique key = i
+            primary.Insert(IndexKey.Create(i), loc, txn.TransactionId);
+            // Secondary: non-unique key = (i-1) — simulates Age=i-1
+            secondary.Insert(IndexKey.Create(i - 1), loc, txn.TransactionId);
+
+            await _storage.CommitTransactionAsync(txn);
+        }
+
+        // Verify all primary keys
+        for (int i = 1; i <= total; i++)
+        {
+            bool found = primary.TryFind(IndexKey.Create(i), out var loc);
+            Assert.True(found, $"Primary key {i} not found (N={N})");
+            Assert.Equal(new DocumentLocation((uint)i, 0), loc);
+        }
     }
 }

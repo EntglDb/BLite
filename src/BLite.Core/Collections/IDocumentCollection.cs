@@ -39,12 +39,18 @@ public interface IDocumentCollection<TId, T> where T : class
     // ── Read ──────────────────────────────────────────────────────────────────
 
     ValueTask<T?> FindByIdAsync(TId id, CancellationToken ct = default);
+    ValueTask<T?> FindByIdAsync(TId id, ITransaction? transaction, CancellationToken ct = default);
 
     IAsyncEnumerable<T> FindAllAsync(CancellationToken ct = default);
+    IAsyncEnumerable<T> FindAllAsync(ITransaction? transaction, CancellationToken ct = default);
 
     [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
     [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     IAsyncEnumerable<T> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
+
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
+    IAsyncEnumerable<T> FindAsync(Expression<Func<T, bool>> predicate, ITransaction? transaction, CancellationToken ct = default);
 
     /// <summary>
     /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
@@ -53,6 +59,11 @@ public interface IDocumentCollection<TId, T> where T : class
     [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
     [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
     Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
+
+    /// <inheritdoc cref="FindOneAsync(Expression{Func{T, bool}}, CancellationToken)"/>
+    [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
+    [RequiresUnreferencedCode("LINQ-style find operations use reflection to resolve members at runtime. Ensure all entity types are preserved.")]
+    Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, ITransaction? transaction, CancellationToken ct = default);
 
     [RequiresDynamicCode("LINQ queries over BLite collections use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
     [RequiresUnreferencedCode("LINQ queries over BLite collections use reflection to resolve methods at runtime. Ensure all entity types and their members are preserved.")]
@@ -115,9 +126,20 @@ public interface IDocumentCollection<TId, T> where T : class
         int take = int.MaxValue,
         CancellationToken ct = default);
 
+    IAsyncEnumerable<T> QueryIndexAsync(
+        string indexName,
+        object? minKey,
+        object? maxKey,
+        bool ascending,
+        int skip,
+        int take,
+        ITransaction? transaction,
+        CancellationToken ct = default);
+
     // ── Raw scan (local engine only; remote throws NotSupportedException) ──────
 
     IAsyncEnumerable<T> ScanAsync(BsonReaderPredicate predicate, CancellationToken ct = default);
+    IAsyncEnumerable<T> ScanAsync(BsonReaderPredicate predicate, ITransaction? transaction, CancellationToken ct = default);
 
     /// <summary>
     /// Executes a query described by an <see cref="IndexQueryPlan"/>.

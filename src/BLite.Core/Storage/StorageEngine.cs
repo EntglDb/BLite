@@ -75,7 +75,7 @@ public sealed partial class StorageEngine : IDisposable
     // Stored as long so Interlocked.Increment works on all target frameworks.
     private long _nextTransactionId;
 
-    private const long MaxWalSize = 4 * 1024 * 1024; // 4MB
+    private const long MaxWalSize = 16 * 1024 * 1024; // 16MB
 
     private volatile bool _disposed;
 

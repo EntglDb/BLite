@@ -14,4 +14,11 @@ public enum MetricEventType : byte
     CollectionUpdate    = 6,
     CollectionDelete    = 7,
     CollectionFind      = 8,
+
+    /// <summary>
+    /// A query/scan operation that materialised results (FindAllAsync, ScanAsync,
+    /// QueryIndexAsync, FindAsync, FindOneAsync, CountAsync).
+    /// Distinct from <see cref="CollectionFind"/> which covers only <c>FindByIdAsync</c>.
+    /// </summary>
+    CollectionQuery     = 9,
 }

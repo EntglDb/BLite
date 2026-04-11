@@ -189,10 +189,11 @@ public sealed partial class StorageEngine
             });
         }
 
-        // Run checkpoint outside _commitLock so concurrent commits aren't blocked.
+        // Fire checkpoint on a separate task so the group-commit writer stays
+        // responsive.  CheckpointAsync guards against concurrent runs internally.
         if (needsCheckpoint && failure == null)
         {
-            await CheckpointAsync().ConfigureAwait(false);
+            _ = Task.Run(() => CheckpointAsync());
         }
     }
 

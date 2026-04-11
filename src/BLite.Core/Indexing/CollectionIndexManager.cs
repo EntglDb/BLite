@@ -506,6 +506,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             if (_metadata.PrimaryRootPageId != pageId)
             {
                 _metadata.PrimaryRootPageId = pageId;
+                RefreshSequenceValue();
                 _storage.SaveCollectionMetadata(_metadata);
             }
         }
@@ -516,7 +517,20 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     private void SaveMetadata()
     {
         UpdateMetadata();
+        RefreshSequenceValue();
         _storage.SaveCollectionMetadata(_metadata);
+    }
+
+    /// <summary>
+    /// Reads the current SequenceValue from the page file so that this in-memory
+    /// <c>_metadata</c> snapshot does not overwrite the auto-increment counter
+    /// that <see cref="StorageEngine.GetNextSequence"/> maintains independently.
+    /// </summary>
+    private void RefreshSequenceValue()
+    {
+        var current = _storage.GetCollectionMetadata(_collectionName);
+        if (current != null)
+            _metadata.SequenceValue = current.SequenceValue;
     }
 
     public void Dispose()

@@ -55,22 +55,34 @@ public sealed partial class StorageEngine
                     if (lazy.IsValueCreated) lazy.Value.Flush();
             }
 
-            // Try-acquire: if commits are flowing, skip cleanup and let WAL grow.
-            if (!_commitLock.Wait(0)) return;
-            try
+            // Drain _walIndex entries that we successfully flushed to disk.
+            // Safe without _commitLock because:
+            //  - ConcurrentDictionary ops are thread-safe
+            //  - ReferenceEquals ensures we only remove entries we actually flushed;
+            //    a concurrent commit that updated the same page uses a different byte[]
+            //    reference, so the check fails and the new version is preserved.
+            foreach (var kvp in snapshot)
             {
-                foreach (var kvp in snapshot)
-                {
-                    if (_walIndex.TryGetValue(kvp.Key, out var current) && ReferenceEquals(current, kvp.Value))
-                        _walIndex.TryRemove(kvp.Key, out _);
-                }
-
-                if (_walIndex.IsEmpty)
-                    await _wal.TruncateAsync(ct);
+                if (_walIndex.TryGetValue(kvp.Key, out var current) && ReferenceEquals(current, kvp.Value))
+                    _walIndex.TryRemove(kvp.Key, out _);
             }
-            finally
+
+            // Truncate WAL only when _walIndex is fully drained.
+            // _commitLock is still needed here to prevent truncating while the
+            // group-commit writer is appending new WAL records.
+            if (_walIndex.IsEmpty && _commitLock.Wait(0))
             {
-                _commitLock.Release();
+                try
+                {
+                    // Double-check: new commits may have promoted entries
+                    // between our IsEmpty check and acquiring the lock.
+                    if (_walIndex.IsEmpty)
+                        await _wal.TruncateAsync(ct);
+                }
+                finally
+                {
+                    _commitLock.Release();
+                }
             }
         }
         finally
