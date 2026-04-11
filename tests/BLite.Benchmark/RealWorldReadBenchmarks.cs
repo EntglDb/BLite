@@ -134,7 +134,7 @@ public class RealWorldReadBenchmarks
             {
                 Id        = Guid.NewGuid(),
                 SourceId  = sourceId,
-                FilePath  = $@"D:\Photos\{sourceId}\IMG_{Guid.NewGuid():N[..8]}.jpg",
+                FilePath  = $@"D:\Photos\{sourceId}\IMG_{Guid.NewGuid().ToString("N")[..8]}.jpg",
                 DateTaken = DateTime.UtcNow.AddDays(-rng.Next(0, 3650)),
                 FileSize  = rng.NextInt64(1024 * 1024, 1024 * 1024 * 15),
                 Width     = new[] { 1920, 2560, 3840, 4000 }[rng.Next(4)],

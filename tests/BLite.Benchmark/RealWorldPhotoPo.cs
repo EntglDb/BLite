@@ -22,10 +22,7 @@ public class RealWorldPhotoPo
 
 public partial class RealWorldPhotoDbContext : DocumentDbContext
 {
-    public RealWorldPhotoDbContext(string path) : base(path)
-    {
-        InitializeCollections();
-    }
+    public RealWorldPhotoDbContext(string path) : base(path) { }
 
     public DocumentCollection<Guid, RealWorldPhotoPo> Photos { get; set; } = null!;
 
