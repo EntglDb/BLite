@@ -30,11 +30,11 @@ public interface IDocumentCollection<TId, T> where T : class
 
     // ── Insert ────────────────────────────────────────────────────────────────
 
-    Task<TId> InsertAsync(T entity, CancellationToken ct = default);
-    Task<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
+    ValueTask<TId> InsertAsync(T entity, CancellationToken ct = default);
+    ValueTask<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
 
-    Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
-    Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
+    ValueTask<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
+    ValueTask<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
@@ -60,19 +60,19 @@ public interface IDocumentCollection<TId, T> where T : class
 
     // ── Update ────────────────────────────────────────────────────────────────
 
-    Task<bool> UpdateAsync(T entity, CancellationToken ct = default);
-    Task<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
+    ValueTask<bool> UpdateAsync(T entity, CancellationToken ct = default);
+    ValueTask<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
 
-    Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
-    Task<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
+    ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
+    ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
 
     // ── Delete ────────────────────────────────────────────────────────────────
 
-    Task<bool> DeleteAsync(TId id, CancellationToken ct = default);
-    Task<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default);
+    ValueTask<bool> DeleteAsync(TId id, CancellationToken ct = default);
+    ValueTask<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default);
 
-    Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default);
-    Task<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default);
+    ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default);
+    ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default);
 
     // ── Index management ──────────────────────────────────────────────────────
     // Local engine: fully supported.

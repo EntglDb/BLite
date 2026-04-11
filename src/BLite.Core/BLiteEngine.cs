@@ -215,23 +215,23 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// <summary>
     /// Creates a new caller-owned transaction asynchronously.
     /// </summary>
-    public Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    public ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<ITransaction>(_storage.BeginTransaction(IsolationLevel.ReadCommitted));
+        return new ValueTask<ITransaction>(_storage.BeginTransaction(IsolationLevel.ReadCommitted));
     }
 
     /// <summary>
     /// No-op when called without a transaction.
     /// Exists for API compatibility — auto-commit write operations commit immediately.
     /// </summary>
-    public Task CommitAsync(CancellationToken ct = default)
+    public ValueTask CommitAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
         foreach (var col in _collections.Values)
             col.PersistIndexMetadata();
-        return Task.CompletedTask;
+        return default;
     }
 
     /// <summary>

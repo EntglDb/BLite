@@ -278,7 +278,7 @@ public readonly struct BLiteDiagnostic
                         sb.AppendLine($"            /// <summary>Commits all pending changes in this session.</summary>");
                         sb.AppendLine($"            public void SaveChanges() => _session.CommitAsync().GetAwaiter().GetResult();");
                         sb.AppendLine($"            /// <summary>Asynchronously commits all pending changes in this session.</summary>");
-                        sb.AppendLine($"            public global::System.Threading.Tasks.Task SaveChangesAsync(global::System.Threading.CancellationToken ct = default) => _session.CommitAsync(ct);");
+                        sb.AppendLine($"            public global::System.Threading.Tasks.ValueTask SaveChangesAsync(global::System.Threading.CancellationToken ct = default) => _session.CommitAsync(ct);");
                         sb.AppendLine($"            /// <summary>Begins a new transaction for this session or returns the active one.</summary>");
                         sb.AppendLine($"            public global::BLite.Core.Transactions.ITransaction BeginTransaction() => _session.BeginTransaction();");
                         sb.AppendLine($"            /// <summary>Rolls back the active transaction, discarding uncommitted changes.</summary>");

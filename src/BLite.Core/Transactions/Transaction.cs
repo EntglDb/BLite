@@ -71,7 +71,7 @@ public sealed class Transaction : ITransaction
         return await _storage.PrepareTransactionAsync(_transactionId);
     }
 
-    public async Task CommitAsync(CancellationToken ct = default)
+    public async ValueTask CommitAsync(CancellationToken ct = default)
     {
         if (_state != TransactionState.Preparing && _state != TransactionState.Active)
             throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
@@ -96,7 +96,7 @@ public sealed class Transaction : ITransaction
     /// </summary>
     public event Action? OnRollback;
 
-    public async Task RollbackAsync()
+    public async ValueTask RollbackAsync()
     {
         if (_state == TransactionState.Committed)
             throw new InvalidOperationException("Cannot rollback committed transaction");

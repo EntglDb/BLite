@@ -349,7 +349,7 @@ public sealed class DynamicCollection : IDisposable
         return new BsonDocument(buffer[..writer.Position], _storage.GetKeyReverseMap(), _storage.GetKeyMap());
     }
 
-    public Task<BsonId> InsertAsync(BsonDocument document, CancellationToken ct = default)
+    public ValueTask<BsonId> InsertAsync(BsonDocument document, CancellationToken ct = default)
     {
         return InsertAsync(document, null, ct);
     }
@@ -358,7 +358,7 @@ public sealed class DynamicCollection : IDisposable
     /// If the document has no _id field, one is auto-generated.
     /// Returns the BsonId of the inserted document.
     /// </summary>
-    public async Task<BsonId> InsertAsync(BsonDocument document, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<BsonId> InsertAsync(BsonDocument document, ITransaction? transaction, CancellationToken ct = default)
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
@@ -397,7 +397,7 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
-    public Task<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+    public ValueTask<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, CancellationToken ct = default)
     {
         return InsertBulkAsync(documents, null, ct);
     }
@@ -406,7 +406,7 @@ public sealed class DynamicCollection : IDisposable
     /// Inserts multiple BsonDocuments asynchronously in a single transaction.
     /// Returns the list of generated/existing BsonIds in insertion order.
     /// </summary>
-    public async Task<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, ITransaction? transaction, CancellationToken ct = default)
     {
         if (documents == null) throw new ArgumentNullException(nameof(documents));
         bool autoCommit = transaction == null;
@@ -617,14 +617,14 @@ public sealed class DynamicCollection : IDisposable
     #endregion
 
     #region Update
-    public Task<bool> UpdateAsync(BsonId id, BsonDocument newDocument, CancellationToken ct = default)
+    public ValueTask<bool> UpdateAsync(BsonId id, BsonDocument newDocument, CancellationToken ct = default)
     {
         return UpdateAsync(id, newDocument, null, ct);
     }
     /// <summary>
     /// Updates a document by its BsonId asynchronously. Replaces the entire document.
     /// </summary>
-    public async Task<bool> UpdateAsync(BsonId id, BsonDocument newDocument, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<bool> UpdateAsync(BsonId id, BsonDocument newDocument, ITransaction? transaction, CancellationToken ct = default)
     {
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
 
@@ -696,7 +696,7 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
-    public Task<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
+    public ValueTask<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, CancellationToken ct = default)
     {
         return UpdateBulkAsync(updates, null, ct);
     }
@@ -704,7 +704,7 @@ public sealed class DynamicCollection : IDisposable
     /// Updates multiple documents asynchronously in a single transaction.
     /// Returns the number of documents successfully updated.
     /// </summary>
-    public async Task<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, ITransaction? transaction, CancellationToken ct = default)
     {
         if (updates == null) throw new ArgumentNullException(nameof(updates));
         bool autoCommit = transaction == null;
@@ -769,7 +769,7 @@ public sealed class DynamicCollection : IDisposable
 
     #region Delete
 
-    public Task<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
+    public ValueTask<bool> DeleteAsync(BsonId id, CancellationToken ct = default)
     {
         return DeleteAsync(id, null, ct);
     }
@@ -777,7 +777,7 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>
     /// Deletes a document by its BsonId asynchronously.
     /// </summary>
-    public async Task<bool> DeleteAsync(BsonId id, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<bool> DeleteAsync(BsonId id, ITransaction? transaction, CancellationToken ct = default)
     {
         var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
         bool success = false;
@@ -828,7 +828,7 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
-    public async Task<int> DeleteBulkAsync(IEnumerable<BsonId> ids, CancellationToken ct = default)
+    public async ValueTask<int> DeleteBulkAsync(IEnumerable<BsonId> ids, CancellationToken ct = default)
     {
         return await DeleteBulkAsync(ids, null, ct);
     }
@@ -836,7 +836,7 @@ public sealed class DynamicCollection : IDisposable
     /// Deletes multiple documents asynchronously in a single transaction.
     /// Returns the number of documents successfully deleted.
     /// </summary>
-    public async Task<int> DeleteBulkAsync(IEnumerable<BsonId> ids, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<int> DeleteBulkAsync(IEnumerable<BsonId> ids, ITransaction? transaction, CancellationToken ct = default)
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
         bool autoCommit = transaction == null;

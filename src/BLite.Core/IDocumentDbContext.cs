@@ -55,18 +55,18 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     /// <summary>
     /// Begins a new transaction asynchronously.
     /// </summary>
-    Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
+    ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
 
     /// <summary>
     /// No-op when called without a transaction.
     /// Auto-commit operations commit immediately; this exists for API compatibility.
     /// </summary>
-    Task SaveChangesAsync(CancellationToken ct = default);
+    ValueTask SaveChangesAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Commits a caller-owned transaction created by <see cref="BeginTransactionAsync"/>.
     /// </summary>
-    Task SaveChangesAsync(ITransaction transaction, CancellationToken ct = default);
+    ValueTask SaveChangesAsync(ITransaction transaction, CancellationToken ct = default);
 
     /// <summary>
     /// Enables the metrics subsystem. Safe to call multiple times — idempotent.

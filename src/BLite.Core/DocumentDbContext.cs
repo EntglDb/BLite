@@ -304,12 +304,12 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// <summary>
     /// Creates a new caller-owned transaction asynchronously.
     /// </summary>
-    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    public ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
         ct.ThrowIfCancellationRequested();
-        return _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        return new ValueTask<ITransaction>(_storage.BeginTransaction(IsolationLevel.ReadCommitted));
     }
 
     /// <summary>
@@ -325,17 +325,17 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// No-op when called without a transaction.
     /// Exists for API compatibility — auto-commit write operations commit immediately.
     /// </summary>
-    public Task SaveChangesAsync(CancellationToken ct = default)
+    public ValueTask SaveChangesAsync(CancellationToken ct = default)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-        return Task.CompletedTask;
+        return default;
     }
 
     /// <summary>
     /// Commits a caller-owned transaction created by <see cref="BeginTransactionAsync"/>.
     /// </summary>
-    public async Task SaveChangesAsync(ITransaction transaction, CancellationToken ct = default)
+    public async ValueTask SaveChangesAsync(ITransaction transaction, CancellationToken ct = default)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));

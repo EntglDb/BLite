@@ -31,13 +31,13 @@ public interface ITransaction : IDisposable
     /// <summary>
     /// Asynchronously commits the transaction, making all changes permanent.
     /// </summary>
-    Task CommitAsync(CancellationToken ct = default);
+    ValueTask CommitAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Rolls back the transaction, discarding all changes.
     /// Called automatically on Dispose() if Commit() was not called.
     /// </summary>
-    Task RollbackAsync();
+    ValueTask RollbackAsync();
 
     /// <summary>
     /// Adds a write operation to the current batch or transaction.

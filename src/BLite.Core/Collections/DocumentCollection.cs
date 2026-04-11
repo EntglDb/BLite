@@ -1312,7 +1312,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously inserts a new document into the collection
     /// </summary>
-    public async Task<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -1357,7 +1357,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously inserts multiple documents in a single transaction.
     /// </summary>
-    public async Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
     {
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
@@ -1858,7 +1858,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously updates an existing document in the collection
     /// </summary>
-    public async Task<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -1895,7 +1895,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously updates multiple documents in a single transaction.
     /// </summary>
-    public async Task<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
     {
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
@@ -2061,7 +2061,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously deletes a document by its primary key.
     /// </summary>
-    public async Task<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default)
     {
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         bool success = false;
@@ -2096,7 +2096,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Asynchronously deletes multiple documents in a single transaction.
     /// </summary>
-    public async Task<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default)
+    public async ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default)
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
@@ -2779,32 +2779,32 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         GC.SuppressFinalize(this);
     }
 
-    public Task<TId> InsertAsync(T entity, CancellationToken ct = default)
+    public ValueTask<TId> InsertAsync(T entity, CancellationToken ct = default)
     {
         return InsertAsync(entity, null, ct);
     }
 
-    public Task<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+    public ValueTask<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
     {
         return InsertBulkAsync(entities, null, ct);
     }
 
-    public Task<bool> UpdateAsync(T entity, CancellationToken ct = default)
+    public ValueTask<bool> UpdateAsync(T entity, CancellationToken ct = default)
     {
         return UpdateAsync(entity, null, ct);
     }
 
-    public Task<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+    public ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
     {
         return UpdateBulkAsync(entities, null, ct);
     }
 
-    public Task<bool> DeleteAsync(TId id, CancellationToken ct = default)
+    public ValueTask<bool> DeleteAsync(TId id, CancellationToken ct = default)
     {
         return DeleteAsync(id, null, ct);
     }
 
-    public Task<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default)
+    public ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default)
     {
         return DeleteBulkAsync(ids, null, ct);
     }

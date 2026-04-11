@@ -74,19 +74,19 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     /// <summary>
     /// Begins a new transaction asynchronously for this session, or returns the already-active one.
     /// </summary>
-    public async Task<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
+    public ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
         if (CurrentTransaction != null)
-            return CurrentTransaction;
+            return new ValueTask<ITransaction>(CurrentTransaction);
         CurrentTransaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
-        return CurrentTransaction!;
+        return new ValueTask<ITransaction>(CurrentTransaction!);
     }
 
     /// <summary>
     /// Asynchronously commits the active transaction.
     /// </summary>
-    public async Task CommitAsync(CancellationToken ct = default)
+    public async ValueTask CommitAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
         foreach (var lazy in _collections.Values)
