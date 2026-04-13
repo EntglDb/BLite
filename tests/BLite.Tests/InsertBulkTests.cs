@@ -63,7 +63,7 @@ public class InsertBulkTests : IDisposable
     [Fact]
     public async Task InsertAsync_SucceedsAfterRollbackInducedFsiDesync()
     {
-        // Each User with a 2000-character name serialises to ~2 050 bytes of BSON + 8 bytes
+        // Each User with a 2000-character name serializes to ~2 050 bytes of BSON + 8 bytes
         // of SlotEntry = ~2 058 bytes per slot.  A 16 KB data page (16 360 bytes of usable
         // space) therefore holds at most 7 such documents, leaving ~2 004 bytes free.
         // 2 004 < 2 058, so no existing page can absorb another large user after the page
