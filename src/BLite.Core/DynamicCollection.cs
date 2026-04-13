@@ -1320,7 +1320,13 @@ public sealed class DynamicCollection : IDisposable
 
             var requiredSpace = data.Length + SlotEntry.Size;
             if (header.AvailableFreeSpace < requiredSpace)
+            {
+                // Correct the FSI to match the physical page state so that the next call to
+                // FindPageWithSpace does not route back to this page (breaks the poisoned-cache loop
+                // that can arise when a transaction that updated the FSI was later rolled back).
+                _fsi.Update(pageId, header.AvailableFreeSpace);
                 throw new InvalidOperationException($"Not enough space in page {pageId}: need {requiredSpace}, have {header.AvailableFreeSpace}");
+            }
 
             // Find free slot
             ushort slotIndex = header.SlotCount;

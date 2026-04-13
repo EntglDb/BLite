@@ -1104,7 +1104,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var requiredSpace = data.Length + SlotEntry.Size;
 
             if (freeSpace < requiredSpace)
-                throw new InvalidOperationException($"Not enough space: need {requiredSpace}, have {freeSpace} | PageId={pageId} | SlotCount={header.SlotCount} | Start={header.FreeSpaceStart} | End={header.FreeSpaceEnd} | FSI={(_fsi.TryGetFreeBytes(pageId, out var fb) ? fb.ToString() : "n/a")}");
+            {
+                // Correct the FSI to match the physical page state so that the next call to
+                // FindPageWithSpace does not route back to this page (breaks the poisoned-cache loop
+                // that can arise when a transaction that updated the FSI was later rolled back).
+                _fsi.Update(pageId, freeSpace);
+                throw new InvalidOperationException($"Not enough space: need {requiredSpace}, have {freeSpace} | PageId={pageId} | SlotCount={header.SlotCount} | Start={header.FreeSpaceStart} | End={header.FreeSpaceEnd} | FSI={freeSpace}");
+            }
 
             // Find free slot (reuse deleted or create new)
             ushort slotIndex = FindFreeSlot(buffer, ref header);
