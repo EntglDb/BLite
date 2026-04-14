@@ -32,13 +32,6 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// </summary>
     internal StorageEngine Storage => _storage;
 
-    /// <summary>
-    /// Always returns <c>null</c>. Transaction state is no longer tracked at the engine level.
-    /// Callers that need explicit transactions should use <see cref="BeginTransaction"/> or
-    /// <see cref="BeginTransactionAsync"/> and pass the returned transaction to each operation.
-    /// </summary>
-    public ITransaction? CurrentTransaction => null;
-
     #region Constructors
 
     /// <summary>

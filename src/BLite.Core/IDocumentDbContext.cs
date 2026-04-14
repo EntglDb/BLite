@@ -15,11 +15,6 @@ namespace BLite.Core;
 public interface IDocumentDbContext : IDisposable, ITransactionHolder
 {
     /// <summary>
-    /// Gets the current active transaction, or <c>null</c> if no transaction is active.
-    /// </summary>
-    ITransaction? CurrentTransaction { get; }
-
-    /// <summary>
     /// Provides access to the embedded Key-Value store that shares the same database file.
     /// </summary>
     IBLiteKvStore KvStore { get; }
