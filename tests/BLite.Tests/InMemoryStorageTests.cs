@@ -308,7 +308,7 @@ public class InMemoryStorageTests
         // Verify that using an in-memory engine doesn't create any .db files.
         var tempDir = Path.GetTempPath();
         var before = Directory.GetFiles(tempDir, "*.db").Length;
-        using (var _ = BLiteEngine.CreateInMemory()) { }
+        using (var engine = BLiteEngine.CreateInMemory()) { }
         var after = Directory.GetFiles(tempDir, "*.db").Length;
         Assert.Equal(before, after);
     }

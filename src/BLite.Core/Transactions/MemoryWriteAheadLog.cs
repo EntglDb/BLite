@@ -42,7 +42,7 @@ public sealed class MemoryWriteAheadLog : IWriteAheadLog
             throw new TimeoutException("Timed out acquiring MemoryWriteAheadLog lock.");
         try
         {
-            _records.Add(new WalRecord { Type = WalRecordType.Begin, TransactionId = transactionId, Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            _records.Add(new WalRecord { Type = WalRecordType.Begin, TransactionId = transactionId, Timestamp = CurrentTimestampMs() });
             _sizeBytes += 17; // same fixed size as the file-based implementation
         }
         finally
@@ -58,7 +58,7 @@ public sealed class MemoryWriteAheadLog : IWriteAheadLog
             throw new TimeoutException("Timed out acquiring MemoryWriteAheadLog lock.");
         try
         {
-            _records.Add(new WalRecord { Type = WalRecordType.Commit, TransactionId = transactionId, Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            _records.Add(new WalRecord { Type = WalRecordType.Commit, TransactionId = transactionId, Timestamp = CurrentTimestampMs() });
             _sizeBytes += 17;
         }
         finally
@@ -74,7 +74,7 @@ public sealed class MemoryWriteAheadLog : IWriteAheadLog
             throw new TimeoutException("Timed out acquiring MemoryWriteAheadLog lock.");
         try
         {
-            _records.Add(new WalRecord { Type = WalRecordType.Abort, TransactionId = transactionId, Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            _records.Add(new WalRecord { Type = WalRecordType.Abort, TransactionId = transactionId, Timestamp = CurrentTimestampMs() });
             _sizeBytes += 17;
         }
         finally
@@ -158,7 +158,7 @@ public sealed class MemoryWriteAheadLog : IWriteAheadLog
     public void Dispose()
     {
         if (_disposed) return;
-        if (_lock.Wait(5_000))
+        if (_lock.Wait(_writeTimeoutMs))
         {
             try
             {
@@ -179,4 +179,6 @@ public sealed class MemoryWriteAheadLog : IWriteAheadLog
         }
         GC.SuppressFinalize(this);
     }
+
+    private static long CurrentTimestampMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 }
