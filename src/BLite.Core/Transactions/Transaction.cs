@@ -81,8 +81,6 @@ public sealed class Transaction : ITransaction
 
         _state = TransactionState.Committed;
 
-        OnCommit?.Invoke();
-
         // Publish CDC events after successful commit
         if (_pendingChanges.Count > 0 && _storage.Cdc != null)
         {
@@ -91,6 +89,8 @@ public sealed class Transaction : ITransaction
                 _storage.Cdc.Publish(change);
             }
         }
+
+        OnCommit?.Invoke();
     }
 
     /// <summary>

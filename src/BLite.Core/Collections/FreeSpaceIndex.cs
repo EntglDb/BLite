@@ -203,20 +203,23 @@ internal sealed class FreeSpaceIndex
     /// </summary>
     public bool SnapshotForTransaction(ulong txnId, uint pageId)
     {
-        bool isNew = !_txnSnapshots.TryGetValue(txnId, out var snap);
-        if (isNew)
+        if (!_txnSnapshots.TryGetValue(txnId, out var snap))
         {
             snap = new Dictionary<uint, ushort>();
             _txnSnapshots[txnId] = snap;
+
+            // Only keep the value that existed *before* the first modification in this transaction.
+            snap[pageId] = _freeMap.TryGetValue(pageId, out var fb) ? fb : (ushort)0;
+            return true; // first page for this transaction
         }
 
         // Only keep the value that existed *before* the first modification in this transaction.
-        if (!snap!.ContainsKey(pageId))
+        if (!snap.ContainsKey(pageId))
         {
             snap[pageId] = _freeMap.TryGetValue(pageId, out var fb) ? fb : (ushort)0;
         }
 
-        return isNew;
+        return false;
     }
 
     /// <summary>
