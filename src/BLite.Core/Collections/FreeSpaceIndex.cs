@@ -26,6 +26,11 @@ internal sealed class FreeSpaceIndex
     // (b) verify boundary-bucket entries without disk I/O.
     private readonly Dictionary<uint, ushort> _freeMap;
 
+    // Per-transaction snapshots of pre-modification FSI values.
+    // Keyed by transaction ID; inner dictionary maps page ID → free bytes before first modification.
+    // Used to proactively restore the FSI when a transaction is rolled back.
+    private readonly Dictionary<ulong, Dictionary<uint, ushort>> _txnSnapshots = new();
+
     // Width of each bucket in bytes, computed from the *usable* page space so that
     // bucket boundaries reflect real available room (not header overhead).
     private readonly int _bucketWidth;
@@ -185,6 +190,57 @@ internal sealed class FreeSpaceIndex
 
         return 0;
     }
+
+    // -----------------------------------------------------------------------
+    // Transaction-aware FSI snapshot / restore
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Records the current free-byte count for <paramref name="pageId"/> as the
+    /// pre-modification snapshot for <paramref name="txnId"/> (first call per page wins).
+    /// Returns <c>true</c> when this is the very first page registered for the transaction
+    /// (i.e., the caller should subscribe to that transaction's rollback/commit events).
+    /// </summary>
+    public bool SnapshotForTransaction(ulong txnId, uint pageId)
+    {
+        bool isNew = !_txnSnapshots.TryGetValue(txnId, out var snap);
+        if (isNew)
+        {
+            snap = new Dictionary<uint, ushort>();
+            _txnSnapshots[txnId] = snap;
+        }
+
+        // Only keep the value that existed *before* the first modification in this transaction.
+        if (!snap!.ContainsKey(pageId))
+        {
+            snap[pageId] = _freeMap.TryGetValue(pageId, out var fb) ? fb : (ushort)0;
+        }
+
+        return isNew;
+    }
+
+    /// <summary>
+    /// Restores the FSI to the pre-modification state for all pages touched by
+    /// <paramref name="txnId"/> and discards the snapshot.  Called on transaction rollback
+    /// so that subsequent inserts are not incorrectly routed to pages that are physically
+    /// full (because the WAL has already reverted the physical pages).
+    /// </summary>
+    public void RollbackTransaction(ulong txnId)
+    {
+        if (_txnSnapshots.TryGetValue(txnId, out var snap))
+        {
+            foreach (var (pageId, oldFree) in snap)
+                Update(pageId, oldFree);
+
+            _txnSnapshots.Remove(txnId);
+        }
+    }
+
+    /// <summary>
+    /// Discards the snapshot recorded for <paramref name="txnId"/> after a successful
+    /// commit (the current FSI values are already consistent with the committed state).
+    /// </summary>
+    public void CommitTransaction(ulong txnId) => _txnSnapshots.Remove(txnId);
 
     // -----------------------------------------------------------------------
     // Private helpers

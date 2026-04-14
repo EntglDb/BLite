@@ -81,6 +81,8 @@ public sealed class Transaction : ITransaction
 
         _state = TransactionState.Committed;
 
+        OnCommit?.Invoke();
+
         // Publish CDC events after successful commit
         if (_pendingChanges.Count > 0 && _storage.Cdc != null)
         {
@@ -90,6 +92,11 @@ public sealed class Transaction : ITransaction
             }
         }
     }
+
+    /// <summary>
+    /// Fires after a successful commit. Useful for cleaning up per-transaction in-memory state.
+    /// </summary>
+    public event Action? OnCommit;
 
     /// <summary>
     /// Rolls back the transaction (discards all writes)
