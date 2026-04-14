@@ -1104,7 +1104,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var requiredSpace = data.Length + SlotEntry.Size;
 
             if (freeSpace < requiredSpace)
-                throw new InvalidOperationException($"Not enough space: need {requiredSpace}, have {freeSpace} | PageId={pageId} | SlotCount={header.SlotCount} | Start={header.FreeSpaceStart} | End={header.FreeSpaceEnd} | FSI={(_fsi.TryGetFreeBytes(pageId, out var fb) ? fb.ToString() : "n/a")}");
+            {
+                // Capture the stale FSI value for the diagnostic message before correcting it.
+                // Correcting the FSI here breaks the "poisoned-cache loop" that arises when a
+                // transaction that updated the FSI (e.g. a delete) was subsequently rolled back:
+                // the physical page reverts via WAL but the in-memory FSI is not reverted,
+                // leaving it with an overly optimistic free-space value. Without this correction
+                // every subsequent insert would be routed to the same full page and fail.
+                _fsi.TryGetFreeBytes(pageId, out var staleFsi);
+                _fsi.Update(pageId, freeSpace);
+                throw new InvalidOperationException($"Not enough space: need {requiredSpace}, have {freeSpace} | PageId={pageId} | SlotCount={header.SlotCount} | Start={header.FreeSpaceStart} | End={header.FreeSpaceEnd} | FSI={staleFsi}");
+            }
 
             // Find free slot (reuse deleted or create new)
             ushort slotIndex = FindFreeSlot(buffer, ref header);
