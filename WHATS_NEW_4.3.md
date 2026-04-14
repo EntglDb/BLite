@@ -345,7 +345,6 @@ All existing overloads without the `ITransaction` parameter continue to work unc
 ```csharp
 public interface IDocumentDbContext
 {
-    ITransaction? CurrentTransaction { get; }
     ITransaction BeginTransaction();
     ValueTask<ITransaction> BeginTransactionAsync(CancellationToken ct = default);
     ValueTask SaveChangesAsync(CancellationToken ct = default);

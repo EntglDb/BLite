@@ -224,12 +224,6 @@ public class BLiteEngineAdditionalTests : IDisposable
     // ─── Transaction edge cases ───────────────────────────────────────────────
 
     [Fact]
-    public void CurrentTransaction_InitiallyNull()
-    {
-        Assert.Null(_engine.CurrentTransaction);
-    }
-
-    [Fact]
     public async Task BeginTransaction_ReturnsActiveTransaction()
     {
         var txn = await _engine.BeginTransactionAsync();
@@ -246,22 +240,6 @@ public class BLiteEngineAdditionalTests : IDisposable
         Assert.NotSame(txn1, txn2);
         await txn1.RollbackAsync();
         await txn2.RollbackAsync();
-    }
-
-    [Fact]
-    public async Task CurrentTransaction_AfterCommit_IsNull()
-    {
-        await _engine.BeginTransactionAsync();
-        await _engine.CommitAsync();
-        Assert.Null(_engine.CurrentTransaction);
-    }
-
-    [Fact]
-    public async Task CurrentTransaction_AfterRollback_IsNull()
-    {
-        await _engine.BeginTransactionAsync();
-        _engine.Rollback();
-        Assert.Null(_engine.CurrentTransaction);
     }
 
     [Fact]
