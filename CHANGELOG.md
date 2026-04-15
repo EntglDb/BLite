@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.3.1"></a>
+## [4.3.1](https://www.github.com/EntglDb/BLite/releases/tag/v4.3.1) (2026-04-15)
+
+### Bug Fixes
+
+* correct FSI before throwing "Not enough space" to break poisoned-cache loop ([#59](https://www.github.com/EntglDb/BLite/issues/59)) ([561da42](https://www.github.com/EntglDb/BLite/commit/561da42b4e109fbca23592049dc4576ea7c15539))
+* proactive FSI revert on transaction rollback ([#61](https://www.github.com/EntglDb/BLite/issues/61)) ([957629c](https://www.github.com/EntglDb/BLite/commit/957629c41f20cebe598f1302df8bf9059181d31d))
+
 <a name="4.3.0"></a>
 ## [4.3.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.3.0) (2026-04-11)
 
