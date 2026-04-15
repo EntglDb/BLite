@@ -56,10 +56,4 @@ public interface ITransaction : IDisposable
     /// Useful for restoring in-memory state (like ID maps).
     /// </summary>
     event Action? OnRollback;
-
-    /// <summary>
-    /// Event triggered after the transaction is successfully committed.
-    /// Useful for cleaning up per-transaction in-memory state.
-    /// </summary>
-    event Action? OnCommit;
 }

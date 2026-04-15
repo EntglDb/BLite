@@ -2270,7 +2270,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 // First page tracked for this transaction — subscribe once to restore/cleanup.
                 var txnId = transaction.TransactionId;
                 transaction.OnRollback += () => _fsi.RollbackTransaction(txnId);
-                transaction.OnCommit  += () => _fsi.CommitTransaction(txnId);
+                // OnCommit is only on the concrete Transaction type (not on ITransaction)
+                // to avoid a breaking change to the public interface.
+                if (transaction is Transactions.Transaction concreteTxn)
+                    concreteTxn.OnCommit += () => _fsi.CommitTransaction(txnId);
             }
             _fsi.Update(location.PageId, compactedHeader.AvailableFreeSpace);
 
