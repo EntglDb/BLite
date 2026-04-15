@@ -57,8 +57,10 @@ public class InsertBulkTests : IDisposable
     /// when a transaction that compacted a page is rolled back, the in-memory FSI retains
     /// an inflated free-space value for that page.  Without the fix every subsequent insert
     /// would be routed to the same (now-full) page and throw "Not enough space" indefinitely.
-    /// With the fix <c>InsertIntoPage</c> corrects the FSI before throwing so that the next
-    /// insert attempt can allocate a new page and succeed.
+    /// Regression test for the FSI "poisoned-cache loop" (proactive fix):
+    /// when a transaction that compacted a page is rolled back, <c>RollbackAsync</c>
+    /// now proactively restores the FSI to its pre-modification state so that the
+    /// very first insert after a rollback succeeds without any exception.
     /// </summary>
     [Fact]
     public async Task InsertAsync_SucceedsAfterRollbackInducedFsiDesync()
@@ -84,10 +86,9 @@ public class InsertBulkTests : IDisposable
         Assert.Equal(docCount, await _db.Users.CountAsync());
 
         // Phase 2 – delete inside a transaction, then roll back.
-        // DeleteCore compacts the page and calls _fsi.Update immediately so the FSI
-        // believes there is ample free space on that page.  The rollback discards the
-        // WAL-cache entry so the physical page reverts to the pre-delete state, but the
-        // FSI retains the inflated (stale) value – this is exactly the desync from the bug.
+        // DeleteCore snapshots the pre-modification FSI value for each page before calling
+        // _fsi.Update.  The rollback restores those snapshots proactively, so the FSI
+        // is already accurate by the time RollbackAsync returns.
         var toDelete = users.Take(5).Select(u => u.Id).ToList();
         using var txn = _db.BeginTransaction();
         await _db.Users.DeleteBulkAsync(toDelete, txn);
@@ -96,40 +97,17 @@ public class InsertBulkTests : IDisposable
         // All 300 original documents must still be present after the rollback.
         Assert.Equal(docCount, await _db.Users.CountAsync());
 
-        // Phase 3 – insert after the desync.
-        // FindPageWithSpace will choose the stale page (FSI says ~10 KB free, physical
-        // actually has ~2 004 bytes).  InsertIntoPage reads the real header, detects
-        // the mismatch, and – with the fix – corrects the FSI before throwing.
-        // On the next attempt all pages have an accurate FSI value (<= 2 004 bytes), so
-        // FindPageWithSpace returns 0, AllocateNewDataPage is called, and the insert succeeds.
-        //
-        // Without the fix: FSI is never corrected → every subsequent insert is routed to
-        // the same full page and raises InvalidOperationException indefinitely.
-        const int maxAttempts = 2; // 1 correction attempt + 1 successful attempt
-        bool inserted = false;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        // Phase 3 – insert after the rollback.
+        // With the proactive fix the FSI is already corrected, so FindPageWithSpace
+        // allocates a new page directly and the insert succeeds on the first attempt
+        // without any "Not enough space" exception.
+        await _db.Users.InsertAsync(new User
         {
-            try
-            {
-                await _db.Users.InsertAsync(new User
-                {
-                    Id = ObjectId.NewObjectId(),
-                    Name = largeName,
-                    Age = 0
-                });
-                inserted = true;
-                break;
-            }
-            catch (InvalidOperationException ex) when (ex.Message.StartsWith("Not enough space"))
-            {
-                // Expected on the first attempt when the stale FSI entry is encountered.
-                // The fix must have corrected the FSI; the next attempt will succeed.
-                if (attempt == maxAttempts)
-                    throw; // Still failing after the fix – something is wrong.
-            }
-        }
+            Id = ObjectId.NewObjectId(),
+            Name = largeName,
+            Age = 0
+        });
 
-        Assert.True(inserted, "Insert after rollback-induced FSI desync must succeed within 2 attempts.");
         Assert.Equal(docCount + 1, await _db.Users.CountAsync());
     }
 }

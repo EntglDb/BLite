@@ -89,6 +89,35 @@ public sealed class Transaction : ITransaction
                 _storage.Cdc.Publish(change);
             }
         }
+
+        InvokeOnCommitHandlersSafely();
+    }
+
+    /// <summary>
+    /// Fires after a successful commit. Useful for cleaning up per-transaction in-memory state.
+    /// Each handler is invoked in a best-effort manner so that a failing handler does not
+    /// prevent other handlers from running or make CommitAsync appear to fail.
+    /// </summary>
+    public event Action? OnCommit;
+
+    private void InvokeOnCommitHandlersSafely()
+    {
+        var handlers = OnCommit;
+        if (handlers == null)
+            return;
+
+        foreach (Action handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler();
+            }
+            catch
+            {
+                // Best-effort post-commit cleanup/notification should not make
+                // CommitAsync appear to fail after the transaction was committed.
+            }
+        }
     }
 
     /// <summary>
@@ -105,7 +134,27 @@ public sealed class Transaction : ITransaction
         await _storage.RollbackTransactionAsync(_transactionId);
         _state = TransactionState.Aborted;
         
-        OnRollback?.Invoke();
+        InvokeOnRollbackHandlersSafely();
+    }
+
+    private void InvokeOnRollbackHandlersSafely()
+    {
+        var handlers = OnRollback;
+        if (handlers == null)
+            return;
+
+        foreach (Action handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler();
+            }
+            catch
+            {
+                // Best-effort post-rollback cleanup/notification should not prevent
+                // other handlers from running or mask the original rollback outcome.
+            }
+        }
     }
 
     public void Dispose()

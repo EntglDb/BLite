@@ -2262,8 +2262,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
             _storage.WritePage(location.PageId, transaction.TransactionId, buffer);
 
-            // UpdateAsync free space index with post-compaction free bytes
+            // Update the free space index with post-compaction free bytes.
+            // Snapshot the pre-modification value first so that a rollback can restore it.
             var compactedHeader = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+            if (_fsi.SnapshotForTransaction(transaction.TransactionId, location.PageId))
+            {
+                // First page tracked for this transaction — subscribe once to restore/cleanup.
+                var txnId = transaction.TransactionId;
+                transaction.OnRollback += () => _fsi.RollbackTransaction(txnId);
+                // OnCommit is only on the concrete Transaction type (not on ITransaction)
+                // to avoid a breaking change to the public interface.
+                if (transaction is Transactions.Transaction concreteTxn)
+                    concreteTxn.OnCommit += () => _fsi.CommitTransaction(txnId);
+            }
             _fsi.Update(location.PageId, compactedHeader.AvailableFreeSpace);
 
             // Remove from primary index
