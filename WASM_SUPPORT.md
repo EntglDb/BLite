@@ -98,108 +98,68 @@ protected DocumentDbContext(StorageEngine storage, BLiteKvOptions? kvOptions = n
 
 ---
 
+## Implemented in `BLite.Wasm` Package
+
+### `BLite.Wasm` project (`src/BLite.Wasm/BLite.Wasm.csproj`)
+
+New NuGet package targeting `net10.0-browser` with OPFS and IndexedDB storage backends.
+
+### `OpfsPageStorage` (Issue 1 — `src/BLite.Wasm/Storage/OpfsPageStorage.cs`)
+
+OPFS (Origin Private File System) page storage using `FileSystemSyncAccessHandle` via JS interop:
+- High-performance synchronous I/O from Worker threads
+- Pages stored as sequential regions in a single OPFS file
+- Supported in Chrome 102+, Firefox 111+, Safari 15.2+
+
+### `IndexedDbPageStorage` (Issue 2 — `src/BLite.Wasm/Storage/IndexedDbPageStorage.cs`)
+
+IndexedDB page storage using async IDB transactions via JS interop:
+- Universal browser compatibility (all modern browsers)
+- Each page stored as a keyed blob in an IndexedDB object store
+- Data exchanged as base64 strings for `[JSImport]` async compatibility
+
+### `OpfsWriteAheadLog` (Issue 3 — `src/BLite.Wasm/Transactions/OpfsWriteAheadLog.cs`)
+
+OPFS-backed WAL for crash recovery in browser contexts:
+- Appends records to a dedicated OPFS `.wal` file
+- Binary format matches the file-based `WriteAheadLog`
+- Full `ReadAll()` support for recovery path
+
+### `IndexedDbWriteAheadLog` (Issue 3 — `src/BLite.Wasm/Transactions/IndexedDbWriteAheadLog.cs`)
+
+IndexedDB-backed WAL for crash recovery:
+- Records stored as serialised byte arrays in an IDB object store
+- `TruncateAsync` clears all entries in a single IDB transaction
+
+### `BLiteWasm` factory (Issue 4 — `src/BLite.Wasm/BLiteWasm.cs`)
+
+```csharp
+// Auto-selects OPFS when available, falls back to IndexedDB:
+var engine = await BLiteWasm.CreateAsync("mydb");
+
+// Or pick a specific backend:
+var engine = await BLiteWasm.CreateAsync("mydb", WasmStorageBackend.IndexedDb);
+```
+
+### `AddBLiteWasm` Blazor extension (Issue 4 — `src/BLite.Wasm/BLiteWasmServiceExtensions.cs`)
+
+```csharp
+// In Program.cs of a Blazor WASM app:
+builder.Services.AddBLiteWasm("mydb");
+```
+
+### `BLiteEngine.CreateFromStorage` (updated — `src/BLite.Core/BLiteEngine.cs`)
+
+New public factory method for creating engines from custom storage backends:
+```csharp
+var engine = BLiteEngine.CreateFromStorage(storageEngine, kvOptions);
+```
+
+---
+
 ## Remaining Sub-Issues
 
-The following issues should be tracked separately and implemented in order.
-
----
-
-### Issue 1 — OPFS Storage Backend for WASM (`BLite.Wasm.Opfs`)
-
-**Scope:** Implement `OpfsPageStorage : IPageStorage` that stores pages in the browser's
-[Origin Private File System (OPFS)](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system).
-
-**Motivation:**
-OPFS has the highest throughput of all browser persistence APIs (comparable to native file I/O
-in benchmarks). It is supported in Chrome 102+, Firefox 111+, and Safari 15.2+ in dedicated
-worker contexts.
-
-**Implementation sketch:**
-```csharp
-// src/BLite.Wasm/Storage/OpfsPageStorage.cs
-public sealed class OpfsPageStorage : IPageStorage
-{
-    // Uses JavaScript interop via [JSImport] / [DynamicDependency] to call
-    // the OPFS SyncAccessHandle (synchronous, high-perf) in a Worker thread.
-    // Pages are stored as sequential regions in a single OPFS file.
-    // ReadPage / WritePage map directly to ReadSync / WriteSync on the handle.
-}
-```
-
-**Project:** New `src/BLite.Wasm/BLite.Wasm.csproj`
-- Target: `net8.0-browser` (or `net9.0-browser`)
-- References `BLite.Core`
-- Depends on `Microsoft.AspNetCore.Components.WebAssembly`
-
-**References:**
-- [wa-sqlite OPFS benchmark](https://github.com/rhashimoto/wa-sqlite/tree/master/src/examples#vfs-comparison)
-- [OPFS SyncAccessHandle spec](https://fs.spec.whatwg.org/#api-filesystemsyncaccesshandle)
-
----
-
-### Issue 2 — IndexedDB Storage Backend for WASM (`BLite.Wasm.IndexedDb`)
-
-**Scope:** Implement `IndexedDbPageStorage : IPageStorage` backed by the browser's
-[IndexedDB API](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API).
-
-**Motivation:**
-IndexedDB is universally supported (all modern browsers, including Safari 7+) and persists
-across sessions. Throughput is lower than OPFS but it is the safest choice for maximum
-compatibility, especially in main-thread Blazor WASM contexts where OPFS Workers are not
-readily available.
-
-**Implementation sketch:**
-```csharp
-// Pages stored as Uint8Array blobs keyed by (databaseName, pageId)
-// in an IndexedDB object store.
-// ReadPageAsync / WritePageAsync use [JSImport] to call the browser IDB API.
-public sealed class IndexedDbPageStorage : IPageStorage
-{
-    // Read/write are async; the synchronous ReadPage/WritePage overloads
-    // block using a TaskCompletionSource pattern (acceptable in WASM
-    // where the main thread uses cooperative scheduling).
-}
-```
-
-**References:**
-- [MDN IndexedDB Guide](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB)
-
----
-
-### Issue 3 — WASM-targeted WAL: `OpfsWriteAheadLog` / `IndexedDbWriteAheadLog`
-
-**Scope:** WAL implementations that persist records to OPFS or IndexedDB, enabling crash
-recovery in browser contexts.
-
-**Motivation:**
-`MemoryWriteAheadLog` (added in this PR) has no persistence — if the browser tab or Worker
-crashes, un-checkpointed data is lost. A browser-persistent WAL closes that gap.
-
-**Implementation sketch:**
-- `OpfsWriteAheadLog : IWriteAheadLog` — appends records to an OPFS file using
-  `FileSystemSyncAccessHandle.write()`.
-- `IndexedDbWriteAheadLog : IWriteAheadLog` — stores WAL records as IndexedDB
-  key/value entries; `TruncateAsync` deletes all entries in a single IDB transaction.
-
----
-
-### Issue 4 — `BLite.Wasm` NuGet Package
-
-**Scope:** Ship a purpose-built `BLite.Wasm` NuGet package targeting `net8.0-browser`
-(or `net9.0-browser`) that bundles:
-- `OpfsPageStorage` (primary recommendation)
-- `IndexedDbPageStorage` (compatibility fallback)
-- `OpfsWriteAheadLog` / `IndexedDbWriteAheadLog`
-- Convenience factory methods:
-  ```csharp
-  // Auto-selects OPFS when available, falls back to IndexedDB
-  var engine = await BLiteWasm.CreateAsync("mydb");
-  ```
-- A Blazor service extension:
-  ```csharp
-  // In Program.cs of a Blazor WASM app:
-  builder.Services.AddBLiteWasm("mydb");
-  ```
+The following issue should be tracked separately.
 
 ---
 
@@ -217,10 +177,10 @@ crashes, un-checkpointed data is lost. A browser-persistent WAL closes that gap.
 
 ```
 [Done]  Issue 0  Storage abstraction (IPageStorage, IWriteAheadLog, MemoryPageStorage, MemoryWriteAheadLog)
-[ ]     Issue 3  Browser WAL implementations (OPFS / IndexedDB)
-[ ]     Issue 1  OPFS page storage backend
-[ ]     Issue 2  IndexedDB page storage backend (compatibility fallback)
-[ ]     Issue 4  BLite.Wasm NuGet package + factory API
+[Done]  Issue 3  Browser WAL implementations (OPFS / IndexedDB)
+[Done]  Issue 1  OPFS page storage backend
+[Done]  Issue 2  IndexedDB page storage backend (compatibility fallback)
+[Done]  Issue 4  BLite.Wasm NuGet package + factory API
 [ ]     Issue 5  Blazor WASM sample + docs
 ```
 

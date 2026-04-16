@@ -110,6 +110,26 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         return new BLiteEngine(storageEngine, kvOptions);
     }
 
+    /// <summary>
+    /// Creates a <see cref="BLiteEngine"/> from a pre-built <see cref="StorageEngine"/>.
+    /// <para>
+    /// This factory is intended for advanced scenarios (such as WASM browser backends)
+    /// where the storage engine is assembled externally from custom
+    /// <see cref="IPageStorage"/> and <see cref="IWriteAheadLog"/> implementations.
+    /// </para>
+    /// <para>
+    /// The caller is responsible for opening the page storage and WAL before
+    /// constructing the <see cref="StorageEngine"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="storage">A fully initialised <see cref="StorageEngine"/>.</param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    /// <returns>A new <see cref="BLiteEngine"/> backed by the supplied storage engine.</returns>
+    public static BLiteEngine CreateFromStorage(StorageEngine storage, BLiteKvOptions? kvOptions = null)
+    {
+        return new BLiteEngine(storage, kvOptions);
+    }
+
     #endregion
 
     #region Session Management
