@@ -29,7 +29,7 @@ public sealed class IndexedDbPageStorage : IPageStorage
 {
     private readonly string _dbName;
     private readonly int _pageSize;
-    private readonly Stack<uint> _freeList = new();
+    private readonly Stack<uint> _freeList = new(); // Guarded by _allocationLock for all access.
     private readonly object _allocationLock = new();
     private uint _nextPageId;
     private bool _opened;

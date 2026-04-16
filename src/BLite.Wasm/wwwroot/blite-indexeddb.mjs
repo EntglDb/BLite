@@ -12,11 +12,13 @@ let _databases = new Map(); // dbName -> IDBDatabase
 // ─── Base64 helpers ──────────────────────────────────────────────────────
 
 function toBase64(uint8Array) {
-    let binary = "";
-    for (let i = 0; i < uint8Array.length; i++) {
-        binary += String.fromCharCode(uint8Array[i]);
+    // Use chunked String.fromCharCode to avoid stack overflow on large arrays.
+    const CHUNK_SIZE = 8192;
+    const chunks = [];
+    for (let i = 0; i < uint8Array.length; i += CHUNK_SIZE) {
+        chunks.push(String.fromCharCode.apply(null, uint8Array.subarray(i, i + CHUNK_SIZE)));
     }
-    return btoa(binary);
+    return btoa(chunks.join(""));
 }
 
 function fromBase64(base64) {
