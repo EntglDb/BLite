@@ -72,6 +72,44 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _kvStore = new BLiteKvStore(_storage, kvOptions);
     }
 
+    /// <summary>
+    /// Internal constructor used by <see cref="CreateInMemory"/> and other factory methods
+    /// that supply a pre-built <see cref="StorageEngine"/>.
+    /// </summary>
+    internal BLiteEngine(StorageEngine storage, BLiteKvOptions? kvOptions = null)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    /// <summary>
+    /// Creates a fully in-memory <see cref="BLiteEngine"/> with no file-system dependencies.
+    /// All data is stored in process memory and is lost when the engine is disposed or the
+    /// process exits.
+    /// <para>
+    /// This mode is ideal for:
+    /// <list type="bullet">
+    ///   <item>Unit and integration tests that should not touch the file system.</item>
+    ///   <item>Ephemeral caches or temporary working sets.</item>
+    ///   <item>Browser-hosted .NET WASM applications, as a foundation before a full
+    ///         IndexedDB/OPFS backend is available.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    /// <param name="pageSize">
+    /// Page size in bytes. Defaults to <see cref="PageFileConfig.Default"/> (16 KB).
+    /// Use <see cref="PageFileConfig.Small"/> (8 KB) for workloads with many small documents.
+    /// </param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    public static BLiteEngine CreateInMemory(int pageSize = 16384, BLiteKvOptions? kvOptions = null)
+    {
+        var pageStorage = new MemoryPageStorage(pageSize);
+        pageStorage.Open();
+        var wal = new MemoryWriteAheadLog();
+        var storageEngine = new StorageEngine(pageStorage, wal);
+        return new BLiteEngine(storageEngine, kvOptions);
+    }
+
     #endregion
 
     #region Session Management

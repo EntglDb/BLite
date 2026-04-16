@@ -75,12 +75,12 @@ public sealed partial class StorageEngine
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Returns the <see cref="PageFile"/> that owns the given (possibly encoded) page ID
-    /// and outputs the physical (file-local) page number to pass to that file.
+    /// Returns the <see cref="IPageStorage"/> that owns the given (possibly encoded) page ID
+    /// and outputs the physical (file-local) page number to pass to that storage backend.
     /// Routing is determined entirely from the high bits of <paramref name="pageId"/>:
     /// no in-memory dictionaries are required and routing survives engine restarts.
     /// </summary>
-    private PageFile GetPageFile(uint pageId, out uint physicalPageId)
+    private IPageStorage GetPageFile(uint pageId, out uint physicalPageId)
     {
         var fileTag = pageId & SubFileTypeMask;
 
@@ -108,13 +108,13 @@ public sealed partial class StorageEngine
         => (_collectionSlotToName != null && _collectionSlotToName.TryGetValue(slot, out var name))
             ? name : null;
 
-    private PageFile GetOrCreateCollectionFile(string collectionName)
+    private IPageStorage GetOrCreateCollectionFile(string collectionName)
     {
         if (_collectionFiles == null)
             return _pageFile;
 
         return _collectionFiles.GetOrAdd(collectionName, name =>
-            new Lazy<PageFile>(() =>
+            new Lazy<IPageStorage>(() =>
             {
                 var filePath = CollectionFilePath(name);
                 var pf = new PageFile(filePath, AsStandaloneConfig(_config));

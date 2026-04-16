@@ -84,6 +84,34 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     }
 
     /// <summary>
+    /// Creates a database context backed by a pre-built <see cref="StorageEngine"/>.
+    /// Use this constructor to supply a custom backend, such as
+    /// <see cref="MemoryPageStorage"/> for in-memory or WASM scenarios.
+    /// <para>
+    /// Example — in-memory context:
+    /// <code>
+    /// var pageStorage = new MemoryPageStorage(16384);
+    /// pageStorage.Open();
+    /// var wal = new MemoryWriteAheadLog();
+    /// var engine = new StorageEngine(pageStorage, wal);
+    /// var ctx = new MyDbContext(engine);
+    /// </code>
+    /// </para>
+    /// </summary>
+    protected DocumentDbContext(StorageEngine storage, BLiteKvOptions? kvOptions = null)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _cdc = new CDC.ChangeStreamDispatcher();
+        _storage.RegisterCdc(_cdc);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+
+        var modelBuilder = new ModelBuilder();
+        OnModelCreating(modelBuilder);
+        _model = modelBuilder.GetEntityBuilders();
+        InitializeCollections();
+    }
+
+    /// <summary>
     /// Provides access to the embedded Key-Value store that shares the same database file.
     /// </summary>
     public IBLiteKvStore KvStore
