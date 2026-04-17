@@ -312,4 +312,25 @@ public class InMemoryStorageTests
         var after = Directory.GetFiles(tempDir, "*.db").Length;
         Assert.Equal(before, after);
     }
+
+    // ─── BLiteEngine.CreateFromStorage integration tests ─────────────────────
+
+    [Fact]
+    public async Task CreateFromStorage_InsertAndFind_Works()
+    {
+        var pageStorage = new MemoryPageStorage(16384);
+        pageStorage.Open();
+        var wal = new MemoryWriteAheadLog();
+        var storageEngine = new BLite.Core.Storage.StorageEngine(pageStorage, wal);
+
+        using var engine = BLiteEngine.CreateFromStorage(storageEngine);
+        var col = engine.GetOrCreateCollection("items");
+
+        var doc = col.CreateDocument(["_id", "key"], b => b.AddString("key", "value"));
+        await col.InsertAsync(doc);
+        await engine.CommitAsync();
+
+        var count = await col.CountAsync();
+        Assert.Equal(1, count);
+    }
 }
