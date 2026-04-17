@@ -7,11 +7,15 @@
     <File Path="README.md" />
     <File Path="RFC.md" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/BLite.BlazorWasm/BLite.BlazorWasm.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/BLite.Bson/BLite.Bson.csproj" />
     <Project Path="src/BLite.Caching/BLite.Caching.csproj" />
     <Project Path="src/BLite.Core/BLite.Core.csproj" />
     <Project Path="src/BLite.SourceGenerators/BLite.SourceGenerators.csproj" />
+    <Project Path="src/BLite.Wasm/BLite.Wasm.csproj" />
     <Project Path="src/BLite/BLite.csproj" />
   </Folder>
   <Folder Name="/tests/">

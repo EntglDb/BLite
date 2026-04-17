@@ -72,6 +72,64 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _kvStore = new BLiteKvStore(_storage, kvOptions);
     }
 
+    /// <summary>
+    /// Internal constructor used by <see cref="CreateInMemory"/> and other factory methods
+    /// that supply a pre-built <see cref="StorageEngine"/>.
+    /// </summary>
+    internal BLiteEngine(StorageEngine storage, BLiteKvOptions? kvOptions = null)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    /// <summary>
+    /// Creates a fully in-memory <see cref="BLiteEngine"/> with no file-system dependencies.
+    /// All data is stored in process memory and is lost when the engine is disposed or the
+    /// process exits.
+    /// <para>
+    /// This mode is ideal for:
+    /// <list type="bullet">
+    ///   <item>Unit and integration tests that should not touch the file system.</item>
+    ///   <item>Ephemeral caches or temporary working sets.</item>
+    ///   <item>Browser-hosted .NET WASM applications, as a foundation before a full
+    ///         IndexedDB/OPFS backend is available.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    /// <param name="pageSize">
+    /// Page size in bytes. Defaults to <see cref="PageFileConfig.Default"/> (16 KB).
+    /// Use <see cref="PageFileConfig.Small"/> (8 KB) for workloads with many small documents.
+    /// </param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    public static BLiteEngine CreateInMemory(int pageSize = 16384, BLiteKvOptions? kvOptions = null)
+    {
+        var pageStorage = new MemoryPageStorage(pageSize);
+        pageStorage.Open();
+        var wal = new MemoryWriteAheadLog();
+        var storageEngine = new StorageEngine(pageStorage, wal);
+        return new BLiteEngine(storageEngine, kvOptions);
+    }
+
+    /// <summary>
+    /// Creates a <see cref="BLiteEngine"/> from a pre-built <see cref="StorageEngine"/>.
+    /// <para>
+    /// This factory is intended for advanced scenarios (such as WASM browser backends)
+    /// where the storage engine is assembled externally from custom
+    /// <see cref="IPageStorage"/> and <see cref="IWriteAheadLog"/> implementations.
+    /// </para>
+    /// <para>
+    /// The caller is responsible for opening the page storage and WAL before
+    /// constructing the <see cref="StorageEngine"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="storage">A fully initialised <see cref="StorageEngine"/>.</param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    /// <returns>A new <see cref="BLiteEngine"/> backed by the supplied storage engine.</returns>
+    public static BLiteEngine CreateFromStorage(StorageEngine storage, BLiteKvOptions? kvOptions = null)
+    {
+        return new BLiteEngine(storage, kvOptions);
+    }
+
     #endregion
 
     #region Session Management

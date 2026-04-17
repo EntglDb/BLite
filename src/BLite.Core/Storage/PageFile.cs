@@ -187,8 +187,9 @@ public readonly struct PageFileConfig
 /// <summary>
 /// Page-based file storage with memory-mapped I/O.
 /// Manages fixed-size pages for efficient storage and retrieval.
+/// Implements <see cref="IPageStorage"/> — the pluggable storage backend abstraction.
 /// </summary>
-public sealed class PageFile : IDisposable
+public sealed class PageFile : IPageStorage
 {
     private readonly string _filePath;
     private readonly PageFileConfig _config;

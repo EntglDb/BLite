@@ -16,9 +16,9 @@ namespace BLite.Core.Storage;
 /// </summary>
 public sealed partial class StorageEngine : IDisposable
 {
-    private readonly PageFile _pageFile;                // data: Data, Overflow, Collection, KV, Dictionary, TimeSeries, Metadata
-    private readonly PageFile? _indexFile;              // indices: Index, Vector, Spatial (null = uses _pageFile)
-    private readonly WriteAheadLog _wal;
+    private readonly IPageStorage _pageFile;                // data: Data, Overflow, Collection, KV, Dictionary, TimeSeries, Metadata
+    private readonly IPageStorage? _indexFile;              // indices: Index, Vector, Spatial (null = uses _pageFile)
+    private readonly IWriteAheadLog _wal;
     private CDC.ChangeStreamDispatcher? _cdc;
     private volatile Metrics.MetricsDispatcher? _metrics;
     
@@ -30,11 +30,11 @@ public sealed partial class StorageEngine : IDisposable
     // Lazily populated on first read after commit
     private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
     
-    // Collection-per-file: collectionName → PageFile dedicated
+    // Collection-per-file: collectionName → IPageStorage dedicated
     // Null if CollectionDataDirectory not configured (embedded mode, single file)
-    // Lazy<PageFile> ensures the file-open factory runs exactly once per collection,
+    // Lazy<IPageStorage> ensures the file-open factory runs exactly once per collection,
     // even when ConcurrentDictionary.GetOrAdd is called concurrently for the same key.
-    private readonly ConcurrentDictionary<string, Lazy<PageFile>>? _collectionFiles;
+    private readonly ConcurrentDictionary<string, Lazy<IPageStorage>>? _collectionFiles;
 
     // Collection slot registry — only populated in multi-file mode
     // Maps collection name → slot index (0-63) and slot → name
@@ -115,7 +115,7 @@ public sealed partial class StorageEngine : IDisposable
         if (config.CollectionDataDirectory != null)
         {
             Directory.CreateDirectory(config.CollectionDataDirectory);
-            _collectionFiles = new ConcurrentDictionary<string, Lazy<PageFile>>(StringComparer.OrdinalIgnoreCase);
+            _collectionFiles = new ConcurrentDictionary<string, Lazy<IPageStorage>>(StringComparer.OrdinalIgnoreCase);
             _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             _collectionSlotToName = new Dictionary<int, string>();
             _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
@@ -155,6 +155,51 @@ public sealed partial class StorageEngine : IDisposable
         // Create and start checkpoint manager
         // _checkpointManager = new Transactions.CheckpointManager(this);
         // _checkpointManager.StartAutoCheckpoint();
+    }
+
+    /// <summary>
+    /// Creates a storage engine backed by pre-built <see cref="IPageStorage"/> and
+    /// <see cref="IWriteAheadLog"/> instances. Use this constructor when you need a
+    /// non-file-system backend, such as <see cref="MemoryPageStorage"/> for in-memory
+    /// or WASM use cases.
+    /// <para>
+    /// The supplied <paramref name="pageStorage"/> must already be opened
+    /// (i.e. <c>Open()</c> called) before being passed here.
+    /// </para>
+    /// <para>
+    /// Multi-file routing (separate index file, per-collection files) is not available
+    /// in this mode — all pages share the single <paramref name="pageStorage"/> instance.
+    /// </para>
+    /// </summary>
+    /// <param name="pageStorage">Page storage backend (already opened).</param>
+    /// <param name="wal">Write-ahead log implementation.</param>
+    public StorageEngine(IPageStorage pageStorage, IWriteAheadLog wal)
+    {
+        _config = PageFileConfig.Default;
+        _pageFile = pageStorage ?? throw new ArgumentNullException(nameof(pageStorage));
+        _wal = wal ?? throw new ArgumentNullException(nameof(wal));
+
+        _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
+        _walIndex = new ConcurrentDictionary<uint, byte[]>();
+        _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
+        _nextTransactionId = 0;
+
+        _writerGate = null; // No admission control needed for single-backend mode.
+
+        _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+        _writerTask = Task.Run(() => GroupCommitWriterAsync(_writerCts.Token));
+
+        // No WAL recovery: the caller provides a fresh backend.
+        // For MemoryWriteAheadLog this is always correct; for a custom persistent WAL
+        // the caller is responsible for replaying WAL before constructing the engine.
+
+        InitializeDictionary();
+        InitializeKv();
     }
 
     /// <summary>

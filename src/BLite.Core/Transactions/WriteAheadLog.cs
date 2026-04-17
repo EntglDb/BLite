@@ -15,8 +15,9 @@ public enum WalRecordType : byte
 /// <summary>
 /// Write-Ahead Log (WAL) for durability and recovery.
 /// All changes are logged before being applied.
+/// Implements <see cref="IWriteAheadLog"/> — the pluggable WAL abstraction.
 /// </summary>
-public sealed class WriteAheadLog : IDisposable
+public sealed class WriteAheadLog : IWriteAheadLog
 {
     private readonly string _walPath;
     private FileStream? _walStream;
