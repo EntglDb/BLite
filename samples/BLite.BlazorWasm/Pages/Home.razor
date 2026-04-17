@@ -1,0 +1,40 @@
+@page "/"
+
+<PageTitle>BLite WASM Demo</PageTitle>
+
+<h1>BLite WASM Demo</h1>
+
+<p>
+    This sample application demonstrates <strong>BLite</strong> running entirely in the browser
+    via .NET WebAssembly. All data is stored locally using
+    <a href="https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API" target="_blank" rel="noopener">IndexedDB</a>
+    or
+    <a href="https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system" target="_blank" rel="noopener">OPFS</a>
+    — no server required.
+</p>
+
+<p>
+    Navigate to the <a href="/counter">Counter</a> page to try the persistent counter.
+    Increment or decrement the counter, then reload the page — the value is restored from
+    the BLite database stored in your browser.
+</p>
+
+<h2>What is BLite?</h2>
+<p>
+    BLite is an embedded, document-oriented database for .NET. In browser contexts it uses
+    <code>BLite.Wasm</code>, which provides OPFS and IndexedDB storage backends through
+    <code>[JSImport]</code> interop.
+</p>
+
+<h2>Quick-start</h2>
+<pre><code>// In Program.cs of a Blazor WASM app:
+builder.Services.AddBLiteWasm("my-database");
+
+// Anywhere you need the engine:
+@@inject BLiteEngine Engine
+
+var doc = Engine.CreateDocument(["name", "score"],
+    b =&gt; b.AddString("name", "Alice").AddInt32("score", 42));
+
+await Engine.InsertAsync("players", doc);
+</code></pre>

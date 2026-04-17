@@ -1,0 +1,117 @@
+@page "/counter"
+@using BLite.BlazorWasm.Services
+@using BLite.Wasm
+@inject CounterStore Store
+
+<PageTitle>BLite Counter</PageTitle>
+
+<h1>BLite Persistent Counter</h1>
+
+@if (!Store.IsInitialized && Store.Error == null)
+{
+    <p class="text-muted"><em>Initialising BLite storage…</em></p>
+}
+else if (Store.Error != null)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>Error:</strong> @Store.Error
+    </div>
+}
+else
+{
+    <div class="counter-card card p-4 mb-4 shadow-sm">
+        <p class="display-4 text-center mb-4" role="status" aria-live="polite">
+            @Store.Value
+        </p>
+
+        <div class="d-flex justify-content-center gap-3 mb-3">
+            <button class="btn btn-outline-secondary btn-lg px-4"
+                    @onclick="DecrementAsync"
+                    disabled="@_busy"
+                    aria-label="Decrement">
+                −
+            </button>
+            <button class="btn btn-outline-danger btn-sm px-3 align-self-center"
+                    @onclick="ResetAsync"
+                    disabled="@_busy"
+                    aria-label="Reset to zero">
+                Reset
+            </button>
+            <button class="btn btn-primary btn-lg px-4"
+                    @onclick="IncrementAsync"
+                    disabled="@_busy"
+                    aria-label="Increment">
+                +
+            </button>
+        </div>
+
+        <div class="text-center text-muted small">
+            @if (Store.LastSaved.HasValue)
+            {
+                <span>💾 Last saved: @Store.LastSaved.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            }
+        </div>
+    </div>
+
+    <div class="info-card card p-3 text-muted small">
+        <dl class="row mb-0">
+            <dt class="col-sm-4">Storage backend</dt>
+            <dd class="col-sm-8">@BackendLabel(Store.Backend)</dd>
+            <dt class="col-sm-4">Persistence</dt>
+            <dd class="col-sm-8">
+                @if (Store.Backend == WasmStorageBackend.InMemory)
+                {
+                    <span class="text-warning">⚠ In-memory only — data is lost on page reload.</span>
+                }
+                else
+                {
+                    <span class="text-success">✅ Data survives page reloads.</span>
+                }
+            </dd>
+            <dt class="col-sm-4">How it works</dt>
+            <dd class="col-sm-8">
+                Each button click writes the new counter value to BLite via
+                <strong>@Store.Backend</strong>. Reload this page — the count is restored
+                from the database.
+            </dd>
+        </dl>
+    </div>
+}
+
+@code {
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Store.InitializeAsync();
+    }
+
+    private async Task IncrementAsync()
+    {
+        _busy = true;
+        await Store.IncrementAsync();
+        _busy = false;
+    }
+
+    private async Task DecrementAsync()
+    {
+        _busy = true;
+        await Store.DecrementAsync();
+        _busy = false;
+    }
+
+    private async Task ResetAsync()
+    {
+        _busy = true;
+        await Store.ResetAsync();
+        _busy = false;
+    }
+
+    private static string BackendLabel(WasmStorageBackend backend) => backend switch
+    {
+        WasmStorageBackend.Opfs     => "⚡ OPFS (Origin Private File System)",
+        WasmStorageBackend.IndexedDb => "🗄 IndexedDB",
+        WasmStorageBackend.InMemory  => "🧠 In-memory",
+        _                            => backend.ToString()
+    };
+}
