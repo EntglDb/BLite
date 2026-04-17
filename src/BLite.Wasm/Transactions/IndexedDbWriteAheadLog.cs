@@ -11,13 +11,10 @@ namespace BLite.Wasm.Transactions;
 /// <summary>
 /// IndexedDB-backed Write-Ahead Log for browser WASM.
 /// <para>
-/// WAL records are stored as serialised byte arrays (base64-encoded for JS interop)
-/// in an IndexedDB object store with auto-increment keys. This enables crash recovery
-/// in browser contexts — if the tab reloads, committed records can be replayed from
-/// IndexedDB.
-/// </para>
-/// <para>
-/// <c>TruncateAsync</c> clears all WAL entries in a single IndexedDB transaction.
+/// WAL records are kept in an in-memory list so that <see cref="ReadAll"/> and
+/// <see cref="GetCurrentSize"/> never block on async JavaScript interop (which
+/// would deadlock the single-threaded WASM runtime). Writes are persisted to
+/// IndexedDB asynchronously so data survives page reloads.
 /// </para>
 /// </summary>
 public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
@@ -25,6 +22,8 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
     private readonly string _dbName;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly int _writeTimeoutMs;
+    private readonly List<WalRecord> _records = new();
+    private long _totalSize;
     private bool _opened;
     private bool _disposed;
 
@@ -44,13 +43,27 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
     }
 
     /// <summary>
-    /// Opens the IndexedDB WAL store. Must be called once before any I/O.
+    /// Opens the IndexedDB WAL store and loads existing records into memory.
+    /// Must be called once before any I/O.
     /// </summary>
     public async Task OpenAsync()
     {
         if (_opened) return;
         await IndexedDbInterop.EnsureLoadedAsync();
         await IndexedDbInterop.WalOpenAsync(_dbName);
+
+        // Pre-load existing records so ReadAll()/GetCurrentSize() are synchronous.
+        var json = await IndexedDbInterop.WalReadAllAsync(_dbName);
+        if (!string.IsNullOrEmpty(json))
+        {
+            var base64Records = JsonSerializer.Deserialize<string[]>(json);
+            if (base64Records != null)
+            {
+                foreach (var base64 in base64Records)
+                    ParseAndAddRecord(base64);
+            }
+        }
+
         _opened = true;
     }
 
@@ -89,6 +102,18 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
             afterImage.Span.CopyTo(buffer.AsSpan(17));
 
             await IndexedDbInterop.WalAppendAsync(_dbName, Convert.ToBase64String(buffer));
+
+            // Keep in-memory copy.
+            var afterCopy = new byte[afterImage.Length];
+            afterImage.Span.CopyTo(afterCopy);
+            _records.Add(new WalRecord
+            {
+                Type = WalRecordType.Write,
+                TransactionId = transactionId,
+                PageId = pageId,
+                AfterImage = afterCopy
+            });
+            _totalSize += totalSize;
         }
         finally
         {
@@ -100,23 +125,7 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
     public Task FlushAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     /// <inheritdoc/>
-    public long GetCurrentSize()
-    {
-        // SemaphoreSlim.Wait(int) is not supported in browser WASM;
-        // use async version with cooperative scheduling.
-        if (!_lock.WaitAsync(_writeTimeoutMs).GetAwaiter().GetResult())
-            throw new TimeoutException("Timed out acquiring IndexedDbWriteAheadLog lock.");
-        try
-        {
-            return _opened
-                ? (long)IndexedDbInterop.WalGetSizeAsync(_dbName).GetAwaiter().GetResult()
-                : 0;
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
+    public long GetCurrentSize() => _totalSize;
 
     /// <inheritdoc/>
     public async Task TruncateAsync(CancellationToken ct = default)
@@ -127,6 +136,8 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
         {
             if (_opened)
                 await IndexedDbInterop.WalClearAsync(_dbName);
+            _records.Clear();
+            _totalSize = 0;
         }
         finally
         {
@@ -135,20 +146,7 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
     }
 
     /// <inheritdoc/>
-    public List<WalRecord> ReadAll()
-    {
-        // SemaphoreSlim.Wait(int) is not supported in browser WASM.
-        if (!_lock.WaitAsync(_writeTimeoutMs).GetAwaiter().GetResult())
-            throw new TimeoutException("Timed out acquiring IndexedDbWriteAheadLog lock.");
-        try
-        {
-            return ReadAllInternal();
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
+    public List<WalRecord> ReadAll() => new(_records);
 
     /// <inheritdoc/>
     public void Dispose()
@@ -172,6 +170,10 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
             BitConverter.TryWriteBytes(buffer.AsSpan(9, 8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
             await IndexedDbInterop.WalAppendAsync(_dbName, Convert.ToBase64String(buffer));
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _records.Add(new WalRecord { Type = type, TransactionId = transactionId, Timestamp = timestamp });
+            _totalSize += 17;
         }
         finally
         {
@@ -179,62 +181,49 @@ public sealed class IndexedDbWriteAheadLog : IWriteAheadLog
         }
     }
 
-    private List<WalRecord> ReadAllInternal()
+    private void ParseAndAddRecord(string? base64)
     {
-        var records = new List<WalRecord>();
-        if (!_opened) return records;
+        if (string.IsNullOrEmpty(base64)) return;
 
-        // The JS side returns a JSON array of base64 strings: ["AQAA...","AgAA..."]
-        var json = IndexedDbInterop.WalReadAllAsync(_dbName).GetAwaiter().GetResult();
-        if (string.IsNullOrEmpty(json)) return records;
+        var buffer = Convert.FromBase64String(base64);
+        if (buffer.Length < 1) return;
 
-        var base64Records = JsonSerializer.Deserialize<string[]>(json);
-        if (base64Records == null) return records;
+        var typeByte = buffer[0];
+        if (typeByte == 0 || !Enum.IsDefined(typeof(WalRecordType), (WalRecordType)typeByte))
+            return;
 
-        foreach (var base64 in base64Records)
+        var type = (WalRecordType)typeByte;
+
+        switch (type)
         {
-            if (string.IsNullOrEmpty(base64)) continue;
+            case WalRecordType.Begin:
+            case WalRecordType.Commit:
+            case WalRecordType.Abort:
+                if (buffer.Length < 17) return;
+                var txnId = BitConverter.ToUInt64(buffer, 1);
+                var timestamp = BitConverter.ToInt64(buffer, 9);
+                _records.Add(new WalRecord { Type = type, TransactionId = txnId, Timestamp = timestamp });
+                _totalSize += buffer.Length;
+                break;
 
-            var buffer = Convert.FromBase64String(base64);
-            if (buffer.Length < 1) continue;
-
-            var typeByte = buffer[0];
-            if (typeByte == 0 || !Enum.IsDefined(typeof(WalRecordType), (WalRecordType)typeByte))
-                continue;
-
-            var type = (WalRecordType)typeByte;
-
-            switch (type)
-            {
-                case WalRecordType.Begin:
-                case WalRecordType.Commit:
-                case WalRecordType.Abort:
-                    if (buffer.Length < 17) continue;
-                    var txnId = BitConverter.ToUInt64(buffer, 1);
-                    var timestamp = BitConverter.ToInt64(buffer, 9);
-                    records.Add(new WalRecord { Type = type, TransactionId = txnId, Timestamp = timestamp });
-                    break;
-
-                case WalRecordType.Write:
-                    if (buffer.Length < 17) continue;
-                    txnId = BitConverter.ToUInt64(buffer, 1);
-                    var pageId = BitConverter.ToUInt32(buffer, 9);
-                    var afterSize = BitConverter.ToInt32(buffer, 13);
-                    if (afterSize < 0 || afterSize > 100 * 1024 * 1024 || buffer.Length < 17 + afterSize)
-                        continue;
-                    var afterImage = new byte[afterSize];
-                    Buffer.BlockCopy(buffer, 17, afterImage, 0, afterSize);
-                    records.Add(new WalRecord
-                    {
-                        Type = type,
-                        TransactionId = txnId,
-                        PageId = pageId,
-                        AfterImage = afterImage
-                    });
-                    break;
-            }
+            case WalRecordType.Write:
+                if (buffer.Length < 17) return;
+                txnId = BitConverter.ToUInt64(buffer, 1);
+                var pageId = BitConverter.ToUInt32(buffer, 9);
+                var afterSize = BitConverter.ToInt32(buffer, 13);
+                if (afterSize < 0 || afterSize > 100 * 1024 * 1024 || buffer.Length < 17 + afterSize)
+                    return;
+                var afterImage = new byte[afterSize];
+                Buffer.BlockCopy(buffer, 17, afterImage, 0, afterSize);
+                _records.Add(new WalRecord
+                {
+                    Type = type,
+                    TransactionId = txnId,
+                    PageId = pageId,
+                    AfterImage = afterImage
+                });
+                _totalSize += buffer.Length;
+                break;
         }
-
-        return records;
     }
 }

@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "BLite.BlazorWasm": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:63173;http://localhost:63174"
+    }
+  }
+}

@@ -100,10 +100,18 @@ export function opfsClose(dbName) {
 
 /**
  * Checks whether the OPFS SyncAccessHandle API is available.
+ * Returns true only when running in a context that supports
+ * createSyncAccessHandle (typically a dedicated Web Worker).
  * @returns {boolean}
  */
 export function opfsIsAvailable() {
+    // createSyncAccessHandle is only usable inside a dedicated Web Worker.
+    // The API may exist on FileSystemFileHandle.prototype even on the main
+    // thread (Chrome), but calling it outside a Worker throws TypeError.
+    if (typeof globalThis.DedicatedWorkerGlobalScope === "undefined") return false;
     return typeof navigator !== "undefined"
         && typeof navigator.storage !== "undefined"
-        && typeof navigator.storage.getDirectory === "function";
+        && typeof navigator.storage.getDirectory === "function"
+        && typeof FileSystemFileHandle !== "undefined"
+        && typeof FileSystemFileHandle.prototype.createSyncAccessHandle === "function";
 }

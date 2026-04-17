@@ -47,12 +47,13 @@ public sealed partial class StorageEngine
             foreach (var kvp in snapshot)
                 GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
 
-            _pageFile.Flush();
-            _indexFile?.Flush();
+            await _pageFile.FlushAsync(ct);
+            if (_indexFile != null)
+                await _indexFile.FlushAsync(ct);
             if (_collectionFiles != null)
             {
                 foreach (var lazy in _collectionFiles.Values)
-                    if (lazy.IsValueCreated) lazy.Value.Flush();
+                    if (lazy.IsValueCreated) await lazy.Value.FlushAsync(ct);
             }
 
             // Drain _walIndex entries that we successfully flushed to disk.

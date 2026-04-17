@@ -3,9 +3,9 @@
 // All operations are async (IndexedDB has no synchronous API).
 // Binary data is exchanged as base64 strings for JSImport compatibility.
 
-const DB_VERSION = 1;
 const PAGES_STORE = "pages";
 const META_STORE = "meta";
+const WAL_STORE_NAME = "wal";
 
 let _databases = new Map(); // dbName -> IDBDatabase
 
@@ -37,7 +37,9 @@ function fromBase64(base64) {
  */
 export function idbOpen(dbName) {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open("blite_" + dbName, DB_VERSION);
+        // Do NOT hardcode a version — open at the current version so we never
+        // get a VersionError if idbWalOpen previously bumped the version.
+        const request = indexedDB.open("blite_" + dbName);
 
         request.onupgradeneeded = (event) => {
             const db = event.target.result;
@@ -46,6 +48,9 @@ export function idbOpen(dbName) {
             }
             if (!db.objectStoreNames.contains(META_STORE)) {
                 db.createObjectStore(META_STORE); // keyed by string keys
+            }
+            if (!db.objectStoreNames.contains(WAL_STORE_NAME)) {
+                db.createObjectStore(WAL_STORE_NAME, { autoIncrement: true });
             }
         };
 
@@ -178,8 +183,6 @@ export function idbIsAvailable() {
 
 // ─── WAL support ──────────────────────────────────────────────────────────
 
-const WAL_STORE = "wal";
-
 /**
  * Opens (or creates) a WAL object store inside the same IndexedDB database.
  * Must be called after idbOpen. If the store doesn't exist, we bump the version.
@@ -191,7 +194,7 @@ export function idbWalOpen(dbName) {
         const db = _databases.get(dbName);
         if (!db) { reject(new Error(`IndexedDB not open for '${dbName}'.`)); return; }
 
-        if (db.objectStoreNames.contains(WAL_STORE)) {
+        if (db.objectStoreNames.contains(WAL_STORE_NAME)) {
             resolve();
             return;
         }
@@ -203,8 +206,8 @@ export function idbWalOpen(dbName) {
         const request = indexedDB.open("blite_" + dbName, newVersion);
         request.onupgradeneeded = (event) => {
             const upgradedDb = event.target.result;
-            if (!upgradedDb.objectStoreNames.contains(WAL_STORE)) {
-                upgradedDb.createObjectStore(WAL_STORE, { autoIncrement: true });
+            if (!upgradedDb.objectStoreNames.contains(WAL_STORE_NAME)) {
+                upgradedDb.createObjectStore(WAL_STORE_NAME, { autoIncrement: true });
             }
         };
         request.onsuccess = (event) => {
@@ -227,8 +230,8 @@ export function idbWalAppend(dbName, base64RecordData) {
         if (!db) { reject(new Error(`IndexedDB not open for '${dbName}'.`)); return; }
 
         const data = fromBase64(base64RecordData);
-        const tx = db.transaction(WAL_STORE, "readwrite");
-        const store = tx.objectStore(WAL_STORE);
+        const tx = db.transaction(WAL_STORE_NAME, "readwrite");
+        const store = tx.objectStore(WAL_STORE_NAME);
         store.add(data.buffer);
 
         tx.oncomplete = () => resolve();
@@ -247,13 +250,13 @@ export function idbWalReadAll(dbName) {
         const db = _databases.get(dbName);
         if (!db) { reject(new Error(`IndexedDB not open for '${dbName}'.`)); return; }
 
-        if (!db.objectStoreNames.contains(WAL_STORE)) {
+        if (!db.objectStoreNames.contains(WAL_STORE_NAME)) {
             resolve("[]");
             return;
         }
 
-        const tx = db.transaction(WAL_STORE, "readonly");
-        const store = tx.objectStore(WAL_STORE);
+        const tx = db.transaction(WAL_STORE_NAME, "readonly");
+        const store = tx.objectStore(WAL_STORE_NAME);
         const request = store.getAll();
 
         request.onsuccess = () => {
@@ -274,13 +277,13 @@ export function idbWalClear(dbName) {
         const db = _databases.get(dbName);
         if (!db) { reject(new Error(`IndexedDB not open for '${dbName}'.`)); return; }
 
-        if (!db.objectStoreNames.contains(WAL_STORE)) {
+        if (!db.objectStoreNames.contains(WAL_STORE_NAME)) {
             resolve();
             return;
         }
 
-        const tx = db.transaction(WAL_STORE, "readwrite");
-        const store = tx.objectStore(WAL_STORE);
+        const tx = db.transaction(WAL_STORE_NAME, "readwrite");
+        const store = tx.objectStore(WAL_STORE_NAME);
         store.clear();
 
         tx.oncomplete = () => resolve();
@@ -298,13 +301,13 @@ export function idbWalGetSize(dbName) {
         const db = _databases.get(dbName);
         if (!db) { reject(new Error(`IndexedDB not open for '${dbName}'.`)); return; }
 
-        if (!db.objectStoreNames.contains(WAL_STORE)) {
+        if (!db.objectStoreNames.contains(WAL_STORE_NAME)) {
             resolve(0);
             return;
         }
 
-        const tx = db.transaction(WAL_STORE, "readonly");
-        const store = tx.objectStore(WAL_STORE);
+        const tx = db.transaction(WAL_STORE_NAME, "readonly");
+        const store = tx.objectStore(WAL_STORE_NAME);
         const request = store.getAll();
 
         request.onsuccess = () => {

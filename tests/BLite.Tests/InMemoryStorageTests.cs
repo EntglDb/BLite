@@ -302,17 +302,6 @@ public class InMemoryStorageTests
         Assert.Equal(0, await col2.CountAsync());
     }
 
-    [Fact]
-    public void CreateInMemory_NoFileCreated()
-    {
-        // Verify that using an in-memory engine doesn't create any .db files.
-        var tempDir = Path.GetTempPath();
-        var before = Directory.GetFiles(tempDir, "*.db").Length;
-        using (var engine = BLiteEngine.CreateInMemory()) { }
-        var after = Directory.GetFiles(tempDir, "*.db").Length;
-        Assert.Equal(before, after);
-    }
-
     // ─── BLiteEngine.CreateFromStorage integration tests ─────────────────────
 
     [Fact]

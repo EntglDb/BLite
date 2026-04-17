@@ -14,9 +14,16 @@
 </p>
 
 <p>
-    Navigate to the <a href="/counter">Counter</a> page to try the persistent counter.
+    Navigate to one of the counter pages to try each storage backend:
+</p>
+<ul>
+    <li><a href="/counter/inmemory">🧠 In-Memory</a> — no persistence, data lost on reload.</li>
+    <li><a href="/counter/opfs">⚡ OPFS</a> — high-performance, persisted via Origin Private File System.</li>
+    <li><a href="/counter/indexeddb">🗄 IndexedDB</a> — universally supported, persisted via IndexedDB.</li>
+</ul>
+<p>
     Increment or decrement the counter, then reload the page — the value is restored from
-    the BLite database stored in your browser.
+    the BLite database stored in your browser (OPFS and IndexedDB only).
 </p>
 
 <h2>What is BLite?</h2>

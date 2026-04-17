@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Core;
@@ -10,13 +11,14 @@ namespace BLite.Wasm.Storage;
 /// <summary>
 /// OPFS (Origin Private File System) page storage backend for browser WASM.
 /// <para>
-/// Pages are stored as sequential regions in a single OPFS file using the
-/// <see cref="https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle">
-/// FileSystemSyncAccessHandle</see> API, which provides synchronous, high-performance
-/// I/O from a dedicated Worker thread.
+/// A dedicated Web Worker performs the synchronous OPFS I/O
+/// (<c>FileSystemSyncAccessHandle</c>). The main thread keeps an in-memory page
+/// cache so that <see cref="ReadPage"/> and <see cref="WritePage"/> never block on
+/// async Worker round-trips. Dirty pages are flushed to OPFS when
+/// <see cref="FlushAsync"/> is called.
 /// </para>
 /// <para>
-/// Supported in Chrome 102+, Firefox 111+, and Safari 15.2+ in Worker contexts.
+/// Supported in Chrome 102+, Firefox 111+, and Safari 15.2+.
 /// Use <see cref="IsAvailable"/> to feature-detect at runtime.
 /// </para>
 /// </summary>
@@ -24,9 +26,11 @@ public sealed class OpfsPageStorage : IPageStorage
 {
     private readonly string _dbName;
     private readonly int _pageSize;
-    private readonly Stack<uint> _freeList = new(); // Guarded by _allocationLock for all access.
-    private readonly object _allocationLock = new();
+    private readonly Dictionary<uint, byte[]> _pageCache = new();
+    private readonly HashSet<uint> _dirtyPages = new();
+    private readonly Stack<uint> _freeList = new();
     private uint _nextPageId;
+    private bool _nextPageIdDirty;
     private bool _opened;
     private bool _disposed;
 
@@ -53,13 +57,13 @@ public sealed class OpfsPageStorage : IPageStorage
     /// <inheritdoc/>
     public uint NextPageId => _nextPageId;
 
-    /// <summary>Returns <c>true</c> if the OPFS SyncAccessHandle API is available in the current browser context.</summary>
-    public static bool IsAvailable() => OpfsInterop.IsAvailable();
+    /// <summary>Returns <c>true</c> if OPFS via Worker is available in the current browser context.</summary>
+    public static bool IsAvailable() => OpfsWorkerInterop.IsAvailable();
 
     /// <summary>
-    /// Opens the OPFS file asynchronously. Must be called once before any I/O.
-    /// If the file already contains data, the page count is restored from the file size.
-    /// Otherwise, header pages are initialised.
+    /// Opens the OPFS file via the Worker asynchronously. Must be called once before
+    /// any I/O. If the file already contains data, all existing pages are loaded into
+    /// the in-memory cache. Otherwise, header pages are initialised.
     /// </summary>
     public async Task OpenAsync()
     {
@@ -67,18 +71,26 @@ public sealed class OpfsPageStorage : IPageStorage
         if (_opened)
             return;
 
-        await OpfsInterop.EnsureLoadedAsync();
-        var fileSize = (long)await OpfsInterop.OpenAsync(_dbName, _pageSize);
+        await OpfsWorkerInterop.EnsureLoadedAsync();
+        var fileSize = (long)await OpfsWorkerInterop.OpenAsync(_dbName, _pageSize);
 
         if (fileSize >= _pageSize * 2)
         {
-            // Existing database — derive page count from file size.
+            // Existing database — load all pages into in-memory cache.
             _nextPageId = (uint)(fileSize / _pageSize);
+            for (uint i = 0; i < _nextPageId; i++)
+            {
+                var base64 = await OpfsWorkerInterop.ReadPageAsync(_dbName, (int)i);
+                var data = Convert.FromBase64String(base64);
+                var page = new byte[_pageSize];
+                data.AsSpan(0, Math.Min(data.Length, _pageSize)).CopyTo(page);
+                _pageCache[i] = page;
+            }
         }
         else
         {
             // Fresh database — write header pages.
-            InitializeHeaderPages();
+            await InitializeHeaderPagesAsync();
         }
 
         _opened = true;
@@ -86,8 +98,8 @@ public sealed class OpfsPageStorage : IPageStorage
 
     /// <summary>
     /// Synchronous <see cref="IPageStorage.Open"/> — calls <see cref="OpenAsync"/> blocking.
-    /// In WASM single-threaded contexts this relies on cooperative scheduling.
-    /// Prefer <see cref="OpenAsync"/> when possible.
+    /// <b>Warning:</b> this will deadlock on the single-threaded WASM runtime.
+    /// Always prefer <see cref="OpenAsync"/>.
     /// </summary>
     public void Open()
     {
@@ -103,7 +115,15 @@ public sealed class OpfsPageStorage : IPageStorage
         if (destination.Length < _pageSize)
             throw new ArgumentException($"Destination must be at least {_pageSize} bytes.");
 
-        OpfsInterop.ReadPage(_dbName, (int)pageId, destination.Slice(0, _pageSize));
+        if (_pageCache.TryGetValue(pageId, out var cached))
+        {
+            cached.AsSpan(0, _pageSize).CopyTo(destination);
+        }
+        else
+        {
+            // Page not in cache — return zeroes.
+            destination.Slice(0, _pageSize).Clear();
+        }
     }
 
     /// <inheritdoc/>
@@ -115,33 +135,33 @@ public sealed class OpfsPageStorage : IPageStorage
         if (destination.Length > _pageSize)
             throw new ArgumentException($"Destination must not exceed {_pageSize} bytes.");
 
-        // OPFS SyncAccessHandle reads are position-based; read the full page then copy header.
-        Span<byte> tmp = stackalloc byte[_pageSize <= 16384 ? _pageSize : 0];
-        byte[]? rented = null;
-        if (tmp.Length == 0)
+        if (_pageCache.TryGetValue(pageId, out var cached))
         {
-            rented = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageSize);
-            tmp = rented.AsSpan(0, _pageSize);
+            cached.AsSpan(0, Math.Min(cached.Length, destination.Length)).CopyTo(destination);
         }
-
-        try
+        else
         {
-            OpfsInterop.ReadPage(_dbName, (int)pageId, tmp);
-            tmp.Slice(0, destination.Length).CopyTo(destination);
-        }
-        finally
-        {
-            if (rented != null)
-                System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+            destination.Clear();
         }
     }
 
     /// <inheritdoc/>
-    public ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
+    public async ValueTask ReadPageAsync(uint pageId, Memory<byte> destination, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        ReadPage(pageId, destination.Span.Slice(0, _pageSize));
-        return ValueTask.CompletedTask;
+        ThrowIfDisposed();
+        ThrowIfNotOpened();
+
+        // Serve from cache first; fall back to Worker for pages that may have been evicted.
+        if (_pageCache.TryGetValue(pageId, out var cached))
+        {
+            cached.AsSpan(0, Math.Min(cached.Length, _pageSize)).CopyTo(destination.Span);
+            return;
+        }
+
+        var base64 = await OpfsWorkerInterop.ReadPageAsync(_dbName, (int)pageId);
+        var data = Convert.FromBase64String(base64);
+        data.AsSpan(0, Math.Min(data.Length, _pageSize)).CopyTo(destination.Span);
     }
 
     /// <inheritdoc/>
@@ -153,17 +173,14 @@ public sealed class OpfsPageStorage : IPageStorage
         if (source.Length < _pageSize)
             throw new ArgumentException($"Source must be at least {_pageSize} bytes.");
 
-        // JSImport requires a mutable Span; copy into a writable buffer.
-        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_pageSize);
-        try
+        if (!_pageCache.TryGetValue(pageId, out var page))
         {
-            source.Slice(0, _pageSize).CopyTo(buffer);
-            OpfsInterop.WritePage(_dbName, (int)pageId, buffer.AsSpan(0, _pageSize));
+            page = new byte[_pageSize];
+            _pageCache[pageId] = page;
         }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
-        }
+
+        source.Slice(0, _pageSize).CopyTo(page);
+        _dirtyPages.Add(pageId);
     }
 
     /// <inheritdoc/>
@@ -172,13 +189,12 @@ public sealed class OpfsPageStorage : IPageStorage
         ThrowIfDisposed();
         ThrowIfNotOpened();
 
-        lock (_allocationLock)
-        {
-            if (_freeList.Count > 0)
-                return _freeList.Pop();
+        if (_freeList.Count > 0)
+            return _freeList.Pop();
 
-            return _nextPageId++;
-        }
+        var id = _nextPageId++;
+        _nextPageIdDirty = true;
+        return id;
     }
 
     /// <inheritdoc/>
@@ -188,25 +204,39 @@ public sealed class OpfsPageStorage : IPageStorage
         if (pageId == 0)
             throw new InvalidOperationException("Cannot free the header page (page 0).");
 
-        lock (_allocationLock)
-        {
-            _freeList.Push(pageId);
-        }
+        _freeList.Push(pageId);
     }
 
-    /// <inheritdoc/>
-    public void Flush()
+    /// <summary>No-op synchronous flush. Call <see cref="FlushAsync"/> to persist dirty pages to OPFS.</summary>
+    public void Flush() { }
+
+    /// <summary>
+    /// Writes all dirty pages from the in-memory cache to OPFS via the Worker and
+    /// flushes the OPFS file.
+    /// </summary>
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (_opened)
-            OpfsInterop.Flush(_dbName);
-    }
+        if (!_opened) return;
 
-    /// <inheritdoc/>
-    public Task FlushAsync(CancellationToken cancellationToken = default)
-    {
-        Flush();
-        return Task.CompletedTask;
+        foreach (var pageId in _dirtyPages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_pageCache.TryGetValue(pageId, out var page))
+            {
+                await OpfsWorkerInterop.WritPageAsync(_dbName, (int)pageId, Convert.ToBase64String(page));
+            }
+        }
+        _dirtyPages.Clear();
+
+        // Flush the OPFS file in the Worker to ensure durability.
+        await OpfsWorkerInterop.FlushAsync(_dbName);
+
+        if (_nextPageIdDirty)
+        {
+            // The file size implicitly tracks the page count for OPFS.
+            _nextPageIdDirty = false;
+        }
     }
 
     /// <inheritdoc/>
@@ -225,12 +255,15 @@ public sealed class OpfsPageStorage : IPageStorage
         _disposed = true;
 
         if (_opened)
-            OpfsInterop.Close(_dbName);
+        {
+            // Fire-and-forget close — the Worker will release the handle.
+            _ = OpfsWorkerInterop.CloseAsync(_dbName);
+        }
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
-    private void InitializeHeaderPages()
+    private async Task InitializeHeaderPagesAsync()
     {
         // Page 0: File Header
         var headerPage = new byte[_pageSize];
@@ -247,7 +280,8 @@ public sealed class OpfsPageStorage : IPageStorage
             KvRootPageId = 0
         };
         header.WriteTo(headerPage);
-        OpfsInterop.WritePage(_dbName, 0, headerPage.AsSpan(0, _pageSize));
+        _pageCache[0] = headerPage;
+        await OpfsWorkerInterop.WritPageAsync(_dbName, 0, Convert.ToBase64String(headerPage));
 
         // Page 1: Collection Metadata (slotted page)
         var metaPage = new byte[_pageSize];
@@ -262,9 +296,10 @@ public sealed class OpfsPageStorage : IPageStorage
             TransactionId = 0
         };
         metaHeader.WriteTo(metaPage);
-        OpfsInterop.WritePage(_dbName, 1, metaPage.AsSpan(0, _pageSize));
+        _pageCache[1] = metaPage;
+        await OpfsWorkerInterop.WritPageAsync(_dbName, 1, Convert.ToBase64String(metaPage));
 
-        OpfsInterop.Flush(_dbName);
+        await OpfsWorkerInterop.FlushAsync(_dbName);
 
         _nextPageId = 2;
     }

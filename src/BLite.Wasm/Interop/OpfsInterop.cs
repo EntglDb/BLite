@@ -40,8 +40,13 @@ internal static partial class OpfsInterop
     /// Loads the JavaScript module so that all <c>[JSImport]</c> calls can resolve.
     /// Must be called once before any other method in this class.
     /// </summary>
+    /// <remarks>
+    /// The URL uses <c>../</c> because the WASM runtime resolves relative paths
+    /// from <c>_framework/</c>, while the <c>.mjs</c> files are served from the
+    /// application root (<c>wwwroot/</c>).
+    /// </remarks>
     internal static async Task EnsureLoadedAsync()
     {
-        await JSHost.ImportAsync(ModuleName, ModuleName);
+        await JSHost.ImportAsync(ModuleName, "../blite-opfs.mjs");
     }
 }

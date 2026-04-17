@@ -8,9 +8,8 @@ using System.Runtime.Versioning;
 namespace BLite.BlazorWasm.Services;
 
 /// <summary>
-/// Singleton service that manages a named counter backed by BLite browser storage.
-/// The counter value is persisted across page reloads using IndexedDB or OPFS,
-/// depending on the browser's capabilities.
+/// Manages a named counter backed by BLite browser storage.
+/// Each instance targets a specific <see cref="WasmStorageBackend"/>.
 /// </summary>
 [SupportedOSPlatform("browser")]
 public sealed class CounterStore : IAsyncDisposable
@@ -18,8 +17,21 @@ public sealed class CounterStore : IAsyncDisposable
     private const string CollectionName = "counters";
     private const string CounterName = "main";
 
+    private readonly WasmStorageBackend _requestedBackend;
+    private readonly string _dbName;
     private BLiteEngine? _engine;
     private BsonId? _documentId;
+
+    /// <summary>
+    /// Creates a new <see cref="CounterStore"/> targeting the specified backend.
+    /// </summary>
+    /// <param name="backend">The storage backend to use.</param>
+    /// <param name="dbName">Logical database name (must be unique per backend to avoid collisions).</param>
+    public CounterStore(WasmStorageBackend backend, string dbName = "blite-counter-demo")
+    {
+        _requestedBackend = backend;
+        _dbName = dbName;
+    }
 
     // ── Public state ──────────────────────────────────────────────────────────
 
@@ -51,9 +63,8 @@ public sealed class CounterStore : IAsyncDisposable
 
         try
         {
-            // Detect the backend before creating the engine so we can display it.
-            Backend = BLiteWasm.DetectBestBackend();
-            _engine = await BLiteWasm.CreateAsync("blite-counter-demo", Backend);
+            Backend = _requestedBackend;
+            _engine = await BLiteWasm.CreateAsync(_dbName, _requestedBackend);
 
             // Try to restore the previously saved counter value.
             await foreach (var doc in _engine.FindAllAsync(CollectionName))
@@ -132,6 +143,10 @@ public sealed class CounterStore : IAsyncDisposable
 
             LastSaved = now;
             Error = null;
+
+            // Flush committed pages from WAL index to persistent storage (IDB / OPFS).
+            // Without this, pages live only in the in-memory cache and are lost on reload.
+            await _engine.CheckpointAsync();
         }
         catch (Exception ex)
         {
@@ -141,9 +156,13 @@ public sealed class CounterStore : IAsyncDisposable
 
     // ── Disposal ──────────────────────────────────────────────────────────────
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        _engine?.Dispose();
-        return ValueTask.CompletedTask;
+        if (_engine != null)
+        {
+            // Ensure any remaining dirty pages are flushed before closing.
+            try { await _engine.CheckpointAsync(); } catch { /* best-effort */ }
+            _engine.Dispose();
+        }
     }
 }

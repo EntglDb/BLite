@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Core;
@@ -10,28 +11,25 @@ namespace BLite.Wasm.Storage;
 /// <summary>
 /// IndexedDB page storage backend for browser WASM.
 /// <para>
-/// Each page is stored as a <c>Uint8Array</c> blob in an IndexedDB object store,
-/// keyed by <c>(databaseName, pageId)</c>. This provides universal browser support
-/// (all modern browsers including Safari 7+) with persistent, cross-session storage.
-/// </para>
-/// <para>
-/// Throughput is lower than <see cref="OpfsPageStorage"/> but IndexedDB works on the
-/// main thread (no Worker requirement), making it the safest choice for maximum
-/// compatibility in Blazor WASM contexts.
+/// All synchronous <see cref="IPageStorage"/> methods operate on an in-memory page
+/// cache so they never block on async JavaScript interop (which would deadlock the
+/// single-threaded WASM runtime). Dirty pages are flushed to IndexedDB when
+/// <see cref="FlushAsync"/> is called.
 /// </para>
 /// <para>
 /// Binary data is exchanged with JavaScript as base64 strings because
-/// <c>[JSImport]</c> does not support <c>byte[]</c> on async (<c>Task</c>-returning)
-/// methods.
+/// <c>[JSImport]</c> does not support <c>byte[]</c> on <c>Task</c>-returning methods.
 /// </para>
 /// </summary>
 public sealed class IndexedDbPageStorage : IPageStorage
 {
     private readonly string _dbName;
     private readonly int _pageSize;
-    private readonly Stack<uint> _freeList = new(); // Guarded by _allocationLock for all access.
-    private readonly object _allocationLock = new();
+    private readonly Dictionary<uint, byte[]> _pageCache = new();
+    private readonly HashSet<uint> _dirtyPages = new();
+    private readonly Stack<uint> _freeList = new();
     private uint _nextPageId;
+    private bool _nextPageIdDirty;
     private bool _opened;
     private bool _disposed;
 
@@ -63,8 +61,8 @@ public sealed class IndexedDbPageStorage : IPageStorage
 
     /// <summary>
     /// Opens the IndexedDB database asynchronously. Must be called once before any I/O.
-    /// If the database already exists, the next-page-id counter is restored.
-    /// Otherwise, header pages are initialised.
+    /// If the database already exists, all existing pages are loaded into the in-memory
+    /// cache. Otherwise, header pages are initialised.
     /// </summary>
     public async Task OpenAsync()
     {
@@ -77,8 +75,16 @@ public sealed class IndexedDbPageStorage : IPageStorage
 
         if (storedNextPageId >= 2)
         {
-            // Existing database — restore counter.
+            // Existing database — load all pages into in-memory cache.
             _nextPageId = storedNextPageId;
+            for (uint i = 0; i < storedNextPageId; i++)
+            {
+                var base64 = await IndexedDbInterop.ReadPageAsync(_dbName, (int)i, _pageSize);
+                var data = Convert.FromBase64String(base64);
+                var page = new byte[_pageSize];
+                data.AsSpan(0, Math.Min(data.Length, _pageSize)).CopyTo(page);
+                _pageCache[i] = page;
+            }
         }
         else
         {
@@ -91,8 +97,8 @@ public sealed class IndexedDbPageStorage : IPageStorage
 
     /// <summary>
     /// Synchronous <see cref="IPageStorage.Open"/> — calls <see cref="OpenAsync"/> blocking.
-    /// In WASM single-threaded contexts this relies on cooperative scheduling.
-    /// Prefer <see cref="OpenAsync"/> when possible.
+    /// <b>Warning:</b> this will deadlock on the single-threaded WASM runtime.
+    /// Always prefer <see cref="OpenAsync"/>.
     /// </summary>
     public void Open()
     {
@@ -108,10 +114,15 @@ public sealed class IndexedDbPageStorage : IPageStorage
         if (destination.Length < _pageSize)
             throw new ArgumentException($"Destination must be at least {_pageSize} bytes.");
 
-        // IndexedDB is inherently async; block on the Task in the WASM single-threaded scheduler.
-        var base64 = IndexedDbInterop.ReadPageAsync(_dbName, (int)pageId, _pageSize).GetAwaiter().GetResult();
-        var data = Convert.FromBase64String(base64);
-        data.AsSpan(0, Math.Min(data.Length, _pageSize)).CopyTo(destination);
+        if (_pageCache.TryGetValue(pageId, out var cached))
+        {
+            cached.AsSpan(0, _pageSize).CopyTo(destination);
+        }
+        else
+        {
+            // Page not in cache — return zeroes.
+            destination.Slice(0, _pageSize).Clear();
+        }
     }
 
     /// <inheritdoc/>
@@ -123,9 +134,14 @@ public sealed class IndexedDbPageStorage : IPageStorage
         if (destination.Length > _pageSize)
             throw new ArgumentException($"Destination must not exceed {_pageSize} bytes.");
 
-        var base64 = IndexedDbInterop.ReadPageAsync(_dbName, (int)pageId, _pageSize).GetAwaiter().GetResult();
-        var data = Convert.FromBase64String(base64);
-        data.AsSpan(0, Math.Min(data.Length, destination.Length)).CopyTo(destination);
+        if (_pageCache.TryGetValue(pageId, out var cached))
+        {
+            cached.AsSpan(0, Math.Min(cached.Length, destination.Length)).CopyTo(destination);
+        }
+        else
+        {
+            destination.Clear();
+        }
     }
 
     /// <inheritdoc/>
@@ -134,6 +150,13 @@ public sealed class IndexedDbPageStorage : IPageStorage
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         ThrowIfNotOpened();
+
+        // Serve from cache first; fall back to IDB for pages that may have been evicted.
+        if (_pageCache.TryGetValue(pageId, out var cached))
+        {
+            cached.AsSpan(0, Math.Min(cached.Length, _pageSize)).CopyTo(destination.Span);
+            return;
+        }
 
         var base64 = await IndexedDbInterop.ReadPageAsync(_dbName, (int)pageId, _pageSize);
         var data = Convert.FromBase64String(base64);
@@ -149,10 +172,14 @@ public sealed class IndexedDbPageStorage : IPageStorage
         if (source.Length < _pageSize)
             throw new ArgumentException($"Source must be at least {_pageSize} bytes.");
 
-        var buffer = new byte[_pageSize];
-        source.Slice(0, _pageSize).CopyTo(buffer);
-        var base64 = Convert.ToBase64String(buffer);
-        IndexedDbInterop.WritePageAsync(_dbName, (int)pageId, base64).GetAwaiter().GetResult();
+        if (!_pageCache.TryGetValue(pageId, out var page))
+        {
+            page = new byte[_pageSize];
+            _pageCache[pageId] = page;
+        }
+
+        source.Slice(0, _pageSize).CopyTo(page);
+        _dirtyPages.Add(pageId);
     }
 
     /// <inheritdoc/>
@@ -161,16 +188,12 @@ public sealed class IndexedDbPageStorage : IPageStorage
         ThrowIfDisposed();
         ThrowIfNotOpened();
 
-        lock (_allocationLock)
-        {
-            if (_freeList.Count > 0)
-                return _freeList.Pop();
+        if (_freeList.Count > 0)
+            return _freeList.Pop();
 
-            var id = _nextPageId++;
-            // Persist the counter so it survives browser restarts.
-            IndexedDbInterop.SaveNextPageIdAsync(_dbName, (int)_nextPageId).GetAwaiter().GetResult();
-            return id;
-        }
+        var id = _nextPageId++;
+        _nextPageIdDirty = true;
+        return id;
     }
 
     /// <inheritdoc/>
@@ -180,17 +203,37 @@ public sealed class IndexedDbPageStorage : IPageStorage
         if (pageId == 0)
             throw new InvalidOperationException("Cannot free the header page (page 0).");
 
-        lock (_allocationLock)
-        {
-            _freeList.Push(pageId);
-        }
+        _freeList.Push(pageId);
     }
 
-    /// <summary>No-op: IndexedDB writes are transactionally durable once the IDB transaction completes.</summary>
+    /// <summary>No-op synchronous flush. Call <see cref="FlushAsync"/> to persist dirty pages to IndexedDB.</summary>
     public void Flush() { }
 
-    /// <summary>No-op: IndexedDB writes are transactionally durable once the IDB transaction completes.</summary>
-    public Task FlushAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    /// <summary>
+    /// Writes all dirty pages from the in-memory cache to IndexedDB and persists the
+    /// next-page-id counter.
+    /// </summary>
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (!_opened) return;
+
+        foreach (var pageId in _dirtyPages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_pageCache.TryGetValue(pageId, out var page))
+            {
+                await IndexedDbInterop.WritePageAsync(_dbName, (int)pageId, Convert.ToBase64String(page));
+            }
+        }
+        _dirtyPages.Clear();
+
+        if (_nextPageIdDirty)
+        {
+            await IndexedDbInterop.SaveNextPageIdAsync(_dbName, (int)_nextPageId);
+            _nextPageIdDirty = false;
+        }
+    }
 
     /// <inheritdoc/>
     /// <exception cref="NotSupportedException">
@@ -230,6 +273,7 @@ public sealed class IndexedDbPageStorage : IPageStorage
             KvRootPageId = 0
         };
         header.WriteTo(headerPage);
+        _pageCache[0] = headerPage;
         await IndexedDbInterop.WritePageAsync(_dbName, 0, Convert.ToBase64String(headerPage));
 
         // Page 1: Collection Metadata (slotted page)
@@ -245,6 +289,7 @@ public sealed class IndexedDbPageStorage : IPageStorage
             TransactionId = 0
         };
         metaHeader.WriteTo(metaPage);
+        _pageCache[1] = metaPage;
         await IndexedDbInterop.WritePageAsync(_dbName, 1, Convert.ToBase64String(metaPage));
 
         await IndexedDbInterop.SaveNextPageIdAsync(_dbName, 2);

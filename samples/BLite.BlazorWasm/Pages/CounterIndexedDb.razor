@@ -1,0 +1,102 @@
+@page "/counter/indexeddb"
+@using BLite.BlazorWasm.Services
+@using BLite.Wasm
+@implements IAsyncDisposable
+
+<PageTitle>BLite Counter — IndexedDB</PageTitle>
+
+<h1>🗄 IndexedDB Counter</h1>
+<p class="text-muted">Data is stored via the IndexedDB API.</p>
+
+@if (!_store.IsInitialized && _store.Error == null)
+{
+    <p class="text-muted"><em>Initialising BLite IndexedDB storage…</em></p>
+}
+else if (_store.Error != null)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>Error:</strong> @_store.Error
+    </div>
+}
+else
+{
+    <div class="counter-card card p-4 mb-4 shadow-sm">
+        <p class="display-4 text-center mb-4" role="status" aria-live="polite">
+            @_store.Value
+        </p>
+
+        <div class="d-flex justify-content-center gap-3 mb-3">
+            <button class="btn btn-outline-secondary btn-lg px-4"
+                    @onclick="DecrementAsync"
+                    disabled="@_busy"
+                    aria-label="Decrement">
+                −
+            </button>
+            <button class="btn btn-outline-danger btn-sm px-3 align-self-center"
+                    @onclick="ResetAsync"
+                    disabled="@_busy"
+                    aria-label="Reset to zero">
+                Reset
+            </button>
+            <button class="btn btn-primary btn-lg px-4"
+                    @onclick="IncrementAsync"
+                    disabled="@_busy"
+                    aria-label="Increment">
+                +
+            </button>
+        </div>
+
+        <div class="text-center text-muted small">
+            @if (_store.LastSaved.HasValue)
+            {
+                <span>💾 Last saved: @_store.LastSaved.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            }
+        </div>
+    </div>
+
+    <div class="info-card card p-3 text-muted small">
+        <dl class="row mb-0">
+            <dt class="col-sm-4">Storage backend</dt>
+            <dd class="col-sm-8">🗄 IndexedDB</dd>
+            <dt class="col-sm-4">Persistence</dt>
+            <dd class="col-sm-8">
+                <span class="text-success">✅ Data survives page reloads.</span>
+            </dd>
+            <dt class="col-sm-4">Compatibility</dt>
+            <dd class="col-sm-8">All modern browsers. Works on the main thread.</dd>
+        </dl>
+    </div>
+}
+
+@code {
+    private readonly CounterStore _store = new(WasmStorageBackend.IndexedDb, "blite-counter-indexeddb");
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await _store.InitializeAsync();
+    }
+
+    private async Task IncrementAsync()
+    {
+        _busy = true;
+        await _store.IncrementAsync();
+        _busy = false;
+    }
+
+    private async Task DecrementAsync()
+    {
+        _busy = true;
+        await _store.DecrementAsync();
+        _busy = false;
+    }
+
+    private async Task ResetAsync()
+    {
+        _busy = true;
+        await _store.ResetAsync();
+        _busy = false;
+    }
+
+    public ValueTask DisposeAsync() => _store.DisposeAsync();
+}
