@@ -46,11 +46,11 @@ public sealed class RecentConnectionViewModel
         get
         {
             var diff = DateTimeOffset.UtcNow - LastOpenedAt;
-            return diff.TotalMinutes < 2  ? "adesso"
-                 : diff.TotalHours   < 1  ? $"{(int)diff.TotalMinutes} min fa"
-                 : diff.TotalHours   < 24 ? $"{(int)diff.TotalHours} h fa"
-                 : diff.TotalDays    < 2  ? "ieri"
-                 : diff.TotalDays    < 30 ? $"{(int)diff.TotalDays} giorni fa"
+            return diff.TotalMinutes < 2  ? "now"
+                 : diff.TotalHours   < 1  ? $"{(int)diff.TotalMinutes} min ago"
+                 : diff.TotalHours   < 24 ? $"{(int)diff.TotalHours} h ago"
+                 : diff.TotalDays    < 2  ? "yesterday"
+                 : diff.TotalDays    < 30 ? $"{(int)diff.TotalDays} days ago"
                  : LastOpenedAt.LocalDateTime.ToString("dd/MM/yyyy");
         }
     }
