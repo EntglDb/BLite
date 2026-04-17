@@ -163,13 +163,31 @@ The following issue should be tracked separately.
 
 ---
 
-### Issue 5 — WASM Demo & Documentation
+### Issue 5 — WASM Demo & Documentation ✅
 
-**Scope:** Provide an end-to-end example of BLite running in a Blazor WASM app:
-- `samples/BLite.BlazorWasm/` — minimal Blazor WASM app storing and querying BSON documents
-  entirely in the browser using the OPFS or IndexedDB backend.
-- Update `README.md` with a WASM section.
-- Update `BENCHMARKS.md` with WASM throughput numbers (OPFS vs IndexedDB vs in-memory).
+**Scope:** End-to-end example of BLite running in a Blazor WASM app.
+
+**Delivered:** `samples/BLite.BlazorWasm/` — a minimal Blazor WebAssembly application that
+demonstrates a **persistent counter** stored entirely in the browser using BLite:
+
+- `Services/CounterStore.cs` — singleton service that calls `BLiteWasm.CreateAsync()`,
+  auto-selects the best storage backend (OPFS → IndexedDB → in-memory), inserts a counter
+  document on first use, and updates it on every increment / decrement / reset.
+- `Pages/Counter.razor` — Blazor component wired to `CounterStore`. Shows the current
+  count, +/−/Reset buttons, the active storage backend, and the last-saved timestamp.
+  Reload the page to verify that the count survives browser restarts.
+- `Pages/Home.razor` — landing page with a brief description and a quick-start code snippet.
+- `wwwroot/blite-indexeddb.mjs` and `wwwroot/blite-opfs.mjs` — the BLite JS interop modules
+  (copied from `BLite.Wasm/wwwroot`) required by `[JSImport]` at runtime.
+
+**Running the sample:**
+
+```bash
+# From the repository root:
+dotnet run --project samples/BLite.BlazorWasm/BLite.BlazorWasm.csproj
+```
+
+Then open `https://localhost:5001/counter` in any modern browser.
 
 ---
 
@@ -181,7 +199,7 @@ The following issue should be tracked separately.
 [Done]  Issue 1  OPFS page storage backend
 [Done]  Issue 2  IndexedDB page storage backend (compatibility fallback)
 [Done]  Issue 4  BLite.Wasm NuGet package + factory API
-[ ]     Issue 5  Blazor WASM sample + docs
+[Done]  Issue 5  Blazor WASM sample — persistent counter demo
 ```
 
 ---
