@@ -309,7 +309,7 @@ namespace BLite.Tests
         }
 
         [Fact]
-        public void Optimizer_OrElse_Equality_SameIndexedField_ReturnsInValues()
+        public void Optimizer_Or_Equality_SameIndexedField_ReturnsInValues()
         {
             var indexes = new List<CollectionIndexInfo>
             {

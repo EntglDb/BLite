@@ -645,7 +645,7 @@ internal static class IndexOptimizer
         out string propertyPath,
         out IReadOnlyList<object?> values)
     {
-        propertyPath = null!;
+        propertyPath = string.Empty;
         values = Array.Empty<object?>();
 
         if (expression is not MethodCallExpression call || call.Method.Name != "Contains")
@@ -682,9 +682,10 @@ internal static class IndexOptimizer
         if (unwrappedMember is not MemberExpression member)
             return false;
 
-        propertyPath = ExtractMemberPath(member, parameter)!;
-        if (propertyPath == null)
+        var extractedPath = ExtractMemberPath(member, parameter);
+        if (extractedPath == null)
             return false;
+        propertyPath = extractedPath;
 
         if (collectionExpr is MethodCallExpression { Method.Name: "op_Implicit", Object: null } implicitCall &&
             implicitCall.Arguments.Count == 1)
