@@ -14,6 +14,7 @@ internal static class IndexOptimizer
         public string IndexName { get; set; } = "";
         public object? MinValue { get; set; }
         public object? MaxValue { get; set; }
+        public IReadOnlyList<object?>? InValues { get; set; }
 
         /// <summary>
         /// Describes how completely the index scan covers the WHERE expression.
@@ -190,6 +191,44 @@ internal static class IndexOptimizer
             return null;
         }
 
+        // Handle OR over exact matches on the same indexed field:
+        // x => x.Prop == a || x.Prop == b  → multi-point index probes.
+        if (expression is BinaryExpression orBinary && orBinary.NodeType == ExpressionType.OrElse)
+        {
+            var left = OptimizeExpression(orBinary.Left, parameter, indexes, registry);
+            var right = OptimizeExpression(orBinary.Right, parameter, indexes, registry);
+
+            if (left != null && right != null &&
+                left.IndexName == right.IndexName &&
+                left.FilterCompleteness == FilterCompleteness.Exact &&
+                right.FilterCompleteness == FilterCompleteness.Exact &&
+                TryGetPointValues(left, out var leftValues) &&
+                TryGetPointValues(right, out var rightValues))
+            {
+                var merged = new List<object?>(leftValues.Count + rightValues.Count);
+                var seen = new HashSet<object?>();
+                foreach (var v in leftValues)
+                {
+                    if (seen.Add(v)) merged.Add(v);
+                }
+                foreach (var v in rightValues)
+                {
+                    if (seen.Add(v)) merged.Add(v);
+                }
+
+                return new OptimizationResult
+                {
+                    IndexName = left.IndexName,
+                    InValues = merged,
+                    IsRange = false,
+                    FilterCompleteness = FilterCompleteness.Exact,
+                    StartInclusive = true,
+                    EndInclusive = true
+                };
+            }
+            return null;
+        }
+
         // Handle bare bool member: e => e.IsActive  (equivalent to e.IsActive == true)
         // Handle logical NOT over bool member: e => !e.IsActive  (equivalent to e.IsActive == false)
         if (expression is MemberExpression bareMember &&
@@ -284,7 +323,25 @@ internal static class IndexOptimizer
                 return result;
             }
         }
-        
+
+        if (TryParseContainsInPredicate(expression, parameter, registry, out var inPropertyPath, out var inValues))
+        {
+            CollectionIndexInfo? index = null;
+            foreach (var idx in indexes) { if (Matches(idx, inPropertyPath)) { index = idx; break; } }
+            if (index != null)
+            {
+                return new OptimizationResult
+                {
+                    IndexName = index.Name,
+                    InValues = inValues,
+                    IsRange = false,
+                    FilterCompleteness = FilterCompleteness.Exact,
+                    StartInclusive = true,
+                    EndInclusive = true
+                };
+            }
+        }
+
         // Handle StartsWith
         if (expression is MethodCallExpression call && call.Method.Name == "StartsWith" && call.Object is MemberExpression member)
         {
@@ -373,6 +430,24 @@ internal static class IndexOptimizer
         }
 
         return null;
+    }
+
+    private static bool TryGetPointValues(OptimizationResult result, out IReadOnlyList<object?> values)
+    {
+        if (result.InValues != null)
+        {
+            values = result.InValues;
+            return true;
+        }
+
+        if (!result.IsRange && Equals(result.MinValue, result.MaxValue))
+        {
+            values = [result.MinValue];
+            return true;
+        }
+
+        values = Array.Empty<object?>();
+        return false;
     }
 
     private static string IncrementPrefix(string prefix)
@@ -560,6 +635,87 @@ internal static class IndexOptimizer
         }
 
         return (null, null, ExpressionType.Default);
+    }
+
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
+    private static bool TryParseContainsInPredicate(
+        Expression expression,
+        ParameterExpression parameter,
+        ValueConverterRegistry? registry,
+        out string propertyPath,
+        out IReadOnlyList<object?> values)
+    {
+        propertyPath = null!;
+        values = Array.Empty<object?>();
+
+        if (expression is not MethodCallExpression call || call.Method.Name != "Contains")
+            return false;
+
+        static Expression UnwrapConvert(Expression e)
+        {
+            while (e is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } u)
+                e = u.Operand;
+            return e;
+        }
+
+        Expression? collectionExpr = null;
+        Expression? memberExpr = null;
+
+        if (call.Object != null && call.Arguments.Count == 1)
+        {
+            // Instance Contains: list.Contains(x.Prop)
+            collectionExpr = call.Object;
+            memberExpr = call.Arguments[0];
+        }
+        else if (call.Object == null && call.Arguments.Count == 2)
+        {
+            // Enumerable.Contains(list, x.Prop)
+            collectionExpr = call.Arguments[0];
+            memberExpr = call.Arguments[1];
+        }
+        else
+        {
+            return false;
+        }
+
+        var unwrappedMember = UnwrapConvert(memberExpr);
+        if (unwrappedMember is not MemberExpression member)
+            return false;
+
+        propertyPath = ExtractMemberPath(member, parameter)!;
+        if (propertyPath == null)
+            return false;
+
+        if (collectionExpr is MethodCallExpression { Method.Name: "op_Implicit", Object: null } implicitCall &&
+            implicitCall.Arguments.Count == 1)
+        {
+            collectionExpr = implicitCall.Arguments[0];
+        }
+
+        object? enumerableObj;
+        try
+        {
+            enumerableObj = EvaluateExpression<object>(collectionExpr);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (enumerableObj is not System.Collections.IEnumerable enumerable || enumerableObj is string)
+            return false;
+
+        var list = new List<object?>();
+        foreach (var raw in enumerable)
+        {
+            var converted = TryApplyConverter(propertyPath, raw, registry);
+            if (!IsIndexableValue(converted))
+                return false;
+            list.Add(converted ?? DBNull.Value);
+        }
+
+        values = list;
+        return true;
     }
 
     private static object? TryApplyConverter(string propertyPath, object? value, ValueConverterRegistry? registry)

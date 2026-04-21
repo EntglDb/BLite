@@ -2477,6 +2477,16 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var index = _indexManager.GetIndex(indexOpt.IndexName);
             if (index != null)
             {
+                if (indexOpt.InValues != null)
+                {
+                    int inCount = 0;
+                    foreach (var key in indexOpt.InValues)
+                    {
+                        inCount += index.CountRange(key, key, true, true, null);
+                    }
+                    return inCount;
+                }
+
                 // Use the per-bound inclusivity flags from OptimizationResult.
                 // These are set correctly for every operator (==, >=, >, <=, <) and
                 // propagated through AND-merges, so compound predicates like
@@ -2658,8 +2668,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 }
                 else
                 {
-                    await foreach (var item in QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, true, 0, int.MaxValue, transaction, ct))
-                        if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                    if (indexOpt.InValues != null)
+                    {
+                        foreach (var key in indexOpt.InValues)
+                        {
+                            await foreach (var item in QueryIndexAsync(indexOpt.IndexName, key, key, true, 0, int.MaxValue, transaction, ct))
+                                if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                        }
+                    }
+                    else
+                    {
+                        await foreach (var item in QueryIndexAsync(indexOpt.IndexName, indexOpt.MinValue, indexOpt.MaxValue, true, 0, int.MaxValue, transaction, ct))
+                            if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
+                    }
                 }
                 yield break;
             }

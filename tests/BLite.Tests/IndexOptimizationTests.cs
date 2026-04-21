@@ -307,5 +307,50 @@ namespace BLite.Tests
             Assert.Equal("idx_age", result.IndexName);
             Assert.Equal(IndexOptimizer.FilterCompleteness.PartialAnd, result.FilterCompleteness);
         }
+
+        [Fact]
+        public void Optimizer_OrElse_Equality_SameIndexedField_ReturnsInValues()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = ["Name"] }
+            };
+
+            Expression<Func<TestEntity, bool>> predicate = x => x.Name == "Alice" || x.Name == "Bob";
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_name", result.IndexName);
+            Assert.NotNull(result.InValues);
+            Assert.Equal(2, result.InValues!.Count);
+            Assert.Contains("Alice", result.InValues);
+            Assert.Contains("Bob", result.InValues);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_Contains_OnIndexedField_ReturnsInValues()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = ["Name"] }
+            };
+
+            var names = new[] { "Alice", "Bob" };
+            Expression<Func<TestEntity, bool>> predicate = x => names.Contains(x.Name);
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.Equal("idx_name", result.IndexName);
+            Assert.NotNull(result.InValues);
+            Assert.Equal(2, result.InValues!.Count);
+            Assert.Contains("Alice", result.InValues);
+            Assert.Contains("Bob", result.InValues);
+            Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
+        }
     }
 }
