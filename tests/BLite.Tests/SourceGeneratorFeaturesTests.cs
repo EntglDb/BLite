@@ -1,4 +1,5 @@
 using BLite.Bson;
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -194,6 +195,55 @@ public class SourceGeneratorFeaturesTests : IDisposable
         Assert.Contains("tag1", retrieved.Tags);
         Assert.Contains("tag2", retrieved.Tags);
         Assert.Contains("tag3", retrieved.Tags);
+    }
+
+    [Fact]
+    public async Task HashSet_FindAll_Works()
+    {
+        // Arrange - insert entity with HashSet data
+        var entity = new EntityWithAdvancedCollections
+        {
+            Name = "Test HashSet FindAll"
+        };
+        entity.Tags.Add("alpha");
+        entity.Tags.Add("beta");
+
+        await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+
+        // Act - use FindAllAsync which goes through the Deserialize path
+        var all = await _db.AdvancedCollectionEntities.FindAllAsync().ToListAsync();
+
+        // Assert
+        Assert.Single(all);
+        Assert.Equal("Test HashSet FindAll", all[0].Name);
+        Assert.Contains("alpha", all[0].Tags);
+        Assert.Contains("beta", all[0].Tags);
+    }
+
+    [Fact]
+    public async Task HashSet_Where_Works()
+    {
+        // Arrange - insert entity with HashSet data
+        var entity = new EntityWithAdvancedCollections
+        {
+            Name = "Test HashSet Where"
+        };
+        entity.Tags.Add("x");
+        entity.Tags.Add("y");
+
+        await _db.AdvancedCollectionEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+
+        // Act - use Where which goes through BsonExpressionEvaluator predicate path
+        var results = await _db.AdvancedCollectionEntities.AsQueryable()
+            .Where(e => e.Name == "Test HashSet Where")
+            .ToListAsync();
+
+        // Assert
+        Assert.Single(results);
+        Assert.Equal("Test HashSet Where", results[0].Name);
+        Assert.Contains("x", results[0].Tags);
     }
 
     [Fact]
