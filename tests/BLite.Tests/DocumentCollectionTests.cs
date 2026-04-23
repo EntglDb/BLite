@@ -292,6 +292,83 @@ public class DocumentCollectionTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task SingleFile_CrossCollectionFsi_IsSharedAcrossCollections()
+    {
+        const int preFillNameLen = 10000;
+        const int insertNameLen = 400;
+
+        var dbPath = Path.Combine(Path.GetTempPath(), $"test_fsi_shared_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var seedDb = new TestDbContext(dbPath))
+            {
+                await seedDb.Users.InsertAsync(new User { Name = new string('X', preFillNameLen), Age = 0 });
+                await seedDb.SaveChangesAsync();
+            }
+
+            using (var db = new TestDbContext(dbPath))
+            {
+                await db.Users.InsertAsync(new User { Name = new string('A', insertNameLen), Age = 1 });
+                await db.SaveChangesAsync();
+
+                await db.ComplexUsers.InsertAsync(new ComplexUser { Name = new string('B', insertNameLen) });
+                await db.SaveChangesAsync();
+
+                Assert.Equal(2, await db.Users.CountAsync());
+                Assert.Equal(1, await db.ComplexUsers.CountAsync());
+            }
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
+    }
+
+    [Fact]
+    public async Task RolledBackInsert_RestoresFreeSpaceIndexForNextInsert()
+    {
+        const int preFillNameLen = 10000;
+        const int insertNameLen = 2500;
+
+        var dbPath = Path.Combine(Path.GetTempPath(), $"test_fsi_insert_rollback_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new TestDbContext(dbPath))
+            {
+                await db.Users.InsertAsync(new User { Name = new string('X', preFillNameLen), Age = 0 });
+                await db.SaveChangesAsync();
+            }
+
+            long fileSizeBeforeCommittedInsert = new FileInfo(dbPath).Length;
+
+            using (var db = new TestDbContext(dbPath))
+            {
+                using (var txn = db.BeginTransaction())
+                {
+                    await db.Users.InsertAsync(new User { Name = new string('R', insertNameLen), Age = 1 }, txn);
+                    await txn.RollbackAsync();
+                }
+
+                await db.Users.InsertAsync(new User { Name = new string('C', insertNameLen), Age = 2 });
+                await db.SaveChangesAsync();
+
+                Assert.Equal(2, await db.Users.CountAsync());
+            }
+
+            long fileSizeAfterCommittedInsert = new FileInfo(dbPath).Length;
+            Assert.Equal(fileSizeBeforeCommittedInsert, fileSizeAfterCommittedInsert);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
+    }
+
     public void Dispose()
     {
         _db?.Dispose();

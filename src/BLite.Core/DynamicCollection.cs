@@ -85,13 +85,18 @@ public sealed class DynamicCollection : IDisposable
     /// <param name="collectionName">Name of the collection</param>
     /// <param name="idType">The BSON type used for the _id field (default: ObjectId)</param>
     public DynamicCollection(StorageEngine storage, ITransactionHolder transactionHolder, string collectionName, BsonIdType idType = BsonIdType.ObjectId)
+        : this(storage, transactionHolder, collectionName, idType, null)
+    {
+    }
+
+    internal DynamicCollection(StorageEngine storage, ITransactionHolder transactionHolder, string collectionName, BsonIdType idType, FreeSpaceIndex? freeSpaceIndex)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _transactionHolder = transactionHolder ?? throw new ArgumentNullException(nameof(transactionHolder));
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _idType = idType;
         _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
-        _fsi = new FreeSpaceIndex(_storage.PageSize);
+        _fsi = freeSpaceIndex ?? new FreeSpaceIndex(_storage.PageSize);
         _isPageLocked = _storage.IsPageLocked;
 
         // Load or create collection metadata
@@ -1286,6 +1291,7 @@ public sealed class DynamicCollection : IDisposable
             };
             header.WriteTo(buffer);
             _storage.WritePage(pageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
+            SnapshotFsiForTransaction(transaction, pageId);
             _fsi.Update(pageId, header.AvailableFreeSpace);
             _currentDataPage = pageId;
         }
@@ -1363,6 +1369,7 @@ public sealed class DynamicCollection : IDisposable
             header.WriteTo(buffer);
 
             _storage.WritePage(pageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
+            SnapshotFsiForTransaction(transaction, pageId);
             _fsi.Update(pageId, header.AvailableFreeSpace);
 
             return slotIndex;
@@ -1394,6 +1401,18 @@ public sealed class DynamicCollection : IDisposable
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private void SnapshotFsiForTransaction(ITransaction transaction, uint pageId)
+    {
+        if (_fsi.SnapshotForTransaction(transaction.TransactionId, pageId))
+        {
+            var txnId = transaction.TransactionId;
+            transaction.OnRollback += () => _fsi.RollbackTransaction(txnId);
+
+            if (transaction is Transaction concreteTxn)
+                concreteTxn.OnCommit += () => _fsi.CommitTransaction(txnId);
         }
     }
 

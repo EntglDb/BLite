@@ -21,6 +21,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 {
     protected readonly StorageEngine _storage;
     internal readonly CDC.ChangeStreamDispatcher _cdc;
+    private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
     protected bool _disposed;
 
@@ -33,6 +34,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     {
         _storage = null!;
         _cdc = null!;
+        _freeSpaceIndexes = null!;
         _kvStore = null!;
         _model = new System.Collections.Generic.Dictionary<Type, object>();
         InitializeCollections();
@@ -74,6 +76,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
         _storage.RegisterCdc(_cdc);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
         // Initialize model before collections
@@ -103,6 +106,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _cdc = new CDC.ChangeStreamDispatcher();
         _storage.RegisterCdc(_cdc);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
         var modelBuilder = new ModelBuilder();
@@ -131,7 +135,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     public BLiteSession OpenSession()
     {
         if (_disposed) throw new ObjectDisposedException(GetType().Name);
-        return new BLiteSession(_storage);
+        return new BLiteSession(_storage, _freeSpaceIndexes);
     }
 
     /// <summary>
@@ -156,7 +160,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             customName = builder?.CollectionName;
         }
 
-        var collection = new DocumentCollection<TId, T>(_storage, holder, mapper, customName);
+        var collection = new DocumentCollection<TId, T>(_storage, holder, mapper, customName, _freeSpaceIndexes.GetIndex());
 
         if (builder != null)
         {
@@ -226,7 +230,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         }
 
         _registeredMappers.Add(mapper);
-        var collection = new DocumentCollection<TId, T>(_storage, this, mapper, customName);
+        var collection = new DocumentCollection<TId, T>(_storage, this, mapper, customName, _freeSpaceIndexes.GetIndex());
 
         // Apply configurations from ModelBuilder
         if (builder != null)
