@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="4.4.0"></a>
+## [4.4.0](https://www.github.com/EntglDb/BLite/releases/tag/v4.4.0) (2026-04-23)
+
+### Features
+
+* add samples/BLite.BlazorWasm counter demo + fix BLite.Wasm TFM ([#64](https://www.github.com/EntglDb/BLite/issues/64)) ([0c4c404](https://www.github.com/EntglDb/BLite/commit/0c4c40404326799a377b9413d514ead97599b278))
+
 <a name="4.3.1"></a>
 ## [4.3.1](https://www.github.com/EntglDb/BLite/releases/tag/v4.3.1) (2026-04-15)
 
