@@ -12,6 +12,8 @@ namespace BLite.Tests
             public string Name { get; set; } = "";
             public int Age { get; set; }
             public bool IsActive { get; set; }
+            public Guid ExternalId { get; set; }
+            public byte[] Payload { get; set; } = [];
         }
 
         [Fact]
@@ -351,6 +353,91 @@ namespace BLite.Tests
             Assert.Contains("Alice", result.InValues);
             Assert.Contains("Bob", result.InValues);
             Assert.Equal(IndexOptimizer.FilterCompleteness.Exact, result.FilterCompleteness);
+        }
+
+        [Fact]
+        public void Optimizer_Contains_WithDuplicateValues_DeDupesInValues()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_name", PropertyPaths = ["Name"] }
+            };
+
+            var names = new[] { "Alice", "Alice", "Bob", "Bob" };
+            Expression<Func<TestEntity, bool>> predicate = x => names.Contains(x.Name);
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.NotNull(result.InValues);
+            Assert.Equal(2, result.InValues!.Count);
+            Assert.Equal(["Alice", "Bob"], result.InValues);
+        }
+
+        [Fact]
+        public void Optimizer_Contains_GuidField_ReturnsInValues()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_external_id", PropertyPaths = ["ExternalId"] }
+            };
+
+            var a = Guid.NewGuid();
+            var b = Guid.NewGuid();
+            var ids = new[] { a, b };
+            Expression<Func<TestEntity, bool>> predicate = x => ids.Contains(x.ExternalId);
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.NotNull(result.InValues);
+            Assert.Equal([a, b], result.InValues);
+        }
+
+        [Fact]
+        public void Optimizer_Contains_ByteArrayField_ReturnsInValues()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_payload", PropertyPaths = ["Payload"] }
+            };
+
+            var p1 = new byte[] { 1, 2, 3 };
+            var p2 = new byte[] { 4, 5, 6 };
+            var payloads = new[] { p1, p2, p1 };
+            Expression<Func<TestEntity, bool>> predicate = x => payloads.Contains(x.Payload);
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.NotNull(result.InValues);
+            Assert.Equal(2, result.InValues!.Count);
+            Assert.Same(p1, result.InValues[0]);
+            Assert.Same(p2, result.InValues[1]);
+        }
+
+        [Fact]
+        public void Optimizer_Contains_ByteArrayField_DeDupesByValue()
+        {
+            var indexes = new List<CollectionIndexInfo>
+            {
+                new CollectionIndexInfo { Name = "idx_payload", PropertyPaths = ["Payload"] }
+            };
+
+            var p1 = new byte[] { 1, 2, 3 };
+            var p1Copy = new byte[] { 1, 2, 3 };
+            var payloads = new[] { p1, p1Copy };
+            Expression<Func<TestEntity, bool>> predicate = x => payloads.Contains(x.Payload);
+            var model = new QueryModel { WhereClause = predicate };
+
+            var result = IndexOptimizer.TryOptimize<TestEntity>(model, indexes);
+
+            Assert.NotNull(result);
+            Assert.NotNull(result.InValues);
+            Assert.Single(result.InValues);
         }
     }
 }

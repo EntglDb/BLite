@@ -2480,8 +2480,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 if (indexOpt.InValues != null)
                 {
                     int inCount = 0;
+                    var seen = new HashSet<object?>(s_inProbeKeyComparer);
                     foreach (var key in indexOpt.InValues)
                     {
+                        if (!seen.Add(key)) continue;
                         inCount += index.CountRange(key, key, true, true, null);
                     }
                     return inCount;
@@ -2670,8 +2672,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 {
                     if (indexOpt.InValues != null)
                     {
+                        var seen = new HashSet<object?>(s_inProbeKeyComparer);
                         foreach (var key in indexOpt.InValues)
                         {
+                            if (!seen.Add(key)) continue;
                             await foreach (var item in QueryIndexAsync(indexOpt.IndexName, key, key, true, 0, int.MaxValue, transaction, ct))
                                 if (indexOpt.FilterCompleteness == Query.IndexOptimizer.FilterCompleteness.Exact || GetCompiled()(item)) { yield return item; if (++yielded >= fetchLimit) yield break; }
                         }
@@ -2710,6 +2714,31 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 yield return item;
                 if (++yielded >= fetchLimit) yield break;
             }
+        }
+    }
+
+    private static readonly IEqualityComparer<object?> s_inProbeKeyComparer = new InProbeKeyComparer();
+
+    private sealed class InProbeKeyComparer : IEqualityComparer<object?>
+    {
+        bool IEqualityComparer<object?>.Equals(object? x, object? y)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (x is null || y is null) return false;
+            if (x is byte[] xb && y is byte[] yb) return xb.AsSpan().SequenceEqual(yb);
+            return x.Equals(y);
+        }
+
+        int IEqualityComparer<object?>.GetHashCode(object? obj)
+        {
+            if (obj is null) return 0;
+            if (obj is byte[] bytes)
+            {
+                var hc = new HashCode();
+                foreach (var b in bytes) hc.Add(b);
+                return hc.ToHashCode();
+            }
+            return obj.GetHashCode();
         }
     }
 
