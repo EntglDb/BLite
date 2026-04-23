@@ -66,7 +66,7 @@ internal sealed class FreeSpaceIndex
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnterGate() => _gate?.WaitAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+    private void EnterGate() => _gate?.Wait();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ExitGate()
