@@ -211,6 +211,87 @@ public class DocumentCollectionTests : IDisposable
         Assert.Equal("SpecifiedID", found.Name);
     }
 
+    /// <summary>
+    /// Regression scenario: two separate DocumentCollection instances that share the same
+    /// physical "users" collection (same StorageEngine, same on-disk pages) are created
+    /// after a page is partially filled.  Each rebuilds its own in-memory FreeSpaceIndex
+    /// from disk; both therefore see page P as having ~6 120 B free (stale after process 1
+    /// writes).
+    ///
+    /// Page = 16 384 B, header = 24 B, SlotEntry = 8 B, BSON overhead ≈ 45 B per User:
+    ///   pre-fill  : name = 10 187 chars → doc = 10 232 B → needs 10 240 B → leaves 6 120 B free
+    ///   insert doc: name =  3 500 chars → doc =  3 545 B → needs  3 553 B
+    ///   after col1 writes: 6 120 − 3 553 = 2 567 B remain — too little for col2 (3 553 > 2 567)
+    ///
+    /// DESIRED  : both inserts succeed (engine handles the stale FSI gracefully by retrying on
+    ///            a newly allocated page).
+    /// CURRENT  : the second InsertAsync throws InvalidOperationException("Not enough space …").
+    /// </summary>
+    [Fact]
+    public async Task TwoCollectionInstances_StaleFSI_SecondInsertShouldSucceed()
+    {
+        const int preFillNameLen = 10000;
+        const int insertNameLen  =  400;
+
+        var dbPath = Path.Combine(Path.GetTempPath(), $"test_fsi_stale_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new TestDbContext(dbPath);
+
+            // ── Step 1: fill the "users" data page to ≈10 KB ──────────────────────
+            await db.Users.InsertAsync(new User { Name = new string('X', preFillNameLen), Age = 0 });
+            await db.SaveChangesAsync();
+
+            // ── Step 3 (process 1): insert 4 KB document via col1 ─────────────────
+            // col1 FSI: P = 6120 ≥ 3553 → uses page P → commits.
+            // col1 FSI updated: P = 2567.  col2 FSI is STILL stale: P = 6120.
+            var col1 = db.Users;
+            List<User> docs1 = new List<User>();
+
+            for (int i = 0; i < 15; i++)
+            {
+                docs1.Add(new User { Name = new string('A', insertNameLen), Age = i });
+            }
+
+            var tasks = new List<Task>();
+
+            var col2 = db.ComplexUsers;
+            List<ComplexUser> docs2 = new List<ComplexUser>();
+            for (int i = 0; i < 15; i++)
+            {
+                docs2.Add(new ComplexUser { Name = new string('B', insertNameLen) });
+            }
+
+            tasks.Add(Task.Run(async () =>
+            {
+                await Task.Delay(1);
+                var id1 = await col1.InsertBulkAsync(docs1);
+                return id1;
+            }));
+
+            foreach(var doc in docs2)
+            {
+                tasks.Add(Task.Run(async () =>
+                {
+                    var id2 = await col2.InsertAsync(doc);
+                    return id2;
+                }));
+            }
+
+            await Task.WhenAll(tasks).ContinueWith(t =>
+            {
+                Assert.False(t.IsFaulted, $"Second insert failed with exception: {t.Exception}");
+            });
+            
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            var wal = Path.ChangeExtension(dbPath, ".wal");
+            if (File.Exists(wal)) File.Delete(wal);
+        }
+    }
+
     public void Dispose()
     {
         _db?.Dispose();
