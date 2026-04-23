@@ -206,7 +206,7 @@ internal static class IndexOptimizer
                 TryGetPointValues(right, out var rightValues))
             {
                 var merged = new List<object?>(leftValues.Count + rightValues.Count);
-                var seen = new HashSet<object?>();
+                var seen = new HashSet<object?>(s_inValueComparer);
                 foreach (var v in leftValues)
                 {
                     if (seen.Add(v)) merged.Add(v);
@@ -667,9 +667,26 @@ internal static class IndexOptimizer
             collectionExpr = call.Object;
             memberExpr = call.Arguments[0];
         }
-        else if (call.Object == null && call.Arguments.Count == 2)
+        else if (call.Object == null && (call.Arguments.Count == 2 || call.Arguments.Count == 3))
         {
-            // Enumerable.Contains(list, x.Prop)
+            // Enumerable.Contains(list, x.Prop) or MemoryExtensions.Contains(span, x.Prop, comparer)
+            // where the comparer argument is typically null.
+            if (call.Arguments.Count == 3)
+            {
+                object? comparer;
+                try
+                {
+                    comparer = EvaluateExpression<object>(call.Arguments[2]);
+                }
+                catch
+                {
+                    return false;
+                }
+
+                if (comparer != null)
+                    return false;
+            }
+
             collectionExpr = call.Arguments[0];
             memberExpr = call.Arguments[1];
         }
@@ -707,16 +724,46 @@ internal static class IndexOptimizer
             return false;
 
         var list = new List<object?>();
+        var seen = new HashSet<object?>(s_inValueComparer);
         foreach (var raw in enumerable)
         {
             var converted = TryApplyConverter(propertyPath, raw, registry);
             if (!IsIndexableValue(converted))
                 return false;
-            list.Add(converted ?? DBNull.Value);
+            var normalized = converted ?? DBNull.Value;
+            if (seen.Add(normalized))
+            {
+                list.Add(normalized);
+            }
         }
 
         values = list;
         return true;
+    }
+
+    private static readonly IEqualityComparer<object?> s_inValueComparer = new InValueComparer();
+
+    private sealed class InValueComparer : IEqualityComparer<object?>
+    {
+        bool IEqualityComparer<object?>.Equals(object? x, object? y)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (x is null || y is null) return false;
+            if (x is byte[] xb && y is byte[] yb) return xb.AsSpan().SequenceEqual(yb);
+            return x.Equals(y);
+        }
+
+        int IEqualityComparer<object?>.GetHashCode(object? obj)
+        {
+            if (obj is null) return 0;
+            if (obj is byte[] bytes)
+            {
+                var hc = new HashCode();
+                foreach (var b in bytes) hc.Add(b);
+                return hc.ToHashCode();
+            }
+            return obj.GetHashCode();
+        }
     }
 
     private static object? TryApplyConverter(string propertyPath, object? value, ValueConverterRegistry? registry)
@@ -731,7 +778,7 @@ internal static class IndexOptimizer
     [
         typeof(int), typeof(long), typeof(double), typeof(decimal),
         typeof(bool), typeof(string), typeof(DateTime), typeof(DateTimeOffset),
-        typeof(ObjectId)
+        typeof(ObjectId), typeof(Guid), typeof(byte[])
     ];
 
     /// <summary>

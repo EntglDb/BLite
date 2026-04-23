@@ -52,6 +52,23 @@ public class CrossCollectionQueryIsolationTests : IDisposable
         Assert.Equal(2, count);
     }
 
+    [Fact]
+    public async Task Contains_WithDuplicateValues_DoesNotDoubleCount()
+    {
+        await _db.IntEntities.EnsureIndexAsync(x => x.Name!, "idx_intentities_name", false);
+
+        await _db.IntEntities.InsertAsync(new IntEntity { Id = 1, Name = "A" });
+        await _db.IntEntities.InsertAsync(new IntEntity { Id = 2, Name = "B" });
+        await _db.SaveChangesAsync();
+
+        var names = new[] { "A", "A", "B", "B" };
+        var count = _db.IntEntities.AsQueryable()
+            .Where(x => names.Contains(x.Name))
+            .Count();
+
+        Assert.Equal(2, count);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
