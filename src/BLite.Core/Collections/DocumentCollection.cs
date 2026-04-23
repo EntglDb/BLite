@@ -123,6 +123,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
     [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName = null)
+        : this(storage, transactionHolder, mapper, collectionName, null)
+    {
+    }
+
+    [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
+    [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
+    internal DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName, FreeSpaceIndex? freeSpaceIndex)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _transactionHolder = transactionHolder ?? throw new ArgumentNullException(nameof(transactionHolder));
@@ -131,7 +138,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
         _indexManager = new CollectionIndexManager<TId, T>(_storage, _mapper, _collectionName);
-        _fsi = new FreeSpaceIndex(_storage.PageSize);
+        _fsi = freeSpaceIndex ?? new FreeSpaceIndex(_storage.PageSize);
         _isPageLocked = _storage.IsPageLocked;
 
         // Calculate max document size dynamically based on page size
@@ -168,6 +175,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         // DocumentCollection can reuse partially-filled pages instead of always allocating new ones.
         RebuildFreeSpaceIndex();
     }
+
 
     /// <summary>
     /// Scans the header of every data page belonging to this collection and
@@ -1009,7 +1017,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             {
                 // Page not yet in FSI (e.g., after a rollback recovery): read header from disk.
                 Span<byte> page = stackalloc byte[SlottedPageHeader.Size];
-                _storage.ReadPage(_currentDataPage, null, page);
+                _storage.ReadPageHeader(_currentDataPage, null, page);
                 var header = SlottedPageHeader.ReadFrom(page);
 
                 if (header.AvailableFreeSpace >= requiredBytes)
@@ -1061,7 +1069,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 _storage.WritePage(pageId, transaction.TransactionId, buffer);
             }
 
-            // Track free space
+            SnapshotFsiForTransaction(transaction, pageId);
             _fsi.Update(pageId, header.AvailableFreeSpace);
             _currentDataPage = pageId;
         }
@@ -1158,7 +1166,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 _storage.WritePage(pageId, transaction.TransactionId, buffer);
             }
 
-            // UpdateAsync free space index
+            SnapshotFsiForTransaction(transaction, pageId);
             _fsi.Update(pageId, header.AvailableFreeSpace);
 
             return slotIndex;
@@ -1341,7 +1349,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             );
             ((Transaction)transaction).AddWrite(writeOp);
 
-            // UpdateAsync free space index
+            SnapshotFsiForTransaction(transaction, primaryPageId);
             _fsi.Update(primaryPageId, header.AvailableFreeSpace);
 
             return (primaryPageId, slotIndex);
@@ -2265,16 +2273,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             // Update the free space index with post-compaction free bytes.
             // Snapshot the pre-modification value first so that a rollback can restore it.
             var compactedHeader = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
-            if (_fsi.SnapshotForTransaction(transaction.TransactionId, location.PageId))
-            {
-                // First page tracked for this transaction — subscribe once to restore/cleanup.
-                var txnId = transaction.TransactionId;
-                transaction.OnRollback += () => _fsi.RollbackTransaction(txnId);
-                // OnCommit is only on the concrete Transaction type (not on ITransaction)
-                // to avoid a breaking change to the public interface.
-                if (transaction is Transactions.Transaction concreteTxn)
-                    concreteTxn.OnCommit += () => _fsi.CommitTransaction(txnId);
-            }
+            SnapshotFsiForTransaction(transaction, location.PageId);
             _fsi.Update(location.PageId, compactedHeader.AvailableFreeSpace);
 
             // Remove from primary index
@@ -2714,6 +2713,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 yield return item;
                 if (++yielded >= fetchLimit) yield break;
             }
+        }
+    }
+
+    private void SnapshotFsiForTransaction(ITransaction transaction, uint pageId)
+    {
+        if (_fsi.SnapshotForTransaction(transaction.TransactionId, pageId))
+        {
+            var txnId = transaction.TransactionId;
+            transaction.OnRollback += () => _fsi.RollbackTransaction(txnId);
+
+            if (transaction is Transaction concreteTxn)
+                concreteTxn.OnCommit += () => _fsi.CommitTransaction(txnId);
         }
     }
 

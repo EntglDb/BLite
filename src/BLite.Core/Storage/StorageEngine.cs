@@ -84,6 +84,7 @@ public sealed partial class StorageEngine : IDisposable
     /// Exposed so that higher-level components (collections, engine, sessions) can read the same settings.
     /// </summary>
     internal LockTimeout LockTimeout => _config.LockTimeout;
+    internal bool UsesSeparateCollectionFiles => _collectionFiles != null;
 
     public StorageEngine(string databasePath, PageFileConfig config)
     {

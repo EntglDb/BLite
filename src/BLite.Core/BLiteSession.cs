@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.Collections;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
@@ -26,14 +27,16 @@ namespace BLite.Core;
 public sealed class BLiteSession : ITransactionHolder, IDisposable
 {
     private readonly StorageEngine _storage;
+    private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly ConcurrentDictionary<string, Lazy<DynamicCollection>> _collections =
         new(StringComparer.OrdinalIgnoreCase);
     private ITransaction? _currentTransaction;
     private bool _disposed;
 
-    internal BLiteSession(StorageEngine storage)
+    internal BLiteSession(StorageEngine storage, FreeSpaceIndexProvider freeSpaceIndexes)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _freeSpaceIndexes = freeSpaceIndexes ?? throw new ArgumentNullException(nameof(freeSpaceIndexes));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -142,7 +145,7 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
 
         return _collections.GetOrAdd(name,
             n => new Lazy<DynamicCollection>(
-                () => new DynamicCollection(_storage, this, n, idType),
+                () => new DynamicCollection(_storage, this, n, idType, _freeSpaceIndexes.GetIndex()),
                 System.Threading.LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 

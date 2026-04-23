@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.Collections;
 using BLite.Core.KeyValue;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
@@ -24,6 +25,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 {
     private readonly StorageEngine _storage;
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
+    private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
     private bool _disposed;
 
@@ -69,6 +71,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             throw new ArgumentNullException(nameof(databasePath));
 
         _storage = new StorageEngine(databasePath, config);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
     }
 
@@ -79,6 +82,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     internal BLiteEngine(StorageEngine storage, BLiteKvOptions? kvOptions = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
     }
 
@@ -151,7 +155,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     public BLiteSession OpenSession()
     {
         ThrowIfDisposed();
-        return new BLiteSession(_storage);
+        return new BLiteSession(_storage, _freeSpaceIndexes);
     }
 
     #endregion
@@ -182,7 +186,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentNullException(nameof(name));
 
-        return _collections.GetOrAdd(name, n => new DynamicCollection(_storage, this, n, idType));
+        return _collections.GetOrAdd(name, n => new DynamicCollection(_storage, this, n, idType, _freeSpaceIndexes.GetIndex()));
     }
 
     /// <summary>
@@ -224,7 +228,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         // own metadata from storage, so the idType argument is irrelevant for
         // existing collections (only matters when creating brand-new ones).
         foreach (var meta in _storage.GetAllCollectionsMetadata())
-            _collections.GetOrAdd(meta.Name, n => new DynamicCollection(_storage, this, n));
+            _collections.GetOrAdd(meta.Name, n => new DynamicCollection(_storage, this, n, BsonIdType.ObjectId, _freeSpaceIndexes.GetIndex()));
 
         return _collections.Keys.ToList();
     }

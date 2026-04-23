@@ -250,4 +250,34 @@ public class FreeSpaceIndexUnitTests
         var found = fsi.FindPage(8000, null);
         Assert.Equal(7u, found);
     }
+
+    [Fact]
+    public void RollbackTransaction_Removes_NewlyTrackedPage()
+    {
+        const ulong txnId = 7;
+        var fsi = new FreeSpaceIndex(PageSize);
+
+        Assert.True(fsi.SnapshotForTransaction(txnId, 123));
+        fsi.Update(123, 4096);
+
+        fsi.RollbackTransaction(txnId);
+
+        Assert.False(fsi.TryGetFreeBytes(123, out _));
+    }
+
+    [Fact]
+    public void RollbackTransaction_Restores_PreviousFreeBytes()
+    {
+        const ulong txnId = 11;
+        var fsi = new FreeSpaceIndex(PageSize);
+        fsi.Update(42, 6000);
+
+        Assert.True(fsi.SnapshotForTransaction(txnId, 42));
+        fsi.Update(42, 1200);
+
+        fsi.RollbackTransaction(txnId);
+
+        Assert.True(fsi.TryGetFreeBytes(42, out var freeBytes));
+        Assert.Equal(6000, freeBytes);
+    }
 }

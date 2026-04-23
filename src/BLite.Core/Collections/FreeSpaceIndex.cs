@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace BLite.Core.Collections;
 
@@ -14,6 +15,18 @@ namespace BLite.Core.Collections;
 internal sealed class FreeSpaceIndex
 {
     private const int BucketCount = 16;
+
+    private readonly struct PageSnapshot
+    {
+        public PageSnapshot(bool exists, ushort freeBytes)
+        {
+            Exists = exists;
+            FreeBytes = freeBytes;
+        }
+
+        public bool Exists { get; }
+        public ushort FreeBytes { get; }
+    }
 
     // One growable uint[] per bucket; each element is a page ID.
     private readonly uint[][] _buckets;
@@ -29,13 +42,14 @@ internal sealed class FreeSpaceIndex
     // Per-transaction snapshots of pre-modification FSI values.
     // Keyed by transaction ID; inner dictionary maps page ID → free bytes before first modification.
     // Used to proactively restore the FSI when a transaction is rolled back.
-    private readonly Dictionary<ulong, Dictionary<uint, ushort>> _txnSnapshots = new();
+    private readonly Dictionary<ulong, Dictionary<uint, PageSnapshot>> _txnSnapshots = new();
 
     // Width of each bucket in bytes, computed from the *usable* page space so that
     // bucket boundaries reflect real available room (not header overhead).
     private readonly int _bucketWidth;
+    private readonly SemaphoreSlim? _gate;
 
-    public FreeSpaceIndex(int pageSize)
+    public FreeSpaceIndex(int pageSize, bool serializeAccess = false)
     {
         // Subtract the fixed page-header size so that bucket boundaries are aligned to
         // actual free bytes a caller would observe in SlottedPageHeader.AvailableFreeSpace.
@@ -46,8 +60,18 @@ internal sealed class FreeSpaceIndex
         _buckets = new uint[BucketCount][];
         _counts = new int[BucketCount];
         _freeMap = new Dictionary<uint, ushort>();
+        _gate = serializeAccess ? new SemaphoreSlim(1, 1) : null;
         for (int i = 0; i < BucketCount; i++)
             _buckets[i] = new uint[4]; // initial capacity per bucket
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnterGate() => _gate?.Wait();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ExitGate()
+    {
+        if (_gate != null) _gate.Release();
     }
 
     /// <summary>Returns the bucket index for a given free-byte count.</summary>
@@ -62,6 +86,185 @@ internal sealed class FreeSpaceIndex
     /// No heap allocation in steady state (arrays only grow when new pages are added).
     /// </summary>
     public void Update(uint pageId, int freeBytes)
+    {
+        EnterGate();
+        try
+        {
+            UpdateCore(pageId, freeBytes);
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    /// <summary>
+    /// Tries to return the stored free bytes for a page without a disk read.
+    /// Returns false if the page is not tracked in this index.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetFreeBytes(uint pageId, out ushort freeBytes)
+    {
+        EnterGate();
+        try
+        {
+            return _freeMap.TryGetValue(pageId, out freeBytes);
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    /// <summary>
+    /// Finds a page that has at least <paramref name="requiredBytes"/> of free space
+    /// and is not locked by another transaction.
+    /// Returns 0 if no suitable page is found.
+    /// Complexity: O(BucketCount) bucket iterations plus O(pages_scanned) within each
+    /// bucket until an unlocked candidate is found; O(1) under no lock contention.
+    /// </summary>
+    /// <param name="requiredBytes">Minimum free bytes required.</param>
+    /// <param name="isPageLocked">
+    ///   Optional predicate that returns <c>true</c> when a page is locked by another
+    ///   transaction and should be skipped.  Pass <c>null</c> to treat every page as
+    ///   available (useful for unit testing without a real storage engine).
+    /// </param>
+    public uint FindPage(int requiredBytes, Func<uint, bool>? isPageLocked = null)
+    {
+        EnterGate();
+        try
+        {
+            return FindPageCore(requiredBytes, isPageLocked);
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    /// <summary>
+    /// Finds a page that has at least <paramref name="requiredBytes"/> of free space
+    /// and is not locked by another transaction.
+    /// This overload accepts a two-argument predicate so callers can pass a cached
+    /// method-group delegate (e.g. <c>_storage.IsPageLocked</c>) together with a
+    /// per-call <paramref name="txnId"/> without allocating a closure on each call.
+    /// Returns 0 if no suitable page is found.
+    /// </summary>
+    /// <param name="requiredBytes">Minimum free bytes required.</param>
+    /// <param name="txnId">Transaction ID to exclude from locking checks.</param>
+    /// <param name="isPageLocked">
+    ///   Optional predicate; called as <c>isPageLocked(pageId, txnId)</c> and should
+    ///   return <c>true</c> when the page is locked by another transaction.
+    ///   Pass <c>null</c> to treat every page as available.
+    /// </param>
+    public uint FindPage(int requiredBytes, ulong txnId, Func<uint, ulong, bool>? isPageLocked)
+    {
+        EnterGate();
+        try
+        {
+            return FindPageCore(requiredBytes, txnId, isPageLocked);
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Transaction-aware FSI snapshot / restore
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Records the current free-byte count for <paramref name="pageId"/> as the
+    /// pre-modification snapshot for <paramref name="txnId"/> (first call per page wins).
+    /// Returns <c>true</c> when this is the very first page registered for the transaction
+    /// (i.e., the caller should subscribe to that transaction's rollback/commit events).
+    /// </summary>
+    public bool SnapshotForTransaction(ulong txnId, uint pageId)
+    {
+        EnterGate();
+        try
+        {
+            if (!_txnSnapshots.TryGetValue(txnId, out var snap))
+            {
+                snap = new Dictionary<uint, PageSnapshot>();
+                _txnSnapshots[txnId] = snap;
+
+                // Only keep the value that existed *before* the first modification in this transaction.
+                snap[pageId] = _freeMap.TryGetValue(pageId, out var fb)
+                    ? new PageSnapshot(true, fb)
+                    : default;
+                return true; // first page for this transaction
+            }
+
+            // Only keep the value that existed *before* the first modification in this transaction.
+            if (!snap.ContainsKey(pageId))
+            {
+                snap[pageId] = _freeMap.TryGetValue(pageId, out var fb)
+                    ? new PageSnapshot(true, fb)
+                    : default;
+            }
+
+            return false;
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    /// <summary>
+    /// Restores the FSI to the pre-modification state for all pages touched by
+    /// <paramref name="txnId"/> and discards the snapshot.  Called on transaction rollback
+    /// so that subsequent inserts are not incorrectly routed to pages that are physically
+    /// full (because the WAL has already reverted the physical pages).
+    /// </summary>
+    public void RollbackTransaction(ulong txnId)
+    {
+        EnterGate();
+        try
+        {
+            if (_txnSnapshots.TryGetValue(txnId, out var snap))
+            {
+                foreach (var (pageId, snapshot) in snap)
+                {
+                    if (snapshot.Exists)
+                        UpdateCore(pageId, snapshot.FreeBytes);
+                    else
+                        RemoveCore(pageId);
+                }
+
+                _txnSnapshots.Remove(txnId);
+            }
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    /// <summary>
+    /// Discards the snapshot recorded for <paramref name="txnId"/> after a successful
+    /// commit (the current FSI values are already consistent with the committed state).
+    /// </summary>
+    public void CommitTransaction(ulong txnId)
+    {
+        EnterGate();
+        try
+        {
+            _txnSnapshots.Remove(txnId);
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    private void UpdateCore(uint pageId, int freeBytes)
     {
         int newBucket = GetBucket(freeBytes);
 
@@ -85,28 +288,16 @@ internal sealed class FreeSpaceIndex
         _freeMap[pageId] = (ushort)freeBytes;
     }
 
-    /// <summary>
-    /// Tries to return the stored free bytes for a page without a disk read.
-    /// Returns false if the page is not tracked in this index.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetFreeBytes(uint pageId, out ushort freeBytes) =>
-        _freeMap.TryGetValue(pageId, out freeBytes);
+    private void RemoveCore(uint pageId)
+    {
+        if (!_freeMap.TryGetValue(pageId, out var freeBytes))
+            return;
 
-    /// <summary>
-    /// Finds a page that has at least <paramref name="requiredBytes"/> of free space
-    /// and is not locked by another transaction.
-    /// Returns 0 if no suitable page is found.
-    /// Complexity: O(BucketCount) bucket iterations plus O(pages_scanned) within each
-    /// bucket until an unlocked candidate is found; O(1) under no lock contention.
-    /// </summary>
-    /// <param name="requiredBytes">Minimum free bytes required.</param>
-    /// <param name="isPageLocked">
-    ///   Optional predicate that returns <c>true</c> when a page is locked by another
-    ///   transaction and should be skipped.  Pass <c>null</c> to treat every page as
-    ///   available (useful for unit testing without a real storage engine).
-    /// </param>
-    public uint FindPage(int requiredBytes, Func<uint, bool>? isPageLocked = null)
+        RemoveFromBucket(pageId, GetBucket(freeBytes));
+        _freeMap.Remove(pageId);
+    }
+
+    private uint FindPageCore(int requiredBytes, Func<uint, bool>? isPageLocked = null)
     {
         int minBucket = GetBucket(requiredBytes);
 
@@ -145,22 +336,7 @@ internal sealed class FreeSpaceIndex
         return 0;
     }
 
-    /// <summary>
-    /// Finds a page that has at least <paramref name="requiredBytes"/> of free space
-    /// and is not locked by another transaction.
-    /// This overload accepts a two-argument predicate so callers can pass a cached
-    /// method-group delegate (e.g. <c>_storage.IsPageLocked</c>) together with a
-    /// per-call <paramref name="txnId"/> without allocating a closure on each call.
-    /// Returns 0 if no suitable page is found.
-    /// </summary>
-    /// <param name="requiredBytes">Minimum free bytes required.</param>
-    /// <param name="txnId">Transaction ID to exclude from locking checks.</param>
-    /// <param name="isPageLocked">
-    ///   Optional predicate; called as <c>isPageLocked(pageId, txnId)</c> and should
-    ///   return <c>true</c> when the page is locked by another transaction.
-    ///   Pass <c>null</c> to treat every page as available.
-    /// </param>
-    public uint FindPage(int requiredBytes, ulong txnId, Func<uint, ulong, bool>? isPageLocked)
+    private uint FindPageCore(int requiredBytes, ulong txnId, Func<uint, ulong, bool>? isPageLocked)
     {
         int minBucket = GetBucket(requiredBytes);
 
@@ -191,64 +367,6 @@ internal sealed class FreeSpaceIndex
         return 0;
     }
 
-    // -----------------------------------------------------------------------
-    // Transaction-aware FSI snapshot / restore
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    /// Records the current free-byte count for <paramref name="pageId"/> as the
-    /// pre-modification snapshot for <paramref name="txnId"/> (first call per page wins).
-    /// Returns <c>true</c> when this is the very first page registered for the transaction
-    /// (i.e., the caller should subscribe to that transaction's rollback/commit events).
-    /// </summary>
-    public bool SnapshotForTransaction(ulong txnId, uint pageId)
-    {
-        if (!_txnSnapshots.TryGetValue(txnId, out var snap))
-        {
-            snap = new Dictionary<uint, ushort>();
-            _txnSnapshots[txnId] = snap;
-
-            // Only keep the value that existed *before* the first modification in this transaction.
-            snap[pageId] = _freeMap.TryGetValue(pageId, out var fb) ? fb : (ushort)0;
-            return true; // first page for this transaction
-        }
-
-        // Only keep the value that existed *before* the first modification in this transaction.
-        if (!snap.ContainsKey(pageId))
-        {
-            snap[pageId] = _freeMap.TryGetValue(pageId, out var fb) ? fb : (ushort)0;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Restores the FSI to the pre-modification state for all pages touched by
-    /// <paramref name="txnId"/> and discards the snapshot.  Called on transaction rollback
-    /// so that subsequent inserts are not incorrectly routed to pages that are physically
-    /// full (because the WAL has already reverted the physical pages).
-    /// </summary>
-    public void RollbackTransaction(ulong txnId)
-    {
-        if (_txnSnapshots.TryGetValue(txnId, out var snap))
-        {
-            foreach (var (pageId, oldFree) in snap)
-                Update(pageId, oldFree);
-
-            _txnSnapshots.Remove(txnId);
-        }
-    }
-
-    /// <summary>
-    /// Discards the snapshot recorded for <paramref name="txnId"/> after a successful
-    /// commit (the current FSI values are already consistent with the committed state).
-    /// </summary>
-    public void CommitTransaction(ulong txnId) => _txnSnapshots.Remove(txnId);
-
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
-
     private void RemoveFromBucket(uint pageId, int bucket)
     {
         var arr = _buckets[bucket];
@@ -275,4 +393,3 @@ internal sealed class FreeSpaceIndex
         _counts[bucket]++;
     }
 }
-
