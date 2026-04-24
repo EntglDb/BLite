@@ -191,42 +191,6 @@ public class SecondaryIndexCoverageTests : IDisposable
         Assert.Single(newResults);
     }
 
-    /// <summary>
-    /// Regression test for non-in-place update dropping secondary index entries.
-    /// When a document grows in size during an update, the engine relocates it by
-    /// calling DeleteCore (which wipes all index entries) then re-writing to a new
-    /// page. The index entry must be re-inserted even if the indexed field value
-    /// has not changed. (Root cause of issue #21 / #28.)
-    /// </summary>
-    [Fact]
-    public async Task Index_SurvivesNonInPlaceUpdate_WhenIndexedFieldUnchanged()
-    {
-        await _col.CreateIndexAsync("value", "idx_value");
-
-        // Insert a small document so the slot size is small.
-        var smallDoc = _col.CreateDocument(["_id", "name", "value", "payload"], b =>
-            b.AddString("name", "original").AddInt32("value", 42).AddString("payload", "x"));
-        var id = await _col.InsertAsync(smallDoc);
-
-        // Verify the index finds it before the update.
-        var before = await _col.QueryIndexAsync("idx_value", 42, 42).ToListAsync();
-        Assert.Single(before);
-
-        // Update the document: keep the indexed field ("value") the same but grow
-        // the payload significantly to force a non-in-place (relocating) update.
-        var largePayload = new string('A', 8192);
-        var largeDoc = _col.CreateDocument(["_id", "name", "value", "payload"], b =>
-            b.AddString("name", "updated").AddInt32("value", 42).AddString("payload", largePayload));
-        var updated = await _col.UpdateAsync(id, largeDoc);
-        Assert.True(updated);
-
-        // The index must still find the document at its new physical location.
-        var after = await _col.QueryIndexAsync("idx_value", 42, 42).ToListAsync();
-        Assert.Single(after);
-        after[0].TryGetString("name", out var name);
-        Assert.Equal("updated", name);
-    }
-
     [Fact]
     public async Task Index_UpdatesWhenDocumentDeleted()
     {

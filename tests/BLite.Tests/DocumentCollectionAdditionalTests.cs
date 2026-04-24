@@ -302,4 +302,42 @@ public class DocumentCollectionAdditionalTests : IDisposable
     {
         Assert.True(_db.Users.CurrentSchemaVersion!.Value.Version > 0);
     }
+
+    // ─── Non-in-place update secondary index regression ───────────────────────
+
+    /// <summary>
+    /// Regression test for GitHub issue #28 / #21.
+    /// When a document is relocated during an update (its serialized size exceeds the
+    /// original slot), <c>DeleteCore</c> wipes all secondary index entries before the
+    /// document is rewritten.  The subsequent <c>UpdateInAll</c> call must re-insert
+    /// every index entry at the new physical location even when the indexed field value
+    /// has not changed.
+    /// </summary>
+    [Fact]
+    public async Task SecondaryIndex_SurvivesNonInPlaceUpdate_WhenIndexedFieldUnchanged()
+    {
+        // TestDocuments has a secondary index on Category (see TestDbContext.OnModelCreating).
+        // The auto-generated name follows the pattern idx_{PropertyName} → "idx_Category".
+        // Insert a document with a short Name so the initial slot is small (~100 bytes).
+        var doc = new TestDocument { Category = "electronics", Amount = 5, Name = "short" };
+        var id = await _db.TestDocuments.InsertAsync(doc);
+        await _db.SaveChangesAsync();
+
+        // Verify the index finds the document before the update.
+        var before = await _db.TestDocuments.QueryIndexAsync("idx_Category", "electronics", "electronics").ToListAsync();
+        Assert.Single(before);
+
+        // Update: keep Category (the indexed field) unchanged, but grow Name to ~5 000
+        // bytes. The new serialised size >> original slot length, so UpdateDataCore will
+        // call DeleteCore + re-insert, exercising the non-in-place code path.
+        var largeDoc = new TestDocument { Id = id, Category = "electronics", Amount = 5, Name = new string('A', 5_000) };
+        var updated = await _db.TestDocuments.UpdateAsync(largeDoc);
+        await _db.SaveChangesAsync();
+        Assert.True(updated);
+
+        // The secondary index must still point to the new physical location.
+        var after = await _db.TestDocuments.QueryIndexAsync("idx_Category", "electronics", "electronics").ToListAsync();
+        Assert.Single(after);
+        Assert.Equal(new string('A', 5_000), after[0].Name);
+    }
 }
