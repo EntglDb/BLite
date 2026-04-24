@@ -158,8 +158,11 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         _definition.TryGetKey(oldDocument, out var oldKey);
         _definition.TryGetKey(newDocument, out var newKey);
         
-        // If keys are the same, no index update needed (optimization)
-        if (Equals(oldKey, newKey))
+        // If keys are the same AND the physical location hasn't changed (in-place update),
+        // no index update is needed. However, if the location changed (non-in-place /
+        // relocation update), DeleteCore has already removed the old index entry, so we
+        // must re-insert it at the new location even when the key is unchanged.
+        if (Equals(oldKey, newKey) && oldLocation.Equals(newLocation))
             return;
         
         var documentId = _mapper.GetId(oldDocument);
