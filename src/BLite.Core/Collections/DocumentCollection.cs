@@ -2128,7 +2128,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 }
 
                 _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
-                _indexManager.UpdateInAll(oldEntity, entity, oldLocation, newLocation, transaction);
+                // DeleteCore already removed all secondary index entries for this document.
+                // We only need to insert the new entries at the new physical location.
+                _indexManager.InsertIntoAll(entity, newLocation, transaction);
 
                 // Notify CDC
                 await NotifyCdc(OperationType.Update, id, transaction, docData);

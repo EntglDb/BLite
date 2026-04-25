@@ -140,12 +140,15 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
 
     /// <summary>
     /// Updates a document in this index (delete old, insert new).
-    /// Only updates if the indexed key has changed.
+    /// This optimization applies only for in-place updates where the physical location
+    /// is unchanged and the old index entry remains valid. For non-in-place (relocating)
+    /// updates, callers must use <c>InsertInAll</c> directly after <c>DeleteFromAll</c>
+    /// has already been called (e.g., via <c>DeleteCore</c>).
     /// </summary>
     /// <param name="oldDocument">Old version of document</param>
     /// <param name="newDocument">New version of document</param>
     /// <param name="oldLocation">Physical location of old document</param>
-    /// <param name="newLocation">Physical location of new document</param>
+    /// <param name="newLocation">Physical location of new document (must equal oldLocation for this method)</param>
     /// <param name="transaction">Optional transaction</param>
     public void Update(T oldDocument, T newDocument, DocumentLocation oldLocation, DocumentLocation newLocation, ITransaction transaction)
     {
@@ -158,7 +161,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         _definition.TryGetKey(oldDocument, out var oldKey);
         _definition.TryGetKey(newDocument, out var newKey);
         
-        // If keys are the same, no index update needed (optimization)
+        // If keys are the same, no index update needed (optimization for in-place updates
+        // where the existing entry at the same location remains valid).
         if (Equals(oldKey, newKey))
             return;
         
