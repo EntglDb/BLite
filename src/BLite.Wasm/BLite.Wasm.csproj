@@ -9,7 +9,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <PackageId>BLite.Wasm</PackageId>
-    <Version>4.4.1</Version>
+    <Version>4.4.2</Version>
     <Authors>BLite Team</Authors>
     <Description>BLite browser storage backends for .NET WASM — OPFS and IndexedDB page storage and WAL implementations</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
