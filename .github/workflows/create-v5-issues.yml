@@ -1,0 +1,41 @@
+name: Create V5 Milestone Issues
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create issues for V5 milestone
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const issues = JSON.parse(fs.readFileSync('.github/v5-issues.json', 'utf8'));
+            const milestone = 1; // v5 milestone number
+
+            console.log(`Creating ${issues.length} issues for milestone ${milestone}...`);
+
+            for (const issue of issues) {
+              try {
+                const result = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: issue.title,
+                  body: issue.body,
+                  milestone: milestone,
+                  labels: issue.labels || [],
+                });
+                console.log(`Created #${result.data.number}: ${issue.title}`);
+                await new Promise(resolve => setTimeout(resolve, 500));
+              } catch (error) {
+                console.error(`Failed "${issue.title}": ${error.message}`);
+              }
+            }
