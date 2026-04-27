@@ -2,6 +2,11 @@ name: Create V5 Milestone Issues
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - copilot/document-review-development-tasks
+    paths:
+      - .github/workflows/create-v5-issues.yml
 
 permissions:
   issues: write
