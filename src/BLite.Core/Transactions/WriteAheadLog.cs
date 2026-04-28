@@ -222,6 +222,46 @@ public sealed class WriteAheadLog : IWriteAheadLog
         }
     }
 
+    internal async Task BackupAsync(string destinationPath, CancellationToken ct = default)
+    {
+#if NET8_0_OR_GREATER
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+#else
+        if (string.IsNullOrWhiteSpace(destinationPath))
+            throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationPath));
+#endif
+
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
+        try
+        {
+            if (_walStream == null)
+                throw new InvalidOperationException("WAL is not open.");
+
+            var destinationDirectory = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(destinationDirectory))
+                Directory.CreateDirectory(destinationDirectory);
+
+            _walStream.Flush(flushToDisk: true);
+
+            var savedPosition = _walStream.Position;
+            _walStream.Position = 0;
+
+            await using var destination = new FileStream(
+                destinationPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 1024 * 1024, FileOptions.Asynchronous);
+
+            await _walStream.CopyToAsync(destination, ct);
+            await destination.FlushAsync(ct);
+
+            _walStream.Position = savedPosition;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
 
     /// <summary>
     /// Truncates the WAL file (removes all content).

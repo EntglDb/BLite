@@ -1,5 +1,7 @@
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Storage;
+using System.Text.Json;
 
 namespace BLite.Tests;
 
@@ -254,16 +256,50 @@ public class BLiteEngineTests2 : IDisposable
     // ─── BackupAsync ──────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task BackupAsync_CreatesRestorable_DatabaseFile()
+    public async Task BackupAsync_WithOptions_ReturnsResult_Manifest_AndEvents()
     {
-        var backupPath = Path.Combine(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}.db");
+        var backupDir = Path.Join(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}");
+        var pattern = $"{backupDir}{Path.DirectorySeparatorChar}{{databaseName}}-{{timestampUtc}}.db";
+        BackupStartedEvent started = default;
+        BackupCompletedEvent completed = default;
+        var startedCount = 0;
+        var completedCount = 0;
+        Action<BackupStartedEvent> startedHandler = evt => { started = evt; startedCount++; };
+        Action<BackupCompletedEvent> completedHandler = evt => { completed = evt; completedCount++; };
+
+        _engine.BackupStarted += startedHandler;
+        _engine.BackupCompleted += completedHandler;
+
         try
         {
             await _engine.InsertAsync("col", MakeDoc("Alice", 30));
 
-            await _engine.BackupAsync(backupPath);
+            var result = await _engine.BackupAsync(new BackupOptions
+            {
+                DestinationPathPattern = pattern
+            });
+
+            var backupPath = result.DestinationPath;
+            var manifestPath = result.ManifestPath;
+            var backupWal = Path.ChangeExtension(backupPath, ".wal");
 
             Assert.True(File.Exists(backupPath));
+            Assert.True(File.Exists(backupWal));
+            Assert.True(File.Exists(manifestPath));
+            Assert.Equal(2, result.FileCount);
+            Assert.True(result.TotalBytes > 0);
+            Assert.True(result.Duration >= TimeSpan.Zero);
+            Assert.Equal(1, startedCount);
+            Assert.Equal(1, completedCount);
+            Assert.Equal(backupPath, started.DestinationPath);
+            Assert.Equal(backupPath, completed.Result.DestinationPath);
+            Assert.Equal(manifestPath, completed.Result.ManifestPath);
+
+            using (var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath)))
+            {
+                var files = manifest.RootElement.GetProperty("files");
+                Assert.Equal(result.FileCount, files.GetArrayLength());
+            }
 
             // Open the backup and verify data
             using var backup = new BLiteEngine(backupPath);
@@ -274,9 +310,81 @@ public class BLiteEngineTests2 : IDisposable
         }
         finally
         {
-            if (File.Exists(backupPath)) File.Delete(backupPath);
-            var backupWal = Path.ChangeExtension(backupPath, ".wal");
-            if (File.Exists(backupWal)) File.Delete(backupWal);
+            _engine.BackupStarted -= startedHandler;
+            _engine.BackupCompleted -= completedHandler;
+            if (Directory.Exists(backupDir))
+                Directory.Delete(backupDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BackupAsync_MultiFile_BackupsCollectionAndIndexFiles()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), $"multibackup_{Guid.NewGuid():N}");
+        var sourceDir = Path.Combine(rootDir, "source");
+        var backupDir = Path.Combine(rootDir, "backup");
+        Directory.CreateDirectory(sourceDir);
+        Directory.CreateDirectory(backupDir);
+
+        var sourcePath = Path.Combine(sourceDir, "multi.db");
+        var backupPath = Path.Combine(backupDir, "multi.db");
+        var config = PageFileConfig.Server(sourcePath);
+
+        try
+        {
+            using (var engine = new BLiteEngine(sourcePath, config))
+            {
+                var col = engine.GetOrCreateCollection("catalog", BsonIdType.Int32);
+
+                for (int i = 1; i <= 3; i++)
+                {
+                    var doc = col.CreateDocument(["_id", "name", "age"], b => b
+                        .AddId((BsonId)i)
+                        .AddString("name", $"Item{i}")
+                        .AddInt32("age", 20 + i));
+                    await col.InsertAsync(doc);
+                }
+
+                await engine.CommitAsync();
+                await col.CreateIndexAsync("age", "idx_age");
+                await engine.CommitAsync();
+
+                var result = await engine.BackupAsync(new BackupOptions { DestinationPath = backupPath });
+                var backupConfig = PageFileConfig.Server(backupPath);
+
+                Assert.Equal(5, result.FileCount);
+                Assert.True(File.Exists(backupPath));
+                Assert.True(File.Exists(backupConfig.WalPath!));
+                Assert.True(File.Exists(backupConfig.IndexFilePath!));
+                Assert.True(File.Exists(Path.Combine(backupConfig.CollectionDataDirectory!, ".slots")));
+                Assert.True(File.Exists(Path.Combine(backupConfig.CollectionDataDirectory!, "catalog.db")));
+                Assert.True(File.Exists(result.ManifestPath));
+
+                using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(result.ManifestPath));
+                var fileNames = manifest.RootElement.GetProperty("files")
+                    .EnumerateArray()
+                    .Select(x => x.GetProperty("name").GetString())
+                    .ToList();
+
+                Assert.Contains("multi.db", fileNames);
+                Assert.Contains(Path.Combine("wal", "multi.wal"), fileNames);
+                Assert.Contains("multi.idx", fileNames);
+                Assert.Contains(Path.Combine("collections", "multi", ".slots"), fileNames);
+                Assert.Contains(Path.Combine("collections", "multi", "catalog.db"), fileNames);
+            }
+
+            using var backup = new BLiteEngine(backupPath);
+            var all = await backup.FindAllAsync("catalog").ToListAsync();
+            Assert.Equal(3, all.Count);
+
+            var backupCollection = backup.GetOrCreateCollection("catalog", BsonIdType.Int32);
+            var indexedResults = await backupCollection.QueryIndexAsync("idx_age", 23, 23).ToListAsync();
+            Assert.Single(indexedResults);
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir))
+                Directory.Delete(rootDir, recursive: true);
         }
     }
 
