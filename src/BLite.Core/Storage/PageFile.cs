@@ -836,11 +836,13 @@ public sealed class PageFile : IPageStorage
 
                 // 2. Walk backwards from the last page to find the last non-free page.
                 //    Pages 0 (header) and 1 (collection metadata) are always kept.
-                var headerBuf = new byte[32]; // PageHeader is 32 bytes
+                //    ReadPageHeaderCore copies only destination.Length bytes, which
+                //    must be <= PageSize but can be as small as the header itself.
+                var headerBuf = new byte[32]; // PageHeader layout size is 32 bytes
                 uint lastUsedPage = 1; // minimum: keep pages 0 and 1
                 for (uint p = _nextPageId - 1; p > 1; p--)
                 {
-                    ReadPageCore(p, headerBuf);
+                    ReadPageHeaderCore(p, headerBuf);
                     var hdr = PageHeader.ReadFrom(headerBuf);
                     if (hdr.PageType != PageType.Free)
                     {
@@ -862,7 +864,7 @@ public sealed class PageFile : IPageStorage
                 {
                     if (freeId < newPageCount)
                         validFreePages.Add(freeId);
-                    ReadPageCore(freeId, headerBuf);
+                    ReadPageHeaderCore(freeId, headerBuf);
                     var freeHdr = PageHeader.ReadFrom(headerBuf);
                     freeId = freeHdr.NextPageId;
                 }
