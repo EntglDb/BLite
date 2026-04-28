@@ -68,8 +68,8 @@ public interface IPageStorage : IDisposable
     /// Implementations must flush all pending writes, unmap (if memory-mapped), truncate
     /// the underlying storage, and remap before returning.
     /// <para>
-    /// Throws <see cref="NotSupportedException"/> for in-memory backends that have no
-    /// file to truncate (e.g. <see cref="MemoryPageStorage"/>).
+    /// Backends that have no file to truncate (e.g. <see cref="MemoryPageStorage"/>)
+    /// treat this as a no-op and return successfully without throwing.
     /// </para>
     /// </summary>
     Task TruncateToMinimumAsync(CancellationToken cancellationToken = default);

@@ -22,9 +22,9 @@ public sealed class VacuumOptions
     /// remapping — the page-cache lifecycle is handled automatically.
     /// </para>
     /// <para>
-    /// This option has no effect on in-memory storage backends (e.g.
-    /// <see cref="Storage.MemoryPageStorage"/>) which always throw
-    /// <see cref="System.NotSupportedException"/> when truncation is requested.
+    /// This option is silently ignored (treated as a no-op) for in-memory
+    /// storage backends (e.g. <see cref="Storage.MemoryPageStorage"/>) which
+    /// have no underlying file to truncate.
     /// </para>
     /// </summary>
     public bool TruncateFile { get; init; } = true;

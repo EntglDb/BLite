@@ -214,10 +214,10 @@ public class VacuumTests : IDisposable
 
         await db.People.VacuumAsync();
 
-        // Secondary index range query Age 10..20 must return correct results (>= 11 docs)
+        // Secondary index range query Age 10..20 must return exactly 11 documents
+        // (Age 10, 11, ..., 20 inclusive — all inserted with Age = i for i in 10..20)
         var results = await db.People.QueryIndexAsync("idx_age", 10, 20).ToListAsync();
-        Assert.True(results.Count >= 11,
-            $"Expected >= 11 results for Age 10..20, got {results.Count}");
+        Assert.Equal(11, results.Count);
         foreach (var p in results)
             Assert.InRange(p.Age, 10, 20);
     }
