@@ -179,7 +179,7 @@ public interface IDocumentCollection<TId, T> where T : class
     /// writes to this collection are permitted while it runs.
     /// </para>
     /// </summary>
-    Task VacuumAsync(CancellationToken ct = default);
+    Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default);
 
     // ── Change Data Capture (local engine only; remote throws NotSupportedException) ───
 

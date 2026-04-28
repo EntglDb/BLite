@@ -128,7 +128,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// no concurrent writes to this collection are allowed while VACUUM runs.
     /// </para>
     /// </summary>
-    public async Task VacuumAsync(CancellationToken ct = default)
+    public async Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -181,6 +181,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            // Optionally rebuild all secondary indexes from scratch.
+            if (options?.RebuildIndexes == true)
+            {
+                foreach (var index in _indexManager.GetAllIndexes())
+                    await RebuildIndexAsync(index, ct).ConfigureAwait(false);
             }
         }
         finally

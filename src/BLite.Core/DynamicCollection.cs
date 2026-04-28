@@ -895,7 +895,7 @@ public sealed class DynamicCollection : IDisposable
     /// no concurrent writes to this collection are allowed while VACUUM runs.
     /// </para>
     /// </summary>
-    public async Task VacuumAsync(CancellationToken ct = default)
+    public async Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -946,6 +946,50 @@ public sealed class DynamicCollection : IDisposable
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            // Optionally rebuild all secondary indexes from scratch.
+            if (options?.RebuildIndexes == true && _secondaryIndexes.Count > 0)
+            {
+                // Replace every secondary index with a fresh, empty instance.
+                var rebuildEntries = new Dictionary<string, DynamicSecondaryIndex>(_secondaryIndexes.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var (name, entry) in _secondaryIndexes)
+                {
+                    DynamicSecondaryIndex freshEntry = entry.Kind switch
+                    {
+                        DynamicIndexKind.BTree    => new DynamicSecondaryIndex(new BTreeIndex(_storage, entry.Options), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.Vector   => new DynamicSecondaryIndex(new VectorSearchIndex(_storage, entry.Options), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.Spatial  => new DynamicSecondaryIndex(new RTreeIndex(_storage, entry.Options, 0), entry.FieldPath, entry.Options),
+                        _                         => entry
+                    };
+                    rebuildEntries[name] = freshEntry;
+                }
+
+                var rebuildTxn = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, rebuildTxn.TransactionId))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var doc = ReadDocumentAt(e.Location, rebuildTxn.TransactionId);
+                        if (doc != null)
+                        {
+                            foreach (var (_, idx) in rebuildEntries)
+                                IndexInsert(idx, doc, e.Location, rebuildTxn);
+                        }
+                    }
+                    await rebuildTxn.CommitAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await rebuildTxn.RollbackAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                // Swap in the rebuilt indexes and persist their new root page IDs.
+                foreach (var (name, entry) in rebuildEntries)
+                    _secondaryIndexes[name] = entry;
+                PersistIndexMetadata();
             }
         }
         finally

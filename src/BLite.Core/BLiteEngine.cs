@@ -410,7 +410,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         foreach (var collection in targets)
         {
             ct.ThrowIfCancellationRequested();
-            await collection.VacuumAsync(ct).ConfigureAwait(false);
+            await collection.VacuumAsync(options, ct).ConfigureAwait(false);
         }
 
         if (options.TruncateFile)
