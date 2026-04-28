@@ -293,12 +293,17 @@ public class VacuumTests : IDisposable
 
         await db.Products.VacuumAsync();
 
-        // Products with Price in [16.5, 30.0] should be Id 11..20 (Price = 16.5 .. 30.0)
+        // Products with Price in [16.5, 30.0] are Id 11..20 (Price = 16.5 .. 30.0, 10 products).
         var results = await db.Products.QueryIndexAsync("idx_price", 16.5m, 30m).ToListAsync();
-        Assert.True(results.Count >= 9,
-            $"Expected >= 9 products in price range, got {results.Count}");
-        foreach (var p in results)
-            Assert.InRange(p.Price, 16.5m, 30m);
+        Assert.Equal(10, results.Count);
+        var sortedResults = results.OrderBy(p => p.Id).ToList();
+        for (int i = 0; i < sortedResults.Count; i++)
+        {
+            var expectedId = i + 11; // Ids 11..20
+            Assert.Equal(expectedId, sortedResults[i].Id);
+            Assert.Equal(expectedId * 1.5m, sortedResults[i].Price);
+            Assert.InRange(sortedResults[i].Price, 16.5m, 30m);
+        }
     }
 
     // ======================================================================

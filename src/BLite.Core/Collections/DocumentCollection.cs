@@ -142,6 +142,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
                 try
                 {
+                    bool secureErase = options?.SecureErase ?? true;
                     foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
                     {
                         ct.ThrowIfCancellationRequested();
@@ -155,14 +156,14 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                         // Compact the page, packing live documents to the top.
                         CompactPage(buffer.AsSpan(0, _storage.PageSize));
 
-                        // Zero-fill the entire free space area between the slot directory and
-                        // the packed document data, erasing any residual deleted bytes.
-                        // Always write the page so pre-existing non-zero free bytes are also erased.
+                        // Optionally zero-fill the free space area to erase residual deleted bytes.
                         var compactedHdr = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
                         int freeBytes = compactedHdr.FreeSpaceEnd - compactedHdr.FreeSpaceStart;
                         if (freeBytes > 0)
                         {
-                            buffer.AsSpan(compactedHdr.FreeSpaceStart, freeBytes).Clear();
+                            if (secureErase)
+                                buffer.AsSpan(compactedHdr.FreeSpaceStart, freeBytes).Clear();
+
                             _storage.WritePage(pageId, transaction.TransactionId,
                                 buffer.AsSpan(0, _storage.PageSize));
                             SnapshotFsiForTransaction(transaction, pageId);

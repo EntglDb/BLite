@@ -169,9 +169,28 @@ public sealed partial class StorageEngine
     public uint PageCount => _pageFile.NextPageId;
 
     /// <summary>
-    /// Shrinks the main data file by removing trailing free pages.
-    /// Delegates to <see cref="IPageStorage.TruncateToMinimumAsync"/>.
+    /// Shrinks all opened page storage files by removing trailing free pages.
+    /// Truncates the main page file, the optional index file, and any per-collection
+    /// files that are currently open.
     /// </summary>
-    public Task TruncateToMinimumAsync(CancellationToken ct = default)
-        => _pageFile.TruncateToMinimumAsync(ct);
+    public async Task TruncateToMinimumAsync(CancellationToken ct = default)
+    {
+        await _pageFile.TruncateToMinimumAsync(ct).ConfigureAwait(false);
+
+        if (_indexFile != null && !ReferenceEquals(_indexFile, _pageFile))
+        {
+            ct.ThrowIfCancellationRequested();
+            await _indexFile.TruncateToMinimumAsync(ct).ConfigureAwait(false);
+        }
+
+        if (_collectionFiles != null)
+        {
+            foreach (var lazy in _collectionFiles.Values)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (lazy.IsValueCreated)
+                    await lazy.Value.TruncateToMinimumAsync(ct).ConfigureAwait(false);
+            }
+        }
+    }
 }

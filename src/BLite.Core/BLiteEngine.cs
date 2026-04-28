@@ -398,13 +398,20 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         IEnumerable<DynamicCollection> targets;
         if (options.CollectionName != null)
         {
-            if (!_collections.TryGetValue(options.CollectionName, out var single))
-                return; // Collection not loaded — nothing to vacuum
-            targets = new[] { single };
+            // Ensure the collection is loaded from disk (it may exist on disk but not yet
+            // in the in-memory map) before vacuum; silently skip if it doesn't exist at all.
+            ListCollections(); // warms up _collections from the on-disk catalog
+            if (!_collections.ContainsKey(options.CollectionName))
+                return;
+
+            targets = new[] { GetOrCreateCollection(options.CollectionName) };
         }
         else
         {
-            targets = _collections.Values.ToArray(); // snapshot to avoid mutation during iteration
+            // Warm up: load any on-disk collections not yet in the in-memory map, then
+            // snapshot the full set to avoid mutation during iteration.
+            ListCollections();
+            targets = _collections.Values.ToArray();
         }
 
         foreach (var collection in targets)

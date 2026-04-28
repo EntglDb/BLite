@@ -904,11 +904,13 @@ public sealed class DynamicCollection : IDisposable
         try
         {
             var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            var scratch = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
             try
             {
                 var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
                 try
                 {
+                    bool secureErase = options?.SecureErase ?? true;
                     foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
                     {
                         ct.ThrowIfCancellationRequested();
@@ -919,9 +921,11 @@ public sealed class DynamicCollection : IDisposable
                         if (header.PageType != PageType.Data)
                             continue;
 
-                        // Compact the page, then zero-fill the free space area so that
-                        // any deleted bytes (including pre-existing ones) are erased.
-                        SlottedPageUtils.CompactAndErase(buffer.AsSpan(0, _storage.PageSize));
+                        // Compact the page. Pass the reusable scratch buffer to avoid
+                        // a per-page ArrayPool rent inside CompactAndErase.
+                        // Zero-filling (secure erase) is conditional on the option.
+                        SlottedPageUtils.CompactAndErase(
+                            buffer.AsSpan(0, _storage.PageSize), scratch, secureErase);
 
                         var compactedHdr = SlottedPageHeader.ReadFrom(
                             buffer.AsSpan(0, SlottedPageHeader.Size));
@@ -945,6 +949,7 @@ public sealed class DynamicCollection : IDisposable
             }
             finally
             {
+                ArrayPool<byte>.Shared.Return(scratch);
                 ArrayPool<byte>.Shared.Return(buffer);
             }
 

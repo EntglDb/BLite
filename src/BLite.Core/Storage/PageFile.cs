@@ -851,7 +851,7 @@ public sealed class PageFile : IPageStorage
                     }
                 }
 
-                var newLength = AlignToBlock(((long)lastUsedPage + 1) * _config.PageSize);
+                var newLength = ((long)lastUsedPage + 1) * _config.PageSize;
                 if (newLength >= _fileStream.Length)
                     return; // Nothing to truncate
 
