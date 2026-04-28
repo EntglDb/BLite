@@ -885,6 +885,77 @@ public sealed class DynamicCollection : IDisposable
 
     #endregion
 
+    #region Vacuum / Secure Erase
+
+    /// <summary>
+    /// Compacts all data pages in this collection, securely erasing freed byte ranges
+    /// by zero-filling the free space area of every page after compaction.
+    /// <para>
+    /// Acquires the collection write lock for the duration of the operation —
+    /// no concurrent writes to this collection are allowed while VACUUM runs.
+    /// </para>
+    /// </summary>
+    public async Task VacuumAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring collection write lock (VacuumAsync).");
+        try
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            try
+            {
+                var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+                    {
+                        ct.ThrowIfCancellationRequested();
+
+                        _storage.ReadPage(pageId, transaction.TransactionId, buffer);
+                        var header = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+
+                        if (header.PageType != PageType.Data)
+                            continue;
+
+                        // Compact the page, then zero-fill the free space area so that
+                        // any deleted bytes (including pre-existing ones) are erased.
+                        SlottedPageUtils.CompactAndErase(buffer.AsSpan(0, _storage.PageSize));
+
+                        var compactedHdr = SlottedPageHeader.ReadFrom(
+                            buffer.AsSpan(0, SlottedPageHeader.Size));
+                        int freeBytes = compactedHdr.FreeSpaceEnd - compactedHdr.FreeSpaceStart;
+                        if (freeBytes > 0)
+                        {
+                            _storage.WritePage(pageId, transaction.TransactionId,
+                                buffer.AsSpan(0, _storage.PageSize));
+                            SnapshotFsiForTransaction(transaction, pageId);
+                            _fsi.Update(pageId, compactedHdr.AvailableFreeSpace);
+                        }
+                    }
+
+                    await transaction.CommitAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await transaction.RollbackAsync().ConfigureAwait(false);
+                    throw;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    #endregion
+
     #region Index Management
 
     /// <summary>
@@ -1394,7 +1465,14 @@ public sealed class DynamicCollection : IDisposable
                 var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
                 slot.Flags |= SlotFlags.Deleted;
                 slot.WriteTo(buffer.AsSpan(slotOffset));
-                header.WriteTo(buffer);
+
+                // Compact the page and securely erase freed bytes (zero-fill free space).
+                SlottedPageUtils.CompactAndErase(buffer.AsSpan(0, _storage.PageSize));
+
+                SnapshotFsiForTransaction(transaction, location.PageId);
+                var compactedHdr = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+                _fsi.Update(location.PageId, compactedHdr.AvailableFreeSpace);
+
                 _storage.WritePage(location.PageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
             }
         }

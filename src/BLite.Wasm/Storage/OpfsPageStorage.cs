@@ -249,6 +249,11 @@ public sealed class OpfsPageStorage : IPageStorage
             "Read pages through the IPageStorage API to create a logical backup.");
 
     /// <inheritdoc/>
+    /// <remarks>OPFS storage does not support file truncation; this method is a no-op.</remarks>
+    public Task TruncateToMinimumAsync(CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;

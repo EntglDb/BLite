@@ -811,6 +811,110 @@ public sealed class PageFile : IPageStorage
         }
     }
 
+    /// <summary>
+    /// Scans trailing pages in the file for free pages and truncates the file to remove them,
+    /// shrinking it to the minimum required size.
+    /// Acquires <see cref="_asyncLock"/> then <see cref="_rwLock"/> write lock, flushes
+    /// dirty pages, unmaps, truncates, and remaps the memory-mapped file.
+    /// </summary>
+    public async Task TruncateToMinimumAsync(CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (!await _asyncLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring PageFile async lock (TruncateToMinimumAsync).");
+        try
+        {
+            if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+                throw new TimeoutException("Timed out acquiring PageFile write lock (TruncateToMinimumAsync).");
+            try
+            {
+                if (_fileStream == null || _mappedFile == null)
+                    return;
+
+                // 1. Flush dirty pages to disk.
+                _fileStream.Flush(flushToDisk: true);
+
+                // 2. Walk backwards from the last page to find the last non-free page.
+                //    Pages 0 (header) and 1 (collection metadata) are always kept.
+                var headerBuf = new byte[32]; // PageHeader is 32 bytes
+                uint lastUsedPage = 1; // minimum: keep pages 0 and 1
+                for (uint p = _nextPageId - 1; p > 1; p--)
+                {
+                    ReadPageCore(p, headerBuf);
+                    var hdr = PageHeader.ReadFrom(headerBuf);
+                    if (hdr.PageType != PageType.Free)
+                    {
+                        lastUsedPage = p;
+                        break;
+                    }
+                }
+
+                var newLength = AlignToBlock(((long)lastUsedPage + 1) * _config.PageSize);
+                if (newLength >= _fileStream.Length)
+                    return; // Nothing to truncate
+
+                // 3. Rebuild the free list excluding pages that will be truncated away.
+                var newPageCount = (uint)(newLength / _config.PageSize);
+                var validFreePages = new List<uint>();
+                uint freeId = _firstFreePageId;
+                var seen = new System.Collections.Generic.HashSet<uint>();
+                while (freeId != 0 && seen.Add(freeId))
+                {
+                    if (freeId < newPageCount)
+                        validFreePages.Add(freeId);
+                    ReadPageCore(freeId, headerBuf);
+                    var freeHdr = PageHeader.ReadFrom(headerBuf);
+                    freeId = freeHdr.NextPageId;
+                }
+
+                // 4. Unmap, truncate, remap.
+                _readAccessor?.Dispose();
+                _readAccessor = null;
+                _mappedFile.Dispose();
+                _mappedFile = null;
+
+                _fileStream.SetLength(newLength);
+                _nextPageId = newPageCount;
+
+                _mappedFile = MemoryMappedFile.CreateFromFile(
+                    _fileStream,
+                    null,
+                    newLength,
+                    _config.Access,
+                    HandleInheritability.None,
+                    leaveOpen: true);
+                _readAccessor = _mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
+
+                // 5. Rewrite the free list chain with only valid (retained) entries.
+                _firstFreePageId = 0;
+                if (validFreePages.Count > 0)
+                {
+                    var pageBuf = new byte[_config.PageSize];
+                    for (int i = validFreePages.Count - 1; i >= 0; i--)
+                    {
+                        var pid = validFreePages[i];
+                        ReadPageCore(pid, pageBuf);
+                        var freePageHdr = PageHeader.ReadFrom(pageBuf);
+                        freePageHdr.NextPageId = _firstFreePageId;
+                        freePageHdr.WriteTo(pageBuf);
+                        WritePageCore(pid, pageBuf);
+                        _firstFreePageId = pid;
+                    }
+                }
+                UpdateFileHeaderFreePtrCore(_firstFreePageId);
+                _fileStream.Flush(flushToDisk: true);
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+        finally
+        {
+            _asyncLock.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)

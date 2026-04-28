@@ -167,4 +167,11 @@ public sealed partial class StorageEngine
     /// Useful for full database scans.
     /// </summary>
     public uint PageCount => _pageFile.NextPageId;
+
+    /// <summary>
+    /// Shrinks the main data file by removing trailing free pages.
+    /// Delegates to <see cref="IPageStorage.TruncateToMinimumAsync"/>.
+    /// </summary>
+    public Task TruncateToMinimumAsync(CancellationToken ct = default)
+        => _pageFile.TruncateToMinimumAsync(ct);
 }

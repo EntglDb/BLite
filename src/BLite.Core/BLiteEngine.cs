@@ -374,6 +374,51 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region Vacuum / Secure Erase
+
+    /// <summary>
+    /// Compacts and securely erases all data pages in the database (or a specific collection),
+    /// zero-filling freed byte ranges so that deleted document data is unrecoverable at the
+    /// page level — supporting GDPR Art. 17 (right to erasure) compliance.
+    /// <para>
+    /// Pass a <see cref="VacuumOptions"/> instance to customise the behaviour:
+    /// target a specific collection, skip file truncation, or enable index rebuilding.
+    /// Passing <c>null</c> uses the default options (secure-erase all collections, truncate file).
+    /// </para>
+    /// <para>
+    /// <b>Note:</b> Secure erase does not guarantee erasure from OS page cache, SSD
+    /// wear-levelling, or swap — these are OS-level concerns outside the scope of this operation.
+    /// </para>
+    /// </summary>
+    public async Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        options ??= new VacuumOptions();
+
+        IEnumerable<DynamicCollection> targets;
+        if (options.CollectionName != null)
+        {
+            if (!_collections.TryGetValue(options.CollectionName, out var single))
+                return; // Collection not loaded — nothing to vacuum
+            targets = new[] { single };
+        }
+        else
+        {
+            targets = _collections.Values.ToArray(); // snapshot to avoid mutation during iteration
+        }
+
+        foreach (var collection in targets)
+        {
+            ct.ThrowIfCancellationRequested();
+            await collection.VacuumAsync(ct).ConfigureAwait(false);
+        }
+
+        if (options.TruncateFile)
+            await _storage.TruncateToMinimumAsync(ct).ConfigureAwait(false);
+    }
+
+    #endregion
+
     #region Convenience CRUD (collection + auto-commit)
 
     /// <summary>

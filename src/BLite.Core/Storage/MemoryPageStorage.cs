@@ -189,6 +189,11 @@ public sealed class MemoryPageStorage : IPageStorage
             "Use a file-based PageFile backend if backup is required.");
 
     /// <inheritdoc/>
+    /// <remarks>In-memory storage has no file to truncate; this method is a no-op.</remarks>
+    public Task TruncateToMinimumAsync(CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         _disposed = true;
