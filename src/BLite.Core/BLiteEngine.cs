@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,10 +25,14 @@ namespace BLite.Core;
 public sealed class BLiteEngine : IDisposable, ITransactionHolder
 {
     private readonly StorageEngine _storage;
+    private readonly string? _databasePath;
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
     private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
     private bool _disposed;
+
+    public event Action<BackupStartedEvent>? BackupStarted;
+    public event Action<BackupCompletedEvent>? BackupCompleted;
 
     /// <summary>
     /// Exposes the underlying storage engine to session instances created by this engine.
@@ -70,6 +75,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
 
+        _databasePath = databasePath;
         _storage = new StorageEngine(databasePath, config);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
@@ -82,6 +88,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     internal BLiteEngine(StorageEngine storage, BLiteKvOptions? kvOptions = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _databasePath = null;
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
     }
@@ -330,22 +337,39 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// Creates a consistent, hot backup of this database to <paramref name="destinationDbPath"/>.
     /// The engine does not need to be stopped or paused; concurrent reads and writes are safe.
     /// <para>
-    /// The method checkpoints the WAL into the PageFile first, then copies the resulting file.
-    /// The destination file is a standalone, fully consistent database that can be opened
+    /// The method checkpoints the WAL first, then copies the main database file plus any
+    /// companion WAL, collection, and index files that belong to the same database.
+    /// A <c>backup.manifest.json</c> file is written alongside the backup with per-file SHA-256 hashes.
+    /// The destination database is a standalone, fully consistent backup that can be opened
     /// with a fresh <see cref="BLiteEngine"/> instance.
     /// </para>
     /// </summary>
     /// <param name="destinationDbPath">Full path to the target .db file.</param>
     public async Task BackupAsync(string destinationDbPath, CancellationToken ct = default)
     {
+        await BackupAsync(new BackupOptions { DestinationPath = destinationDbPath }, ct);
+    }
+
+    /// <summary>
+    /// Creates a consistent, hot backup of this database using the supplied <paramref name="options"/>.
+    /// </summary>
+    public async Task<BackupResult> BackupAsync(BackupOptions options, CancellationToken ct = default)
+    {
         ThrowIfDisposed();
-#if NET8_0_OR_GREATER
-        ArgumentException.ThrowIfNullOrWhiteSpace(destinationDbPath);
-#else
-        if (string.IsNullOrWhiteSpace(destinationDbPath))
-            throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationDbPath));
-#endif
-        await _storage.BackupAsync(destinationDbPath, ct);
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+
+        var destinationDbPath = ResolveBackupDestinationPath(options);
+        var startedAt = DateTimeOffset.UtcNow;
+        InvokeHandlers(BackupStarted, new BackupStartedEvent(destinationDbPath, options, startedAt));
+
+        var sw = Stopwatch.StartNew();
+        var stats = await _storage.BackupDetailedAsync(destinationDbPath, options.IncludeIndexes, ct);
+        sw.Stop();
+
+        var result = new BackupResult(destinationDbPath, stats.ManifestPath, sw.Elapsed, stats.FileCount, stats.TotalBytes);
+        InvokeHandlers(BackupCompleted, new BackupCompletedEvent(result, options, DateTimeOffset.UtcNow));
+        return result;
     }
 
     #endregion
@@ -411,6 +435,35 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     {
         ThrowIfDisposed();
         _storage.ImportDictionary(sourceReverseMap);
+    }
+
+    private string ResolveBackupDestinationPath(BackupOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.DestinationPath))
+            return options.DestinationPath!;
+
+        if (string.IsNullOrWhiteSpace(options.DestinationPathPattern))
+            throw new ArgumentException("BackupOptions must specify DestinationPath or DestinationPathPattern.", nameof(options));
+
+        if (string.IsNullOrWhiteSpace(_databasePath))
+            throw new NotSupportedException("DestinationPathPattern requires a file-based BLiteEngine.");
+
+        return options.DestinationPathPattern!
+            .Replace("{databaseName}", Path.GetFileNameWithoutExtension(_databasePath), StringComparison.Ordinal)
+            .Replace("{databasePath}", _databasePath, StringComparison.Ordinal)
+            .Replace("{timestampUtc}", DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss"), StringComparison.Ordinal);
+    }
+
+    private static void InvokeHandlers<T>(Action<T>? handlers, T args)
+    {
+        if (handlers == null)
+            return;
+
+        foreach (Action<T> handler in handlers.GetInvocationList())
+        {
+            try { handler(args); }
+            catch { }
+        }
     }
 
     /// <summary>Async exact-match lookup in the named collection.</summary>
