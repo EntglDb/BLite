@@ -258,8 +258,8 @@ public class BLiteEngineTests2 : IDisposable
     [Fact]
     public async Task BackupAsync_WithOptions_ReturnsResult_Manifest_AndEvents()
     {
-        var backupDir = Path.Combine(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}");
-        var pattern = Path.Combine(backupDir, "{databaseName}-{timestampUtc}.db");
+        var backupDir = Path.Join(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}");
+        var pattern = $"{backupDir}{Path.DirectorySeparatorChar}{{databaseName}}-{{timestampUtc}}.db";
         BackupStartedEvent started = default;
         BackupCompletedEvent completed = default;
         var startedCount = 0;

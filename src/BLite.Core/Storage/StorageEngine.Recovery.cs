@@ -162,8 +162,8 @@ public sealed partial class StorageEngine
 
         try
         {
-            var manifestPath = Path.Combine(Path.GetDirectoryName(destinationDbPath) ?? ".", "backup.manifest.json");
-            var manifestRoot = Path.GetDirectoryName(destinationDbPath) ?? ".";
+            var manifestRoot = Path.GetFullPath(Path.GetDirectoryName(destinationDbPath) ?? ".");
+            var manifestPath = Path.Combine(manifestRoot, "backup.manifest.json");
             var files = new List<BackupManifestFile>(operations.Count);
             long totalBytes = 0;
 
@@ -279,9 +279,13 @@ public sealed partial class StorageEngine
         {
             foreach (var sourcePath in Directory.EnumerateFiles(_config.CollectionDataDirectory).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
             {
-                var destinationPath = Path.Combine(targetLayout.CollectionDirectory!, Path.GetFileName(sourcePath));
+                var fileName = Path.GetFileName(sourcePath);
+                if (Path.IsPathRooted(fileName))
+                    throw new InvalidOperationException($"Collection file name '{fileName}' must not be an absolute path.");
 
-                if (string.Equals(Path.GetFileName(sourcePath), ".slots", StringComparison.OrdinalIgnoreCase))
+                var destinationPath = Path.Combine(targetLayout.CollectionDirectory!, fileName);
+
+                if (string.Equals(fileName, ".slots", StringComparison.OrdinalIgnoreCase))
                 {
                     operations.Add(new BackupCopyOperation(destinationPath, ct => CopyClosedFileAsync(sourcePath, destinationPath, ct)));
                     continue;
@@ -402,7 +406,13 @@ public sealed partial class StorageEngine
                 if (File.Exists(operation.DestinationPath))
                     File.Delete(operation.DestinationPath);
             }
-            catch { }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (SystemException ex) when (
+                ex is DirectoryNotFoundException or
+                FileNotFoundException or
+                PathTooLongException or
+                NotSupportedException) { }
 
             var directory = Path.GetDirectoryName(operation.DestinationPath);
             if (!string.IsNullOrEmpty(directory))
@@ -416,7 +426,13 @@ public sealed partial class StorageEngine
                 if (File.Exists(manifestPath))
                     File.Delete(manifestPath);
             }
-            catch { }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (SystemException ex) when (
+                ex is DirectoryNotFoundException or
+                FileNotFoundException or
+                PathTooLongException or
+                NotSupportedException) { }
 
             var directory = Path.GetDirectoryName(manifestPath);
             if (!string.IsNullOrEmpty(directory))
@@ -430,7 +446,12 @@ public sealed partial class StorageEngine
                 if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
                     Directory.Delete(directory);
             }
-            catch { }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (SystemException ex) when (
+                ex is DirectoryNotFoundException or
+                PathTooLongException or
+                NotSupportedException) { }
         }
     }
 

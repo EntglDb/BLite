@@ -462,7 +462,10 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         foreach (Action<T> handler in handlers.GetInvocationList())
         {
             try { handler(args); }
-            catch { }
+            catch (Exception ex)
+            {
+                Trace.TraceError($"BLiteEngine handler invocation failed: {ex}");
+            }
         }
     }
 
