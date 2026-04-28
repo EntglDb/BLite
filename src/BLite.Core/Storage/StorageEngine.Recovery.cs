@@ -129,6 +129,8 @@ public sealed partial class StorageEngine
             throw new ArgumentException("The value cannot be null, empty, or whitespace.", nameof(destinationDbPath));
 #endif
 
+        var backupTimestamp = DateTimeOffset.UtcNow;
+
         if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring commit lock (Backup).");
 
@@ -179,7 +181,7 @@ public sealed partial class StorageEngine
                 });
             }
 
-            await WriteManifestAsync(manifestPath, files, ct).ConfigureAwait(false);
+            await WriteManifestAsync(manifestPath, files, backupTimestamp, ct).ConfigureAwait(false);
             return new StorageBackupStats(manifestPath, files.Count, totalBytes);
         }
         catch
@@ -352,7 +354,7 @@ public sealed partial class StorageEngine
         return ToHexString(sha256.ComputeHash(stream));
     }
 
-    private static async Task WriteManifestAsync(string manifestPath, List<BackupManifestFile> files, CancellationToken ct)
+    private static async Task WriteManifestAsync(string manifestPath, List<BackupManifestFile> files, DateTimeOffset backupTimestamp, CancellationToken ct)
     {
         var directory = Path.GetDirectoryName(manifestPath);
         if (!string.IsNullOrEmpty(directory))
@@ -363,7 +365,7 @@ public sealed partial class StorageEngine
         await using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
         writer.WriteStartObject();
         writer.WriteNumber("version", 1);
-        writer.WriteString("timestamp", DateTimeOffset.UtcNow);
+        writer.WriteString("timestamp", backupTimestamp);
         writer.WriteStartArray("files");
         foreach (var file in files)
         {

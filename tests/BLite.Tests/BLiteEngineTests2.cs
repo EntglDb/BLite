@@ -264,9 +264,11 @@ public class BLiteEngineTests2 : IDisposable
         BackupCompletedEvent completed = default;
         var startedCount = 0;
         var completedCount = 0;
+        Action<BackupStartedEvent> startedHandler = evt => { started = evt; startedCount++; };
+        Action<BackupCompletedEvent> completedHandler = evt => { completed = evt; completedCount++; };
 
-        _engine.BackupStarted += evt => { started = evt; startedCount++; };
-        _engine.BackupCompleted += evt => { completed = evt; completedCount++; };
+        _engine.BackupStarted += startedHandler;
+        _engine.BackupCompleted += completedHandler;
 
         try
         {
@@ -308,6 +310,8 @@ public class BLiteEngineTests2 : IDisposable
         }
         finally
         {
+            _engine.BackupStarted -= startedHandler;
+            _engine.BackupCompleted -= completedHandler;
             if (Directory.Exists(backupDir))
                 Directory.Delete(backupDir, recursive: true);
         }
