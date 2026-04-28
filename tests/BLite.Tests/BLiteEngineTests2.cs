@@ -374,8 +374,8 @@ public class BLiteEngineTests2 : IDisposable
             Assert.Equal(3, all.Count);
 
             var backupCollection = backup.GetOrCreateCollection("catalog", BsonIdType.Int32);
-            var indexed = await backupCollection.QueryIndexAsync("idx_age", 23, 23).ToListAsync();
-            Assert.Single(indexed);
+            var indexedResults = await backupCollection.QueryIndexAsync("idx_age", 23, 23).ToListAsync();
+            Assert.Single(indexedResults);
         }
         finally
         {
