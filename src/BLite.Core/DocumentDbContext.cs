@@ -217,26 +217,10 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     private readonly List<IDocumentMapper> _registeredMappers = new();
 
     // Per-collection delegates registered in CreateCollection<TId, T> (called during
-    // InitializeCollections, which runs on the construction thread).  After construction,
-    // DropCollectionAsync<T>() removes entries from all four plain Dictionaries, so callers
-    // must only access them while the context is known to be fully initialized and not
-    // concurrently dropped.  _droppedProxies is written by DropCollectionAsync<T>() at
-    // runtime and therefore uses a ConcurrentDictionary for thread safety.
+    // InitializeCollections, which runs on the construction thread).  These are read-only
+    // after construction; no concurrent mutation occurs.
     private readonly Dictionary<Type, IDocumentMapper> _mapperRegistry = new();
-    private readonly Dictionary<Type, Action> _disposeCallbacks = new();
-    private readonly Dictionary<Type, Func<string, object>> _proxyFactories = new();
     private readonly Dictionary<Type, Func<CancellationToken, Task<int>>> _truncateCallbacks = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Type, object> _droppedProxies = new();
-
-    /// <summary>
-    /// Returns the <see cref="Collections.DroppedCollectionProxy{TId,T}"/> installed for entity type
-    /// <typeparamref name="T"/> if the collection was previously dropped, <c>null</c> otherwise.
-    /// Called by source-generated <c>Set&lt;TId,T&gt;()</c> overrides before returning the concrete property.
-    /// </summary>
-    protected IDocumentCollection<TId, T>? GetDroppedProxy<TId, T>() where T : class
-        => _droppedProxies.TryGetValue(typeof(T), out var p)
-            ? (IDocumentCollection<TId, T>)p
-            : null;
 
     /// <summary>
     /// Override to configure the model using Fluent API.
@@ -307,12 +291,10 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
         _storage.RegisterMappers(_registeredMappers);
 
-        // Register per-type delegates so DropCollectionAsync<T> and TruncateCollectionAsync<T>
-        // can operate without reflection.  These are populated once during InitializeCollections
-        // (single-threaded constructor path) and only read on the hot path afterward.
-        _mapperRegistry[typeof(T)]   = mapper;
-        _disposeCallbacks[typeof(T)] = () => collection.Dispose();
-        _proxyFactories[typeof(T)]   = name => new Collections.DroppedCollectionProxy<TId, T>(name);
+        // Register per-type delegates so TruncateCollectionAsync<T>() can operate
+        // without reflection.  Populated once during InitializeCollections (single-threaded
+        // constructor path) and only read on the hot path afterwards.
+        _mapperRegistry[typeof(T)] = mapper;
         var col = collection;                                    // close over typed instance
         _truncateCallbacks[typeof(T)] = ct => col.TruncateAsync(ct);
 
@@ -335,57 +317,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// <returns>An <see cref="IDocumentCollection{TId,T}"/> instance for performing operations on documents of type T.</returns>
     public virtual IDocumentCollection<TId, T> Set<TId, T>() where T : class
     {
-        // Check whether this collection has been dropped — return the proxy if so,
-        // so callers get a clear InvalidOperationException instead of the generic
-        // "not registered" message or a NullReferenceException.
-        var proxy = GetDroppedProxy<TId, T>();
-        if (proxy != null)
-            return proxy;
-
         throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
-    }
-
-    /// <summary>
-    /// Drops the collection registered for entity type <typeparamref name="T"/>.
-    /// After this call, any attempt to use the collection throws <see cref="InvalidOperationException"/>.
-    /// Physical storage is freed synchronously (multi-file: file deleted; single-file: pages marked free).
-    /// </summary>
-    public Task DropCollectionAsync<T>(CancellationToken ct = default) where T : class
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(DocumentDbContext));
-
-        ct.ThrowIfCancellationRequested();
-
-        if (!_mapperRegistry.TryGetValue(typeof(T), out var mapper))
-            throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}'.");
-
-        var collectionName = mapper.CollectionName;
-
-        // Dispose the in-memory collection first.
-        if (_disposeCallbacks.TryGetValue(typeof(T), out var dispose))
-            dispose();
-
-        // Free physical storage.
-        _storage.FreeCollectionPages(collectionName);    // no-op in multi-file mode
-        _storage.DeleteCollectionMetadata(collectionName);
-        _storage.DropCollectionFile(collectionName);     // no-op in single-file mode
-
-        // Install a dropped proxy so future Set<T>() calls give a clear error.
-        if (_proxyFactories.TryGetValue(typeof(T), out var proxyFactory))
-            _droppedProxies[typeof(T)] = proxyFactory(collectionName);
-
-        // Remove the truncate/dispose callbacks so they can't be called on the dead collection.
-        _disposeCallbacks.Remove(typeof(T));
-        _truncateCallbacks.Remove(typeof(T));
-        _mapperRegistry.Remove(typeof(T));
-        _proxyFactories.Remove(typeof(T));
-
-#if NET5_0_OR_GREATER
-        return Task.CompletedTask;
-#else
-        return System.Threading.Tasks.Task.CompletedTask;
-#endif
     }
 
     /// <summary>
@@ -398,9 +330,6 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(DocumentDbContext));
-
-        if (_droppedProxies.ContainsKey(typeof(T)))
-            throw new InvalidOperationException($"Collection '{typeof(T).Name}' has been dropped.");
 
         if (!_truncateCallbacks.TryGetValue(typeof(T), out var truncate))
             throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}'.");

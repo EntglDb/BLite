@@ -190,56 +190,6 @@ public class TruncateDropCollectionTests : IDisposable
         Assert.Equal(1, count);
     }
 
-    // ── DocumentDbContext.DropCollectionAsync<T> ──────────────────────────────
-
-    [Fact]
-    public async Task Context_DropCollectionAsync_ProxyThrowsOnAnyAccess()
-    {
-        using var db = new TestDbContext(_dbPath);
-
-        await db.Users.InsertAsync(new User { Name = "WillBeDropped", Age = 42 });
-
-        await db.DropCollectionAsync<User>();
-
-        // After drop, Set<User>() should return a proxy that throws on access.
-        var proxy = db.Set<User>();
-        Assert.NotNull(proxy);
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await proxy.InsertAsync(new User { Name = "Fail" }));
-        Assert.Contains("dropped", ex.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Context_DropCollectionAsync_TruncateAfterDropThrows()
-    {
-        using var db = new TestDbContext(_dbPath);
-        await db.Users.InsertAsync(new User { Name = "WillBeDropped", Age = 42 });
-
-        await db.DropCollectionAsync<User>();
-
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => db.TruncateCollectionAsync<User>());
-    }
-
-    [Fact]
-    public async Task Context_DropCollectionAsync_MetadataRemovedFromStorage()
-    {
-        using (var db = new TestDbContext(_dbPath))
-        {
-            await db.Users.InsertAsync(new User { Name = "Temp", Age = 1 });
-            await db.DropCollectionAsync<User>();
-        }
-
-        // Verify that after reopening the DB, the old data is gone.
-        // (Users is re-created by InitializeCollections on open, but its data should be gone.)
-        using var db2 = new TestDbContext(_dbPath);
-        int count = 0;
-        await foreach (var _ in db2.Users.FindAllAsync())
-            count++;
-        Assert.Equal(0, count);
-    }
-
     // ── Orphan-collection pruning ──────────────────────────────────────────────
 
     [Fact]

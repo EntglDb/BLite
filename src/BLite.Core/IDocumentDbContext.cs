@@ -64,18 +64,6 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     ValueTask SaveChangesAsync(ITransaction transaction, CancellationToken ct = default);
 
     /// <summary>
-    /// Drops the collection registered for entity type <typeparamref name="T"/>.
-    /// After this call, subsequent lookups via <see cref="Set{T}()"/> or <see cref="Set{TId,T}()"/>
-    /// observe the dropped state and throw <see cref="InvalidOperationException"/>.
-    /// Previously cached collection references are not guaranteed to throw; they may return
-    /// <see cref="ObjectDisposedException"/> or behave unexpectedly once the underlying
-    /// storage has been freed.
-    /// Physical storage is freed synchronously (multi-file: collection data file deleted and
-    /// index/schema pages in the shared file freed; single-file: all pages marked free).
-    /// </summary>
-    Task DropCollectionAsync<T>(CancellationToken ct = default) where T : class;
-
-    /// <summary>
     /// Deletes all documents in the collection for <typeparamref name="T"/> and clears all secondary indexes.
     /// The collection structure (schema, indexes, metadata) is preserved and the collection
     /// is immediately usable after the operation completes.
