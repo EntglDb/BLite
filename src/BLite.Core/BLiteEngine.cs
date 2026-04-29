@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.KeyValue;
+using BLite.Core.Retention;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
@@ -682,6 +683,34 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         if (!collection.IsTimeSeries) return (false, 0, null);
         var (retentionMs, ttlField) = collection.GetTimeSeriesConfig();
         return (true, retentionMs, ttlField);
+    }
+
+    #endregion
+
+    #region Retention Policy
+
+    /// <summary>
+    /// Configures a generalized retention policy for the named collection.
+    /// The policy is persisted in collection metadata and survives engine restarts.
+    /// </summary>
+    /// <param name="collectionName">Name of the collection to configure.</param>
+    /// <param name="configure">Action that configures the retention policy via the fluent builder.</param>
+    public void SetRetentionPolicy(string collectionName, Action<RetentionPolicyBuilder> configure)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        collection.SetRetentionPolicy(configure);
+    }
+
+    /// <summary>
+    /// Immediately runs the retention policy on the named collection, regardless of any triggers.
+    /// Primarily intended for testing; in production, retention is triggered automatically.
+    /// </summary>
+    public Task ForceApplyRetentionPolicyAsync(string collectionName)
+    {
+        ThrowIfDisposed();
+        var collection = GetOrCreateCollection(collectionName);
+        return collection.ForceApplyRetentionPolicyAsync();
     }
 
     #endregion

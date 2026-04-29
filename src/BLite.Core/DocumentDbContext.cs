@@ -172,6 +172,9 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
             if (builder.TimeSeriesTtlField != null && builder.TimeSeriesRetention.HasValue)
                 collection.SetTimeSeries(builder.TimeSeriesTtlField, builder.TimeSeriesRetention.Value);
+
+            if (builder.RetentionPolicy != null)
+                collection.SetRetentionPolicy(builder.RetentionPolicy);
         }
 
         return collection;
@@ -247,6 +250,9 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
             if (builder.TimeSeriesTtlField != null && builder.TimeSeriesRetention.HasValue)
                 collection.SetTimeSeries(builder.TimeSeriesTtlField, builder.TimeSeriesRetention.Value);
+
+            if (builder.RetentionPolicy != null)
+                collection.SetRetentionPolicy(builder.RetentionPolicy);
         }
 
         _storage.RegisterMappers(_registeredMappers);

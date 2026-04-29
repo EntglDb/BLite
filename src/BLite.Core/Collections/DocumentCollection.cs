@@ -1,11 +1,17 @@
 using BLite.Core.CDC;
+using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
 using BLite.Core.Metrics;
+using BLite.Core.Retention;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System.Runtime.CompilerServices;
@@ -50,6 +56,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     private readonly Func<uint, ulong, bool> _isPageLocked;
     private bool _isTimeSeries;
     private string? _ttlFieldName;
+
+    // ── Generalized Retention Policy ─────────────────────────────────────────
+    private RetentionPolicy? _retentionPolicy;
+    private Timer? _retentionTimer;
+    private int _retentionRunning; // 0=idle, 1=running (Interlocked flag)
 
     // Current page for inserts (optimization)
     private uint _currentDataPage;
@@ -119,6 +130,324 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         _storage.SaveCollectionMetadata(meta);
         await transaction.CommitAsync();
     }
+
+    #region Retention Policy
+
+    private static readonly TimeSpan DefaultScheduledInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Configures a generalized retention policy for this collection.
+    /// The policy is persisted in collection metadata and survives engine restarts.
+    /// Called internally from <see cref="DocumentDbContext"/> when applying builder configuration.
+    /// </summary>
+    internal void SetRetentionPolicy(RetentionPolicy policy)
+    {
+        if (policy == null) throw new ArgumentNullException(nameof(policy));
+        var meta = _indexManager.GetMetadata();
+        meta.GeneralRetentionPolicy = policy;
+        _storage.SaveCollectionMetadata(meta);
+        ApplyRetentionPolicyConfig(policy);
+    }
+
+    /// <summary>
+    /// Immediately runs the retention policy regardless of any triggers.
+    /// Primarily intended for testing; in production, retention is triggered automatically.
+    /// </summary>
+    public async Task ForceApplyRetentionPolicyAsync(CancellationToken ct = default)
+    {
+        // Load from persisted metadata if not yet set in memory.
+        if (_retentionPolicy == null)
+        {
+            var metaPolicy = _storage.GetCollectionMetadata(_collectionName)?.GeneralRetentionPolicy;
+            if (metaPolicy == null) return;
+            ApplyRetentionPolicyConfig(metaPolicy);
+        }
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (ForceApplyRetentionPolicy).");
+        try
+        {
+            await ApplyRetentionPolicyCoreAsync(ct);
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Sets up the in-memory retention policy reference and starts/stops the scheduled timer.
+    /// </summary>
+    private void ApplyRetentionPolicyConfig(RetentionPolicy policy)
+    {
+        _retentionPolicy = policy;
+
+        _retentionTimer?.Dispose();
+        _retentionTimer = null;
+
+        if ((policy.Triggers & RetentionTrigger.Scheduled) != 0)
+        {
+            var interval = policy.ScheduledIntervalMs > 0
+                ? TimeSpan.FromMilliseconds(policy.ScheduledIntervalMs)
+                : DefaultScheduledInterval;
+
+            _retentionTimer = new Timer(
+                callback: _ => _ = RunScheduledRetentionAsync(),
+                state: null,
+                dueTime: interval,
+                period: interval);
+        }
+    }
+
+    private async Task RunScheduledRetentionAsync()
+    {
+        if (Interlocked.CompareExchange(ref _retentionRunning, 1, 0) != 0)
+            return;
+        try
+        {
+            if (_retentionPolicy == null) return;
+
+            if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs))
+                return;
+            try
+            {
+                await ApplyRetentionPolicyCoreAsync(CancellationToken.None);
+            }
+            finally
+            {
+                _collectionLock.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore cancellation from background retention execution.
+        }
+        catch (Exception ex) when (!IsFatalException(ex))
+        {
+            // Swallow non-fatal exceptions from the background timer to avoid crashing the process.
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _retentionRunning, 0);
+        }
+    }
+
+    private static bool IsFatalException(Exception ex) =>
+        ex is OutOfMemoryException
+        or StackOverflowException
+        or AccessViolationException
+        or AppDomainUnloadedException
+        or BadImageFormatException
+        or CannotUnloadAppDomainException
+        or InvalidProgramException
+        or ThreadAbortException;
+
+    /// <summary>
+    /// Core retention enforcement. Must be called with the collection lock held.
+    /// </summary>
+    private async Task ApplyRetentionPolicyCoreAsync(CancellationToken ct)
+    {
+        var policy = _retentionPolicy!;
+
+        // Collect all document IDs and (optionally) timestamps using a raw BSON scan.
+        var entries = new List<(TId Id, long TimestampTicks)>();
+        long nowTicks = DateTime.UtcNow.Ticks;
+
+        foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, 0UL))
+        {
+            ct.ThrowIfCancellationRequested();
+            var id = _mapper.FromIndexKey(entry.Key);
+            long ticks = 0;
+
+            if (policy.TimestampField != null)
+            {
+                var rawBytes = ReadRawBytesAt(entry.Location, 0UL);
+                if (rawBytes != null)
+                    ticks = ExtractTimestampTicks(rawBytes, policy.TimestampField);
+            }
+
+            entries.Add((id, ticks));
+        }
+
+        var toDelete = new HashSet<TId>();
+
+        // MaxAge — delete documents older than the cutoff
+        if (policy.MaxAgeMs > 0 && policy.TimestampField != null)
+        {
+            long cutoff = nowTicks - (policy.MaxAgeMs * TimeSpan.TicksPerMillisecond);
+            foreach (var (id, ticks) in entries)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (ticks > 0 && ticks < cutoff)
+                    toDelete.Add(id);
+            }
+        }
+
+        // MaxDocumentCount — delete oldest documents over the limit
+        if (policy.MaxDocumentCount > 0 && entries.Count > policy.MaxDocumentCount)
+        {
+            int excess = (int)(entries.Count - policy.MaxDocumentCount);
+            var ordered = policy.TimestampField != null
+                ? entries.OrderBy(e => e.TimestampTicks == 0 ? long.MaxValue : e.TimestampTicks)
+                : entries.AsEnumerable();
+
+            foreach (var (id, _) in ordered.Take(excess))
+            {
+                ct.ThrowIfCancellationRequested();
+                toDelete.Add(id);
+            }
+        }
+
+        // MaxSizeBytes — delete oldest documents until size is within limit
+        if (policy.MaxSizeBytes > 0)
+        {
+            long estimatedBytes = EstimateCollectionSizeBytes();
+            if (estimatedBytes > policy.MaxSizeBytes)
+            {
+                var ordered = policy.TimestampField != null
+                    ? entries.OrderBy(e => e.TimestampTicks == 0 ? long.MaxValue : e.TimestampTicks)
+                    : entries.AsEnumerable();
+
+                foreach (var (id, _) in ordered)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (estimatedBytes <= policy.MaxSizeBytes) break;
+                    toDelete.Add(id);
+                    estimatedBytes -= _storage.PageSize / Math.Max(entries.Count, 1);
+                }
+            }
+        }
+
+        if (toDelete.Count == 0) return;
+
+        // Delete the collected IDs in a single transaction via the existing DeleteCore path.
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            foreach (var id in toDelete)
+            {
+                ct.ThrowIfCancellationRequested();
+                await DeleteCore(id, transaction);
+            }
+            await transaction.CommitAsync(ct);
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Reads the raw BSON bytes for a document at the given location without deserializing.
+    /// Returns null if the slot is deleted, the page is invalid, or the document spans
+    /// multiple overflow pages — overflow documents are exempt from age-based retention
+    /// because reassembling the full payload is expensive in this context.
+    /// For retention purposes, <see cref="MaxDocumentCount"/> and <see cref="RetentionPolicy.MaxSizeBytes"/>
+    /// still apply to overflow documents (their primary-index entry is included in the count scan).
+    /// </summary>
+    private byte[]? ReadRawBytesAt(DocumentLocation location, ulong txnId)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            _storage.ReadPage(location.PageId, txnId, buffer);
+            var pageType = (PageType)buffer[4];
+            if (pageType == PageType.Free || pageType == PageType.Empty || pageType == PageType.TimeSeries)
+                return null;
+
+            var header = SlottedPageHeader.ReadFrom(buffer);
+            if (location.SlotIndex >= header.SlotCount) return null;
+
+            var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+            if ((slot.Flags & SlotFlags.Deleted) != 0) return null;
+            if ((slot.Flags & SlotFlags.HasOverflow) != 0) return null; // skip overflow docs for retention
+
+            if (slot.Offset + slot.Length > buffer.Length) return null;
+            return buffer.AsSpan(slot.Offset, slot.Length).ToArray();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Extracts a UTC-ticks timestamp from raw BSON bytes using the given field name.
+    /// Resolves the field name against the Key Dictionary for correct C-BSON lookup,
+    /// then uses the O(1) offset-table fast path when available.
+    /// Returns 0 if the field is absent or is not a DateTime/Int64.
+    /// </summary>
+    private long ExtractTimestampTicks(byte[] bsonBytes, string fieldName)
+    {
+        // fieldName is already lower-cased by RetentionPolicyBuilder.OnField().
+        // Resolve to key ID via the forward dictionary for fast C-BSON seek.
+        var keyMap = _storage.GetKeyMap();
+        bool hasKeyId = keyMap.TryGetValue(fieldName, out var keyId);
+
+        try
+        {
+            var reader = new BsonSpanReader(bsonBytes, _storage.GetKeyReverseMap());
+            reader.ReadDocumentSize();
+
+            // Fast path: use offset table via key ID.
+            if (hasKeyId && reader.TrySeekToField(keyId, out var seekType))
+            {
+                var value = BsonValue.ReadFrom(ref reader, seekType);
+                return value.Type switch
+                {
+                    BsonType.DateTime => value.AsDateTime.Ticks,
+                    BsonType.Int64    => value.AsInt64,
+                    _                 => 0
+                };
+            }
+
+            // Slow path: sequential scan (offset table absent or field ID out of range).
+            while (reader.Remaining > 1)
+            {
+                var type = reader.ReadBsonType();
+                if (type == BsonType.EndOfDocument) break;
+                var name = reader.ReadElementHeader();
+                // Both sides are lowercase: fieldName normalised by builder, name from key reverse map.
+                if (name != fieldName)
+                {
+                    reader.SkipValue(type);
+                    continue;
+                }
+                var val = BsonValue.ReadFrom(ref reader, type);
+                return val.Type switch
+                {
+                    BsonType.DateTime => val.AsDateTime.Ticks,
+                    BsonType.Int64    => val.AsInt64,
+                    _                 => 0
+                };
+            }
+        }
+        catch (InvalidOperationException) { return 0; }
+        catch (ArgumentOutOfRangeException) { return 0; }
+        catch (IndexOutOfRangeException) { return 0; }
+        return 0;
+    }
+
+    /// <summary>
+    /// Estimates the total size of this collection's data pages in bytes.
+    /// </summary>
+    private long EstimateCollectionSizeBytes()
+    {
+        long count = 0;
+        var hdrBuf = new byte[SlottedPageHeader.Size];
+        foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+        {
+            _storage.ReadPageHeader(pageId, null, hdrBuf);
+            var h = SlottedPageHeader.ReadFrom(hdrBuf);
+            if (h.PageType == PageType.Data)
+                count++;
+        }
+        return count * _storage.PageSize;
+    }
+
+    #endregion
 
     /// <summary>
     /// Compacts all data pages in this collection, securely erasing freed byte ranges
@@ -232,6 +561,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             _isTimeSeries = true;
             _ttlFieldName = tsMeta.TtlFieldName;
         }
+
+        // Restore generalized retention policy and set up the scheduled timer if needed.
+        if (tsMeta.GeneralRetentionPolicy != null)
+            ApplyRetentionPolicyConfig(tsMeta.GeneralRetentionPolicy);
 
         // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
         // Use persisted root page ID if available
@@ -1457,7 +1790,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             try
             {
                 var id = await InsertCore(entity, transaction);
-                if (autoCommit) await transaction.CommitAsync(ct);
+                if (autoCommit)
+                {
+                    await transaction.CommitAsync(ct);
+                    // ── OnInsert retention trigger — runs AFTER commit within the lock ──
+                    if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                        await ApplyRetentionPolicyCoreAsync(ct);
+                }
+                else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                         && transaction is Transaction concreteTx)
+                {
+                    // For caller-managed transactions, fire retention in the background after commit.
+                    concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                }
                 success = true;
                 return id;
             }
@@ -1502,7 +1847,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             try
             {
                 await InsertBulkInternal(entityList, ids, transaction);
-                if (autoCommit) await transaction.CommitAsync(ct);
+                if (autoCommit)
+                {
+                    await transaction.CommitAsync(ct);
+                    // ── OnInsert retention trigger — runs AFTER commit within the lock ──
+                    if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                        await ApplyRetentionPolicyCoreAsync(ct);
+                }
+                else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                         && transaction is Transaction concreteTx)
+                {
+                    // For caller-managed transactions, fire retention in the background after commit.
+                    concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                }
                 return ids;
             }
             catch
@@ -3081,6 +3438,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// immediately. After calling Dispose, the object should not be used.</remarks>
     public void Dispose()
     {
+        _retentionTimer?.Dispose();
+        _retentionTimer = null;
         _indexManager.Dispose();
         GC.SuppressFinalize(this);
     }

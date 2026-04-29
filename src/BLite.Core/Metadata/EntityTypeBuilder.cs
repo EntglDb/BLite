@@ -1,5 +1,6 @@
 using BLite.Core.Indexing;
 using System.Linq.Expressions;
+using BLite.Core.Retention;
 
 namespace BLite.Core.Metadata;
 
@@ -24,6 +25,7 @@ public class EntityTypeBuilder<T> where T : class
     public Dictionary<string, Type> PropertyConverters { get; } = new();
     public string? TimeSeriesTtlField { get; private set; }
     public TimeSpan? TimeSeriesRetention { get; private set; }
+    public RetentionPolicy? RetentionPolicy { get; private set; }
 
     public EntityTypeBuilder<T> ToCollection(string name)
     {
@@ -67,6 +69,20 @@ public class EntityTypeBuilder<T> where T : class
         TimeSeriesTtlField = ExpressionAnalyzer.ExtractPropertyPaths(timestampSelector)
             .FirstOrDefault()?.ToLowerInvariant();
         TimeSeriesRetention = retention;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures a generalized retention policy for this collection.
+    /// The policy is persisted in collection metadata and evaluated on the specified triggers.
+    /// </summary>
+    /// <param name="configure">Action that configures the retention policy via the fluent builder.</param>
+    public EntityTypeBuilder<T> HasRetentionPolicy(Action<RetentionPolicyBuilder<T>> configure)
+    {
+        if (configure == null) throw new ArgumentNullException(nameof(configure));
+        var builder = new RetentionPolicyBuilder<T>();
+        configure(builder);
+        RetentionPolicy = builder.Build();
         return this;
     }
 
