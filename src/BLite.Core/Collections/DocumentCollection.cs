@@ -1797,6 +1797,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
                         await ApplyRetentionPolicyCoreAsync(ct);
                 }
+                else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                         && transaction is Transaction concreteTx)
+                {
+                    // For caller-managed transactions, fire retention in the background after commit.
+                    concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                }
                 success = true;
                 return id;
             }
@@ -1847,6 +1853,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     // ── OnInsert retention trigger — runs AFTER commit within the lock ──
                     if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
                         await ApplyRetentionPolicyCoreAsync(ct);
+                }
+                else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                         && transaction is Transaction concreteTx)
+                {
+                    // For caller-managed transactions, fire retention in the background after commit.
+                    concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
                 }
                 return ids;
             }

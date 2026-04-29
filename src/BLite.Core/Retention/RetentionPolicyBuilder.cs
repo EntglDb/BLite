@@ -17,6 +17,7 @@ public sealed class RetentionPolicyBuilder
     /// </summary>
     public RetentionPolicyBuilder MaxAge(TimeSpan age)
     {
+        if (age < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(age));
         _policy.MaxAgeMs = (long)age.TotalMilliseconds;
         return this;
     }

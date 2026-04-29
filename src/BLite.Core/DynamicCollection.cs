@@ -360,27 +360,29 @@ public sealed class DynamicCollection : IDisposable
             }
         }
         catch (OperationCanceledException)
-        {
+        {
             // Ignore cancellation in background retention execution.
-        }
-        catch (TimeoutException)
-        {
-            // Ignore transient timeout failures in scheduled background retention.
         }
-        catch (Exception) when (Environment.HasShutdownStarted)
+        catch (Exception ex) when (!IsFatalException(ex))
         {
-            // Ignore failures during process shutdown.
-        }
-        catch (Exception)
-        {
-            // Preserve diagnosability for unexpected failures.
-            throw;
+            // Swallow non-fatal exceptions (including ObjectDisposedException during Dispose)
+            // so background retention can never destabilise the process.
         }
         finally
         {
             Interlocked.Exchange(ref _retentionRunning, 0);
         }
     }
+
+    private static bool IsFatalException(Exception ex) =>
+        ex is OutOfMemoryException
+        or StackOverflowException
+        or AccessViolationException
+        or AppDomainUnloadedException
+        or BadImageFormatException
+        or CannotUnloadAppDomainException
+        or InvalidProgramException
+        or ThreadAbortException;
 
     /// <summary>
     /// Core retention enforcement logic. Must be called with the collection lock held.
@@ -681,6 +683,12 @@ public sealed class DynamicCollection : IDisposable
                 if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
                     await ApplyRetentionPolicyCoreAsync(ct);
             }
+            else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                     && transaction is Transaction concreteTx)
+            {
+                // For caller-managed transactions, fire retention in the background after commit.
+                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+            }
             success = true;
             return result;
         }
@@ -736,6 +744,12 @@ public sealed class DynamicCollection : IDisposable
                 // ── OnInsert retention trigger — runs AFTER commit within the lock ──
                 if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
                     await ApplyRetentionPolicyCoreAsync(ct);
+            }
+            else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                     && transaction is Transaction concreteTx)
+            {
+                // For caller-managed transactions, fire retention in the background after commit.
+                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
             }
             return ids;
         }
