@@ -387,7 +387,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 };
             }
         }
-        catch { }
+        catch (InvalidOperationException) { return 0; }
+        catch (ArgumentOutOfRangeException) { return 0; }
+        catch (IndexOutOfRangeException) { return 0; }
         return 0;
     }
 
