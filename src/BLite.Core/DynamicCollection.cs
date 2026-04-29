@@ -356,9 +356,22 @@ public sealed class DynamicCollection : IDisposable
                 _collectionLock.Release();
             }
         }
-        catch
+        catch (OperationCanceledException)
+        {
+            // Ignore cancellation in background retention execution.
+        }
+        catch (TimeoutException)
         {
-            // Swallow exceptions from the background timer to avoid crashing the process.
+            // Ignore transient timeout failures in scheduled background retention.
+        }
+        catch (Exception) when (Environment.HasShutdownStarted)
+        {
+            // Ignore failures during process shutdown.
+        }
+        catch (Exception)
+        {
+            // Preserve diagnosability for unexpected failures.
+            throw;
         }
         finally
         {
