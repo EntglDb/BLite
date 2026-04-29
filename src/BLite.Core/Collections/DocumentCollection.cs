@@ -120,6 +120,83 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         await transaction.CommitAsync();
     }
 
+    /// <summary>
+    /// Compacts all data pages in this collection, securely erasing freed byte ranges
+    /// by zero-filling the free space area of every page after compaction.
+    /// <para>
+    /// Acquires the collection write lock for the duration of the operation —
+    /// no concurrent writes to this collection are allowed while VACUUM runs.
+    /// </para>
+    /// </summary>
+    public async Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring collection write lock (VacuumAsync).");
+        try
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            try
+            {
+                var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    bool secureErase = options?.SecureErase ?? true;
+                    foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+                    {
+                        ct.ThrowIfCancellationRequested();
+
+                        _storage.ReadPage(pageId, transaction.TransactionId, buffer);
+                        var header = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+
+                        if (header.PageType != PageType.Data)
+                            continue;
+
+                        // Compact the page, packing live documents to the top.
+                        CompactPage(buffer.AsSpan(0, _storage.PageSize));
+
+                        // Optionally zero-fill the free space area to erase residual deleted bytes.
+                        var compactedHdr = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+                        int freeBytes = compactedHdr.FreeSpaceEnd - compactedHdr.FreeSpaceStart;
+                        if (freeBytes > 0)
+                        {
+                            if (secureErase)
+                                buffer.AsSpan(compactedHdr.FreeSpaceStart, freeBytes).Clear();
+
+                            _storage.WritePage(pageId, transaction.TransactionId,
+                                buffer.AsSpan(0, _storage.PageSize));
+                            SnapshotFsiForTransaction(transaction, pageId);
+                            _fsi.Update(pageId, compactedHdr.AvailableFreeSpace);
+                        }
+                    }
+
+                    await transaction.CommitAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await _storage.RollbackTransactionAsync(transaction).ConfigureAwait(false);
+                    throw;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            // Optionally rebuild all secondary indexes from scratch.
+            if (options?.RebuildIndexes == true)
+            {
+                foreach (var index in _indexManager.GetAllIndexes())
+                    await RebuildIndexAsync(index, ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
     [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
     [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName = null)
@@ -2269,6 +2346,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             // Compact the page: reclaim the bytes that belonged to the deleted document
             // and advance FreeSpaceEnd so FindPageWithSpace can see the freed space.
             CompactPage(buffer.AsSpan(0, _storage.PageSize));
+
+            // Secure erase: zero-fill the free space area so the deleted document bytes
+            // are unrecoverable at the page level, supporting GDPR Art. 17 compliance.
+            var postCompactHeader = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+            buffer.AsSpan(postCompactHeader.FreeSpaceStart,
+                postCompactHeader.FreeSpaceEnd - postCompactHeader.FreeSpaceStart).Clear();
 
             _storage.WritePage(location.PageId, transaction.TransactionId, buffer);
 

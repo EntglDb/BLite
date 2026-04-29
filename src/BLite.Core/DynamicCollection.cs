@@ -885,6 +885,126 @@ public sealed class DynamicCollection : IDisposable
 
     #endregion
 
+    #region Vacuum / Secure Erase
+
+    /// <summary>
+    /// Compacts all data pages in this collection, securely erasing freed byte ranges
+    /// by zero-filling the free space area of every page after compaction.
+    /// <para>
+    /// Acquires the collection write lock for the duration of the operation —
+    /// no concurrent writes to this collection are allowed while VACUUM runs.
+    /// </para>
+    /// </summary>
+    public async Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring collection write lock (VacuumAsync).");
+        try
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            var scratch = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+            try
+            {
+                var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    bool secureErase = options?.SecureErase ?? true;
+                    foreach (var pageId in _storage.GetCollectionPageIds(_collectionName))
+                    {
+                        ct.ThrowIfCancellationRequested();
+
+                        _storage.ReadPage(pageId, transaction.TransactionId, buffer);
+                        var header = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+
+                        if (header.PageType != PageType.Data)
+                            continue;
+
+                        // Compact the page. Pass the reusable scratch buffer to avoid
+                        // a per-page ArrayPool rent inside CompactAndErase.
+                        // Zero-filling (secure erase) is conditional on the option.
+                        SlottedPageUtils.CompactAndErase(
+                            buffer.AsSpan(0, _storage.PageSize), scratch, secureErase);
+
+                        var compactedHdr = SlottedPageHeader.ReadFrom(
+                            buffer.AsSpan(0, SlottedPageHeader.Size));
+                        int freeBytes = compactedHdr.FreeSpaceEnd - compactedHdr.FreeSpaceStart;
+                        if (freeBytes > 0)
+                        {
+                            _storage.WritePage(pageId, transaction.TransactionId,
+                                buffer.AsSpan(0, _storage.PageSize));
+                            SnapshotFsiForTransaction(transaction, pageId);
+                            _fsi.Update(pageId, compactedHdr.AvailableFreeSpace);
+                        }
+                    }
+
+                    await transaction.CommitAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await transaction.RollbackAsync().ConfigureAwait(false);
+                    throw;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(scratch);
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            // Optionally rebuild all secondary indexes from scratch.
+            if (options?.RebuildIndexes == true && _secondaryIndexes.Count > 0)
+            {
+                // Replace every secondary index with a fresh, empty instance.
+                var rebuildEntries = new Dictionary<string, DynamicSecondaryIndex>(_secondaryIndexes.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var (name, entry) in _secondaryIndexes)
+                {
+                    DynamicSecondaryIndex freshEntry = entry.Kind switch
+                    {
+                        DynamicIndexKind.BTree    => new DynamicSecondaryIndex(new BTreeIndex(_storage, entry.Options), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.Vector   => new DynamicSecondaryIndex(new VectorSearchIndex(_storage, entry.Options), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.Spatial  => new DynamicSecondaryIndex(new RTreeIndex(_storage, entry.Options, 0), entry.FieldPath, entry.Options),
+                        _                         => entry
+                    };
+                    rebuildEntries[name] = freshEntry;
+                }
+
+                var rebuildTxn = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, rebuildTxn.TransactionId))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var doc = ReadDocumentAt(e.Location, rebuildTxn.TransactionId);
+                        if (doc != null)
+                        {
+                            foreach (var (_, idx) in rebuildEntries)
+                                IndexInsert(idx, doc, e.Location, rebuildTxn);
+                        }
+                    }
+                    await rebuildTxn.CommitAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await rebuildTxn.RollbackAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                // Swap in the rebuilt indexes and persist their new root page IDs.
+                foreach (var (name, entry) in rebuildEntries)
+                    _secondaryIndexes[name] = entry;
+                PersistIndexMetadata();
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    #endregion
+
     #region Index Management
 
     /// <summary>
@@ -1394,7 +1514,14 @@ public sealed class DynamicCollection : IDisposable
                 var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
                 slot.Flags |= SlotFlags.Deleted;
                 slot.WriteTo(buffer.AsSpan(slotOffset));
-                header.WriteTo(buffer);
+
+                // Compact the page and securely erase freed bytes (zero-fill free space).
+                SlottedPageUtils.CompactAndErase(buffer.AsSpan(0, _storage.PageSize));
+
+                SnapshotFsiForTransaction(transaction, location.PageId);
+                var compactedHdr = SlottedPageHeader.ReadFrom(buffer.AsSpan(0, SlottedPageHeader.Size));
+                _fsi.Update(location.PageId, compactedHdr.AvailableFreeSpace);
+
                 _storage.WritePage(location.PageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
             }
         }

@@ -167,6 +167,20 @@ public interface IDocumentCollection<TId, T> where T : class
 
     Task ForcePruneAsync();
 
+    // ── Vacuum / Secure Erase ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Compacts all data pages belonging to this collection, securely erasing
+    /// deleted document bytes (zero-filling the freed byte ranges within each page).
+    /// This supports GDPR Art. 17 (right to erasure) by ensuring that deleted data
+    /// cannot be recovered via disk forensics after this operation completes.
+    /// <para>
+    /// VACUUM acquires the collection write lock for its duration — no concurrent
+    /// writes to this collection are permitted while it runs.
+    /// </para>
+    /// </summary>
+    Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default);
+
     // ── Change Data Capture (local engine only; remote throws NotSupportedException) ───
 
     IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload = false);

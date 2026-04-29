@@ -145,6 +145,114 @@ public enum SlotFlags : uint
 }
 
 /// <summary>
+/// Shared utility methods for slotted-page maintenance.
+/// </summary>
+internal static class SlottedPageUtils
+{
+    /// <summary>
+    /// Compacts a slotted data page by packing live documents to the top of the data area.
+    /// When <paramref name="secureErase"/> is <c>true</c> (the default), the resulting free
+    /// space is zero-filled so that deleted document bytes are unrecoverable
+    /// (secure erase / GDPR Art. 17 support).
+    /// <para>
+    /// Deleted slot entries are retained in the slot array so that existing
+    /// <see cref="DocumentLocation"/> values (stored in the B-Tree primary index) remain valid.
+    /// Only the document data area is compacted; <c>SlotCount</c> and <c>FreeSpaceStart</c>
+    /// are unchanged.
+    /// </para>
+    /// </summary>
+    /// <param name="buffer">
+    ///   Full page buffer (exactly <c>pageSize</c> bytes). Modified in-place.
+    /// </param>
+    /// <param name="scratch">
+    ///   Optional caller-owned scratch buffer of at least <c>buffer.Length</c> bytes.
+    ///   When non-<c>null</c> it is used instead of renting from <see cref="System.Buffers.ArrayPool{T}"/>,
+    ///   allowing callers that process many pages (e.g. VACUUM) to amortise allocation cost
+    ///   by providing a single reusable buffer across all calls.
+    ///   Pass <c>null</c> to let the method rent internally (single-call sites such as
+    ///   per-delete slot erasure).
+    /// </param>
+    /// <param name="secureErase">
+    ///   When <c>true</c> (the default), the free-space byte range is zero-filled after
+    ///   compaction. Set to <c>false</c> to skip zero-fill for performance-sensitive
+    ///   VACUUM passes where data erasure is not required.
+    /// </param>
+    /// <returns>
+    ///   <c>true</c> if the page contained deleted slots and was compacted;
+    ///   <c>false</c> if there were no deleted slots and the page was unchanged.
+    /// </returns>
+    internal static bool CompactAndErase(Span<byte> buffer, byte[]? scratch = null, bool secureErase = true)
+    {
+        var header = SlottedPageHeader.ReadFrom(buffer);
+        if (header.SlotCount == 0) return false;
+
+        // Gather live (non-deleted) slots, preserving their original indices.
+        int deletedCount = 0;
+        for (ushort i = 0; i < header.SlotCount; i++)
+        {
+            var slotOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.Slice(slotOffset, SlotEntry.Size));
+            if ((slot.Flags & SlotFlags.Deleted) != 0)
+                deletedCount++;
+        }
+
+        if (deletedCount == 0)
+        {
+            // No deleted slots: zero-fill existing free space when secure erase is requested.
+            if (secureErase)
+            {
+                buffer.Slice(header.FreeSpaceStart,
+                    header.FreeSpaceEnd - header.FreeSpaceStart).Clear();
+            }
+            return false;
+        }
+
+        // Pack live document data from top of page downward using a temp copy
+        // to avoid read-after-write corruption.  Slot indices are preserved so
+        // primary-index DocumentLocation values remain valid after compaction.
+        bool rented = scratch == null;
+        byte[] temp = rented
+            ? System.Buffers.ArrayPool<byte>.Shared.Rent(buffer.Length)
+            : scratch!;
+        try
+        {
+            buffer.CopyTo(temp);
+            ushort newEnd = (ushort)buffer.Length;
+
+            for (ushort i = 0; i < header.SlotCount; i++)
+            {
+                var entryOffset = SlottedPageHeader.Size + (i * SlotEntry.Size);
+                var slot = SlotEntry.ReadFrom(buffer.Slice(entryOffset, SlotEntry.Size));
+                if ((slot.Flags & SlotFlags.Deleted) != 0)
+                    continue;
+
+                newEnd -= slot.Length;
+                temp.AsSpan(slot.Offset, slot.Length).CopyTo(buffer.Slice(newEnd, slot.Length));
+
+                var updatedSlot = slot;
+                updatedSlot.Offset = newEnd;
+                updatedSlot.WriteTo(buffer.Slice(entryOffset, SlotEntry.Size));
+            }
+
+            header.FreeSpaceEnd = newEnd;
+            header.WriteTo(buffer);
+
+            // Zero-fill the entire free space area (between slot directory and data area)
+            // only when secure erase is requested.
+            if (secureErase)
+                buffer.Slice(header.FreeSpaceStart, header.FreeSpaceEnd - header.FreeSpaceStart).Clear();
+
+            return true;
+        }
+        finally
+        {
+            if (rented)
+                System.Buffers.ArrayPool<byte>.Shared.Return(temp!);
+        }
+    }
+}
+
+/// <summary>
 /// Location of a document within the database.
 /// Maps ObjectId to specific page and slot.
 /// </summary>

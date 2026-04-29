@@ -62,4 +62,15 @@ public interface IPageStorage : IDisposable
     /// file-based backup (e.g. <see cref="MemoryPageStorage"/>).
     /// </summary>
     Task BackupAsync(string destinationPath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Shrinks the storage file by removing trailing free pages after a VACUUM pass.
+    /// Implementations must flush all pending writes, unmap (if memory-mapped), truncate
+    /// the underlying storage, and remap before returning.
+    /// <para>
+    /// Backends that have no file to truncate (e.g. <see cref="MemoryPageStorage"/>)
+    /// treat this as a no-op and return successfully without throwing.
+    /// </para>
+    /// </summary>
+    Task TruncateToMinimumAsync(CancellationToken cancellationToken = default);
 }
