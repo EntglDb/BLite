@@ -65,8 +65,13 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
 
     /// <summary>
     /// Drops the collection registered for entity type <typeparamref name="T"/>.
-    /// After this call, any cached reference to the collection throws <see cref="InvalidOperationException"/>.
-    /// Physical storage is freed synchronously (multi-file: file deleted; single-file: pages marked free).
+    /// After this call, subsequent lookups via <see cref="Set{T}()"/> or <see cref="Set{TId,T}()"/>
+    /// observe the dropped state and throw <see cref="InvalidOperationException"/>.
+    /// Previously cached collection references are not guaranteed to throw; they may return
+    /// <see cref="ObjectDisposedException"/> or behave unexpectedly once the underlying
+    /// storage has been freed.
+    /// Physical storage is freed synchronously (multi-file: collection data file deleted and
+    /// index/schema pages in the shared file freed; single-file: all pages marked free).
     /// </summary>
     Task DropCollectionAsync<T>(CancellationToken ct = default) where T : class;
 

@@ -188,11 +188,12 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     private readonly IReadOnlyDictionary<Type, object> _model;
     private readonly List<IDocumentMapper> _registeredMappers = new();
 
-    // Per-collection delegates populated in CreateCollection<TId, T>.
-    // Keyed by entity type T; all modifications happen during construction
-    // (single-threaded), reads happen on the hot path.  The dropped-proxies
-    // dictionary is the only one written after construction, so it uses a
-    // ConcurrentDictionary for thread safety.
+    // Per-collection delegates registered in CreateCollection<TId, T> (called during
+    // InitializeCollections, which runs on the construction thread).  After construction,
+    // DropCollectionAsync<T>() removes entries from all four plain Dictionaries, so callers
+    // must only access them while the context is known to be fully initialized and not
+    // concurrently dropped.  _droppedProxies is written by DropCollectionAsync<T>() at
+    // runtime and therefore uses a ConcurrentDictionary for thread safety.
     private readonly Dictionary<Type, IDocumentMapper> _mapperRegistry = new();
     private readonly Dictionary<Type, Action> _disposeCallbacks = new();
     private readonly Dictionary<Type, Func<string, object>> _proxyFactories = new();

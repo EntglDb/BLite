@@ -548,8 +548,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             try
             {
                 // Collect all keys first to avoid modifying the index while iterating.
+                // Use the caller's transaction ID so that uncommitted inserts/updates
+                // visible to this transaction are included in the truncation.
+                var txnId = transaction.TransactionId;
                 var keys = new List<IndexKey>();
-                foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, 0UL))
+                foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId))
                 {
                     ct.ThrowIfCancellationRequested();
                     keys.Add(entry.Key);

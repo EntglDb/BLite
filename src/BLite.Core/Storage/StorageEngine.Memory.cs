@@ -156,9 +156,16 @@ public sealed partial class StorageEngine
     }
 
     /// <summary>
-    /// Marks all pages owned by the named collection as free in single-file mode,
-    /// making them immediately available for reuse by the page allocator.
-    /// No-op in multi-file mode (the caller must invoke <see cref="DropCollectionFile"/> instead).
+    /// Marks all pages owned by the named collection as free, making them immediately
+    /// available for reuse by the page allocator.
+    /// <list type="bullet">
+    ///   <item><b>Single-file mode:</b> frees data pages, overflow pages, all index pages
+    ///   (B-tree, vector; spatial is best-effort), TimeSeries page chains, and schema pages.</item>
+    ///   <item><b>Multi-file mode:</b> data and TimeSeries pages reside in the dedicated
+    ///   collection file, which the caller frees via <see cref="DropCollectionFile"/>.
+    ///   This method frees the index pages and schema pages that are stored in the shared
+    ///   main/index file.</item>
+    /// </list>
     /// </summary>
     /// <remarks>
     /// This does not compact the file — a VACUUM pass is required to reclaim physical disk space.
@@ -166,8 +173,6 @@ public sealed partial class StorageEngine
     /// </remarks>
     public void FreeCollectionPages(string collectionName)
     {
-        if (_collectionFiles != null) return; // multi-file: drop the file instead
-
         var metadata = GetCollectionMetadata(collectionName);
         if (metadata == null) return;
 
@@ -175,8 +180,8 @@ public sealed partial class StorageEngine
         // while iterating over B-tree nodes (which also read from the same storage).
         var toFree = new HashSet<uint>();
 
-        // 1. Primary index B-tree pages + data pages via index entries
-        if (metadata.PrimaryRootPageId != 0)
+        // ── 1. Data pages (single-file mode only; multi-file: deleted via DropCollectionFile) ──
+        if (_collectionFiles == null && metadata.PrimaryRootPageId != 0)
         {
             var primaryIndex = new BTreeIndex(this, IndexOptions.CreateUnique("_id"), metadata.PrimaryRootPageId);
 
@@ -228,17 +233,70 @@ public sealed partial class StorageEngine
                 ArrayPool<byte>.Shared.Return(pageBuffer);
             }
         }
-
-        // 2. Secondary index B-tree pages
-        foreach (var idx in metadata.Indexes.Where(i => i.RootPageId != 0))
+        else if (_collectionFiles != null && metadata.PrimaryRootPageId != 0)
         {
-            var secIndexOptions = IndexOptions.CreateBTree(idx.Name ?? string.Empty);
-            var secIndex = new BTreeIndex(this, secIndexOptions, idx.RootPageId);
-            foreach (var pageId in secIndex.CollectAllPages())
+            // Multi-file: B-tree index pages for the primary index live in the shared index file.
+            // Collect them here; the data pages are freed by deleting the collection file.
+            var primaryIndex = new BTreeIndex(this, IndexOptions.CreateUnique("_id"), metadata.PrimaryRootPageId);
+            foreach (var pageId in primaryIndex.CollectAllPages())
                 toFree.Add(pageId);
         }
 
-        // 3. Schema chain pages
+        // ── 2. Secondary index pages (all modes — these live in the shared index/main file) ──
+        foreach (var idx in metadata.Indexes)
+        {
+            if (idx.RootPageId == 0) continue;
+
+            switch (idx.Type)
+            {
+                case IndexType.BTree:
+                case IndexType.Unique:
+                {
+                    var opts = idx.IsUnique
+                        ? IndexOptions.CreateUnique(idx.PropertyPaths)
+                        : IndexOptions.CreateBTree(idx.PropertyPaths);
+                    var secIndex = new BTreeIndex(this, opts, idx.RootPageId);
+                    foreach (var pageId in secIndex.CollectAllPages())
+                        toFree.Add(pageId);
+                    break;
+                }
+                case IndexType.Vector:
+                {
+                    var opts = IndexOptions.CreateVector(idx.Dimensions, idx.Metric, fields: idx.PropertyPaths);
+                    var vecIndex = new VectorSearchIndex(this, opts, idx.RootPageId);
+                    foreach (var pageId in vecIndex.CollectAllPages())
+                        toFree.Add(pageId);
+                    break;
+                }
+                case IndexType.Spatial:
+                    // RTreeIndex does not yet implement CollectAllPages — pages will be
+                    // reclaimed by a subsequent VACUUM pass.
+                    break;
+            }
+        }
+
+        // ── 3. TimeSeries page chain (single-file mode only; multi-file: in collection file) ──
+        if (_collectionFiles == null && metadata.IsTimeSeries && metadata.TimeSeriesHeadPageId != 0)
+        {
+            var tsBuf = ArrayPool<byte>.Shared.Rent(PageSize);
+            try
+            {
+                var tsPageId = metadata.TimeSeriesHeadPageId;
+                while (tsPageId != 0)
+                {
+                    toFree.Add(tsPageId);
+                    ReadPage(tsPageId, null, tsBuf);
+                    var tsHdr = PageHeader.ReadFrom(tsBuf.AsSpan(0, 32));
+                    tsPageId = tsHdr.NextPageId;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(tsBuf);
+            }
+        }
+
+        // ── 4. Schema chain pages (all modes — these live in the main file) ──
         if (metadata.SchemaRootPageId != 0)
         {
             var schemaBuf = ArrayPool<byte>.Shared.Rent(PageSize);
@@ -259,9 +317,13 @@ public sealed partial class StorageEngine
             }
         }
 
-        // Free all collected pages.
+        // Free all collected pages and remove stale WAL-index entries so that
+        // a re-allocated page is not served stale data from the WAL index.
         foreach (var pageId in toFree)
+        {
             FreePage(pageId);
+            _walIndex.TryRemove(pageId, out _);
+        }
     }
 
     /// <summary>

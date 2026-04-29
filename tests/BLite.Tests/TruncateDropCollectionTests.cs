@@ -102,7 +102,10 @@ public class TruncateDropCollectionTests : IDisposable
     [Fact]
     public async Task Engine_DropCollection_SingleFile_PagesReclaimedForReuse()
     {
-        using var engine = new BLiteEngine(_dbPath);
+        // Use an in-memory engine so there is no file-I/O during the background
+        // checkpoint that would cause lock contention with the synchronous page-freeing
+        // walk performed by FreeCollectionPages.
+        using var engine = BLiteEngine.CreateInMemory();
         var col = engine.GetOrCreateCollection("temp_col");
 
         // Insert documents to allocate pages.
@@ -113,19 +116,40 @@ public class TruncateDropCollectionTests : IDisposable
             await col.InsertAsync(doc);
         }
 
+        // Record the allocator high-watermark before drop.
+        uint pageCountAfterInsert = engine.Storage.PageCount;
+
         engine.DropCollection("temp_col");
 
         // After dropping, the collection should no longer exist.
         Assert.Null(engine.GetCollection("temp_col"));
 
-        // Create a new collection and verify it works normally.
+        // NextPageId is a monotonically increasing high-watermark; it doesn't shrink
+        // when pages are freed — only AllocatePage can advance it.
+        Assert.Equal(pageCountAfterInsert, engine.Storage.PageCount);
+
+        // Re-insert the same volume of documents under a new collection.
+        // The freed pages must be reused from the free list; the high-watermark
+        // must not grow (within a small tolerance for new catalog/schema overhead).
         var col2 = engine.GetOrCreateCollection("new_col");
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 20; i++)
         {
-            var doc = col2.CreateDocument(["_id", "x"], b => b.AddInt32("x", i));
+            var doc = col2.CreateDocument(["_id", "payload"],
+                b => b.AddString("payload", new string('x', 200)));
             await col2.InsertAsync(doc);
         }
-        Assert.Equal(5, (int)await col2.CountAsync());
+
+        uint pageCountAfterReInsert = engine.Storage.PageCount;
+
+        // Pages freed by DropCollection were reused; the allocator high-watermark
+        // must not exceed the post-first-insert count by more than a small constant
+        // (the new collection's metadata/schema pages cannot be reclaimed from the
+        // same catalog slot as the old collection).
+        Assert.True(pageCountAfterReInsert <= pageCountAfterInsert + 2,
+            $"Expected page reuse: count after re-insert ({pageCountAfterReInsert}) " +
+            $"should be <= count after first insert ({pageCountAfterInsert}) + 2.");
+
+        Assert.Equal(20, (int)await col2.CountAsync());
     }
 
     // ── DocumentDbContext.TruncateCollectionAsync<T> ──────────────────────────
