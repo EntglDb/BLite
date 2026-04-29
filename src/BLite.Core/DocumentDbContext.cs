@@ -7,6 +7,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using BLite.Bson;
 
@@ -276,6 +278,110 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// <returns>An <see cref="IDocumentCollection{TId,T}"/> instance for performing operations on documents of type T.</returns>
     public virtual IDocumentCollection<TId, T> Set<TId, T>() where T : class
         => throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
+
+    [RequiresDynamicCode("Dropped collection proxy creation uses MakeGenericType and reflection-based property access.")]
+    [RequiresUnreferencedCode("Dropped collection proxy installation inspects collection properties via reflection.")]
+    public async Task DropCollectionAsync<T>(CancellationToken ct = default) where T : class
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+
+        var (property, collection) = GetCollectionReference(typeof(T));
+        if (collection is not ICollectionLifecycle lifecycle)
+            throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}'.");
+
+        await lifecycle.TruncateCollectionAsync(ct);
+
+        var metadata = _storage.GetCollectionMetadata(lifecycle.CollectionName);
+        if (metadata != null)
+        {
+            _storage.FreeCollectionRoots(metadata);
+            foreach (var pageId in _storage.FreeCollectionPages(lifecycle.CollectionName))
+                _freeSpaceIndexes.GetIndex().Remove(pageId);
+
+            _storage.DeleteCollectionMetadata(lifecycle.CollectionName);
+            _storage.DropCollectionFile(lifecycle.CollectionName);
+        }
+
+        lifecycle.MarkDropped();
+        ReplaceWithDroppedProxy(property, lifecycle.CollectionName, collection!);
+    }
+
+    [RequiresUnreferencedCode("Collection lookup inspects collection properties via reflection.")]
+    public Task<int> TruncateCollectionAsync<T>(CancellationToken ct = default) where T : class
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+
+        var (_, collection) = GetCollectionReference(typeof(T));
+        if (collection is not ICollectionLifecycle lifecycle)
+            throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}'.");
+
+        return lifecycle.TruncateCollectionAsync(ct);
+    }
+
+    [RequiresUnreferencedCode("Collection lookup inspects collection properties via reflection.")]
+    private (PropertyInfo? Property, object? Collection) GetCollectionReference(Type entityType)
+    {
+        foreach (var property in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (!property.CanRead || property.GetIndexParameters().Length != 0)
+                continue;
+
+            if (!TryGetCollectionTypes(property.PropertyType, out _, out var propertyEntityType) || propertyEntityType != entityType)
+                continue;
+
+            return (property, property.GetValue(this));
+        }
+
+        return (null, null);
+    }
+
+    [RequiresUnreferencedCode("Collection lookup inspects collection interfaces via reflection.")]
+    private static bool TryGetCollectionTypes(Type type, out Type? idType, out Type? entityType)
+    {
+        foreach (var candidate in type.IsInterface ? new[] { type }.Concat(type.GetInterfaces()) : type.GetInterfaces().Concat(new[] { type }))
+        {
+            if (!candidate.IsGenericType || candidate.GetGenericTypeDefinition() != typeof(IDocumentCollection<,>))
+                continue;
+
+            var args = candidate.GetGenericArguments();
+            idType = args[0];
+            entityType = args[1];
+            return true;
+        }
+
+        idType = null;
+        entityType = null;
+        return false;
+    }
+
+    [RequiresDynamicCode("Dropped collection proxy creation uses MakeGenericType.")]
+    [RequiresUnreferencedCode("Dropped collection proxy installation inspects collection properties via reflection.")]
+    private void ReplaceWithDroppedProxy(PropertyInfo? property, string collectionName, object currentCollection)
+    {
+        if (property == null || !TryGetCollectionTypes(property.PropertyType, out var idType, out var entityType))
+            return;
+
+        var proxyType = typeof(DroppedCollectionProxy<,>).MakeGenericType(idType!, entityType!);
+        var proxy = Activator.CreateInstance(proxyType, collectionName);
+
+        foreach (var candidate in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (!candidate.CanRead || !candidate.CanWrite || candidate.GetIndexParameters().Length != 0)
+                continue;
+
+            if (!TryGetCollectionTypes(candidate.PropertyType, out _, out var candidateEntityType) || candidateEntityType != entityType)
+                continue;
+
+            var currentValue = candidate.GetValue(this);
+            if (!ReferenceEquals(currentValue, currentCollection))
+                continue;
+
+            if (candidate.PropertyType.IsAssignableFrom(proxyType))
+                candidate.SetValue(this, proxy);
+        }
+    }
 
     // ── Metrics ──────────────────────────────────────────────────────────────
 

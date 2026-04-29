@@ -63,6 +63,13 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     /// </summary>
     ValueTask SaveChangesAsync(ITransaction transaction, CancellationToken ct = default);
 
+    [RequiresDynamicCode("Dropped collection proxy creation uses MakeGenericType and reflection-based property access.")]
+    [RequiresUnreferencedCode("Dropped collection proxy installation inspects collection properties via reflection.")]
+    Task DropCollectionAsync<T>(CancellationToken ct = default) where T : class;
+
+    [RequiresUnreferencedCode("Collection lookup inspects collection properties via reflection.")]
+    Task<int> TruncateCollectionAsync<T>(CancellationToken ct = default) where T : class;
+
     /// <summary>
     /// Enables the metrics subsystem. Safe to call multiple times — idempotent.
     /// </summary>

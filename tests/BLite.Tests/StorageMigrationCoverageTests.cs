@@ -150,10 +150,9 @@ public class StorageMigrationCoverageTests : IDisposable
 
         engine.DropCollection("temp");
 
-        // Collection data file should eventually be removed
         var colFile = Path.Combine(config.CollectionDataDirectory!, "temp.db");
-        // The drop may not immediately remove the file on all platforms,
-        // but re-creating should work regardless
+        Assert.False(File.Exists(colFile));
+
         var col2 = engine.GetOrCreateCollection("temp");
         Assert.Empty((await col2.FindAllAsync().ToListAsync()));
     }

@@ -208,18 +208,36 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     /// <summary>
     /// Drops a collection and removes it from the engine.
-    /// Note: this removes the in-memory reference. Physical page cleanup is deferred.
     /// </summary>
     public bool DropCollection(string name)
     {
         ThrowIfDisposed();
         if (_collections.TryRemove(name, out var collection))
         {
+            collection.TruncateAsync().GetAwaiter().GetResult();
+            var metadata = _storage.GetCollectionMetadata(name);
+            if (metadata != null)
+                _storage.FreeCollectionRoots(metadata);
+
+            foreach (var pageId in _storage.FreeCollectionPages(name))
+                _freeSpaceIndexes.GetIndex().Remove(pageId);
+
             collection.Dispose();
             _storage.DeleteCollectionMetadata(name);
+            _storage.DropCollectionFile(name);
             return true;
         }
         return false;
+    }
+
+    public Task<int> TruncateCollectionAsync(string name, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        var collection = GetCollection(name);
+        if (collection == null)
+            throw new InvalidOperationException($"Collection '{name}' is not loaded.");
+
+        return collection.TruncateAsync(ct);
     }
 
     /// <summary>

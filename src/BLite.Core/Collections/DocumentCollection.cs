@@ -41,7 +41,7 @@ public class DocumentCollection<T> : DocumentCollection<ObjectId, T>, IDocumentC
 /// </summary>
 /// <typeparam name="TId">Type of the primary key</typeparam>
 /// <typeparam name="T">Type of the entity</typeparam>
-public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposable where T : class
+public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, ICollectionLifecycle, IDisposable where T : class
 {
     private readonly ITransactionHolder _transactionHolder;
     private readonly StorageEngine _storage;
@@ -72,6 +72,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
 
     private readonly int _maxDocumentSizeForSinglePage;
+    private string? _droppedMessage;
 
     // Tracks the last successful serialized size (+25% margin) to skip retry steps that are
     // known to be too small. Volatile: benign race in Parallel.For — worst case a step is
@@ -82,6 +83,23 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     // Exposed to BTreeQueryProvider so the query engine can convert ValueObjects to BSON
     // primitives at query-plan time, enabling index lookups on ValueObject-keyed collections.
     internal ValueConverterRegistry ConverterRegistry { get; private set; } = ValueConverterRegistry.Empty;
+
+    string ICollectionLifecycle.CollectionName => _collectionName;
+
+    void ICollectionLifecycle.MarkDropped() => MarkDropped();
+
+    Task<int> ICollectionLifecycle.TruncateCollectionAsync(CancellationToken ct) => TruncateAsync(ct);
+
+    internal void MarkDropped()
+    {
+        _droppedMessage ??= $"Collection '{_collectionName}' has been dropped.";
+    }
+
+    private void ThrowIfDropped()
+    {
+        if (_droppedMessage != null)
+            throw new InvalidOperationException(_droppedMessage);
+    }
 
     internal void SetConverterRegistry(ValueConverterRegistry registry) =>
         ConverterRegistry = registry ?? ValueConverterRegistry.Empty;
@@ -115,6 +133,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async Task ForcePruneAsync()
     {
+        ThrowIfDropped();
         if (!_isTimeSeries)
             throw new InvalidOperationException("ForcePrune is only valid on TimeSeries collections.");
 
@@ -155,6 +174,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async Task ForceApplyRetentionPolicyAsync(CancellationToken ct = default)
     {
+        ThrowIfDropped();
         // Load from persisted metadata if not yet set in memory.
         if (_retentionPolicy == null)
         {
@@ -459,6 +479,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async Task VacuumAsync(VacuumOptions? options = null, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         ct.ThrowIfCancellationRequested();
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
@@ -663,6 +684,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         bool unique = false,
         CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (keySelector == null)
             throw new ArgumentNullException(nameof(keySelector));
 
@@ -690,6 +712,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         string? name = null,
         CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
 
         using (var txn = _storage.BeginTransaction(IsolationLevel.ReadCommitted))
@@ -713,6 +736,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         bool unique = false,
         CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
 
         // 1. Check if index already exists (fast path)
@@ -738,6 +762,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <returns>True if the index was found and dropped, false otherwise</returns>
     public Task<bool> DropIndexAsync(string name, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Index name cannot be empty", nameof(name));
 
@@ -756,6 +781,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <returns>Collection of index metadata</returns>
     public IEnumerable<CollectionIndexInfo> GetIndexes()
     {
+        ThrowIfDropped();
         return _indexManager.GetIndexInfo();
     }
 
@@ -796,7 +822,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     public IAsyncEnumerable<T> ScanAsync(
         BsonReaderPredicate predicate,
         CancellationToken ct = default)
-        => ScanAsync(predicate, null, ct);
+    {
+        ThrowIfDropped();
+        return ScanAsync(predicate, null, ct);
+    }
 
     public async IAsyncEnumerable<T> ScanAsync(
         BsonReaderPredicate predicate,
@@ -1265,6 +1294,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     [RequiresUnreferencedCode("LINQ queries over BLite collections use reflection to resolve methods at runtime. Ensure all entity types and their members are preserved.")]
     public IBLiteQueryable<T> AsQueryable()
     {
+        ThrowIfDropped();
         return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this, ConverterRegistry));
     }
 
@@ -1274,6 +1304,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async Task<ICollectionIndex<TId, T>?> GetIndexAsync(string name)
     {
+        ThrowIfDropped();
         var idx = _indexManager.GetIndex(name);
         return idx is null ? null : await BindReaderAndReturn(idx);
     }
@@ -1307,7 +1338,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         int skip = 0,
         int take = int.MaxValue,
         CancellationToken ct = default)
-        => QueryIndexAsync(indexName, minKey, maxKey, ascending, skip, take, null, ct);
+    {
+        ThrowIfDropped();
+        return QueryIndexAsync(indexName, minKey, maxKey, ascending, skip, take, null, ct);
+    }
 
     public async IAsyncEnumerable<T> QueryIndexAsync(
         string indexName,
@@ -1319,6 +1353,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         ITransaction? transaction,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
+        ThrowIfDropped();
         var index = _indexManager.GetIndex(indexName);
         if (index == null) throw new ArgumentException($"Index {indexName} not found");
 
@@ -1775,6 +1810,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<TId> InsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
@@ -1832,6 +1868,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<List<TId>> InsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
@@ -2068,6 +2105,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <inheritdoc />
     public async ValueTask<T?> FindByIdAsync(TId id, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         bool success = false;
         var txnId = transaction?.TransactionId ?? 0UL;
@@ -2099,11 +2137,15 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// and <see cref="FindByLocationAsync"/> for each page read.
     /// </summary>
     public IAsyncEnumerable<T> FindAllAsync(CancellationToken ct = default)
-        => FindAllAsync(null, ct);
+    {
+        ThrowIfDropped();
+        return FindAllAsync(null, ct);
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<T> FindAllAsync(ITransaction? transaction, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
+        ThrowIfDropped();
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         var txnId = transaction?.TransactionId ?? 0UL;
 
@@ -2361,6 +2403,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<bool> UpdateAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
@@ -2406,6 +2449,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
         var entityList = entities.ToList();
@@ -2582,6 +2626,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<bool> DeleteAsync(TId id, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         bool success = false;
         bool autoCommit = transaction == null;
@@ -2625,6 +2670,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
         int deleteCount = 0;
@@ -2663,6 +2709,99 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 deleteCount++;
         }
         return deleteCount;
+    }
+
+    public Task<int> TruncateAsync(CancellationToken ct = default)
+        => TruncateAsync(null, ct);
+
+    public async Task<int> TruncateAsync(ITransaction? transaction, CancellationToken ct = default)
+    {
+        ThrowIfDropped();
+        ct.ThrowIfCancellationRequested();
+
+        bool autoCommit = transaction == null;
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Truncate).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            var idsAndPages = _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId)
+                .Select(entry => (Id: _mapper.FromIndexKey(entry.Key), PageId: entry.Location.PageId))
+                .ToList();
+
+            var indexDefinitions = _indexManager.GetAllIndexes()
+                .Select(index => index.Definition)
+                .ToList();
+
+            int deletedCount = await DeleteBulkInternal(idsAndPages.Select(x => x.Id), transaction);
+
+            if (autoCommit)
+                await transaction.CommitAsync(ct);
+
+            FreeDeletedPages(idsAndPages.Select(x => x.PageId));
+
+            foreach (var definition in indexDefinitions)
+            {
+                _indexManager.DropIndex(definition.Name);
+                _indexManager.CreateIndex(definition);
+            }
+
+            return deletedCount;
+        }
+        catch
+        {
+            if (autoCommit)
+                await transaction.RollbackAsync();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    private void FreeDeletedPages(IEnumerable<uint> pageIds)
+    {
+        var seen = new HashSet<uint>();
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            foreach (var pageId in pageIds)
+            {
+                if (!seen.Add(pageId))
+                    continue;
+
+                _storage.ReadPage(pageId, null, buffer);
+                var header = SlottedPageHeader.ReadFrom(buffer);
+                if (header.PageType != PageType.Data || header.SlotCount == 0)
+                    continue;
+
+                bool hasLiveSlots = false;
+                for (ushort slotIndex = 0; slotIndex < header.SlotCount; slotIndex++)
+                {
+                    var slotOffset = SlottedPageHeader.Size + (slotIndex * SlotEntry.Size);
+                    var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+                    if ((slot.Flags & SlotFlags.Deleted) == 0)
+                    {
+                        hasLiveSlots = true;
+                        break;
+                    }
+                }
+
+                if (hasLiveSlots)
+                    continue;
+
+                _storage.FreePage(pageId);
+                _fsi.Remove(pageId);
+                if (_currentDataPage == pageId)
+                    _currentDataPage = 0;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private async Task<bool> DeleteCore(TId id, ITransaction transaction, bool notifyCdc = true)
@@ -2768,6 +2907,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <returns>Number of documents</returns>
     public Task<int> CountAsync(CancellationToken ct = default)
     {
+        ThrowIfDropped();
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         try
         {
@@ -2970,7 +3110,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     public IAsyncEnumerable<T> FindAsync(
         System.Linq.Expressions.Expression<Func<T, bool>> predicate,
         CancellationToken ct = default)
-        => FetchAsync(predicate, int.MaxValue, ct);
+    {
+        ThrowIfDropped();
+        return FetchAsync(predicate, int.MaxValue, ct);
+    }
 
     /// <inheritdoc />
     [RequiresDynamicCode("LINQ-style find operations use Expression.Compile() and index optimization which require dynamic code generation.")]
@@ -2979,7 +3122,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         System.Linq.Expressions.Expression<Func<T, bool>> predicate,
         ITransaction? transaction,
         CancellationToken ct = default)
-        => FetchAsync(predicate, int.MaxValue, transaction, ct);
+    {
+        ThrowIfDropped();
+        return FetchAsync(predicate, int.MaxValue, transaction, ct);
+    }
 
     /// <summary>
     /// Returns the first document matching <paramref name="predicate"/>, or <c>null</c> if none.
@@ -3000,6 +3146,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         ITransaction? transaction,
         CancellationToken ct = default)
     {
+        ThrowIfDropped();
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         bool success = false;
         try
@@ -3395,6 +3542,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <exception cref="InvalidOperationException">Thrown if change data capture (CDC) is not initialized for the storage.</exception>
     public IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload = false)
     {
+        ThrowIfDropped();
         if (_storage.Cdc == null) throw new InvalidOperationException("CDC is not initialized.");
 
         return new ChangeStreamObservable<TId, T>(_storage.Cdc, _collectionName, capturePayload, _mapper, _storage.GetKeyReverseMap());
@@ -3446,31 +3594,37 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     public ValueTask<TId> InsertAsync(T entity, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         return InsertAsync(entity, null, ct);
     }
 
     public ValueTask<List<TId>> InsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         return InsertBulkAsync(entities, null, ct);
     }
 
     public ValueTask<bool> UpdateAsync(T entity, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         return UpdateAsync(entity, null, ct);
     }
 
     public ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         return UpdateBulkAsync(entities, null, ct);
     }
 
     public ValueTask<bool> DeleteAsync(TId id, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         return DeleteAsync(id, null, ct);
     }
 
     public ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default)
     {
+        ThrowIfDropped();
         return DeleteBulkAsync(ids, null, ct);
     }
 }

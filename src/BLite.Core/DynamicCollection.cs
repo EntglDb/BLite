@@ -1204,6 +1204,58 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
+    public Task<int> TruncateAsync(CancellationToken ct = default)
+        => TruncateAsync(null, ct);
+
+    public async Task<int> TruncateAsync(ITransaction? transaction, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        bool autoCommit = transaction == null;
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Truncate).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            var entries = _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, transaction.TransactionId)
+                .Select(entry => (Key: entry.Key, entry.Location))
+                .ToList();
+
+            foreach (var (key, location) in entries)
+            {
+                ct.ThrowIfCancellationRequested();
+                var doc = ReadDocumentAt(location, transaction.TransactionId);
+                _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+                if (doc != null)
+                {
+                    foreach (var (_, idx) in _secondaryIndexes)
+                        IndexDelete(idx, doc, location, transaction);
+                }
+
+                DeleteSlot(location, transaction);
+            }
+
+            if (autoCommit)
+                await transaction.CommitAsync(ct);
+
+            FreeDeletedPages(entries.Select(x => x.Location.PageId));
+            RebuildEmptyIndexes();
+            return entries.Count;
+        }
+        catch
+        {
+            if (autoCommit)
+                await transaction.RollbackAsync();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
     #endregion
 
     #region Vacuum / Secure Erase
@@ -1426,9 +1478,11 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>Drops a secondary index by name.</summary>
     public bool DropIndex(string name)
     {
-        if (!_secondaryIndexes.Remove(name))
+        if (!_secondaryIndexes.TryGetValue(name, out var index))
             return false;
 
+        FreeIndexPages(index);
+        _secondaryIndexes.Remove(name);
         PersistIndexMetadata();
         return true;
     }
@@ -1530,6 +1584,90 @@ public sealed class DynamicCollection : IDisposable
         }
 
         _storage.SaveCollectionMetadata(metadata);
+    }
+
+    private void RebuildEmptyIndexes()
+    {
+        var rebuiltIndexes = new Dictionary<string, DynamicSecondaryIndex>(_secondaryIndexes.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, index) in _secondaryIndexes)
+        {
+            FreeIndexPages(index);
+            rebuiltIndexes[name] = index.Kind switch
+            {
+                DynamicIndexKind.BTree => new DynamicSecondaryIndex(new BTreeIndex(_storage, index.Options), index.FieldPath, index.Options),
+                DynamicIndexKind.Vector => new DynamicSecondaryIndex(new VectorSearchIndex(_storage, index.Options), index.FieldPath, index.Options),
+                DynamicIndexKind.Spatial => new DynamicSecondaryIndex(new RTreeIndex(_storage, index.Options, 0), index.FieldPath, index.Options),
+                _ => index
+            };
+        }
+
+        _secondaryIndexes.Clear();
+        foreach (var (name, index) in rebuiltIndexes)
+            _secondaryIndexes[name] = index;
+
+        PersistIndexMetadata();
+    }
+
+    private void FreeIndexPages(DynamicSecondaryIndex index)
+    {
+        switch (index.Kind)
+        {
+            case DynamicIndexKind.Vector:
+                foreach (var pageId in index.Vector!.CollectAllPages())
+                    _storage.FreePage(pageId);
+                break;
+            case DynamicIndexKind.Spatial:
+                if (index.RootPageId != 0)
+                    _storage.FreePage(index.RootPageId);
+                break;
+            default:
+                foreach (var pageId in index.BTree!.CollectAllPages())
+                    _storage.FreePage(pageId);
+                break;
+        }
+    }
+
+    private void FreeDeletedPages(IEnumerable<uint> pageIds)
+    {
+        var seen = new HashSet<uint>();
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            foreach (var pageId in pageIds)
+            {
+                if (!seen.Add(pageId))
+                    continue;
+
+                _storage.ReadPage(pageId, null, buffer);
+                var header = SlottedPageHeader.ReadFrom(buffer);
+                if (header.PageType != PageType.Data || header.SlotCount == 0)
+                    continue;
+
+                bool hasLiveSlots = false;
+                for (ushort slotIndex = 0; slotIndex < header.SlotCount; slotIndex++)
+                {
+                    var slotOffset = SlottedPageHeader.Size + (slotIndex * SlotEntry.Size);
+                    var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+                    if ((slot.Flags & SlotFlags.Deleted) == 0)
+                    {
+                        hasLiveSlots = true;
+                        break;
+                    }
+                }
+
+                if (hasLiveSlots)
+                    continue;
+
+                _storage.FreePage(pageId);
+                _fsi.Remove(pageId);
+                if (_currentDataPage == pageId)
+                    _currentDataPage = 0;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     // ── Index dispatch helpers ────────────────────────────────────────────────

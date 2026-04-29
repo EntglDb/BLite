@@ -85,6 +85,11 @@ public interface IDocumentCollection<TId, T> where T : class
     ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, CancellationToken ct = default);
     ValueTask<int> DeleteBulkAsync(IEnumerable<TId> ids, ITransaction? transaction, CancellationToken ct = default);
 
+    // ── Truncate ──────────────────────────────────────────────────────────────
+
+    Task<int> TruncateAsync(CancellationToken ct = default);
+    Task<int> TruncateAsync(ITransaction? transaction, CancellationToken ct = default);
+
     // ── Index management ──────────────────────────────────────────────────────
     // Local engine: fully supported.
     // Remote (BLite.Client): CreateIndexAsync/Drop/List supported; Scan/ForcePruneAsync throw NotSupportedException.

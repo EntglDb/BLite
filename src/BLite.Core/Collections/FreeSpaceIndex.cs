@@ -260,6 +260,19 @@ internal sealed class FreeSpaceIndex
         }
     }
 
+    public void Remove(uint pageId)
+    {
+        EnterGate();
+        try
+        {
+            RemoveCore(pageId);
+        }
+        finally
+        {
+            ExitGate();
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
