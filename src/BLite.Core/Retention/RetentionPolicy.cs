@@ -47,6 +47,12 @@ public sealed class RetentionPolicy
     /// Required for <see cref="MaxAgeMs"/>; also used by <see cref="MaxDocumentCount"/>
     /// and <see cref="MaxSizeBytes"/> when ordering documents for deletion.
     /// When absent those constraints fall back to primary-key (insertion) order.
+    /// <para>
+    /// <b>Note:</b> documents whose timestamp field is absent are exempt from
+    /// age-based deletion (<see cref="MaxAgeMs"/>).  Large documents stored across
+    /// overflow pages are also exempt from age-based deletion but are still counted
+    /// for <see cref="MaxDocumentCount"/> and <see cref="MaxSizeBytes"/> purposes.
+    /// </para>
     /// </summary>
     public string? TimestampField { get; set; }
 

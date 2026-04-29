@@ -321,7 +321,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     /// <summary>
     /// Reads the raw BSON bytes for a document at the given location without deserializing.
-    /// Returns null if the slot is deleted or the page is invalid.
+    /// Returns null if the slot is deleted, the page is invalid, or the document spans
+    /// multiple overflow pages — overflow documents are exempt from age-based retention
+    /// because reassembling the full payload is expensive in this context.
+    /// For retention purposes, <see cref="MaxDocumentCount"/> and <see cref="RetentionPolicy.MaxSizeBytes"/>
+    /// still apply to overflow documents (their primary-index entry is included in the count scan).
     /// </summary>
     private byte[]? ReadRawBytesAt(DocumentLocation location, ulong txnId)
     {

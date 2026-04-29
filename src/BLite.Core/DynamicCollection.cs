@@ -505,7 +505,8 @@ public sealed class DynamicCollection : IDisposable
     }
 
     /// <summary>
-    /// Extracts the primary key <see cref="BsonId"/> from a document.
+    /// Tries to extract the primary key <see cref="BsonId"/> from a document's "_id" field.
+    /// Returns <see langword="false"/> if the field is absent or empty.
     /// </summary>
     private static bool TryExtractId(BsonDocument doc, out BsonId id)
     {
