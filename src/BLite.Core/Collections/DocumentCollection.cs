@@ -155,15 +155,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     public async Task ForceApplyRetentionPolicyAsync(CancellationToken ct = default)
     {
-        var policy = _retentionPolicy
-                     ?? _storage.GetCollectionMetadata(_collectionName)?.GeneralRetentionPolicy;
-        if (policy == null) return;
+        // Load from persisted metadata if not yet set in memory.
+        if (_retentionPolicy == null)
+        {
+            var metaPolicy = _storage.GetCollectionMetadata(_collectionName)?.GeneralRetentionPolicy;
+            if (metaPolicy == null) return;
+            ApplyRetentionPolicyConfig(metaPolicy);
+        }
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (ForceApplyRetentionPolicy).");
         try
         {
-            await ApplyRetentionPolicyCoreAsync(policy, ct);
+            await ApplyRetentionPolicyCoreAsync(ct);
         }
         finally
         {
@@ -201,14 +205,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             return;
         try
         {
-            var policy = _retentionPolicy;
-            if (policy == null) return;
+            if (_retentionPolicy == null) return;
 
             if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs))
                 return;
             try
             {
-                await ApplyRetentionPolicyCoreAsync(policy, CancellationToken.None);
+                await ApplyRetentionPolicyCoreAsync(CancellationToken.None);
             }
             finally
             {
@@ -242,8 +245,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Core retention enforcement. Must be called with the collection lock held.
     /// </summary>
-    private async Task ApplyRetentionPolicyCoreAsync(RetentionPolicy policy, CancellationToken ct)
+    private async Task ApplyRetentionPolicyCoreAsync(CancellationToken ct)
     {
+        var policy = _retentionPolicy!;
+
         // Collect all document IDs and (optionally) timestamps using a raw BSON scan.
         var entries = new List<(TId Id, long TimestampTicks)>();
         long nowTicks = DateTime.UtcNow.Ticks;
@@ -370,29 +375,51 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     /// <summary>
     /// Extracts a UTC-ticks timestamp from raw BSON bytes using the given field name.
+    /// Resolves the field name against the Key Dictionary for correct C-BSON lookup,
+    /// then uses the O(1) offset-table fast path when available.
     /// Returns 0 if the field is absent or is not a DateTime/Int64.
     /// </summary>
     private long ExtractTimestampTicks(byte[] bsonBytes, string fieldName)
     {
+        // fieldName is already lower-cased by RetentionPolicyBuilder.OnField().
+        // Resolve to key ID via the forward dictionary for fast C-BSON seek.
+        var keyMap = _storage.GetKeyMap();
+        bool hasKeyId = keyMap.TryGetValue(fieldName, out var keyId);
+
         try
         {
             var reader = new BsonSpanReader(bsonBytes, _storage.GetKeyReverseMap());
             reader.ReadDocumentSize();
+
+            // Fast path: use offset table via key ID.
+            if (hasKeyId && reader.TrySeekToField(keyId, out var seekType))
+            {
+                var value = BsonValue.ReadFrom(ref reader, seekType);
+                return value.Type switch
+                {
+                    BsonType.DateTime => value.AsDateTime.Ticks,
+                    BsonType.Int64    => value.AsInt64,
+                    _                 => 0
+                };
+            }
+
+            // Slow path: sequential scan (offset table absent or field ID out of range).
             while (reader.Remaining > 1)
             {
                 var type = reader.ReadBsonType();
                 if (type == BsonType.EndOfDocument) break;
                 var name = reader.ReadElementHeader();
-                if (!string.Equals(name, fieldName, StringComparison.OrdinalIgnoreCase))
+                // Both sides are lowercase: fieldName normalised by builder, name from key reverse map.
+                if (name != fieldName)
                 {
                     reader.SkipValue(type);
                     continue;
                 }
-                var value = BsonValue.ReadFrom(ref reader, type);
-                return value.Type switch
+                var val = BsonValue.ReadFrom(ref reader, type);
+                return val.Type switch
                 {
-                    BsonType.DateTime => value.AsDateTime.Ticks,
-                    BsonType.Int64    => value.AsInt64,
+                    BsonType.DateTime => val.AsDateTime.Ticks,
+                    BsonType.Int64    => val.AsInt64,
                     _                 => 0
                 };
             }
@@ -1767,9 +1794,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 {
                     await transaction.CommitAsync(ct);
                     // ── OnInsert retention trigger — runs AFTER commit within the lock ──
-                    var rp = _retentionPolicy;
-                    if (rp != null && (rp.Triggers & RetentionTrigger.OnInsert) != 0)
-                        await ApplyRetentionPolicyCoreAsync(rp, ct);
+                    if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                        await ApplyRetentionPolicyCoreAsync(ct);
                 }
                 success = true;
                 return id;
@@ -1819,9 +1845,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 {
                     await transaction.CommitAsync(ct);
                     // ── OnInsert retention trigger — runs AFTER commit within the lock ──
-                    var rp = _retentionPolicy;
-                    if (rp != null && (rp.Triggers & RetentionTrigger.OnInsert) != 0)
-                        await ApplyRetentionPolicyCoreAsync(rp, ct);
+                    if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                        await ApplyRetentionPolicyCoreAsync(ct);
                 }
                 return ids;
             }

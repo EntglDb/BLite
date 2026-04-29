@@ -293,15 +293,19 @@ public sealed class DynamicCollection : IDisposable
     /// </summary>
     public async Task ForceApplyRetentionPolicyAsync(CancellationToken ct = default)
     {
-        var policy = _retentionPolicy
-                     ?? _storage.GetCollectionMetadata(_collectionName)?.GeneralRetentionPolicy;
-        if (policy == null) return;
+        // Load from persisted metadata if not yet set in memory.
+        if (_retentionPolicy == null)
+        {
+            var metaPolicy = _storage.GetCollectionMetadata(_collectionName)?.GeneralRetentionPolicy;
+            if (metaPolicy == null) return;
+            ApplyRetentionPolicyConfig(metaPolicy);
+        }
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (ForceApplyRetentionPolicy).");
         try
         {
-            await ApplyRetentionPolicyCoreAsync(policy, ct);
+            await ApplyRetentionPolicyCoreAsync(ct);
         }
         finally
         {
@@ -342,14 +346,13 @@ public sealed class DynamicCollection : IDisposable
             return;
         try
         {
-            var policy = _retentionPolicy;
-            if (policy == null) return;
+            if (_retentionPolicy == null) return;
 
             if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs))
                 return; // skip if lock is not available quickly
             try
             {
-                await ApplyRetentionPolicyCoreAsync(policy, CancellationToken.None);
+                await ApplyRetentionPolicyCoreAsync(CancellationToken.None);
             }
             finally
             {
@@ -382,8 +385,10 @@ public sealed class DynamicCollection : IDisposable
     /// <summary>
     /// Core retention enforcement logic. Must be called with the collection lock held.
     /// </summary>
-    private async Task ApplyRetentionPolicyCoreAsync(RetentionPolicy policy, CancellationToken ct)
+    private async Task ApplyRetentionPolicyCoreAsync(CancellationToken ct)
     {
+        var policy = _retentionPolicy!;
+
         // ── 1. Collect all document IDs and (optionally) timestamps ──────────
         var entries = new List<(BsonId Id, long TimestampTicks)>();
         long nowTicks = DateTime.UtcNow.Ticks;
@@ -673,9 +678,8 @@ public sealed class DynamicCollection : IDisposable
             {
                 await transaction.CommitAsync(ct);
                 // ── OnInsert retention trigger — runs AFTER commit within the lock ──
-                var rp = _retentionPolicy;
-                if (rp != null && (rp.Triggers & RetentionTrigger.OnInsert) != 0)
-                    await ApplyRetentionPolicyCoreAsync(rp, ct);
+                if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                    await ApplyRetentionPolicyCoreAsync(ct);
             }
             success = true;
             return result;
@@ -730,9 +734,8 @@ public sealed class DynamicCollection : IDisposable
             {
                 await transaction.CommitAsync(ct);
                 // ── OnInsert retention trigger — runs AFTER commit within the lock ──
-                var rp = _retentionPolicy;
-                if (rp != null && (rp.Triggers & RetentionTrigger.OnInsert) != 0)
-                    await ApplyRetentionPolicyCoreAsync(rp, ct);
+                if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                    await ApplyRetentionPolicyCoreAsync(ct);
             }
             return ids;
         }
