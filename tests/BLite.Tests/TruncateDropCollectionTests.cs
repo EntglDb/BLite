@@ -240,7 +240,50 @@ public class TruncateDropCollectionTests : IDisposable
         Assert.Equal(0, count);
     }
 
-    // ── IDocumentCollection.TruncateAsync ────────────────────────────────────
+    // ── Orphan-collection pruning ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task Context_Initialization_DropsOrphanCollections()
+    {
+        // Step 1: seed the database with a collection that is NOT registered
+        // in TestDbContext ("legacy_col") alongside one that IS ("users").
+        using (var engine = new BLiteEngine(_dbPath))
+        {
+            var legacy = engine.GetOrCreateCollection("legacy_col");
+            var doc = legacy.CreateDocument(["_id", "v"], b => b.AddInt32("v", 1));
+            await legacy.InsertAsync(doc);
+
+            var users = engine.GetOrCreateCollection("users");
+            var u = users.CreateDocument(["_id", "name"], b => b.AddString("name", "Alice"));
+            await users.InsertAsync(u);
+        }
+
+        // Verify the orphan exists before we open the context.
+        using (var engineCheck = new BLiteEngine(_dbPath))
+        {
+            Assert.Contains("legacy_col", engineCheck.ListCollections());
+        }
+
+        // Step 2: open TestDbContext (knows "users" and many others, but NOT "legacy_col").
+        // The constructor must automatically drop "legacy_col" as an orphan.
+        using (var db = new TestDbContext(_dbPath))
+        {
+            // The context's own collection must still be intact.
+            int count = 0;
+            await foreach (var _ in db.Users.FindAllAsync())
+                count++;
+            Assert.Equal(1, count);
+        }
+
+        // Step 3: reopen via raw engine and verify the orphan is gone.
+        using (var engine2 = new BLiteEngine(_dbPath))
+        {
+            var collections = engine2.ListCollections();
+            Assert.DoesNotContain("legacy_col", collections);
+            Assert.Contains("users", collections);
+        }
+    }
+
 
     [Fact]
     public async Task Collection_TruncateAsync_DeletesAllDocuments()

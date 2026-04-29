@@ -597,7 +597,19 @@ public sealed class DynamicCollection : IDisposable
         {
             var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
             if (pageId == 0) pageId = AllocateNewDataPage(transaction);
-            var slotIndex = InsertIntoPage(pageId, docData, transaction);
+            ushort slotIndex;
+            try
+            {
+                slotIndex = InsertIntoPage(pageId, docData, transaction);
+            }
+            catch (InvalidOperationException)
+            {
+                // The FSI entry was stale (e.g., a recycled page from a previously dropped
+                // collection still appeared to have free space).  InsertIntoPage already
+                // corrected the FSI; fall back to a freshly allocated page.
+                pageId = AllocateNewDataPage(transaction);
+                slotIndex = InsertIntoPage(pageId, docData, transaction);
+            }
             location = new DocumentLocation(pageId, slotIndex);
         }
         else

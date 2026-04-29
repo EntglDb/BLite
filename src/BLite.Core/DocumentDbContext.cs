@@ -4,6 +4,7 @@ using BLite.Core.Metadata;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Threading;
 using System;
 using System.Collections.Generic;
@@ -84,6 +85,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
+        DropOrphanCollections();
     }
 
     /// <summary>
@@ -113,6 +115,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
+        DropOrphanCollections();
     }
 
     /// <summary>
@@ -183,6 +186,31 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     protected virtual void InitializeCollections()
     {
         // Derived classes can override to initialize collections
+    }
+
+    /// <summary>
+    /// Drops any collections that exist in the underlying database but are not
+    /// registered in this context. Called automatically at construction time so
+    /// the database stays in sync with the schema defined by the <see cref="DocumentDbContext"/>.
+    /// </summary>
+    private void DropOrphanCollections()
+    {
+        if (_storage == null) return; // parameterless remote-context constructor
+
+        // Build the set of collection names that this context knows about.
+        var registeredNames = new HashSet<string>(
+            _mapperRegistry.Values.Select(m => m.CollectionName),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var metadata in _storage.GetAllCollectionsMetadata())
+        {
+            if (registeredNames.Contains(metadata.Name)) continue;
+
+            // Orphan — free its pages, delete its metadata, and remove any per-collection file.
+            _storage.FreeCollectionPages(metadata.Name);
+            _storage.DeleteCollectionMetadata(metadata.Name);
+            _storage.DropCollectionFile(metadata.Name);
+        }
     }
 
     private readonly IReadOnlyDictionary<Type, object> _model;

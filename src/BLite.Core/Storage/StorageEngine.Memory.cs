@@ -189,8 +189,13 @@ public sealed partial class StorageEngine
             foreach (var pageId in primaryIndex.CollectAllPages())
                 toFree.Add(pageId);
 
-            // Collect data pages referenced by the primary index entries.
-            var scannedDataPages = new HashSet<uint>();
+            // For each data page, only free it if ALL non-deleted slots belong to this
+            // collection.  In single-file mode multiple collections can share a data page;
+            // freeing a shared page would corrupt the other collection's data.
+            // We track (pageId → slots from this collection) and compare against the
+            // total live-slot count read from the page header.
+            var pageSlotCounts = new Dictionary<uint, int>(); // slots owned by this collection
+            var overflowChains = new List<(uint dataPageId, ushort slotIndex)>();
             var pageBuffer = ArrayPool<byte>.Shared.Rent(PageSize);
             try
             {
@@ -198,23 +203,39 @@ public sealed partial class StorageEngine
                 {
                     var dataPageId = entry.Location.PageId;
                     if (dataPageId == 0) continue;
-                    toFree.Add(dataPageId);
+                    pageSlotCounts.TryGetValue(dataPageId, out var prev);
+                    pageSlotCounts[dataPageId] = prev + 1;
+                    overflowChains.Add((dataPageId, entry.Location.SlotIndex));
+                }
 
-                    // Scan each data page once for overflow slots.
-                    if (!scannedDataPages.Add(dataPageId))
-                        continue;
-
+                foreach (var (dataPageId, ownedSlots) in pageSlotCounts)
+                {
                     ReadPage(dataPageId, null, pageBuffer);
                     var hdr = SlottedPageHeader.ReadFrom(pageBuffer.AsSpan(0, SlottedPageHeader.Size));
                     if (hdr.PageType != PageType.Data) continue;
 
+                    // Count non-deleted slots on this page.
+                    int liveSlots = 0;
+                    for (ushort s = 0; s < hdr.SlotCount; s++)
+                    {
+                        var slotOff = SlottedPageHeader.Size + (s * SlotEntry.Size);
+                        var slot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOff));
+                        if ((slot.Flags & SlotFlags.Deleted) == 0)
+                            liveSlots++;
+                    }
+
+                    if (liveSlots != ownedSlots)
+                        // Page is shared with another collection — leave it; VACUUM will compact.
+                        continue;
+
+                    toFree.Add(dataPageId);
+
+                    // The page is exclusively ours — also chase any overflow chains.
                     for (ushort s = 0; s < hdr.SlotCount; s++)
                     {
                         var slotOff = SlottedPageHeader.Size + (s * SlotEntry.Size);
                         var slot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOff));
                         if ((slot.Flags & SlotFlags.HasOverflow) == 0) continue;
-
-                        // Overflow start page is stored at slot.Offset + 4 in the slot data.
                         if (slot.Offset + 8 > pageBuffer.Length) continue;
                         var overflowPageId = BinaryPrimitives.ReadUInt32LittleEndian(
                             pageBuffer.AsSpan(slot.Offset + 4, 4));
