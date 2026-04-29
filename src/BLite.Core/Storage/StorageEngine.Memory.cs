@@ -230,9 +230,8 @@ public sealed partial class StorageEngine
         }
 
         // 2. Secondary index B-tree pages
-        foreach (var idx in metadata.Indexes)
+        foreach (var idx in metadata.Indexes.Where(i => i.RootPageId != 0))
         {
-            if (idx.RootPageId == 0) continue;
             var secIndexOptions = IndexOptions.CreateBTree(idx.Name ?? string.Empty);
             var secIndex = new BTreeIndex(this, secIndexOptions, idx.RootPageId);
             foreach (var pageId in secIndex.CollectAllPages())
