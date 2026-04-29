@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.IO.MemoryMappedFiles;
+using BLite.Core.Encryption;
 
 namespace BLite.Core.Storage;
 
@@ -47,6 +49,14 @@ public readonly struct PageFileConfig
     /// Use <see cref="LockTimeout.Immediate"/> for fail-fast behaviour.
     /// </summary>
     public LockTimeout LockTimeout { get; init; }
+
+    /// <summary>
+    /// Optional transparent page-level encryption provider.
+    /// When <c>null</c> (the default), data is stored in plaintext and the file layout is
+    /// identical to all previous versions of BLite (zero overhead, full backwards compatibility).
+    /// Set to <see cref="AesGcmCryptoProvider"/> to enable AES-256-GCM encryption at rest.
+    /// </summary>
+    public ICryptoProvider? CryptoProvider { get; init; }
 
     /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
@@ -200,6 +210,17 @@ public sealed class PageFile : IPageStorage
     // CreateViewAccessor-per-read (which allocates an object + 16 KB temp array each time).
     private MemoryMappedViewAccessor? _readAccessor;
 
+    // ── Encryption ────────────────────────────────────────────────────────────
+    // Null means no encryption (zero overhead, unchanged file format).
+    // Non-null means page I/O is transparently encrypted/decrypted.
+    private readonly ICryptoProvider? _cryptoProvider;
+
+    // Cached derived values — computed once in the constructor from _config and _cryptoProvider.
+    // Physical page size = logical page size + per-page crypto overhead (0 or 16).
+    private readonly int _physicalPageSize;
+    // Byte offset from the start of the file to the first page (0 normally, 64 for AES-GCM).
+    private readonly int _cryptoFileHeaderSize;
+
     // _rwLock guards _mappedFile, _nextPageId, and _firstFreePageId.
     // Read lock:  ReadPage(), WritePage() when no file growth is needed.
     // Write lock: Open(), AllocatePage(), FreePage(), WritePage() when file grows,
@@ -228,6 +249,9 @@ public sealed class PageFile : IPageStorage
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _config = config;
+        _cryptoProvider = config.CryptoProvider;
+        _physicalPageSize = _config.PageSize + (_cryptoProvider?.PageOverhead ?? 0);
+        _cryptoFileHeaderSize = _cryptoProvider?.FileHeaderSize ?? 0;
     }
 
     public int PageSize => _config.PageSize;
@@ -269,50 +293,71 @@ public sealed class PageFile : IPageStorage
                 FileOptions.Asynchronous);
 #endif
 
-            if (!fileExists || _fileStream.Length == 0)
+            bool isNew = !fileExists || _fileStream.Length == 0;
+
+            if (isNew)
             {
-                // Allocate exactly enough for Header + Collection Metadata,
-                // rounded up to the nearest growth block.
-                _fileStream.SetLength(AlignToBlock((long)_config.PageSize * 2));
-                InitializeHeader();
-            }
-            else if (_fileStream.Length >= 32)
-            {
-                // Validate page size matches the existing file
-                Span<byte> probe = stackalloc byte[32];
-#if NET6_0_OR_GREATER
-                _fileStream.ReadExactly(probe);
-#else
-                var probeArr = new byte[32];
-                int probeRead = 0;
-                while (probeRead < 32)
+                // Write the per-file crypto header (if any) BEFORE the memory map is created.
+                // GetFileHeader generates the random salt and derives the encryption key.
+                if (_cryptoProvider != null && _cryptoFileHeaderSize > 0)
                 {
-                    int n = _fileStream.Read(probeArr, probeRead, 32 - probeRead);
-                    if (n == 0) break;
-                    probeRead += n;
+                    var cryptoHdr = new byte[_cryptoFileHeaderSize];
+                    _cryptoProvider.GetFileHeader(cryptoHdr);
+                    _fileStream.Position = 0;
+                    _fileStream.Write(cryptoHdr);
                 }
-                probeArr.AsSpan().CopyTo(probe);
-#endif
-                _fileStream.Position = 0;
-                var fileHeader = PageHeader.ReadFrom(probe);
-                int actualPageSize = fileHeader.FreeBytes + 32;
-                if (actualPageSize != _config.PageSize)
-                    throw new InvalidOperationException(
-                        $"Page size mismatch: file was created with {actualPageSize} byte pages, "
-                      + $"but the configuration specifies {_config.PageSize} byte pages. "
-                      + $"Use PageFileConfig.DetectFromFile() or the correct preset.");
 
-                //skip for now
-                //if (fileHeader.FormatVersion < PageHeader.CurrentFormatVersion)
-                    //throw new InvalidOperationException(
-                    //    $"Database format version {fileHeader.FormatVersion} is not supported. "
-                    //  + $"This build requires format version {PageHeader.CurrentFormatVersion}. "
-                    //  + "The database was created with an older version of BLite that stored integer "
-                    //  + "index keys in little-endian order. Please re-create the database.");
+                // Allocate space for the crypto header + first two pages (Header + Collection Metadata).
+                // For encrypted files, allocate exactly without pre-growth: extra pages
+                // would be all-zeros on disk, and attempting to decrypt zeros as AES-GCM
+                // ciphertext produces an AuthenticationTagMismatch error.
+                // For plain files, round up to the nearest growth block for I/O efficiency.
+                var initialSize = _cryptoProvider != null && _cryptoFileHeaderSize > 0
+                    ? _cryptoFileHeaderSize + (long)_physicalPageSize * 2
+                    : AlignToBlock((long)_physicalPageSize * 2);
+                _fileStream.SetLength(initialSize);
+            }
+            else if (_fileStream.Length >= GetMinimumExistingFileSize())
+            {
+                if (_cryptoProvider != null && _cryptoFileHeaderSize > 0)
+                {
+                    // Encrypted file: read and validate the per-file crypto header,
+                    // then derive the key. This must happen before any page I/O.
+                    var cryptoHdr = new byte[_cryptoFileHeaderSize];
+                    ReadBytesFromStream(_fileStream, 0, cryptoHdr);
+                    _cryptoProvider.LoadFromFileHeader(cryptoHdr);
+                }
+                else
+                {
+                    // Plain file: validate that the page size matches the configuration.
+                    Span<byte> probe = stackalloc byte[32];
+#if NET6_0_OR_GREATER
+                    _fileStream.Position = 0;
+                    _fileStream.ReadExactly(probe);
+#else
+                    var probeArr = new byte[32];
+                    int probeRead = 0;
+                    while (probeRead < 32)
+                    {
+                        int n = _fileStream.Read(probeArr, probeRead, 32 - probeRead);
+                        if (n == 0) break;
+                        probeRead += n;
+                    }
+                    probeArr.AsSpan().CopyTo(probe);
+#endif
+                    _fileStream.Position = 0;
+                    var fileHeader = PageHeader.ReadFrom(probe);
+                    int actualPageSize = fileHeader.FreeBytes + 32;
+                    if (actualPageSize != _config.PageSize)
+                        throw new InvalidOperationException(
+                            $"Page size mismatch: file was created with {actualPageSize} byte pages, "
+                          + $"but the configuration specifies {_config.PageSize} byte pages. "
+                          + $"Use PageFileConfig.DetectFromFile() or the correct preset.");
+                }
             }
 
-            // Initialize next page ID based on file length
-            _nextPageId = (uint)(_fileStream.Length / _config.PageSize);
+            // Calculate next page ID accounting for the crypto header and physical page size.
+            _nextPageId = (uint)((_fileStream.Length - _cryptoFileHeaderSize) / _physicalPageSize);
 
             _mappedFile = MemoryMappedFile.CreateFromFile(
                 _fileStream,
@@ -327,14 +372,22 @@ public sealed class PageFile : IPageStorage
             _readAccessor?.Dispose();
             _readAccessor = _mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
 
-            // Read free list head from Page 0
-            if (_fileStream.Length >= _config.PageSize)
+            if (isNew)
             {
-                var headerSpan = new byte[32]; // PageHeader.Size
-                using var accessor = _mappedFile.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read);
-                accessor.ReadArray(0, headerSpan, 0, 32);
-                var header = PageHeader.ReadFrom(headerSpan);
-                _firstFreePageId = header.NextPageId;
+                // Write the initial page-0 (file header) and page-1 (collection metadata)
+                // via WritePageCore so that encryption is applied when a crypto provider is set.
+                InitializeHeader();
+            }
+            else
+            {
+                // Read free list head from Page 0 (decrypts automatically when a provider is set).
+                if ((_fileStream.Length - _cryptoFileHeaderSize) >= _physicalPageSize)
+                {
+                    var headerBuf = new byte[_config.PageSize];
+                    ReadPageCore(0, headerBuf);
+                    var hdr = PageHeader.ReadFrom(headerBuf);
+                    _firstFreePageId = hdr.NextPageId;
+                }
             }
         }
         finally
@@ -342,6 +395,27 @@ public sealed class PageFile : IPageStorage
             _rwLock.ExitWriteLock();
         }
     }
+
+    /// <summary>
+    /// Returns the minimum file length (in bytes) for a non-empty existing file,
+    /// used to decide whether to attempt header validation during <see cref="Open"/>.
+    /// </summary>
+    private int GetMinimumExistingFileSize()
+        => _cryptoFileHeaderSize > 0 ? _cryptoFileHeaderSize : 32;
+
+    /// <summary>Reads exactly <paramref name="length"/> bytes from the file at the given offset.</summary>
+    private static void ReadBytesFromStream(FileStream stream, long offset, byte[] buffer)
+    {
+        stream.Position = offset;
+        int read = 0;
+        while (read < buffer.Length)
+        {
+            int n = stream.Read(buffer, read, buffer.Length - read);
+            if (n == 0) break;
+            read += n;
+        }
+    }
+
     private void InitializeHeader()
     {
         // 1. Initialize Header (Page 0)
@@ -356,15 +430,14 @@ public sealed class PageFile : IPageStorage
             FormatVersion = PageHeader.CurrentFormatVersion
         };
 
-        Span<byte> buffer = stackalloc byte[_config.PageSize];
+        var buffer = new byte[_config.PageSize];
         header.WriteTo(buffer);
 
-        _fileStream!.Position = 0;
-        _fileStream.Write(buffer);
+        // WritePageCore handles encryption transparently.
+        WritePageCore(0, buffer);
 
         // 2. Initialize Collection Metadata (Page 1)
-        // This page is reserved for storing index definitions
-        buffer.Clear();
+        Array.Clear(buffer, 0, buffer.Length);
         var metaHeader = new SlottedPageHeader
         {
             PageId = 1,
@@ -377,10 +450,9 @@ public sealed class PageFile : IPageStorage
         };
         metaHeader.WriteTo(buffer);
 
-        _fileStream.Position = _config.PageSize;
-        _fileStream.Write(buffer);
+        WritePageCore(1, buffer);
         
-        _fileStream.Flush();
+        _fileStream!.Flush();
     }
 
     // ── Lock-free core helpers ─────────────────────────────────────────────
@@ -399,14 +471,23 @@ public sealed class PageFile : IPageStorage
 
     private unsafe void ReadPageCore(uint pageId, Span<byte> destination)
     {
-        // Zero-alloc fast path: acquire the base pointer of the persistent full-file
-        // accessor and copy exactly one page.  One memcpy, no heap allocation.
-        var offset = (long)pageId * _config.PageSize;
+        // Physical byte offset of this page within the file.
+        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
         byte* basePtr = null;
         _readAccessor!.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
         try
         {
-            new ReadOnlySpan<byte>(basePtr + offset, _config.PageSize).CopyTo(destination);
+            var physicalPage = new ReadOnlySpan<byte>(basePtr + offset, _physicalPageSize);
+            if (_cryptoProvider != null)
+            {
+                // Decrypt physical page (ciphertext + tag) into the logical destination.
+                _cryptoProvider.Decrypt(pageId, physicalPage, destination[.._config.PageSize]);
+            }
+            else
+            {
+                // Zero-alloc fast path: one memcpy, no heap allocation.
+                physicalPage.CopyTo(destination);
+            }
         }
         finally
         {
@@ -416,14 +497,32 @@ public sealed class PageFile : IPageStorage
 
     private unsafe void ReadPageHeaderCore(uint pageId, Span<byte> destination)
     {
-        // Like ReadPageCore but copies only destination.Length bytes from the page start.
-        // Used to read just the page header without copying the full page payload.
-        var offset = (long)pageId * _config.PageSize;
+        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
         byte* basePtr = null;
         _readAccessor!.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
         try
         {
-            new ReadOnlySpan<byte>(basePtr + offset, destination.Length).CopyTo(destination);
+            if (_cryptoProvider != null)
+            {
+                // For encrypted pages we must decrypt the entire page to access its header.
+                // Use a rented buffer to avoid stack pressure.
+                var buf = ArrayPool<byte>.Shared.Rent(_config.PageSize);
+                try
+                {
+                    var physicalPage = new ReadOnlySpan<byte>(basePtr + offset, _physicalPageSize);
+                    _cryptoProvider.Decrypt(pageId, physicalPage, buf.AsSpan(0, _config.PageSize));
+                    buf.AsSpan(0, destination.Length).CopyTo(destination);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buf);
+                }
+            }
+            else
+            {
+                // Like ReadPageCore but copies only destination.Length bytes from the page start.
+                new ReadOnlySpan<byte>(basePtr + offset, destination.Length).CopyTo(destination);
+            }
         }
         finally
         {
@@ -433,14 +532,35 @@ public sealed class PageFile : IPageStorage
 
     private void WritePageCore(uint pageId, ReadOnlySpan<byte> source)
     {
-        var offset = (long)pageId * _config.PageSize;
-        using var accessor = _mappedFile!.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write);
-        accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
-        // FlushViewOfFile is required to guarantee that writes made through the
-        // memory-mapped view are visible to subsequent ReadFile / RandomAccess.ReadAsync
-        // calls on the same handle. Without it, the OS does not guarantee coherency
-        // between the mapped-view pages and the buffered-file-I/O view.
-        accessor.Flush();
+        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
+
+        if (_cryptoProvider != null)
+        {
+            // Encrypt the plaintext page into a temporary buffer, then write to the MMF.
+            // The in-memory (plaintext) buffer is never modified.
+            var tempBuf = ArrayPool<byte>.Shared.Rent(_physicalPageSize);
+            try
+            {
+                _cryptoProvider.Encrypt(pageId, source[.._config.PageSize], tempBuf.AsSpan(0, _physicalPageSize));
+                using var accessor = _mappedFile!.CreateViewAccessor(offset, _physicalPageSize, MemoryMappedFileAccess.Write);
+                accessor.WriteArray(0, tempBuf, 0, _physicalPageSize);
+                accessor.Flush();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(tempBuf);
+            }
+        }
+        else
+        {
+            using var accessor = _mappedFile!.CreateViewAccessor(offset, _config.PageSize, MemoryMappedFileAccess.Write);
+            accessor.WriteArray(0, source.ToArray(), 0, _config.PageSize);
+            // FlushViewOfFile is required to guarantee that writes made through the
+            // memory-mapped view are visible to subsequent ReadFile / RandomAccess.ReadAsync
+            // calls on the same handle. Without it, the OS does not guarantee coherency
+            // between the mapped-view pages and the buffered-file-I/O view.
+            accessor.Flush();
+        }
     }
 
     // ── Grow-file helper ───────────────────────────────────────────────────
@@ -448,10 +568,16 @@ public sealed class PageFile : IPageStorage
     // _mappedFile when the requested offset does not fit in the current mapping.
     private void EnsureCapacityCore(long requiredOffset)
     {
-        if (requiredOffset + _config.PageSize <= _fileStream!.Length)
+        if (requiredOffset + _physicalPageSize <= _fileStream!.Length)
             return;
 
-        var newSize = AlignToBlock(requiredOffset + _config.PageSize);
+        // For encrypted files, grow exactly to fit the new page.  Extra (unwritten) pages
+        // contain all-zeros and cannot be decrypted by AES-GCM (auth tag mismatch).
+        // For plain files, round up to the block boundary for I/O efficiency.
+        var newSize = _cryptoProvider != null && _cryptoFileHeaderSize > 0
+            ? requiredOffset + _physicalPageSize
+            : AlignToBlock(requiredOffset + _physicalPageSize);
+
         _fileStream.SetLength(newSize);
         _mappedFile!.Dispose();
         _mappedFile = MemoryMappedFile.CreateFromFile(
@@ -577,10 +703,10 @@ public sealed class PageFile : IPageStorage
         if (_mappedFile == null)
             throw new InvalidOperationException("File not open");
 
-        var offset = (long)pageId * _config.PageSize;
+        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
 
         // Fast path: file is already large enough — share the mapping with readers.
-        if (offset + _config.PageSize <= _fileStream!.Length)
+        if (offset + _physicalPageSize <= _fileStream!.Length)
         {
             if (!_rwLock.TryEnterReadLock(ReadLockTimeoutMs))
                 throw new TimeoutException("Timed out acquiring PageFile read lock (WritePage).");
@@ -649,7 +775,7 @@ public sealed class PageFile : IPageStorage
             var pageId = _nextPageId++;
             
             // Extend file if necessary (EnsureCapacityCore replaces the mapping in-place)
-            EnsureCapacityCore((long)pageId * _config.PageSize);
+            EnsureCapacityCore(_cryptoFileHeaderSize + (long)pageId * _physicalPageSize);
             
             return pageId;
         }
@@ -851,12 +977,12 @@ public sealed class PageFile : IPageStorage
                     }
                 }
 
-                var newLength = ((long)lastUsedPage + 1) * _config.PageSize;
+                var newLength = _cryptoFileHeaderSize + ((long)lastUsedPage + 1) * _physicalPageSize;
                 if (newLength >= _fileStream.Length)
                     return; // Nothing to truncate
 
                 // 3. Rebuild the free list excluding pages that will be truncated away.
-                var newPageCount = (uint)(newLength / _config.PageSize);
+                var newPageCount = (uint)((newLength - _cryptoFileHeaderSize) / _physicalPageSize);
                 var validFreePages = new List<uint>();
                 uint freeId = _firstFreePageId;
                 var seen = new System.Collections.Generic.HashSet<uint>();

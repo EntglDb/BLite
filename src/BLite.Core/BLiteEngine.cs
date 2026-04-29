@@ -83,9 +83,34 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
-    /// Internal constructor used by <see cref="CreateInMemory"/> and other factory methods
-    /// that supply a pre-built <see cref="StorageEngine"/>.
+    /// Creates a new BLiteEngine with encryption enabled, using AES-256-GCM.
     /// </summary>
+    /// <param name="databasePath">Path to the database file.</param>
+    /// <param name="crypto">Passphrase and key-derivation options.</param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    public BLiteEngine(string databasePath, BLite.Core.Encryption.CryptoOptions crypto, BLiteKvOptions? kvOptions = null)
+    {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentNullException(nameof(databasePath));
+        if (crypto == null)
+            throw new ArgumentNullException(nameof(crypto));
+
+        // Do NOT use DetectFromFile here — the encrypted file begins with a 64-byte crypto
+        // header, not a page header, so the auto-detection heuristic would misread it and
+        // derive an incorrect page size.  Use Default (16 KB) and let the PageFile open path
+        // (which reads the crypto header and validates the key) handle existing files.
+        var config = PageFileConfig.Default with
+        {
+            CryptoProvider = new BLite.Core.Encryption.AesGcmCryptoProvider(crypto)
+        };
+
+        _databasePath = databasePath;
+        _storage = new StorageEngine(databasePath, config);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+
     internal BLiteEngine(StorageEngine storage, BLiteKvOptions? kvOptions = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
