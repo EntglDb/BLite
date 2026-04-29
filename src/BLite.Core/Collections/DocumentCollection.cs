@@ -219,15 +219,25 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         {
             // Ignore cancellation from background retention execution.
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsFatalException(ex))
         {
-            // Swallow exceptions from the background timer to avoid crashing the process.
+            // Swallow non-fatal exceptions from the background timer to avoid crashing the process.
         }
         finally
         {
             Interlocked.Exchange(ref _retentionRunning, 0);
         }
     }
+
+    private static bool IsFatalException(Exception ex) =>
+        ex is OutOfMemoryException
+        or StackOverflowException
+        or AccessViolationException
+        or AppDomainUnloadedException
+        or BadImageFormatException
+        or CannotUnloadAppDomainException
+        or InvalidProgramException
+        or ThreadAbortException;
 
     /// <summary>
     /// Core retention enforcement. Must be called with the collection lock held.
