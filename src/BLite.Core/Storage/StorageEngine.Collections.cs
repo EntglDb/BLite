@@ -5,6 +5,7 @@ using System.Linq;
 using BLite.Bson;
 using BLite.Core.Indexing;
 using BLite.Core.Collections;
+using BLite.Core.Retention;
 
 namespace BLite.Core.Storage;
 
@@ -88,6 +89,9 @@ public class CollectionMetadata
 
     // ── Sequence (int/long auto-increment) ──
     public long SequenceValue { get; set; }
+
+    // ── Generalized Retention Policy ──
+    public RetentionPolicy? GeneralRetentionPolicy { get; set; }
 }
 
 public class IndexMetadata
@@ -205,6 +209,24 @@ public sealed partial class StorageEngine
                     if (reader.BaseStream.Position < reader.BaseStream.Length)
                         metadata.SequenceValue = reader.ReadInt64();
 
+                    // ── GeneralRetentionPolicy (backward-compatible) ────────
+                    if (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        bool hasRetentionPolicy = reader.ReadBoolean();
+                        if (hasRetentionPolicy)
+                        {
+                            metadata.GeneralRetentionPolicy = new RetentionPolicy
+                            {
+                                MaxAgeMs           = reader.ReadInt64(),
+                                MaxDocumentCount   = reader.ReadInt64(),
+                                MaxSizeBytes       = reader.ReadInt64(),
+                                ScheduledIntervalMs = reader.ReadInt64(),
+                                TimestampField     = reader.ReadBoolean() ? reader.ReadString() : null,
+                                Triggers           = (RetentionTrigger)reader.ReadInt32(),
+                            };
+                        }
+                    }
+
                     return metadata;
                 }
                 catch
@@ -282,6 +304,21 @@ public sealed partial class StorageEngine
 
         // ── Sequence serialization ─────────────────────────────────────────────
         writer.Write(metadata.SequenceValue);
+
+        // ── GeneralRetentionPolicy serialization ───────────────────────────────
+        writer.Write(metadata.GeneralRetentionPolicy != null);
+        if (metadata.GeneralRetentionPolicy != null)
+        {
+            var rp = metadata.GeneralRetentionPolicy;
+            writer.Write(rp.MaxAgeMs);
+            writer.Write(rp.MaxDocumentCount);
+            writer.Write(rp.MaxSizeBytes);
+            writer.Write(rp.ScheduledIntervalMs);
+            writer.Write(rp.TimestampField != null);
+            if (rp.TimestampField != null)
+                writer.Write(rp.TimestampField);
+            writer.Write((int)rp.Triggers);
+        }
 
         var newData = stream.ToArray();
 
