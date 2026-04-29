@@ -1,4 +1,8 @@
+using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using BLite.Core.Indexing;
 
 namespace BLite.Core.Storage;
 
@@ -148,6 +152,199 @@ public sealed partial class StorageEngine
             var filePath = CollectionFilePath(collectionName);
             if (File.Exists(filePath))
                 File.Delete(filePath);
+        }
+    }
+
+    /// <summary>
+    /// Marks all pages owned by the named collection as free, making them immediately
+    /// available for reuse by the page allocator.
+    /// <list type="bullet">
+    ///   <item><b>Single-file mode:</b> frees data pages, overflow pages, all index pages
+    ///   (B-tree, vector; spatial is best-effort), TimeSeries page chains, and schema pages.</item>
+    ///   <item><b>Multi-file mode:</b> data and TimeSeries pages reside in the dedicated
+    ///   collection file, which the caller frees via <see cref="DropCollectionFile"/>.
+    ///   This method frees the index pages and schema pages that are stored in the shared
+    ///   main/index file.</item>
+    /// </list>
+    /// </summary>
+    /// <remarks>
+    /// This does not compact the file — a VACUUM pass is required to reclaim physical disk space.
+    /// Must be called BEFORE <see cref="DeleteCollectionMetadata"/> so that metadata is still available.
+    /// </remarks>
+    public void FreeCollectionPages(string collectionName)
+    {
+        var metadata = GetCollectionMetadata(collectionName);
+        if (metadata == null) return;
+
+        // Collect page IDs in a set first, then free them all — avoids modifying storage
+        // while iterating over B-tree nodes (which also read from the same storage).
+        var toFree = new HashSet<uint>();
+
+        // ── 1. Data pages (single-file mode only; multi-file: deleted via DropCollectionFile) ──
+        if (_collectionFiles == null && metadata.PrimaryRootPageId != 0)
+        {
+            var primaryIndex = new BTreeIndex(this, IndexOptions.CreateUnique("_id"), metadata.PrimaryRootPageId);
+
+            // Collect all B-tree node pages first.
+            foreach (var pageId in primaryIndex.CollectAllPages())
+                toFree.Add(pageId);
+
+            // For each data page, only free it if ALL non-deleted slots belong to this
+            // collection.  In single-file mode multiple collections can share a data page;
+            // freeing a shared page would corrupt the other collection's data.
+            // We track (pageId → owned-slot-count from this collection) and compare against
+            // the total live-slot count read from the page header.  The logic is correct
+            // because every non-deleted slot on a page is either owned by this collection
+            // (tracked in ownedSlotCount) or by another collection; if liveSlots == ownedSlotCount
+            // then there are exactly zero slots from any other collection on the page.
+            var pageSlotCounts = new Dictionary<uint, int>(); // pageId → owned-slot-count
+            var pageBuffer = ArrayPool<byte>.Shared.Rent(PageSize);
+            try
+            {
+                foreach (var entry in primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey))
+                {
+                    var dataPageId = entry.Location.PageId;
+                    if (dataPageId == 0) continue;
+                    pageSlotCounts.TryGetValue(dataPageId, out var prev);
+                    pageSlotCounts[dataPageId] = prev + 1;
+                }
+
+                foreach (var (dataPageId, ownedSlotCount) in pageSlotCounts)
+                {
+                    ReadPage(dataPageId, null, pageBuffer);
+                    var hdr = SlottedPageHeader.ReadFrom(pageBuffer.AsSpan(0, SlottedPageHeader.Size));
+                    if (hdr.PageType != PageType.Data) continue;
+
+                    // Count non-deleted slots on this page.
+                    int liveSlots = 0;
+                    for (ushort s = 0; s < hdr.SlotCount; s++)
+                    {
+                        var slotOff = SlottedPageHeader.Size + (s * SlotEntry.Size);
+                        var slot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOff));
+                        if ((slot.Flags & SlotFlags.Deleted) == 0)
+                            liveSlots++;
+                    }
+
+                    if (liveSlots != ownedSlotCount)
+                        // Page is shared with another collection — leave it; VACUUM will compact.
+                        continue;
+
+                    toFree.Add(dataPageId);
+
+                    // The page is exclusively ours — also chase any overflow chains.
+                    for (ushort s = 0; s < hdr.SlotCount; s++)
+                    {
+                        var slotOff = SlottedPageHeader.Size + (s * SlotEntry.Size);
+                        var slot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOff));
+                        if ((slot.Flags & SlotFlags.HasOverflow) == 0) continue;
+                        if (slot.Offset + 8 > pageBuffer.Length) continue;
+                        var overflowPageId = BinaryPrimitives.ReadUInt32LittleEndian(
+                            pageBuffer.AsSpan(slot.Offset + 4, 4));
+                        while (overflowPageId != 0)
+                        {
+                            toFree.Add(overflowPageId);
+                            ReadPage(overflowPageId, null, pageBuffer);
+                            var overflowHdr = SlottedPageHeader.ReadFrom(pageBuffer.AsSpan(0, SlottedPageHeader.Size));
+                            overflowPageId = overflowHdr.NextOverflowPage;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(pageBuffer);
+            }
+        }
+        else if (_collectionFiles != null && metadata.PrimaryRootPageId != 0)
+        {
+            // Multi-file: B-tree index pages for the primary index live in the shared index file.
+            // Collect them here; the data pages are freed by deleting the collection file.
+            var primaryIndex = new BTreeIndex(this, IndexOptions.CreateUnique("_id"), metadata.PrimaryRootPageId);
+            foreach (var pageId in primaryIndex.CollectAllPages())
+                toFree.Add(pageId);
+        }
+
+        // ── 2. Secondary index pages (all modes — these live in the shared index/main file) ──
+        foreach (var idx in metadata.Indexes)
+        {
+            if (idx.RootPageId == 0) continue;
+
+            switch (idx.Type)
+            {
+                case IndexType.BTree:
+                case IndexType.Unique:
+                {
+                    var opts = idx.IsUnique
+                        ? IndexOptions.CreateUnique(idx.PropertyPaths)
+                        : IndexOptions.CreateBTree(idx.PropertyPaths);
+                    var secIndex = new BTreeIndex(this, opts, idx.RootPageId);
+                    foreach (var pageId in secIndex.CollectAllPages())
+                        toFree.Add(pageId);
+                    break;
+                }
+                case IndexType.Vector:
+                {
+                    var opts = IndexOptions.CreateVector(idx.Dimensions, idx.Metric, fields: idx.PropertyPaths);
+                    var vecIndex = new VectorSearchIndex(this, opts, idx.RootPageId);
+                    foreach (var pageId in vecIndex.CollectAllPages())
+                        toFree.Add(pageId);
+                    break;
+                }
+                case IndexType.Spatial:
+                    // RTreeIndex does not yet implement CollectAllPages — pages will be
+                    // reclaimed by a subsequent VACUUM pass.
+                    break;
+            }
+        }
+
+        // ── 3. TimeSeries page chain (single-file mode only; multi-file: in collection file) ──
+        if (_collectionFiles == null && metadata.IsTimeSeries && metadata.TimeSeriesHeadPageId != 0)
+        {
+            var tsBuf = ArrayPool<byte>.Shared.Rent(PageSize);
+            try
+            {
+                var tsPageId = metadata.TimeSeriesHeadPageId;
+                while (tsPageId != 0)
+                {
+                    toFree.Add(tsPageId);
+                    ReadPage(tsPageId, null, tsBuf);
+                    var tsHdr = PageHeader.ReadFrom(tsBuf.AsSpan(0, 32));
+                    tsPageId = tsHdr.NextPageId;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(tsBuf);
+            }
+        }
+
+        // ── 4. Schema chain pages (all modes — these live in the main file) ──
+        if (metadata.SchemaRootPageId != 0)
+        {
+            var schemaBuf = ArrayPool<byte>.Shared.Rent(PageSize);
+            try
+            {
+                var schemaPageId = metadata.SchemaRootPageId;
+                while (schemaPageId != 0)
+                {
+                    toFree.Add(schemaPageId);
+                    ReadPage(schemaPageId, null, schemaBuf);
+                    var sHdr = PageHeader.ReadFrom(schemaBuf.AsSpan(0, 32));
+                    schemaPageId = sHdr.NextPageId;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(schemaBuf);
+            }
+        }
+
+        // Free all collected pages and remove stale WAL-index entries so that
+        // a re-allocated page is not served stale data from the WAL index.
+        foreach (var pageId in toFree)
+        {
+            FreePage(pageId);
+            _walIndex.TryRemove(pageId, out _);
         }
     }
 

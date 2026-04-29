@@ -597,7 +597,19 @@ public sealed class DynamicCollection : IDisposable
         {
             var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
             if (pageId == 0) pageId = AllocateNewDataPage(transaction);
-            var slotIndex = InsertIntoPage(pageId, docData, transaction);
+            ushort slotIndex;
+            try
+            {
+                slotIndex = InsertIntoPage(pageId, docData, transaction);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("Not enough space in page", StringComparison.Ordinal))
+            {
+                // The FSI entry was stale (e.g., a recycled page from a previously dropped
+                // collection still appeared to have free space).  InsertIntoPage already
+                // corrected the FSI; fall back to a freshly allocated page.
+                pageId = AllocateNewDataPage(transaction);
+                slotIndex = InsertIntoPage(pageId, docData, transaction);
+            }
             location = new DocumentLocation(pageId, slotIndex);
         }
         else
@@ -1202,6 +1214,62 @@ public sealed class DynamicCollection : IDisposable
         {
             _collectionLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Deletes all documents in the collection.
+    /// The collection structure (indexes, metadata) is preserved.
+    /// </summary>
+    /// <returns>Number of documents deleted.</returns>
+    public async Task<int> TruncateAsync(CancellationToken ct = default)
+    {
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring collection lock (TruncateAsync).");
+
+        var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        int deleted = 0;
+        try
+        {
+            // Collect all keys first to avoid modifying the index while iterating.
+            var keys = new List<IndexKey>();
+            foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, 0UL))
+            {
+                ct.ThrowIfCancellationRequested();
+                keys.Add(entry.Key);
+            }
+
+            foreach (var key in keys)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
+                    continue;
+
+                var doc = ReadDocumentAt(location, transaction.TransactionId);
+                _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+                if (doc != null)
+                {
+                    foreach (var (_, idx) in _secondaryIndexes)
+                        IndexDelete(idx, doc, location, transaction);
+                }
+
+                DeleteSlot(location, transaction);
+                deleted++;
+            }
+
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+
+        return deleted;
     }
 
     #endregion

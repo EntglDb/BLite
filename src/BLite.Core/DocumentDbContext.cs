@@ -4,6 +4,7 @@ using BLite.Core.Metadata;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Threading;
 using System;
 using System.Collections.Generic;
@@ -84,6 +85,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
+        DropOrphanCollections();
     }
 
     /// <summary>
@@ -113,6 +115,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
+        DropOrphanCollections();
     }
 
     /// <summary>
@@ -185,8 +188,39 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         // Derived classes can override to initialize collections
     }
 
+    /// <summary>
+    /// Drops any collections that exist in the underlying database but are not
+    /// registered in this context. Called automatically at construction time so
+    /// the database stays in sync with the schema defined by the <see cref="DocumentDbContext"/>.
+    /// </summary>
+    private void DropOrphanCollections()
+    {
+        if (_storage == null) return; // parameterless remote-context constructor
+
+        // Build the set of collection names that this context knows about.
+        var registeredNames = new HashSet<string>(
+            _mapperRegistry.Values.Select(m => m.CollectionName),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var metadata in _storage.GetAllCollectionsMetadata())
+        {
+            if (registeredNames.Contains(metadata.Name)) continue;
+
+            // Orphan — free its pages, delete its metadata, and remove any per-collection file.
+            _storage.FreeCollectionPages(metadata.Name);
+            _storage.DeleteCollectionMetadata(metadata.Name);
+            _storage.DropCollectionFile(metadata.Name);
+        }
+    }
+
     private readonly IReadOnlyDictionary<Type, object> _model;
     private readonly List<IDocumentMapper> _registeredMappers = new();
+
+    // Per-collection delegates registered in CreateCollection<TId, T> (called during
+    // InitializeCollections, which runs on the construction thread).  These are read-only
+    // after construction; no concurrent mutation occurs.
+    private readonly Dictionary<Type, IDocumentMapper> _mapperRegistry = new();
+    private readonly Dictionary<Type, Func<CancellationToken, Task<int>>> _truncateCallbacks = new();
 
     /// <summary>
     /// Override to configure the model using Fluent API.
@@ -257,6 +291,13 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
         _storage.RegisterMappers(_registeredMappers);
 
+        // Register per-type delegates so TruncateCollectionAsync<T>() can operate
+        // without reflection.  Populated once during InitializeCollections (single-threaded
+        // constructor path) and only read on the hot path afterwards.
+        _mapperRegistry[typeof(T)] = mapper;
+        var col = collection;                                    // close over typed instance
+        _truncateCallbacks[typeof(T)] = ct => col.TruncateAsync(ct);
+
         return collection;
     }
 
@@ -275,7 +316,26 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// <typeparam name="T">The type of the document to be managed. Must be a reference type.</typeparam>
     /// <returns>An <see cref="IDocumentCollection{TId,T}"/> instance for performing operations on documents of type T.</returns>
     public virtual IDocumentCollection<TId, T> Set<TId, T>() where T : class
-        => throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
+    {
+        throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
+    }
+
+    /// <summary>
+    /// Deletes all documents in the collection for <typeparamref name="T"/> and clears all secondary indexes.
+    /// The collection structure (schema, indexes, metadata) is preserved and the collection
+    /// is immediately usable after the operation completes.
+    /// </summary>
+    /// <returns>Number of documents deleted.</returns>
+    public async Task<int> TruncateCollectionAsync<T>(CancellationToken ct = default) where T : class
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DocumentDbContext));
+
+        if (!_truncateCallbacks.TryGetValue(typeof(T), out var truncate))
+            throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}'.");
+
+        return await truncate(ct).ConfigureAwait(false);
+    }
 
     // ── Metrics ──────────────────────────────────────────────────────────────
 
