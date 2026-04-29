@@ -430,27 +430,35 @@ public sealed class PageFile : IPageStorage
             FormatVersion = PageHeader.CurrentFormatVersion
         };
 
-        var buffer = new byte[_config.PageSize];
-        header.WriteTo(buffer);
-
-        // WritePageCore handles encryption transparently.
-        WritePageCore(0, buffer);
-
-        // 2. Initialize Collection Metadata (Page 1)
-        Array.Clear(buffer, 0, buffer.Length);
-        var metaHeader = new SlottedPageHeader
+        var buffer = ArrayPool<byte>.Shared.Rent(_config.PageSize);
+        try
         {
-            PageId = 1,
-            PageType = PageType.Collection,
-            SlotCount = 0,
-            FreeSpaceStart = SlottedPageHeader.Size,
-            FreeSpaceEnd = (ushort)_config.PageSize,
-            NextOverflowPage = 0,
-            TransactionId = 0
-        };
-        metaHeader.WriteTo(buffer);
+            Array.Clear(buffer, 0, _config.PageSize);
+            header.WriteTo(buffer);
 
-        WritePageCore(1, buffer);
+            // WritePageCore handles encryption transparently.
+            WritePageCore(0, buffer);
+
+            // 2. Initialize Collection Metadata (Page 1)
+            Array.Clear(buffer, 0, _config.PageSize);
+            var metaHeader = new SlottedPageHeader
+            {
+                PageId = 1,
+                PageType = PageType.Collection,
+                SlotCount = 0,
+                FreeSpaceStart = SlottedPageHeader.Size,
+                FreeSpaceEnd = (ushort)_config.PageSize,
+                NextOverflowPage = 0,
+                TransactionId = 0
+            };
+            metaHeader.WriteTo(buffer);
+
+            WritePageCore(1, buffer);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
         
         _fileStream!.Flush();
     }

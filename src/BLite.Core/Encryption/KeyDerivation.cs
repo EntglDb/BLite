@@ -51,6 +51,9 @@ internal static class KeyDerivation
 #else
         // Manual HKDF (RFC 5869) for netstandard2.1
         // Step 1: Extract
+        // RFC 5869 §2.2: if salt is not provided, use a string of HashLen zeros.
+        // An all-zeros salt is not "no salt" — it is the RFC-mandated default that
+        // preserves the HKDF security proof when the caller omits salt intentionally.
         var saltArray = salt.IsEmpty ? new byte[32] : salt.ToArray(); // default salt = 0x00 * HashLen
         byte[] prk;
         using (var hmac = new HMACSHA256(saltArray))

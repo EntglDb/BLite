@@ -107,6 +107,9 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
         Span<byte> nonce = stackalloc byte[NonceSize];
         BuildNonce(pageId, nonce);
 
+        // The single-parameter AesGcm constructor is deprecated in NET7+ in favour of the
+        // overload that accepts an explicit tag size, which validates the tag length at
+        // construction time and is more explicit about the expected tag size.
 #if NET7_0_OR_GREATER
         using var aes = new AesGcm(_key!, TagSize);
 #else
@@ -127,6 +130,7 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
         Span<byte> nonce = stackalloc byte[NonceSize];
         BuildNonce(pageId, nonce);
 
+        // See comment in Encrypt for rationale of the conditional constructor.
 #if NET7_0_OR_GREATER
         using var aes = new AesGcm(_key!, TagSize);
 #else
