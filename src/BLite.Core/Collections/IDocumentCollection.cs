@@ -163,6 +163,19 @@ public interface IDocumentCollection<TId, T> where T : class
         int degreeOfParallelism = -1,
         CancellationToken ct = default);
 
+    // ── Truncate ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Deletes all documents in the collection and rebuilds empty indexes.
+    /// The collection structure (schema, indexes, metadata) is preserved.
+    /// The collection is immediately usable after truncate.
+    /// </summary>
+    /// <returns>Number of documents deleted.</returns>
+    Task<int> TruncateAsync(CancellationToken ct = default);
+
+    /// <inheritdoc cref="TruncateAsync(CancellationToken)"/>
+    Task<int> TruncateAsync(ITransaction? transaction, CancellationToken ct = default);
+
     // ── TimeSeries (local engine only; remote throws NotSupportedException) ───
 
     Task ForcePruneAsync();

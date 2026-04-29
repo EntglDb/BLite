@@ -1,4 +1,8 @@
+using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using BLite.Core.Indexing;
 
 namespace BLite.Core.Storage;
 
@@ -149,6 +153,116 @@ public sealed partial class StorageEngine
             if (File.Exists(filePath))
                 File.Delete(filePath);
         }
+    }
+
+    /// <summary>
+    /// Marks all pages owned by the named collection as free in single-file mode,
+    /// making them immediately available for reuse by the page allocator.
+    /// No-op in multi-file mode (the caller must invoke <see cref="DropCollectionFile"/> instead).
+    /// </summary>
+    /// <remarks>
+    /// This does not compact the file — a VACUUM pass is required to reclaim physical disk space.
+    /// Must be called BEFORE <see cref="DeleteCollectionMetadata"/> so that metadata is still available.
+    /// </remarks>
+    public void FreeCollectionPages(string collectionName)
+    {
+        if (_collectionFiles != null) return; // multi-file: drop the file instead
+
+        var metadata = GetCollectionMetadata(collectionName);
+        if (metadata == null) return;
+
+        // Collect page IDs in a set first, then free them all — avoids modifying storage
+        // while iterating over B-tree nodes (which also read from the same storage).
+        var toFree = new HashSet<uint>();
+
+        // 1. Primary index B-tree pages + data pages via index entries
+        if (metadata.PrimaryRootPageId != 0)
+        {
+            var primaryIndex = new BTreeIndex(this, IndexOptions.CreateUnique("_id"), metadata.PrimaryRootPageId);
+
+            // Collect all B-tree node pages first.
+            foreach (var pageId in primaryIndex.CollectAllPages())
+                toFree.Add(pageId);
+
+            // Collect data pages referenced by the primary index entries.
+            var scannedDataPages = new HashSet<uint>();
+            var pageBuffer = ArrayPool<byte>.Shared.Rent(PageSize);
+            try
+            {
+                foreach (var entry in primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey))
+                {
+                    var dataPageId = entry.Location.PageId;
+                    if (dataPageId == 0) continue;
+                    toFree.Add(dataPageId);
+
+                    // Scan each data page once for overflow slots.
+                    if (!scannedDataPages.Add(dataPageId))
+                        continue;
+
+                    ReadPage(dataPageId, null, pageBuffer);
+                    var hdr = SlottedPageHeader.ReadFrom(pageBuffer.AsSpan(0, SlottedPageHeader.Size));
+                    if (hdr.PageType != PageType.Data) continue;
+
+                    for (ushort s = 0; s < hdr.SlotCount; s++)
+                    {
+                        var slotOff = SlottedPageHeader.Size + (s * SlotEntry.Size);
+                        var slot = SlotEntry.ReadFrom(pageBuffer.AsSpan(slotOff));
+                        if ((slot.Flags & SlotFlags.HasOverflow) == 0) continue;
+
+                        // Overflow start page is stored at slot.Offset + 4 in the slot data.
+                        if (slot.Offset + 8 > pageBuffer.Length) continue;
+                        var overflowPageId = BinaryPrimitives.ReadUInt32LittleEndian(
+                            pageBuffer.AsSpan(slot.Offset + 4, 4));
+                        while (overflowPageId != 0)
+                        {
+                            toFree.Add(overflowPageId);
+                            ReadPage(overflowPageId, null, pageBuffer);
+                            var overflowHdr = SlottedPageHeader.ReadFrom(pageBuffer.AsSpan(0, SlottedPageHeader.Size));
+                            overflowPageId = overflowHdr.NextOverflowPage;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(pageBuffer);
+            }
+        }
+
+        // 2. Secondary index B-tree pages
+        foreach (var idx in metadata.Indexes)
+        {
+            if (idx.RootPageId == 0) continue;
+            var secIndexOptions = IndexOptions.CreateBTree(idx.Name ?? string.Empty);
+            var secIndex = new BTreeIndex(this, secIndexOptions, idx.RootPageId);
+            foreach (var pageId in secIndex.CollectAllPages())
+                toFree.Add(pageId);
+        }
+
+        // 3. Schema chain pages
+        if (metadata.SchemaRootPageId != 0)
+        {
+            var schemaBuf = ArrayPool<byte>.Shared.Rent(PageSize);
+            try
+            {
+                var schemaPageId = metadata.SchemaRootPageId;
+                while (schemaPageId != 0)
+                {
+                    toFree.Add(schemaPageId);
+                    ReadPage(schemaPageId, null, schemaBuf);
+                    var sHdr = PageHeader.ReadFrom(schemaBuf.AsSpan(0, 32));
+                    schemaPageId = sHdr.NextPageId;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(schemaBuf);
+            }
+        }
+
+        // Free all collected pages.
+        foreach (var pageId in toFree)
+            FreePage(pageId);
     }
 
     /// <summary>

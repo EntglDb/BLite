@@ -64,6 +64,21 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     ValueTask SaveChangesAsync(ITransaction transaction, CancellationToken ct = default);
 
     /// <summary>
+    /// Drops the collection registered for entity type <typeparamref name="T"/>.
+    /// After this call, any cached reference to the collection throws <see cref="InvalidOperationException"/>.
+    /// Physical storage is freed synchronously (multi-file: file deleted; single-file: pages marked free).
+    /// </summary>
+    Task DropCollectionAsync<T>(CancellationToken ct = default) where T : class;
+
+    /// <summary>
+    /// Deletes all documents in the collection for <typeparamref name="T"/> and clears all secondary indexes.
+    /// The collection structure (schema, indexes, metadata) is preserved and the collection
+    /// is immediately usable after the operation completes.
+    /// </summary>
+    /// <returns>Number of documents deleted.</returns>
+    Task<int> TruncateCollectionAsync<T>(CancellationToken ct = default) where T : class;
+
+    /// <summary>
     /// Enables the metrics subsystem. Safe to call multiple times — idempotent.
     /// </summary>
     void EnableMetrics(Metrics.MetricsOptions? options = null);

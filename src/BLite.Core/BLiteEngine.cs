@@ -208,7 +208,9 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     /// <summary>
     /// Drops a collection and removes it from the engine.
-    /// Note: this removes the in-memory reference. Physical page cleanup is deferred.
+    /// Frees physical storage synchronously: in multi-file mode the dedicated file is deleted;
+    /// in single-file mode all collection pages are marked free (physical space reclamation
+    /// requires a VACUUM pass).
     /// </summary>
     public bool DropCollection(string name)
     {
@@ -216,10 +218,32 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         if (_collections.TryRemove(name, out var collection))
         {
             collection.Dispose();
+            // Free pages before deleting metadata (FreeCollectionPages reads the metadata).
+            _storage.FreeCollectionPages(name);    // no-op in multi-file mode
             _storage.DeleteCollectionMetadata(name);
+            _storage.DropCollectionFile(name);     // no-op in single-file mode
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Deletes all documents in the named collection and clears all secondary indexes.
+    /// The collection structure (schema, indexes, metadata) is preserved.
+    /// The collection is immediately usable after the operation completes.
+    /// </summary>
+    /// <returns>Number of documents deleted.</returns>
+    public async Task<int> TruncateCollectionAsync(string name, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentNullException(nameof(name));
+
+        // Ensure the collection is loaded so we can call TruncateAsync on it.
+        var collection = _collections.GetOrAdd(name,
+            n => new DynamicCollection(_storage, this, n, BsonIdType.ObjectId, _freeSpaceIndexes.GetIndex()));
+
+        return await collection.TruncateAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -213,6 +213,14 @@ public readonly struct BLiteDiagnostic
                         sb.AppendLine($"        public override global::BLite.Core.Collections.IDocumentCollection<TId, T> Set<TId, T>()");
                         sb.AppendLine($"        {{");
 
+                        // Check dropped proxies before returning the strongly-typed property.
+                        // This ensures that after DropCollectionAsync<T>() the proxy is returned
+                        // even through concrete-typed property access paths.
+                        sb.AppendLine($"            var _droppedProxy = GetDroppedProxy<TId, T>();");
+                        sb.AppendLine($"            if (_droppedProxy != null)");
+                        sb.AppendLine($"                return _droppedProxy;");
+                        sb.AppendLine();
+
                         foreach (var entity in collectionsWithProperties)
                         {
                             var entityTypeStr = $"global::{entity.FullTypeName}";

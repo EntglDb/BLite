@@ -526,6 +526,61 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
+    /// <summary>
+    /// Deletes all documents and clears all secondary indexes.
+    /// The collection structure (schema, indexes, metadata) is preserved.
+    /// </summary>
+    public Task<int> TruncateAsync(CancellationToken ct = default)
+        => TruncateAsync(null, ct);
+
+    /// <inheritdoc cref="TruncateAsync(CancellationToken)"/>
+    public async Task<int> TruncateAsync(ITransaction? transaction, CancellationToken ct = default)
+    {
+        int deleted = 0;
+        bool autoCommit = transaction == null;
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
+            throw new TimeoutException("Timed out acquiring collection lock (TruncateAsync).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            try
+            {
+                // Collect all keys first to avoid modifying the index while iterating.
+                var keys = new List<IndexKey>();
+                foreach (var entry in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, 0UL))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    keys.Add(entry.Key);
+                }
+
+                foreach (var key in keys)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var id = _mapper.FromIndexKey(key);
+                    if (await DeleteCore(id, transaction, notifyCdc: false).ConfigureAwait(false))
+                        deleted++;
+                }
+
+                if (autoCommit)
+                    await transaction.CommitAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                if (autoCommit)
+                    await transaction.RollbackAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+
+        return deleted;
+    }
+
     [RequiresDynamicCode("DocumentCollection uses CollectionIndexManager which compiles index key selectors via Expression.Compile().")]
     [RequiresUnreferencedCode("Index creation uses reflection (Expression.PropertyOrField) to access type members. Ensure all entity types and their members are preserved.")]
     public DocumentCollection(StorageEngine storage, ITransactionHolder transactionHolder, IDocumentMapper<TId, T> mapper, string? collectionName = null)
