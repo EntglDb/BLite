@@ -215,7 +215,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 _collectionLock.Release();
             }
         }
-        catch
+        catch (OperationCanceledException)
+        {
+            // Ignore cancellation from background retention execution.
+        }
+        catch (Exception)
         {
             // Swallow exceptions from the background timer to avoid crashing the process.
         }
