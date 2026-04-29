@@ -192,10 +192,12 @@ public sealed partial class StorageEngine
             // For each data page, only free it if ALL non-deleted slots belong to this
             // collection.  In single-file mode multiple collections can share a data page;
             // freeing a shared page would corrupt the other collection's data.
-            // We track (pageId → slots from this collection) and compare against the
-            // total live-slot count read from the page header.
-            var pageSlotCounts = new Dictionary<uint, int>(); // slots owned by this collection
-            var overflowChains = new List<(uint dataPageId, ushort slotIndex)>();
+            // We track (pageId → owned-slot-count from this collection) and compare against
+            // the total live-slot count read from the page header.  The logic is correct
+            // because every non-deleted slot on a page is either owned by this collection
+            // (tracked in ownedSlotCount) or by another collection; if liveSlots == ownedSlotCount
+            // then there are exactly zero slots from any other collection on the page.
+            var pageSlotCounts = new Dictionary<uint, int>(); // pageId → owned-slot-count
             var pageBuffer = ArrayPool<byte>.Shared.Rent(PageSize);
             try
             {
@@ -205,10 +207,9 @@ public sealed partial class StorageEngine
                     if (dataPageId == 0) continue;
                     pageSlotCounts.TryGetValue(dataPageId, out var prev);
                     pageSlotCounts[dataPageId] = prev + 1;
-                    overflowChains.Add((dataPageId, entry.Location.SlotIndex));
                 }
 
-                foreach (var (dataPageId, ownedSlots) in pageSlotCounts)
+                foreach (var (dataPageId, ownedSlotCount) in pageSlotCounts)
                 {
                     ReadPage(dataPageId, null, pageBuffer);
                     var hdr = SlottedPageHeader.ReadFrom(pageBuffer.AsSpan(0, SlottedPageHeader.Size));
@@ -224,7 +225,7 @@ public sealed partial class StorageEngine
                             liveSlots++;
                     }
 
-                    if (liveSlots != ownedSlots)
+                    if (liveSlots != ownedSlotCount)
                         // Page is shared with another collection — leave it; VACUUM will compact.
                         continue;
 

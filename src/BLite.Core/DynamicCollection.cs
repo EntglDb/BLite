@@ -602,7 +602,7 @@ public sealed class DynamicCollection : IDisposable
             {
                 slotIndex = InsertIntoPage(pageId, docData, transaction);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("Not enough space in page", StringComparison.Ordinal))
             {
                 // The FSI entry was stale (e.g., a recycled page from a previously dropped
                 // collection still appeared to have free space).  InsertIntoPage already
