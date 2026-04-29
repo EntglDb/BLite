@@ -2736,16 +2736,16 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, ICollecti
 
             int deletedCount = await DeleteBulkInternal(idsAndPages.Select(x => x.Id), transaction);
 
-            if (autoCommit)
-                await transaction.CommitAsync(ct);
-
-            FreeDeletedPages(idsAndPages.Select(x => x.PageId));
-
             foreach (var definition in indexDefinitions)
             {
                 _indexManager.DropIndex(definition.Name);
                 _indexManager.CreateIndex(definition);
             }
+
+            if (autoCommit)
+                await transaction.CommitAsync(ct);
+
+            FreeDeletedPages(idsAndPages.Select(x => x.PageId));
 
             return deletedCount;
         }

@@ -1237,11 +1237,12 @@ public sealed class DynamicCollection : IDisposable
                 DeleteSlot(location, transaction);
             }
 
+            RebuildEmptyIndexes();
+
             if (autoCommit)
                 await transaction.CommitAsync(ct);
 
             FreeDeletedPages(entries.Select(x => x.Location.PageId));
-            RebuildEmptyIndexes();
             return entries.Count;
         }
         catch
