@@ -1028,7 +1028,7 @@ public class EncryptionTests : IDisposable
         using (var coordinator = new EncryptionCoordinator(masterKey))
         using (var engine = new BLiteEngine(dbPath, coordinator))
         {
-            var orders   = engine.GetOrCreateCollection("orders");
+            var orders = engine.GetOrCreateCollection("orders");
             var products = engine.GetOrCreateCollection("products");
 
             await orders.InsertAsync(orders.CreateDocument(["_id", "item"],
@@ -1042,7 +1042,7 @@ public class EncryptionTests : IDisposable
         using (var coordinator2 = new EncryptionCoordinator(masterKey))
         using (var engine2 = new BLiteEngine(dbPath, coordinator2))
         {
-            var orders2   = engine2.GetOrCreateCollection("orders");
+            var orders2 = engine2.GetOrCreateCollection("orders");
             var products2 = engine2.GetOrCreateCollection("products");
 
             var o = await orders2.FindAllAsync().ToListAsync();
@@ -1063,7 +1063,7 @@ public class EncryptionTests : IDisposable
         // Writing with one key and reading with a different key must fail.
         var dbPath = Path.Combine(TempDir(), "multienc3.db");
         var correctKey = MakeMasterKey(0xCC);
-        var wrongKey   = MakeMasterKey(0xDD); // different key
+        var wrongKey = MakeMasterKey(0xDD); // different key
 
         using (var coordinator = new EncryptionCoordinator(correctKey))
         using (var engine = new BLiteEngine(dbPath, coordinator))
