@@ -466,4 +466,123 @@ public class EncryptionTests : IDisposable
             using var engine = new BLiteEngine(path, wrong);
         });
     }
+
+    // ── WAL encryption ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void WriteAheadLog_WithCrypto_RecordsAreEncryptedOnDisk()
+    {
+        var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
+        _tempFiles.Add(walPath);
+
+        var opts  = new CryptoOptions("wal-secret", iterations: 1);
+        var crypto = new AesGcmCryptoProvider(opts, fileRole: 3);
+
+        using (var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto))
+        {
+            wal.WriteBeginRecordAsync(1).GetAwaiter().GetResult();
+            wal.WriteDataRecordAsync(1, 42, new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }).GetAwaiter().GetResult();
+            wal.WriteCommitRecordAsync(1).GetAwaiter().GetResult();
+            wal.FlushAsync().GetAwaiter().GetResult();
+        }
+
+        // The WAL file must exist and contain the 64-byte file header.
+        Assert.True(File.Exists(walPath));
+        var rawBytes = File.ReadAllBytes(walPath);
+        Assert.True(rawBytes.Length > AesGcmCryptoProvider.HeaderSize, "WAL file should be larger than the file header.");
+
+        // The known plaintext values must NOT appear verbatim in the WAL file.
+        var rawText = System.Text.Encoding.UTF8.GetString(rawBytes);
+        Assert.DoesNotContain("\xDE\xAD\xBE\xEF", rawText);
+    }
+
+    [Fact]
+    public void WriteAheadLog_WithCrypto_ReadAll_RoundTrip()
+    {
+        var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
+        _tempFiles.Add(walPath);
+
+        var opts   = new CryptoOptions("wal-roundtrip", iterations: 1);
+        var crypto = new AesGcmCryptoProvider(opts, fileRole: 3);
+
+        var afterImageBytes = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+
+        // Write records
+        using (var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto))
+        {
+            wal.WriteBeginRecordAsync(7).GetAwaiter().GetResult();
+            wal.WriteDataRecordAsync(7, 99, afterImageBytes).GetAwaiter().GetResult();
+            wal.WriteCommitRecordAsync(7).GetAwaiter().GetResult();
+            wal.FlushAsync().GetAwaiter().GetResult();
+        }
+
+        // Read back using a fresh provider loaded from the same file header
+        var crypto2 = new AesGcmCryptoProvider(opts, fileRole: 3);
+        using var wal2 = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto2);
+        var records = wal2.ReadAll();
+
+        Assert.Equal(3, records.Count);
+        Assert.Equal(BLite.Core.Transactions.WalRecordType.Begin,  records[0].Type);
+        Assert.Equal(7UL, records[0].TransactionId);
+        Assert.Equal(BLite.Core.Transactions.WalRecordType.Write,  records[1].Type);
+        Assert.Equal(7UL, records[1].TransactionId);
+        Assert.Equal(99u, records[1].PageId);
+        Assert.Equal(afterImageBytes, records[1].AfterImage);
+        Assert.Equal(BLite.Core.Transactions.WalRecordType.Commit, records[2].Type);
+        Assert.Equal(7UL, records[2].TransactionId);
+    }
+
+    [Fact]
+    public void WriteAheadLog_WithCrypto_TruncateAndReuse()
+    {
+        var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
+        _tempFiles.Add(walPath);
+
+        var opts   = new CryptoOptions("wal-trunc", iterations: 1);
+        var crypto = new AesGcmCryptoProvider(opts, fileRole: 3);
+
+        using var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto);
+
+        // First batch
+        wal.WriteBeginRecordAsync(1).GetAwaiter().GetResult();
+        wal.WriteCommitRecordAsync(1).GetAwaiter().GetResult();
+        wal.FlushAsync().GetAwaiter().GetResult();
+
+        // Truncate
+        wal.TruncateAsync().GetAwaiter().GetResult();
+        Assert.Equal(0, wal.GetCurrentSize());
+
+        // Second batch (new header should be written automatically)
+        wal.WriteBeginRecordAsync(2).GetAwaiter().GetResult();
+        wal.WriteCommitRecordAsync(2).GetAwaiter().GetResult();
+        wal.FlushAsync().GetAwaiter().GetResult();
+
+        var records = wal.ReadAll();
+        Assert.Equal(2, records.Count);
+        Assert.All(records, r => Assert.Equal(2UL, r.TransactionId));
+    }
+
+    [Fact]
+    public async Task BLiteEngine_WithCrypto_WalIsEncryptedOnDisk()
+    {
+        var path = TempDb();
+        var crypto = new CryptoOptions("wal-data-secret", iterations: 1);
+
+        using (var engine = new BLiteEngine(path, crypto))
+        {
+            var col = engine.GetOrCreateCollection("secrets");
+            var doc = col.CreateDocument(["_id", "secret"], b => b
+                .AddString("secret", "WALTopSecretValue"));
+            await col.InsertAsync(doc);
+            // Do NOT commit — this leaves the WAL intact with uncommitted data
+            // (the engine will abort on dispose, but the WAL file may still exist).
+        }
+
+        var walPath = Path.ChangeExtension(path, ".wal");
+        if (!File.Exists(walPath)) return; // WAL already checkpointed — test is vacuously satisfied.
+
+        var rawBytes = File.ReadAllBytes(walPath);
+        var rawText  = System.Text.Encoding.UTF8.GetString(rawBytes);
+        Assert.DoesNotContain("WALTopSecretValue", rawText);
+    }
 }

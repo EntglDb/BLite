@@ -123,7 +123,7 @@ public sealed partial class StorageEngine : IDisposable
             LoadCollectionSlots();
         }
 
-        _wal = new WriteAheadLog(walPath, config.LockTimeout.WriteTimeoutMs);
+        _wal = new WriteAheadLog(walPath, config.WalCryptoProvider, config.LockTimeout.WriteTimeoutMs);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();

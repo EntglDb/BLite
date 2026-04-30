@@ -101,7 +101,8 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         // (which reads the crypto header and validates the key) handle existing files.
         var config = PageFileConfig.Default with
         {
-            CryptoProvider = new BLite.Core.Encryption.AesGcmCryptoProvider(crypto)
+            CryptoProvider = new BLite.Core.Encryption.AesGcmCryptoProvider(crypto),
+            WalCryptoProvider = new BLite.Core.Encryption.AesGcmCryptoProvider(crypto, fileRole: 3)
         };
 
         _databasePath = databasePath;
