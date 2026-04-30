@@ -183,9 +183,10 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     ///   </item>
     ///   <item>
     ///     <b>Key-provider encryption (production)</b> — <see cref="EncryptionOptions.KeyProvider"/> is set.
-    ///     <see cref="IKeyProvider.GetKeyAsync"/> is called once at open time to retrieve the 32-byte
-    ///     master key.  An <see cref="EncryptionCoordinator"/> is initialized with that key and derives
-    ///     unique per-file sub-keys via HKDF-SHA256, eliminating nonce-reuse risk across files.
+    ///     <see cref="IKeyProvider.GetKeyAsync"/> is called <b>synchronously</b> (blocking the calling
+    ///     thread via <c>GetAwaiter().GetResult()</c>).  This is safe in console, background-thread, and
+    ///     thread-pool contexts.  If you are calling from a UI thread or an ASP.NET request context with a
+    ///     synchronization context, use <see cref="CreateAsync"/> instead to avoid a potential deadlock.
     ///   </item>
     /// </list>
     /// </remarks>
@@ -279,6 +280,19 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
+    /// Internal constructor for fully-assembled storage with a known database path.
+    /// Used by <see cref="CreateAsync"/> to preserve the database path when constructing
+    /// from an externally-built <see cref="StorageEngine"/>.
+    /// </summary>
+    private BLiteEngine(StorageEngine storage, string? databasePath, BLiteKvOptions? kvOptions)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _databasePath = databasePath;
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    /// <summary>
     /// Creates a fully in-memory <see cref="BLiteEngine"/> with no file-system dependencies.
     /// All data is stored in process memory and is lost when the engine is disposed or the
     /// process exits.
@@ -324,6 +338,68 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     public static BLiteEngine CreateFromStorage(StorageEngine storage, BLiteKvOptions? kvOptions = null)
     {
         return new BLiteEngine(storage, kvOptions);
+    }
+
+    /// <summary>
+    /// Asynchronously creates a new <see cref="BLiteEngine"/> from a
+    /// <see cref="BLiteEngineOptions"/> object, properly awaiting
+    /// <see cref="IKeyProvider.GetKeyAsync"/> when an external key provider is configured.
+    /// </summary>
+    /// <remarks>
+    /// Prefer this factory over the <c>new BLiteEngine(BLiteEngineOptions)</c> constructor
+    /// when <see cref="EncryptionOptions.KeyProvider"/> is set and you are running in an
+    /// environment with a synchronization context (UI thread, ASP.NET request context) where
+    /// blocking on an async call with <c>GetAwaiter().GetResult()</c> could cause a deadlock.
+    /// </remarks>
+    /// <param name="options">Engine configuration.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>A fully initialised <see cref="BLiteEngine"/>.</returns>
+    public static async Task<BLiteEngine> CreateAsync(BLiteEngineOptions options, CancellationToken ct = default)
+    {
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+        if (string.IsNullOrWhiteSpace(options.Filename))
+            throw new ArgumentException("BLiteEngineOptions.Filename must not be null or whitespace.", nameof(options));
+
+        var enc = options.Encryption;
+
+        if (enc?.KeyProvider != null && enc.Passphrase != null)
+            throw new ArgumentException(
+                "Specify either EncryptionOptions.Passphrase or EncryptionOptions.KeyProvider, not both.",
+                nameof(options));
+
+        if (enc?.KeyProvider != null)
+        {
+            var databaseName = System.IO.Path.GetFileNameWithoutExtension(options.Filename);
+            var keyMemory = await enc.KeyProvider.GetKeyAsync(databaseName, ct).ConfigureAwait(false);
+
+            if (keyMemory.Length != 32)
+                throw new InvalidOperationException(
+                    $"IKeyProvider must return exactly 32 bytes (256-bit AES key) for database '{databaseName}'; " +
+                    $"got {keyMemory.Length} bytes.");
+
+            var masterKey = keyMemory.Span.ToArray();
+            try
+            {
+                var coordinator = new EncryptionCoordinator(masterKey);
+                var mainProvider = coordinator.CreateForMainFile();
+                var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                {
+                    CryptoProvider = mainProvider,
+                    EncryptionCoordinator = coordinator
+                };
+
+                var storage = new StorageEngine(options.Filename, config);
+                return new BLiteEngine(storage, options.Filename, options.KvOptions);
+            }
+            finally
+            {
+                Array.Clear(masterKey, 0, masterKey.Length);
+            }
+        }
+
+        // For non-KeyProvider cases, delegate to the synchronous constructor (no async work needed).
+        return new BLiteEngine(options);
     }
 
     #endregion

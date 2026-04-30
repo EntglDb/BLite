@@ -1323,4 +1323,43 @@ public class EncryptionTests : IDisposable
         await provider.NotifyKeyRotationAsync("mydb", CancellationToken.None);
         Assert.Equal(1, provider.NotifyRotationCallCount);
     }
+
+    [Fact]
+    public async Task BLiteEngineOptions_CreateAsync_KeyProvider_WriteAndReadBack()
+    {
+        var path = Path.Combine(TempDir(), "async_kp.db");
+        var masterKey = MakeMasterKey(0xFD);
+        var provider1 = new FixedKeyProvider(masterKey);
+        var provider2 = new FixedKeyProvider(masterKey);
+
+        // Write using the async factory
+        using (var engine = await BLiteEngine.CreateAsync(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider1 }
+        }))
+        {
+            var col = engine.GetOrCreateCollection("async_records");
+            await col.InsertAsync(col.CreateDocument(["_id", "val"],
+                b => b.AddId((BsonId)1).AddString("val", "async-value")));
+            await engine.CommitAsync();
+        }
+
+        // GetKeyAsync called once via async factory
+        Assert.Equal(1, provider1.GetKeyCallCount);
+
+        // Read back using the async factory
+        using (var engine2 = await BLiteEngine.CreateAsync(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider2 }
+        }))
+        {
+            var col2 = engine2.GetOrCreateCollection("async_records");
+            var all = await col2.FindAllAsync().ToListAsync();
+            Assert.Single(all);
+            Assert.True(all[0].TryGetString("val", out var val));
+            Assert.Equal("async-value", val);
+        }
+    }
 }
