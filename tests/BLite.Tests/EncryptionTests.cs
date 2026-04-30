@@ -614,10 +614,10 @@ public class EncryptionTests : IDisposable
     [Fact]
     public void EncryptionCoordinator_InvalidMasterKeySize_Throws()
     {
+        Assert.Throws<ArgumentNullException>(() => new EncryptionCoordinator(null!));
         Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[16]));
         Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[31]));
         Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[33]));
-        Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(null!));
     }
 
     [Fact]
@@ -720,27 +720,31 @@ public class EncryptionTests : IDisposable
     [Fact]
     public void EncryptionCoordinator_DifferentFilesGetDifferentSubKeys()
     {
+        // Prove each file provider uses a DISTINCT subkey by encrypting identical plaintext
+        // and then showing that decrypting ciphertext_A with provider_B throws an auth-tag
+        // mismatch (which only happens when the keys differ — not merely the nonces).
         var masterKey = MakeMasterKey();
         const int pageSize = 256;
-        var plaintext = new byte[pageSize]; // all zeros — deterministic cipher would be obvious
+        var plaintext = new byte[pageSize]; // all zeros for a deterministic test
 
         byte[] mainCt, colCt, idxCt, walCt;
+        ICryptoProvider mainProv, colProv, idxProv, walProv;
 
         using (var coordinator = new EncryptionCoordinator(masterKey))
         {
-            var mainProv = coordinator.CreateForMainFile();
+            mainProv = coordinator.CreateForMainFile();
             var mainHeader = new byte[mainProv.FileHeaderSize];
             mainProv.GetFileHeader(mainHeader);
 
-            var colProv = coordinator.CreateForCollection(0);
+            colProv = coordinator.CreateForCollection(0);
             var colHeader = new byte[colProv.FileHeaderSize];
             colProv.GetFileHeader(colHeader);
 
-            var idxProv = coordinator.CreateForIndex(0);
+            idxProv = coordinator.CreateForIndex(0);
             var idxHeader = new byte[idxProv.FileHeaderSize];
             idxProv.GetFileHeader(idxHeader);
 
-            var walProv = coordinator.CreateForWal();
+            walProv = coordinator.CreateForWal();
             var walHeader = new byte[walProv.FileHeaderSize];
             walProv.GetFileHeader(walHeader);
 
@@ -755,14 +759,14 @@ public class EncryptionTests : IDisposable
             walProv.Encrypt(0, plaintext, walCt);
         }
 
-        // Each file uses a different subkey → different ciphertexts even for the same plaintext + pageId.
-        // Simply assert the nonce+ciphertext slices differ (they MUST if keys differ or nonces differ).
-        Assert.NotEqual(mainCt, colCt);
-        Assert.NotEqual(mainCt, idxCt);
-        Assert.NotEqual(mainCt, walCt);
-        Assert.NotEqual(colCt,  idxCt);
-        Assert.NotEqual(colCt,  walCt);
-        Assert.NotEqual(idxCt,  walCt);
+        // Cross-decryption must fail (auth tag mismatch) — proves different subkeys were used.
+        var buf = new byte[pageSize];
+        Assert.ThrowsAny<Exception>(() => colProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<Exception>(() => idxProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<Exception>(() => walProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<Exception>(() => mainProv.Decrypt(0, colCt,  buf));
+        Assert.ThrowsAny<Exception>(() => mainProv.Decrypt(0, idxCt,  buf));
+        Assert.ThrowsAny<Exception>(() => mainProv.Decrypt(0, walCt,  buf));
     }
 
     [Fact]
@@ -856,6 +860,43 @@ public class EncryptionTests : IDisposable
         // A provider for collection 1 should reject the collection 0 header (index mismatch)
         var col1Prov = coordinator.CreateForCollection(1);
         Assert.Throws<InvalidOperationException>(() => col1Prov.LoadFromFileHeader(col0Header));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_ConflictingSalt_Throws()
+    {
+        // Attempting to initialise the coordinator with a DIFFERENT main-file header
+        // (i.e. a different database salt) after it has already been primed must throw.
+        using var c1 = new EncryptionCoordinator(MakeMasterKey());
+        using var c2 = new EncryptionCoordinator(MakeMasterKey());
+
+        // Generate two distinct main file headers (each has its own random salt).
+        var prov1 = c1.CreateForMainFile();
+        var header1 = new byte[prov1.FileHeaderSize];
+        prov1.GetFileHeader(header1);  // primes c1 with salt from header1
+
+        var prov2 = c2.CreateForMainFile();
+        var header2 = new byte[prov2.FileHeaderSize];
+        prov2.GetFileHeader(header2);  // header2 has a different (random) salt
+
+        // Now load header2 into c1 — salts differ, must throw.
+        var conflictProv = c1.CreateForMainFile();
+        Assert.Throws<InvalidOperationException>(() => conflictProv.LoadFromFileHeader(header2));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_Disposed_GetFileHeader_Throws()
+    {
+        // After the coordinator is disposed DeriveSubKey should throw ObjectDisposedException
+        // rather than silently using the zeroed (all-zero) master key.
+        var coordinator = new EncryptionCoordinator(MakeMasterKey());
+
+        // Create a main file provider and dispose the coordinator BEFORE calling GetFileHeader.
+        var mainProv = coordinator.CreateForMainFile();
+        coordinator.Dispose();
+
+        var header = new byte[mainProv.FileHeaderSize];
+        Assert.Throws<ObjectDisposedException>(() => mainProv.GetFileHeader(header));
     }
 
     [Fact]

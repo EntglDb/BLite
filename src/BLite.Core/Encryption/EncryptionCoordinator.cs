@@ -84,12 +84,17 @@ public sealed class EncryptionCoordinator : IDisposable
     /// The coordinator makes a private copy; the caller may zero the original immediately
     /// after construction.  The internal copy is zeroed when <see cref="Dispose"/> is called.
     /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="masterKey"/> is <c>null</c>.
+    /// </exception>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="masterKey"/> is <c>null</c> or not exactly 32 bytes.
+    /// Thrown when <paramref name="masterKey"/> is not exactly 32 bytes.
     /// </exception>
     public EncryptionCoordinator(byte[] masterKey)
     {
-        if (masterKey == null || masterKey.Length != KeySize)
+        if (masterKey == null)
+            throw new ArgumentNullException(nameof(masterKey));
+        if (masterKey.Length != KeySize)
             throw new ArgumentException(
                 $"Master key must be exactly {KeySize} bytes.", nameof(masterKey));
 
@@ -203,9 +208,22 @@ public sealed class EncryptionCoordinator : IDisposable
     /// <summary>
     /// Stores the 32-byte database salt extracted from the main file header.
     /// Called by <see cref="CoordinatedFileProvider"/> during header exchange.
+    /// Zeroes any previously stored salt before replacing it.
+    /// Throws if a different (conflicting) salt is supplied after the first initialisation.
     /// </summary>
     private void SetDatabaseSalt(ReadOnlySpan<byte> salt)
     {
+        if (_databaseSalt != null)
+        {
+            if (!salt.SequenceEqual(_databaseSalt))
+                throw new InvalidOperationException(
+                    "A different database salt was supplied after the coordinator was already " +
+                    "initialised. The same main file header must be used for the lifetime of a " +
+                    "single coordinator instance.");
+            // Same salt — no-op (idempotent re-open of the same file).
+            return;
+        }
+
         _databaseSalt = salt.ToArray();
     }
 
@@ -215,6 +233,7 @@ public sealed class EncryptionCoordinator : IDisposable
     /// </summary>
     private byte[] DeriveSubKey(byte fileRole, ushort fileIndex)
     {
+        ThrowIfDisposed();
         var info = new byte[3]
         {
             fileRole,
