@@ -797,7 +797,7 @@ public class StorageMigrationCoverageTests : IDisposable
     [Fact]
     public void Engine_NullPath_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new BLiteEngine(null!));
+        Assert.Throws<ArgumentNullException>(() => new BLiteEngine((string)null!));
     }
 
     [Fact]

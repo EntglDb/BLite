@@ -161,6 +161,115 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
 
+    /// <summary>
+    /// Creates a new <see cref="BLiteEngine"/> from a unified <see cref="BLiteEngineOptions"/> object.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This constructor supports three modes:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>
+    ///     <b>No encryption</b> — <see cref="BLiteEngineOptions.Encryption"/> is <c>null</c> or both
+    ///     <see cref="EncryptionOptions.Passphrase"/> and <see cref="EncryptionOptions.KeyProvider"/>
+    ///     are <c>null</c>.  Data is stored in plaintext with zero overhead.
+    ///   </item>
+    ///   <item>
+    ///     <b>Passphrase encryption (development)</b> — <see cref="EncryptionOptions.Passphrase"/> is set.
+    ///     The encryption key is derived via PBKDF2-SHA256 at open time from the passphrase and a
+    ///     per-file random salt stored in the file header.  This mode is convenient for local
+    ///     development but <b>unsuitable for production</b> because it cannot leverage centralized
+    ///     key management or key rotation.
+    ///   </item>
+    ///   <item>
+    ///     <b>Key-provider encryption (production)</b> — <see cref="EncryptionOptions.KeyProvider"/> is set.
+    ///     <see cref="IKeyProvider.GetKeyAsync"/> is called once at open time to retrieve the 32-byte
+    ///     master key.  An <see cref="EncryptionCoordinator"/> is initialized with that key and derives
+    ///     unique per-file sub-keys via HKDF-SHA256, eliminating nonce-reuse risk across files.
+    ///   </item>
+    /// </list>
+    /// </remarks>
+    /// <param name="options">Engine configuration.  <see cref="BLiteEngineOptions.Filename"/> must not be null or whitespace.</param>
+    public BLiteEngine(BLiteEngineOptions options)
+    {
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+        if (string.IsNullOrWhiteSpace(options.Filename))
+            throw new ArgumentException("BLiteEngineOptions.Filename must not be null or whitespace.", nameof(options));
+
+        _databasePath = options.Filename;
+
+        var enc = options.Encryption;
+
+        if (enc?.KeyProvider != null && enc.Passphrase != null)
+            throw new ArgumentException(
+                "Specify either EncryptionOptions.Passphrase or EncryptionOptions.KeyProvider, not both.",
+                nameof(options));
+
+        if (enc?.KeyProvider != null)
+        {
+            // ── Production path: external key management ───────────────────
+            // Call the provider once at open time to obtain the 32-byte master key, then
+            // hand it to EncryptionCoordinator which derives per-file sub-keys via HKDF.
+            var databaseName = System.IO.Path.GetFileNameWithoutExtension(options.Filename);
+            var keyMemory = enc.KeyProvider.GetKeyAsync(databaseName, CancellationToken.None)
+                                           .GetAwaiter().GetResult();
+
+            if (keyMemory.Length != 32)
+                throw new InvalidOperationException(
+                    $"IKeyProvider must return exactly 32 bytes (256-bit AES key) for database '{databaseName}'; " +
+                    $"got {keyMemory.Length} bytes.");
+
+            var masterKey = keyMemory.Span.ToArray();
+            try
+            {
+                var coordinator = new EncryptionCoordinator(masterKey);
+                var mainProvider = coordinator.CreateForMainFile();
+                var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                {
+                    CryptoProvider = mainProvider,
+                    EncryptionCoordinator = coordinator
+                    // WalCryptoProvider intentionally null — StorageEngine calls
+                    // coordinator.CreateForWal() after the main file is opened (primes salt).
+                };
+
+                _storage = new StorageEngine(options.Filename, config);
+            }
+            finally
+            {
+                // Zero the local copy; the coordinator holds its own clone.
+                Array.Clear(masterKey, 0, masterKey.Length);
+            }
+        }
+        else if (enc?.Passphrase != null)
+        {
+            // ── Development path: passphrase-based key derivation ──────────
+            // Convenient for local development; not suitable for production.
+            // Key is derived via PBKDF2-SHA256; per-file salt stored in file header.
+            var cryptoOptions = new CryptoOptions(enc.Passphrase, enc.Kdf, enc.KdfIterations);
+            var baseConfig = options.PageConfig ?? PageFileConfig.Default;
+            var config = baseConfig with
+            {
+                CryptoProvider = new AesGcmCryptoProvider(cryptoOptions),
+                WalCryptoProvider = new AesGcmCryptoProvider(cryptoOptions, fileRole: 3)
+            };
+
+            _storage = new StorageEngine(options.Filename, config);
+        }
+        else
+        {
+            // ── Plain storage (no encryption) ──────────────────────────────
+            var config = options.PageConfig
+                ?? PageFileConfig.DetectFromFile(options.Filename)
+                ?? PageFileConfig.Default;
+
+            _storage = new StorageEngine(options.Filename, config);
+        }
+
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, options.KvOptions);
+    }
+
     internal BLiteEngine(StorageEngine storage, BLiteKvOptions? kvOptions = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));

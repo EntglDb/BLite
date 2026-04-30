@@ -1084,4 +1084,243 @@ public class EncryptionTests : IDisposable
             using var _ = new BLiteEngine(dbPath, wrongCoordinator);
         });
     }
+
+    // ── IKeyProvider / EncryptionOptions / BLiteEngineOptions ────────────────
+
+    /// <summary>
+    /// Minimal stub key provider that returns a fixed 32-byte key.
+    /// </summary>
+    private sealed class FixedKeyProvider : IKeyProvider
+    {
+        private readonly byte[] _key;
+        public string? LastDatabaseName { get; private set; }
+        public int GetKeyCallCount { get; private set; }
+        public int NotifyRotationCallCount { get; private set; }
+
+        public FixedKeyProvider(byte[]? key = null)
+        {
+            _key = key ?? MakeMasterKey(0xAB);
+        }
+
+        public ValueTask<ReadOnlyMemory<byte>> GetKeyAsync(string databaseName, CancellationToken ct)
+        {
+            LastDatabaseName = databaseName;
+            GetKeyCallCount++;
+            return new ValueTask<ReadOnlyMemory<byte>>(_key.AsMemory());
+        }
+
+        public ValueTask NotifyKeyRotationAsync(string databaseName, CancellationToken ct)
+        {
+            NotifyRotationCallCount++;
+            return default;
+        }
+    }
+
+    [Fact]
+    public void EncryptionOptions_DefaultValues_AreCorrect()
+    {
+        var opts = new EncryptionOptions();
+        Assert.Null(opts.Passphrase);
+        Assert.Null(opts.KeyProvider);
+        Assert.Equal(EncryptionAlgorithm.AesGcm256, opts.Algorithm);
+        Assert.Equal(KdfAlgorithm.Pbkdf2Sha256, opts.Kdf);
+        Assert.Equal(100_000, opts.KdfIterations);
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_NullOptions_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => new BLiteEngine((BLiteEngineOptions)null!));
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_NullFilename_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new BLiteEngine(new BLiteEngineOptions { Filename = null }));
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_EmptyFilename_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new BLiteEngine(new BLiteEngineOptions { Filename = "   " }));
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_BothPassphraseAndKeyProvider_Throws()
+    {
+        var path = TempDb();
+        Assert.Throws<ArgumentException>(() =>
+            new BLiteEngine(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions
+                {
+                    Passphrase = "secret",
+                    KeyProvider = new FixedKeyProvider()
+                }
+            }));
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_NoEncryption_OpensPlainDatabase()
+    {
+        var path = TempDb();
+        using (var engine = new BLiteEngine(new BLiteEngineOptions { Filename = path }))
+        {
+            Assert.NotNull(engine);
+        }
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task BLiteEngineOptions_PassphraseEncryption_WriteAndReadBack()
+    {
+        var path = TempDb();
+        var passphrase = "test-passphrase-2026";
+
+        // Write
+        using (var engine = new BLiteEngine(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { Passphrase = passphrase }
+        }))
+        {
+            var col = engine.GetOrCreateCollection("users");
+            await col.InsertAsync(col.CreateDocument(["_id", "name"],
+                b => b.AddId((BsonId)1).AddString("name", "Alice")));
+            await engine.CommitAsync();
+        }
+
+        // Read back — same passphrase must decrypt correctly
+        using (var engine2 = new BLiteEngine(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { Passphrase = passphrase }
+        }))
+        {
+            var col2 = engine2.GetOrCreateCollection("users");
+            var all = await col2.FindAllAsync().ToListAsync();
+            Assert.Single(all);
+            Assert.True(all[0].TryGetString("name", out var name));
+            Assert.Equal("Alice", name);
+        }
+    }
+
+    [Fact]
+    public async Task BLiteEngineOptions_KeyProvider_CalledOnceAtOpen()
+    {
+        var path = Path.Combine(TempDir(), "kp_test.db");
+        var provider = new FixedKeyProvider();
+
+        using (var engine = new BLiteEngine(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider }
+        }))
+        {
+            var col = engine.GetOrCreateCollection("items");
+            await col.InsertAsync(col.CreateDocument(["_id", "v"],
+                b => b.AddId((BsonId)1).AddInt32("v", 99)));
+            await engine.CommitAsync();
+        }
+
+        // GetKeyAsync must have been called exactly once
+        Assert.Equal(1, provider.GetKeyCallCount);
+        // The database name passed must be the filename without extension
+        Assert.Equal("kp_test", provider.LastDatabaseName);
+    }
+
+    [Fact]
+    public async Task BLiteEngineOptions_KeyProvider_WriteAndReadBack()
+    {
+        var path = Path.Combine(TempDir(), "kp_rw.db");
+        var masterKey = MakeMasterKey(0xFE);
+        var provider1 = new FixedKeyProvider(masterKey);
+        var provider2 = new FixedKeyProvider(masterKey);
+
+        // Write
+        using (var engine = new BLiteEngine(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider1 }
+        }))
+        {
+            var col = engine.GetOrCreateCollection("records");
+            await col.InsertAsync(col.CreateDocument(["_id", "data"],
+                b => b.AddId((BsonId)42).AddString("data", "secret-value")));
+            await engine.CommitAsync();
+        }
+
+        // Read back
+        using (var engine2 = new BLiteEngine(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider2 }
+        }))
+        {
+            var col2 = engine2.GetOrCreateCollection("records");
+            var all = await col2.FindAllAsync().ToListAsync();
+            Assert.Single(all);
+            Assert.True(all[0].TryGetString("data", out var data));
+            Assert.Equal("secret-value", data);
+        }
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_KeyProvider_WrongKeySize_Throws()
+    {
+        var path = Path.Combine(TempDir(), "kp_badkey.db");
+        // Provider returns 16 bytes instead of 32
+        var badProvider = new FixedKeyProvider(new byte[16]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new BLiteEngine(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions { KeyProvider = badProvider }
+            }));
+    }
+
+    [Fact]
+    public async Task BLiteEngineOptions_KeyProvider_WrongKeyOnReopen_Throws()
+    {
+        var path = Path.Combine(TempDir(), "kp_wrongkey.db");
+        var correctKey = MakeMasterKey(0x11);
+        var wrongKey = MakeMasterKey(0x22);
+
+        using (var engine = new BLiteEngine(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = new FixedKeyProvider(correctKey) }
+        }))
+        {
+            var col = engine.GetOrCreateCollection("c");
+            await col.InsertAsync(col.CreateDocument(["_id"],
+                b => b.AddId((BsonId)1)));
+            await engine.CommitAsync();
+        }
+
+        // Opening with wrong key must fail
+        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(async () =>
+        {
+            using var bad = new BLiteEngine(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions { KeyProvider = new FixedKeyProvider(wrongKey) }
+            });
+            // Force page read to trigger decryption failure
+            var col = bad.GetOrCreateCollection("c");
+            _ = await col.FindAllAsync().ToListAsync();
+        });
+    }
+
+    [Fact]
+    public async Task IKeyProvider_NotifyKeyRotationAsync_IsCallable()
+    {
+        var provider = new FixedKeyProvider();
+        await provider.NotifyKeyRotationAsync("mydb", CancellationToken.None);
+        Assert.Equal(1, provider.NotifyRotationCallCount);
+    }
 }
