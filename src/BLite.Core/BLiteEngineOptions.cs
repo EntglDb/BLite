@@ -44,9 +44,20 @@ public sealed class BLiteEngineOptions
 
     /// <summary>
     /// Optional page-file configuration (page size, growth block, lock timeouts).
-    /// When <c>null</c>, <see cref="PageFileConfig.Default"/> is used for passphrase-based
-    /// encryption and plain databases; server layout is used for <see cref="EncryptionOptions.KeyProvider"/>-based
-    /// encryption.
+    /// When <c>null</c>:
+    /// <list type="bullet">
+    ///   <item>For <see cref="EncryptionOptions.KeyProvider"/>-based encryption, the server layout
+    ///   (<see cref="PageFileConfig.Server"/>) is used as the base — separate WAL directory,
+    ///   dedicated index file, and per-collection files.</item>
+    ///   <item>For passphrase-based encryption, <see cref="PageFileConfig.Default"/> (16 KB pages,
+    ///   single-file layout) is used.</item>
+    ///   <item>For plain (unencrypted) databases, the page size is auto-detected from an existing
+    ///   file or defaults to <see cref="PageFileConfig.Default"/>.</item>
+    /// </list>
+    /// When explicitly set, the supplied configuration is used as-is (page size, lock timeouts,
+    /// etc.) but for <see cref="EncryptionOptions.KeyProvider"/>-based encryption the multi-file
+    /// paths are still derived via <see cref="PageFileConfig.Server"/>, meaning the supplied value
+    /// acts as the <c>baseConfig</c> parameter to that method.
     /// </summary>
     public PageFileConfig? PageConfig { get; init; }
 }
