@@ -67,6 +67,24 @@ public readonly struct PageFileConfig
     public ICryptoProvider? WalCryptoProvider { get; init; }
 
     /// <summary>
+    /// Optional coordinator for multi-file HKDF-SHA256 subkey derivation.
+    /// <para>
+    /// When set in conjunction with <see cref="CryptoProvider"/>, the
+    /// <see cref="BLite.Core.Storage.StorageEngine"/> automatically derives a unique
+    /// AES-256-GCM subkey for each sub-file (index file, WAL, per-collection files)
+    /// using <c>HKDF-SHA256(masterKey, databaseSalt, info)</c> — preventing nonce
+    /// reuse across files that share the same page IDs.
+    /// </para>
+    /// <para>
+    /// The coordinator's <see cref="EncryptionCoordinator.CreateForMainFile"/> provider
+    /// must already be assigned to <see cref="CryptoProvider"/> before passing this
+    /// config to <see cref="BLite.Core.Storage.StorageEngine"/>.
+    /// The coordinator is <b>not</b> disposed by the engine; the caller retains ownership.
+    /// </para>
+    /// </summary>
+    public EncryptionCoordinator? EncryptionCoordinator { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()

@@ -121,7 +121,22 @@ public sealed partial class StorageEngine
             new Lazy<IPageStorage>(() =>
             {
                 var filePath = CollectionFilePath(name);
-                var pf = new PageFile(filePath, AsStandaloneConfig(_config));
+                var collConfig = AsStandaloneConfig(_config);
+
+                // When a coordinator is present, derive a per-collection subkey keyed on
+                // the slot index so that collection files never share a key with each other
+                // or with the main/index file even when they contain the same page IDs.
+                if (_config.EncryptionCoordinator != null &&
+                    _collectionNameToSlot != null &&
+                    _collectionNameToSlot.TryGetValue(name, out var slot))
+                {
+                    collConfig = collConfig with
+                    {
+                        CryptoProvider = _config.EncryptionCoordinator.CreateForCollection(slot)
+                    };
+                }
+
+                var pf = new PageFile(filePath, collConfig);
                 pf.Open();
                 return pf;
             })).Value;

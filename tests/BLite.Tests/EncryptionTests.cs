@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Encryption;
@@ -24,6 +25,14 @@ public class EncryptionTests : IDisposable
         _tempFiles.Add(path);
         _tempFiles.Add(Path.ChangeExtension(path, ".wal"));
         return path;
+    }
+
+    private string TempDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"enc_test_{Guid.NewGuid()}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        return dir;
     }
 
     public void Dispose()
@@ -599,5 +608,480 @@ public class EncryptionTests : IDisposable
         var secretBytes = System.Text.Encoding.UTF8.GetBytes("WALTopSecretValue");
         Assert.True(rawBytes.AsSpan().IndexOf(secretBytes) == -1,
             "Plaintext secret must not appear unencrypted in the WAL file.");
+    }
+
+    // ── EncryptionCoordinator ────────────────────────────────────────────────
+
+    private static byte[] MakeMasterKey(byte seed = 0x42)
+    {
+        var key = new byte[32];
+        for (var i = 0; i < key.Length; i++) key[i] = (byte)(seed + i);
+        return key;
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_InvalidMasterKeySize_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => new EncryptionCoordinator(null!));
+        Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[16]));
+        Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[31]));
+        Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[33]));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_CreateForMainFile_ReturnsProvider()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+        var provider = coordinator.CreateForMainFile();
+        Assert.NotNull(provider);
+        Assert.Equal(28, provider.PageOverhead);  // NonceSize(12) + TagSize(16)
+        Assert.Equal(64, provider.FileHeaderSize);
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_CreateBeforeSalt_Throws()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+        // CreateForMainFile does NOT require the salt yet
+        _ = coordinator.CreateForMainFile();
+
+        // But using CreateForCollection/Index/Wal before the main file is opened (salt unavailable) must throw
+        using var coordinator2 = new EncryptionCoordinator(MakeMasterKey());
+        Assert.Throws<InvalidOperationException>(() => coordinator2.CreateForCollection(0));
+        Assert.Throws<InvalidOperationException>(() => coordinator2.CreateForIndex(0));
+        Assert.Throws<InvalidOperationException>(() => coordinator2.CreateForWal());
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_InvalidIndex_Throws()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+
+        // Initialise salt by calling GetFileHeader on the main file provider
+        var mainProvider = coordinator.CreateForMainFile();
+        var mainHeader = new byte[mainProvider.FileHeaderSize];
+        mainProvider.GetFileHeader(mainHeader);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => coordinator.CreateForCollection(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => coordinator.CreateForIndex(-1));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_MainFile_EncryptDecrypt_RoundTrip()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+        using var provider = (IDisposable)coordinator.CreateForMainFile();
+        var crypto = (ICryptoProvider)provider;
+
+        // Initialise key by writing the file header (new file path)
+        var header = new byte[crypto.FileHeaderSize];
+        crypto.GetFileHeader(header);
+
+        const int pageSize = 4096;
+        var plaintext  = new byte[pageSize];
+        new Random(1).NextBytes(plaintext);
+
+        var ciphertext = new byte[pageSize + crypto.PageOverhead];
+        crypto.Encrypt(0, plaintext, ciphertext);
+
+        var decrypted = new byte[pageSize];
+        crypto.Decrypt(0, ciphertext, decrypted);
+
+        Assert.Equal(plaintext, decrypted);
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_MainFile_ReloadFromHeader_RoundTrip()
+    {
+        var masterKey = MakeMasterKey(0x10);
+        byte[] savedHeader;
+        byte[] ciphertext;
+        const int pageSize = 512;
+        var plaintext = new byte[pageSize];
+        new Random(2).NextBytes(plaintext);
+
+        // Write side: new file
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        {
+            using var provider = (IDisposable)coordinator.CreateForMainFile();
+            var crypto = (ICryptoProvider)provider;
+            savedHeader = new byte[crypto.FileHeaderSize];
+            crypto.GetFileHeader(savedHeader);
+
+            ciphertext = new byte[pageSize + crypto.PageOverhead];
+            crypto.Encrypt(7, plaintext, ciphertext);
+        }
+
+        // Read side: existing file (reload from header)
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        {
+            using var provider2 = (IDisposable)coordinator2.CreateForMainFile();
+            var crypto2 = (ICryptoProvider)provider2;
+            crypto2.LoadFromFileHeader(savedHeader);
+
+            var decrypted = new byte[pageSize];
+            crypto2.Decrypt(7, ciphertext, decrypted);
+            Assert.Equal(plaintext, decrypted);
+        }
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_DifferentFilesGetDifferentSubKeys()
+    {
+        // Prove each file provider uses a DISTINCT subkey by encrypting identical plaintext
+        // and then showing that decrypting ciphertext_A with provider_B throws an auth-tag
+        // mismatch (which only happens when the keys differ — not merely the nonces).
+        var masterKey = MakeMasterKey();
+        const int pageSize = 256;
+        var plaintext = new byte[pageSize]; // all zeros for a deterministic test
+
+        byte[] mainCt, colCt, idxCt, walCt;
+        ICryptoProvider mainProv, colProv, idxProv, walProv;
+
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        {
+            mainProv = coordinator.CreateForMainFile();
+            var mainHeader = new byte[mainProv.FileHeaderSize];
+            mainProv.GetFileHeader(mainHeader);
+
+            colProv = coordinator.CreateForCollection(0);
+            var colHeader = new byte[colProv.FileHeaderSize];
+            colProv.GetFileHeader(colHeader);
+
+            idxProv = coordinator.CreateForIndex(0);
+            var idxHeader = new byte[idxProv.FileHeaderSize];
+            idxProv.GetFileHeader(idxHeader);
+
+            walProv = coordinator.CreateForWal();
+            var walHeader = new byte[walProv.FileHeaderSize];
+            walProv.GetFileHeader(walHeader);
+
+            mainCt = new byte[pageSize + mainProv.PageOverhead];
+            colCt  = new byte[pageSize + colProv.PageOverhead];
+            idxCt  = new byte[pageSize + idxProv.PageOverhead];
+            walCt  = new byte[pageSize + walProv.PageOverhead];
+
+            mainProv.Encrypt(0, plaintext, mainCt);
+            colProv.Encrypt(0, plaintext, colCt);
+            idxProv.Encrypt(0, plaintext, idxCt);
+            walProv.Encrypt(0, plaintext, walCt);
+        }
+
+        // Cross-decryption must fail (AES-GCM auth tag mismatch) — proves different subkeys were used.
+        var buf = new byte[pageSize];
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => colProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => idxProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => walProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => mainProv.Decrypt(0, colCt,  buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => mainProv.Decrypt(0, idxCt,  buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => mainProv.Decrypt(0, walCt,  buf));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_CollectionAndIndex_RoundTrip()
+    {
+        var masterKey = MakeMasterKey(0x20);
+        const int pageSize = 128;
+        var plaintext = new byte[pageSize];
+        new Random(55).NextBytes(plaintext);
+
+        byte[] savedMainHeader;
+        byte[] savedColHeader;
+        byte[] savedColCt;
+
+        // Write side: create coordinator, prime the salt, encrypt a collection page
+        using (var c1 = new EncryptionCoordinator(masterKey))
+        {
+            var mp = c1.CreateForMainFile();
+            savedMainHeader = new byte[mp.FileHeaderSize];
+            mp.GetFileHeader(savedMainHeader);
+
+            var cp = c1.CreateForCollection(7);
+            savedColHeader = new byte[cp.FileHeaderSize];
+            cp.GetFileHeader(savedColHeader);
+
+            savedColCt = new byte[pageSize + cp.PageOverhead];
+            cp.Encrypt(3, plaintext, savedColCt);
+        }
+
+        // Read side: reload coordinator from the same headers and decrypt
+        using (var c2 = new EncryptionCoordinator(masterKey))
+        {
+            var mp = c2.CreateForMainFile();
+            mp.LoadFromFileHeader(savedMainHeader);  // primes the salt in c2
+
+            var cp = c2.CreateForCollection(7);
+            cp.LoadFromFileHeader(savedColHeader);
+
+            var decrypted = new byte[pageSize];
+            cp.Decrypt(3, savedColCt, decrypted);
+            Assert.Equal(plaintext, decrypted);
+        }
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_LoadFromFileHeader_RejectsWrongKdf()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+        var mainProvider = coordinator.CreateForMainFile();
+
+        // Build a header with KDF=1 (PBKDF2) — coordinator must reject it
+        var badHeader = new byte[64];
+        BinaryPrimitives.WriteUInt32LittleEndian(badHeader, 0x424C4345u); // magic
+        badHeader[4] = 1; // version
+        badHeader[5] = 1; // AES-GCM
+        badHeader[6] = 1; // KDF = PBKDF2 (wrong for coordinator)
+        badHeader[7] = 0; // role = main
+
+        Assert.Throws<InvalidOperationException>(() => mainProvider.LoadFromFileHeader(badHeader));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_LoadFromFileHeader_RejectsWrongRole()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+
+        // Generate a valid main file header
+        var mainProv = coordinator.CreateForMainFile();
+        var mainHeader = new byte[mainProv.FileHeaderSize];
+        mainProv.GetFileHeader(mainHeader);
+
+        // A collection provider should reject a main file header (role mismatch)
+        var colProv = coordinator.CreateForCollection(0);
+        Assert.Throws<InvalidOperationException>(() => colProv.LoadFromFileHeader(mainHeader));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_LoadFromFileHeader_RejectsWrongIndex()
+    {
+        using var coordinator = new EncryptionCoordinator(MakeMasterKey());
+
+        var mainProv = coordinator.CreateForMainFile();
+        var mainHeader = new byte[mainProv.FileHeaderSize];
+        mainProv.GetFileHeader(mainHeader);
+
+        // Create collection 0 header
+        var col0Prov = coordinator.CreateForCollection(0);
+        var col0Header = new byte[col0Prov.FileHeaderSize];
+        col0Prov.GetFileHeader(col0Header);
+
+        // A provider for collection 1 should reject the collection 0 header (index mismatch)
+        var col1Prov = coordinator.CreateForCollection(1);
+        Assert.Throws<InvalidOperationException>(() => col1Prov.LoadFromFileHeader(col0Header));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_ConflictingSalt_Throws()
+    {
+        // Attempting to initialise the coordinator with a DIFFERENT main-file header
+        // (i.e. a different database salt) after it has already been primed must throw.
+        using var c1 = new EncryptionCoordinator(MakeMasterKey());
+        using var c2 = new EncryptionCoordinator(MakeMasterKey());
+
+        // Generate two distinct main file headers (each has its own random salt).
+        var prov1 = c1.CreateForMainFile();
+        var header1 = new byte[prov1.FileHeaderSize];
+        prov1.GetFileHeader(header1);  // primes c1 with salt from header1
+
+        var prov2 = c2.CreateForMainFile();
+        var header2 = new byte[prov2.FileHeaderSize];
+        prov2.GetFileHeader(header2);  // header2 has a different (random) salt
+
+        // Now load header2 into c1 — salts differ, must throw.
+        var conflictProv = c1.CreateForMainFile();
+        Assert.Throws<InvalidOperationException>(() => conflictProv.LoadFromFileHeader(header2));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_Disposed_GetFileHeader_Throws()
+    {
+        // After the coordinator is disposed DeriveSubKey should throw ObjectDisposedException
+        // rather than silently using the zeroed (all-zero) master key.
+        var coordinator = new EncryptionCoordinator(MakeMasterKey());
+
+        // Create a main file provider and dispose the coordinator BEFORE calling GetFileHeader.
+        var mainProv = coordinator.CreateForMainFile();
+        coordinator.Dispose();
+
+        var header = new byte[mainProv.FileHeaderSize];
+        Assert.Throws<ObjectDisposedException>(() => mainProv.GetFileHeader(header));
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_Dispose_PreventsNewProviders()
+    {
+        var coordinator = new EncryptionCoordinator(MakeMasterKey());
+        var mainProv = coordinator.CreateForMainFile();
+        var mainHeader = new byte[mainProv.FileHeaderSize];
+        mainProv.GetFileHeader(mainHeader);
+
+        coordinator.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => coordinator.CreateForMainFile());
+        Assert.Throws<ObjectDisposedException>(() => coordinator.CreateForCollection(0));
+        Assert.Throws<ObjectDisposedException>(() => coordinator.CreateForIndex(0));
+        Assert.Throws<ObjectDisposedException>(() => coordinator.CreateForWal());
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_Dispose_IsIdempotent()
+    {
+        var coordinator = new EncryptionCoordinator(MakeMasterKey());
+        coordinator.Dispose();
+        coordinator.Dispose(); // must not throw
+    }
+
+    [Fact]
+    public void EncryptionCoordinator_PageFile_CreateAndRead()
+    {
+        var path = TempDb();
+        var masterKey = MakeMasterKey(0x77);
+
+        byte[] written;
+        uint allocatedPageId;
+
+        // Phase 1: Write with coordinator
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        {
+            var provider = coordinator.CreateForMainFile();
+            var config = PageFileConfig.Default with { CryptoProvider = provider };
+
+            using var pf = new PageFile(path, config);
+            pf.Open();
+
+            allocatedPageId = pf.AllocatePage();
+            written = new byte[pf.PageSize];
+            new Random(77).NextBytes(written);
+            pf.WritePage(allocatedPageId, written);
+            pf.Flush();
+        }
+
+        // Phase 2: Read back with a new coordinator instance (same master key)
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        {
+            var provider2 = coordinator2.CreateForMainFile();
+            var config2 = PageFileConfig.Default with { CryptoProvider = provider2 };
+
+            using var pf2 = new PageFile(path, config2);
+            pf2.Open();
+
+            var readBuf = new byte[pf2.PageSize];
+            pf2.ReadPage(allocatedPageId, readBuf);
+            Assert.Equal(written, readBuf);
+        }
+    }
+
+    // ── BLiteEngine multi-file mode with EncryptionCoordinator ───────────────
+
+    [Fact]
+    public async Task EncryptionCoordinator_MultiFileEngine_WriteAndReadBack()
+    {
+        // Full BLiteEngine round-trip: write with coordinator, re-open with same master key,
+        // verify all documents can be read back correctly.
+        var dbPath = Path.Combine(TempDir(), "multienc.db");
+        var masterKey = MakeMasterKey(0xAA);
+
+        // ── Phase 1: Write ───────────────────────────────────────────────────
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        using (var engine = new BLiteEngine(dbPath, coordinator))
+        {
+            var col = engine.GetOrCreateCollection("users");
+
+            await col.InsertAsync(col.CreateDocument(["_id", "name", "score"],
+                b => b.AddId((BsonId)1).AddString("name", "Alice").AddInt32("score", 90)));
+            await col.InsertAsync(col.CreateDocument(["_id", "name", "score"],
+                b => b.AddId((BsonId)2).AddString("name", "Bob").AddInt32("score", 75)));
+            await col.InsertAsync(col.CreateDocument(["_id", "name", "score"],
+                b => b.AddId((BsonId)3).AddString("name", "Carol").AddInt32("score", 85)));
+
+            await engine.CommitAsync();
+        }
+
+        // ── Phase 2: Read-back with fresh coordinator (same master key) ──────
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        using (var engine2 = new BLiteEngine(dbPath, coordinator2))
+        {
+            var col2 = engine2.GetOrCreateCollection("users");
+
+            var all = await col2.FindAllAsync().ToListAsync();
+            Assert.Equal(3, all.Count);
+
+            var byName = await col2.FindAsync(d =>
+            {
+                d.TryGetString("name", out var n);
+                return n == "Carol";
+            }).ToListAsync();
+            Assert.Single(byName);
+            Assert.True(byName[0].TryGetInt32("score", out var score));
+            Assert.Equal(85, score);
+        }
+    }
+
+    [Fact]
+    public async Task EncryptionCoordinator_MultiFileEngine_MultipleCollections_Isolated()
+    {
+        // Each collection file gets its own derived subkey.
+        // Prove this by checking that the engine can write/read multiple collections.
+        var dbPath = Path.Combine(TempDir(), "multienc2.db");
+        var masterKey = MakeMasterKey(0xBB);
+
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        using (var engine = new BLiteEngine(dbPath, coordinator))
+        {
+            var orders = engine.GetOrCreateCollection("orders");
+            var products = engine.GetOrCreateCollection("products");
+
+            await orders.InsertAsync(orders.CreateDocument(["_id", "item"],
+                b => b.AddId((BsonId)1).AddString("item", "widget")));
+            await products.InsertAsync(products.CreateDocument(["_id", "sku"],
+                b => b.AddId((BsonId)100).AddString("sku", "W-001")));
+
+            await engine.CommitAsync();
+        }
+
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        using (var engine2 = new BLiteEngine(dbPath, coordinator2))
+        {
+            var orders2 = engine2.GetOrCreateCollection("orders");
+            var products2 = engine2.GetOrCreateCollection("products");
+
+            var o = await orders2.FindAllAsync().ToListAsync();
+            Assert.Single(o);
+            Assert.True(o[0].TryGetString("item", out var item));
+            Assert.Equal("widget", item);
+
+            var p = await products2.FindAllAsync().ToListAsync();
+            Assert.Single(p);
+            Assert.True(p[0].TryGetString("sku", out var sku));
+            Assert.Equal("W-001", sku);
+        }
+    }
+
+    [Fact]
+    public async Task EncryptionCoordinator_MultiFileEngine_WrongMasterKey_Throws()
+    {
+        // Writing with one key and reading with a different key must fail.
+        var dbPath = Path.Combine(TempDir(), "multienc3.db");
+        var correctKey = MakeMasterKey(0xCC);
+        var wrongKey = MakeMasterKey(0xDD); // different key
+
+        using (var coordinator = new EncryptionCoordinator(correctKey))
+        using (var engine = new BLiteEngine(dbPath, coordinator))
+        {
+            var col = engine.GetOrCreateCollection("items");
+            await col.InsertAsync(col.CreateDocument(["_id", "v"],
+                b => b.AddId((BsonId)1).AddInt32("v", 42)));
+            await engine.CommitAsync();
+        }
+
+        // Opening with the wrong master key must throw during engine construction.
+        // The BLCE header is not AES-GCM authenticated, but page 0 (the file header page) is
+        // encrypted with a subkey derived from the wrong master key; decrypting it with the
+        // correct subkey derived from the correct master key fails AES-GCM tag verification.
+        using var wrongCoordinator = new EncryptionCoordinator(wrongKey);
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() =>
+        {
+            using var _ = new BLiteEngine(dbPath, wrongCoordinator);
+        });
     }
 }

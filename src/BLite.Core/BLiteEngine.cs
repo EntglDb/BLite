@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
 using BLite.Core.Collections;
+using BLite.Core.Encryption;
 using BLite.Core.KeyValue;
 using BLite.Core.Retention;
 using BLite.Core.Storage;
@@ -88,7 +89,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// <param name="databasePath">Path to the database file.</param>
     /// <param name="crypto">Passphrase and key-derivation options.</param>
     /// <param name="kvOptions">Optional Key-Value store configuration.</param>
-    public BLiteEngine(string databasePath, BLite.Core.Encryption.CryptoOptions crypto, BLiteKvOptions? kvOptions = null)
+    public BLiteEngine(string databasePath, CryptoOptions crypto, BLiteKvOptions? kvOptions = null)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
@@ -101,8 +102,56 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         // (which reads the crypto header and validates the key) handle existing files.
         var config = PageFileConfig.Default with
         {
-            CryptoProvider = new BLite.Core.Encryption.AesGcmCryptoProvider(crypto),
-            WalCryptoProvider = new BLite.Core.Encryption.AesGcmCryptoProvider(crypto, fileRole: 3)
+            CryptoProvider = new AesGcmCryptoProvider(crypto),
+            WalCryptoProvider = new AesGcmCryptoProvider(crypto, fileRole: 3)
+        };
+
+        _databasePath = databasePath;
+        _storage = new StorageEngine(databasePath, config);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    /// <summary>
+    /// Creates a new <see cref="BLiteEngine"/> in multi-file (server) mode with
+    /// coordinator-managed per-file AES-256-GCM encryption.
+    /// <para>
+    /// Each physical file (main, index, WAL, per-collection) receives a unique 256-bit
+    /// subkey derived via HKDF-SHA256 from the coordinator's master key and the
+    /// database salt stored in the main file header.  This eliminates nonce-reuse risk
+    /// when multiple files contain pages with the same ID.
+    /// </para>
+    /// </summary>
+    /// <param name="databasePath">Path to the main database file.</param>
+    /// <param name="coordinator">
+    /// Coordinator that owns the master key and derives per-file subkeys.
+    /// The caller retains ownership — the coordinator is <b>not</b> disposed by the engine.
+    /// </param>
+    /// <param name="baseConfig">
+    /// Optional base page configuration (page size, growth block, lock timeouts).
+    /// Defaults to <see cref="PageFileConfig.Default"/> (16 KB pages).
+    /// Multi-file paths (WAL directory, index file, collection directory) are derived from
+    /// <paramref name="databasePath"/> via <see cref="PageFileConfig.Server"/>.
+    /// </param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    public BLiteEngine(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null, BLiteKvOptions? kvOptions = null)
+    {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentNullException(nameof(databasePath));
+        if (coordinator == null)
+            throw new ArgumentNullException(nameof(coordinator));
+
+        var mainProvider = coordinator.CreateForMainFile();
+
+        // Server layout: separate WAL directory, dedicated index file, per-collection directory.
+        // Coordinator is stored in the config so StorageEngine can derive subkeys for each
+        // sub-file (index, WAL, per-collection) after the main file is opened.
+        var config = PageFileConfig.Server(databasePath, baseConfig) with
+        {
+            CryptoProvider = mainProvider,
+            EncryptionCoordinator = coordinator
+            // WalCryptoProvider is intentionally null — StorageEngine calls
+            // coordinator.CreateForWal() after opening the main file (which primes the salt).
         };
 
         _databasePath = databasePath;
