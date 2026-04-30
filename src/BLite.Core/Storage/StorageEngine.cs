@@ -101,6 +101,8 @@ public sealed partial class StorageEngine : IDisposable
         // Initialize storage infrastructure
         _pageFile = new PageFile(databasePath, config);
         _pageFile.Open();
+        // NOTE: Opening the main file primes the EncryptionCoordinator's database salt
+        // (if one is set), making CreateForIndex/CreateForCollection/CreateForWal available.
 
         // Phase 3: open separate index file if configured
         if (config.IndexFilePath != null)
@@ -108,7 +110,14 @@ public sealed partial class StorageEngine : IDisposable
             var idxDirectory = Path.GetDirectoryName(config.IndexFilePath);
             if (!string.IsNullOrWhiteSpace(idxDirectory))
                 Directory.CreateDirectory(idxDirectory);
-            _indexFile = new PageFile(config.IndexFilePath, AsStandaloneConfig(config));
+
+            // When a coordinator is present derive a dedicated index-file subkey so that
+            // index and data pages encrypted with the same pageId never share a key.
+            var idxConfig = config.EncryptionCoordinator != null
+                ? AsStandaloneConfig(config) with { CryptoProvider = config.EncryptionCoordinator.CreateForIndex(0) }
+                : AsStandaloneConfig(config);
+
+            _indexFile = new PageFile(config.IndexFilePath, idxConfig);
             _indexFile.Open();
         }
 
@@ -123,7 +132,12 @@ public sealed partial class StorageEngine : IDisposable
             LoadCollectionSlots();
         }
 
-        _wal = new WriteAheadLog(walPath, config.WalCryptoProvider, config.LockTimeout.WriteTimeoutMs);
+        // When a coordinator is present derive a dedicated WAL subkey.
+        var walCryptoProvider = config.EncryptionCoordinator != null
+            ? config.EncryptionCoordinator.CreateForWal()
+            : config.WalCryptoProvider;
+
+        _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
@@ -315,5 +329,5 @@ public sealed partial class StorageEngine : IDisposable
     /// that should not itself spawn further sub-files.
     /// </summary>
     private static PageFileConfig AsStandaloneConfig(PageFileConfig config)
-        => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
+        => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null, EncryptionCoordinator = null };
 }

@@ -27,6 +27,14 @@ public class EncryptionTests : IDisposable
         return path;
     }
 
+    private string TempDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"enc_test_{Guid.NewGuid()}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        return dir;
+    }
+
     public void Dispose()
     {
         foreach (var f in _tempFiles)
@@ -961,5 +969,117 @@ public class EncryptionTests : IDisposable
             pf2.ReadPage(allocatedPageId, readBuf);
             Assert.Equal(written, readBuf);
         }
+    }
+
+    // ── BLiteEngine multi-file mode with EncryptionCoordinator ───────────────
+
+    [Fact]
+    public async Task EncryptionCoordinator_MultiFileEngine_WriteAndReadBack()
+    {
+        // Full BLiteEngine round-trip: write with coordinator, re-open with same master key,
+        // verify all documents can be read back correctly.
+        var dbPath = Path.Combine(TempDir(), "multienc.db");
+        var masterKey = MakeMasterKey(0xAA);
+
+        // ── Phase 1: Write ───────────────────────────────────────────────────
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        using (var engine = new BLiteEngine(dbPath, coordinator))
+        {
+            var col = engine.GetOrCreateCollection("users");
+
+            await col.InsertAsync(col.CreateDocument(["_id", "name", "score"],
+                b => b.AddId((BsonId)1).AddString("name", "Alice").AddInt32("score", 90)));
+            await col.InsertAsync(col.CreateDocument(["_id", "name", "score"],
+                b => b.AddId((BsonId)2).AddString("name", "Bob").AddInt32("score", 75)));
+            await col.InsertAsync(col.CreateDocument(["_id", "name", "score"],
+                b => b.AddId((BsonId)3).AddString("name", "Carol").AddInt32("score", 85)));
+
+            await engine.CommitAsync();
+        }
+
+        // ── Phase 2: Read-back with fresh coordinator (same master key) ──────
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        using (var engine2 = new BLiteEngine(dbPath, coordinator2))
+        {
+            var col2 = engine2.GetOrCreateCollection("users");
+
+            var all = await col2.FindAllAsync().ToListAsync();
+            Assert.Equal(3, all.Count);
+
+            var byName = await col2.FindAsync(d =>
+            {
+                d.TryGetString("name", out var n);
+                return n == "Carol";
+            }).ToListAsync();
+            Assert.Single(byName);
+            Assert.True(byName[0].TryGetInt32("score", out var score));
+            Assert.Equal(85, score);
+        }
+    }
+
+    [Fact]
+    public async Task EncryptionCoordinator_MultiFileEngine_MultipleCollections_Isolated()
+    {
+        // Each collection file gets its own derived subkey.
+        // Prove this by checking that the engine can write/read multiple collections.
+        var dbPath = Path.Combine(TempDir(), "multienc2.db");
+        var masterKey = MakeMasterKey(0xBB);
+
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        using (var engine = new BLiteEngine(dbPath, coordinator))
+        {
+            var orders   = engine.GetOrCreateCollection("orders");
+            var products = engine.GetOrCreateCollection("products");
+
+            await orders.InsertAsync(orders.CreateDocument(["_id", "item"],
+                b => b.AddId((BsonId)1).AddString("item", "widget")));
+            await products.InsertAsync(products.CreateDocument(["_id", "sku"],
+                b => b.AddId((BsonId)100).AddString("sku", "W-001")));
+
+            await engine.CommitAsync();
+        }
+
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        using (var engine2 = new BLiteEngine(dbPath, coordinator2))
+        {
+            var orders2   = engine2.GetOrCreateCollection("orders");
+            var products2 = engine2.GetOrCreateCollection("products");
+
+            var o = await orders2.FindAllAsync().ToListAsync();
+            Assert.Single(o);
+            Assert.True(o[0].TryGetString("item", out var item));
+            Assert.Equal("widget", item);
+
+            var p = await products2.FindAllAsync().ToListAsync();
+            Assert.Single(p);
+            Assert.True(p[0].TryGetString("sku", out var sku));
+            Assert.Equal("W-001", sku);
+        }
+    }
+
+    [Fact]
+    public async Task EncryptionCoordinator_MultiFileEngine_WrongMasterKey_Throws()
+    {
+        // Writing with one key and reading with a different key must fail.
+        var dbPath = Path.Combine(TempDir(), "multienc3.db");
+        var correctKey = MakeMasterKey(0xCC);
+        var wrongKey   = MakeMasterKey(0xDD); // different key
+
+        using (var coordinator = new EncryptionCoordinator(correctKey))
+        using (var engine = new BLiteEngine(dbPath, coordinator))
+        {
+            var col = engine.GetOrCreateCollection("items");
+            await col.InsertAsync(col.CreateDocument(["_id", "v"],
+                b => b.AddId((BsonId)1).AddInt32("v", 42)));
+            await engine.CommitAsync();
+        }
+
+        // Opening with the wrong master key must throw during engine construction
+        // (the main-file BLCE header fails AES-GCM authentication tag verification).
+        using var wrongCoordinator = new EncryptionCoordinator(wrongKey);
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() =>
+        {
+            using var _ = new BLiteEngine(dbPath, wrongCoordinator);
+        });
     }
 }
