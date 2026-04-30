@@ -100,6 +100,20 @@ public sealed partial class StorageEngine : IDisposable
 
         // Initialize storage infrastructure
         _pageFile = new PageFile(databasePath, config);
+
+        // Validate coordinator configuration before opening any files: if an
+        // EncryptionCoordinator is supplied, the main-file CryptoProvider must also be set
+        // (and must have been obtained via coordinator.CreateForMainFile()) so that the
+        // database salt is primed when the main file is opened.  Without this guard the
+        // subsequent coordinator.CreateForWal()/CreateForIndex() calls would throw a
+        // confusing InvalidOperationException about the salt not being initialised.
+        if (config.EncryptionCoordinator != null && config.CryptoProvider == null)
+            throw new InvalidOperationException(
+                "PageFileConfig.EncryptionCoordinator is set but PageFileConfig.CryptoProvider is null. " +
+                "When using an EncryptionCoordinator, assign coordinator.CreateForMainFile() to " +
+                "PageFileConfig.CryptoProvider so that the database salt is primed when the main " +
+                "file is opened.");
+
         _pageFile.Open();
         // NOTE: Opening the main file primes the EncryptionCoordinator's database salt
         // (if one is set), making CreateForIndex/CreateForCollection/CreateForWal available.

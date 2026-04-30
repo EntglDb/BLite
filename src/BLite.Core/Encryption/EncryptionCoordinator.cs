@@ -208,7 +208,8 @@ public sealed class EncryptionCoordinator : IDisposable
     /// <summary>
     /// Stores the 32-byte database salt extracted from the main file header.
     /// Called by <see cref="CoordinatedFileProvider"/> during header exchange.
-    /// Zeroes any previously stored salt before replacing it.
+    /// On first call, caches the salt so subsequent sub-file providers can derive subkeys.
+    /// Subsequent calls with the same salt are idempotent (re-open of the same file).
     /// Throws if a different (conflicting) salt is supplied after the first initialisation.
     /// </summary>
     private void SetDatabaseSalt(ReadOnlySpan<byte> salt)

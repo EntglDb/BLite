@@ -767,14 +767,14 @@ public class EncryptionTests : IDisposable
             walProv.Encrypt(0, plaintext, walCt);
         }
 
-        // Cross-decryption must fail (auth tag mismatch) — proves different subkeys were used.
+        // Cross-decryption must fail (AES-GCM auth tag mismatch) — proves different subkeys were used.
         var buf = new byte[pageSize];
-        Assert.ThrowsAny<Exception>(() => colProv.Decrypt(0, mainCt, buf));
-        Assert.ThrowsAny<Exception>(() => idxProv.Decrypt(0, mainCt, buf));
-        Assert.ThrowsAny<Exception>(() => walProv.Decrypt(0, mainCt, buf));
-        Assert.ThrowsAny<Exception>(() => mainProv.Decrypt(0, colCt,  buf));
-        Assert.ThrowsAny<Exception>(() => mainProv.Decrypt(0, idxCt,  buf));
-        Assert.ThrowsAny<Exception>(() => mainProv.Decrypt(0, walCt,  buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => colProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => idxProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => walProv.Decrypt(0, mainCt, buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => mainProv.Decrypt(0, colCt,  buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => mainProv.Decrypt(0, idxCt,  buf));
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => mainProv.Decrypt(0, walCt,  buf));
     }
 
     [Fact]
@@ -1074,8 +1074,10 @@ public class EncryptionTests : IDisposable
             await engine.CommitAsync();
         }
 
-        // Opening with the wrong master key must throw during engine construction
-        // (the main-file BLCE header fails AES-GCM authentication tag verification).
+        // Opening with the wrong master key must throw during engine construction.
+        // The BLCE header is not AES-GCM authenticated, but page 0 (the file header page) is
+        // encrypted with a subkey derived from the wrong master key; decrypting it with the
+        // correct subkey derived from the correct master key fails AES-GCM tag verification.
         using var wrongCoordinator = new EncryptionCoordinator(wrongKey);
         Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() =>
         {
