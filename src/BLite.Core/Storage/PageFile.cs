@@ -59,6 +59,14 @@ public readonly struct PageFileConfig
     public ICryptoProvider? CryptoProvider { get; init; }
 
     /// <summary>
+    /// Optional record-level encryption provider for the Write-Ahead Log (WAL).
+    /// When <c>null</c> (the default), WAL records are stored in plaintext.
+    /// Set to <see cref="AesGcmCryptoProvider"/> with <c>fileRole: 3</c> to enable
+    /// AES-256-GCM encryption of WAL records at rest.
+    /// </summary>
+    public ICryptoProvider? WalCryptoProvider { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()

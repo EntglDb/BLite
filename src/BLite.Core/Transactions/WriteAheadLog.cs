@@ -1,3 +1,7 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using BLite.Core.Encryption;
+
 namespace BLite.Core.Transactions;
 
 /// <summary>
@@ -16,6 +20,23 @@ public enum WalRecordType : byte
 /// Write-Ahead Log (WAL) for durability and recovery.
 /// All changes are logged before being applied.
 /// Implements <see cref="IWriteAheadLog"/> — the pluggable WAL abstraction.
+/// <para>
+/// When an <see cref="ICryptoProvider"/> is supplied (e.g. <see cref="AesGcmCryptoProvider"/>
+/// with <c>fileRole: 3</c>), each WAL record is transparently encrypted before it is written
+/// and decrypted during <see cref="ReadAll"/> (recovery). The WAL file begins with a 64-byte
+/// crypto header (identical in layout to the main database file header) followed by
+/// variable-length encrypted record envelopes. Unencrypted WAL files (no crypto provider)
+/// use exactly the same on-disk format as before — byte-for-byte compatible.
+/// </para>
+/// <para>
+/// <b>Encrypted record envelope on-disk layout:</b>
+/// <code>
+/// [plaintext_size : int32 LE (4 bytes)]
+/// [nonce          : 12 bytes          ]
+/// [ciphertext     : plaintext_size bytes]
+/// [GCM auth tag   : 16 bytes          ]
+/// </code>
+/// </para>
 /// </summary>
 public sealed class WriteAheadLog : IWriteAheadLog
 {
@@ -25,20 +46,214 @@ public sealed class WriteAheadLog : IWriteAheadLog
     private bool _disposed;
     private readonly int _writeTimeoutMs;
 
-    public WriteAheadLog(string walPath, int writeTimeoutMs = 5_000)
+    // Optional encryption provider. Non-null only when real encryption is configured
+    // (i.e. crypto.FileHeaderSize > 0). NullCryptoProvider is treated as no encryption.
+    private readonly ICryptoProvider? _crypto;
+
+    // True when the crypto file header has been written to (or read from) the current
+    // WAL file. Reset to false by TruncateAsync so the header is re-written on the
+    // next record write (after truncation the file is empty and needs a fresh header).
+    private bool _cryptoInitialized;
+
+    /// <summary>
+    /// Opens or creates a WAL file at <paramref name="walPath"/>.
+    /// </summary>
+    /// <param name="walPath">Path to the WAL file.</param>
+    /// <param name="crypto">
+    /// Optional encryption provider. When non-null and <see cref="ICryptoProvider.FileHeaderSize"/>
+    /// is greater than zero, each WAL record is AES-256-GCM encrypted before being written.
+    /// Pass <c>null</c> or <see cref="NullCryptoProvider"/> to keep WAL records in plaintext.
+    /// <para>
+    /// <b>Ownership:</b> <see cref="WriteAheadLog"/> takes ownership of <paramref name="crypto"/>
+    /// and will dispose it when this instance is disposed. Do not share the same
+    /// <see cref="ICryptoProvider"/> instance with another component (e.g. <see cref="BLite.Core.Storage.PageFile"/>)
+    /// to avoid double-dispose.
+    /// </para>
+    /// </param>
+    /// <param name="writeTimeoutMs">Lock-acquisition timeout in milliseconds.</param>
+    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000)
     {
         _walPath = walPath ?? throw new ArgumentNullException(nameof(walPath));
         _writeTimeoutMs = writeTimeoutMs;
-        
+
+        // Treat providers that add no overhead (NullCryptoProvider) as no encryption so
+        // the on-disk format stays byte-for-byte identical to the pre-encryption format.
+        _crypto = (crypto != null && crypto.FileHeaderSize > 0) ? crypto : null;
+
         _walStream = new FileStream(
             _walPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
-            FileShare.None,  // Exclusive access like PageFile
-            bufferSize: 64 * 1024); // 64KB buffer for better sequential write performance
+            FileShare.None,
+            bufferSize: 64 * 1024);
         // REMOVED FileOptions.WriteThrough for SQLite-style lazy checkpointing
         // Durability is ensured by explicit Flush() calls
+
+        // If the WAL file already exists with content and encryption is enabled,
+        // read the file header to derive the encryption key before any I/O.
+        // Guard against legacy plaintext or corrupt WAL files by checking the BLCE
+        // magic before passing the header to the crypto provider (which would throw
+        // on a magic mismatch).  If the magic is absent we leave _cryptoInitialized
+        // false so the header will be re-written on the next record write.
+        if (_crypto != null && _walStream.Length >= _crypto.FileHeaderSize)
+        {
+            var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
+            try
+            {
+                _walStream.Position = 0;
+                var read = _walStream.Read(header, 0, _crypto.FileHeaderSize);
+                if (read == _crypto.FileHeaderSize)
+                {
+                    // Only load an encrypted header when the BLCE magic is present.
+                    // This allows legacy plaintext or corrupt WAL files to be opened
+                    // without throwing; the stale/plaintext content is discarded on
+                    // the next TruncateAsync / EnsureCryptoHeader call.
+                    var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0, 4));
+                    if (magic == 0x424C4345u) // "BLCE"
+                    {
+                        _crypto.LoadFromFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
+                        _cryptoInitialized = true;
+                    }
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(header);
+            }
+        }
+
+        // Position the stream at the end so subsequent writes append correctly.
+        if (_walStream.Length > 0)
+            _walStream.Position = _walStream.Length;
     }
+
+    /// <summary>
+    /// Opens or creates a WAL file at <paramref name="walPath"/> without encryption.
+    /// </summary>
+    public WriteAheadLog(string walPath, int writeTimeoutMs = 5_000)
+        : this(walPath, null, writeTimeoutMs)
+    {
+    }
+
+    // ── Crypto helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Writes the 64-byte crypto file header to the WAL if it has not been written yet.
+    /// Always writes the header at offset 0 (truncating any existing stale content first)
+    /// so the WAL file is in a consistent state for the new encryption epoch.
+    /// Must be called while holding <see cref="_lock"/>.
+    /// </summary>
+    private void EnsureCryptoHeader()
+    {
+        if (_crypto == null || _cryptoInitialized) return;
+
+        // Always start the new encrypted WAL at the beginning of the file.
+        // If the file has stale content (e.g., leftover plaintext from before encryption
+        // was enabled, or from a previous epoch after truncation), discard it so the
+        // header is never appended in the middle of the file.
+        if (_walStream!.Length != 0)
+            _walStream.SetLength(0);
+        _walStream.Position = 0;
+
+        var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
+        try
+        {
+            _crypto.GetFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
+            _walStream.Write(header.AsSpan(0, _crypto.FileHeaderSize));
+            _cryptoInitialized = true;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(header);
+        }
+    }
+
+    /// <summary>
+    /// Async version of <see cref="EnsureCryptoHeader"/>.
+    /// Always writes the header at offset 0 (truncating any existing stale content first).
+    /// </summary>
+    private async ValueTask EnsureCryptoHeaderAsync(CancellationToken ct)
+    {
+        if (_crypto == null || _cryptoInitialized) return;
+
+        // Always start the new encrypted WAL at the beginning of the file.
+        if (_walStream!.Length != 0)
+            _walStream.SetLength(0);
+        _walStream.Position = 0;
+
+        var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
+        try
+        {
+            _crypto.GetFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
+            await _walStream.WriteAsync(new ReadOnlyMemory<byte>(header, 0, _crypto.FileHeaderSize), ct);
+            _cryptoInitialized = true;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(header);
+        }
+    }
+
+    /// <summary>
+    /// Writes a serialised WAL record to the stream — encrypting it first if a crypto
+    /// provider is configured, or writing it verbatim otherwise.
+    /// Must be called while holding <see cref="_lock"/>.
+    /// </summary>
+    private async ValueTask WriteRawAsync(ReadOnlyMemory<byte> plaintext, CancellationToken ct)
+    {
+        if (_crypto == null)
+        {
+            await _walStream!.WriteAsync(plaintext, ct);
+            return;
+        }
+
+        await EnsureCryptoHeaderAsync(ct);
+
+        // Encrypted envelope: [plaintext_size(4 LE)][nonce(12)][ciphertext(N)][tag(16)]
+        // where N = plaintext.Length and PageOverhead = 28 (12 nonce + 16 tag).
+        var ciphertextSize = plaintext.Length + _crypto.PageOverhead;
+        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(4 + ciphertextSize);
+        try
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), plaintext.Length);
+            _crypto.Encrypt(0, plaintext.Span, buf.AsSpan(4, ciphertextSize));
+            await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(buf, 0, 4 + ciphertextSize), ct);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+    /// <summary>
+    /// Synchronous version of <see cref="WriteRawAsync"/> used by the sync write path.
+    /// Must be called while holding <see cref="_lock"/>.
+    /// </summary>
+    private void WriteRawSync(ReadOnlySpan<byte> plaintext)
+    {
+        if (_crypto == null)
+        {
+            _walStream!.Write(plaintext);
+            return;
+        }
+
+        EnsureCryptoHeader();
+
+        var ciphertextSize = plaintext.Length + _crypto.PageOverhead;
+        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(4 + ciphertextSize);
+        try
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), plaintext.Length);
+            _crypto.Encrypt(0, plaintext, buf.AsSpan(4, ciphertextSize));
+            _walStream!.Write(buf.AsSpan(0, 4 + ciphertextSize));
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+    // ── Record write methods ─────────────────────────────────────────────────
 
     public async ValueTask WriteBeginRecordAsync(ulong transactionId, CancellationToken ct = default)
     {
@@ -48,13 +263,13 @@ public sealed class WriteAheadLog : IWriteAheadLog
         {
             // Use ArrayPool for async I/O compatibility (cannot use stackalloc with async)
             var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(17);
-            try 
+            try
             {
                 buffer[0] = (byte)WalRecordType.Begin;
                 BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
                 BitConverter.TryWriteBytes(buffer.AsSpan(9, 8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                
-                await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, 17), ct);
+
+                await WriteRawAsync(new ReadOnlyMemory<byte>(buffer, 0, 17), ct);
             }
             finally
             {
@@ -80,8 +295,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 buffer[0] = (byte)WalRecordType.Commit;
                 BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
                 BitConverter.TryWriteBytes(buffer.AsSpan(9, 8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                
-                await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, 17), ct);
+
+                await WriteRawAsync(new ReadOnlyMemory<byte>(buffer, 0, 17), ct);
             }
             finally
             {
@@ -107,8 +322,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 buffer[0] = (byte)WalRecordType.Abort;
                 BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
                 BitConverter.TryWriteBytes(buffer.AsSpan(9, 8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                
-                await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, 17), ct);
+
+                await WriteRawAsync(new ReadOnlyMemory<byte>(buffer, 0, 17), ct);
             }
             finally
             {
@@ -130,7 +345,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
         {
             var headerSize = 17;
             var totalSize = headerSize + afterImage.Length;
-            
+
             var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(totalSize);
             try
             {
@@ -138,10 +353,10 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
                 BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
                 BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
-                
+
                 afterImage.Span.CopyTo(buffer.AsSpan(headerSize));
-                
-                await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, totalSize), ct);
+
+                await WriteRawAsync(new ReadOnlyMemory<byte>(buffer, 0, totalSize), ct);
             }
             finally
             {
@@ -159,7 +374,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
         // Header: type(1) + txnId(8) + pageId(4) + afterSize(4) = 17 bytes
         var headerSize = 17;
         var totalSize = headerSize + afterImage.Length;
-        
+
         var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(totalSize);
         try
         {
@@ -167,10 +382,10 @@ public sealed class WriteAheadLog : IWriteAheadLog
             BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
             BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
             BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
-            
+
             afterImage.CopyTo(buffer.AsSpan(headerSize));
-            
-            _walStream!.Write(buffer.AsSpan(0, totalSize));
+
+            WriteRawSync(buffer.AsSpan(0, totalSize));
         }
         finally
         {
@@ -278,6 +493,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 _walStream.SetLength(0);
                 _walStream.Position = 0;
                 await _walStream.FlushAsync(ct);
+                // Reset so the crypto file header is re-written on the next record write.
+                _cryptoInitialized = false;
             }
         }
         finally
@@ -287,7 +504,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
     }
 
     /// <summary>
-    /// Reads all WAL records (for recovery)
+    /// Reads all WAL records (for recovery).
+    /// Decrypts records transparently when a crypto provider is active.
     /// </summary>
     public List<WalRecord> ReadAll()
     {
@@ -296,102 +514,158 @@ public sealed class WriteAheadLog : IWriteAheadLog
         try
         {
             var records = new List<WalRecord>();
-            
+
             if (_walStream == null || _walStream.Length == 0)
                 return records;
 
-            _walStream.Position = 0;
-            
-            // Allocate buffers outside loop to avoid CA2014 warning
-            Span<byte> headerBuf = stackalloc byte[16];
-            Span<byte> dataBuf = stackalloc byte[12];
-            
-            while (_walStream.Position < _walStream.Length)
+            if (_crypto != null && _cryptoInitialized)
             {
-                var typeByte = _walStream.ReadByte();
-                if (typeByte == -1) break;
-                
-                var type = (WalRecordType)typeByte;
-                
-                // Check for invalid record type (file padding or corruption)
-                if (typeByte == 0 || !Enum.IsDefined(typeof(WalRecordType), type))
+                // ── Encrypted path ────────────────────────────────────────────────────
+                // Skip the 64-byte file header and read encrypted record envelopes.
+                var headerSize = _crypto.FileHeaderSize;
+                if (_walStream.Length <= headerSize)
+                    return records;
+
+                _walStream.Position = headerSize;
+
+                var sizeBuf = new byte[4];
+
+                while (_walStream.Position < _walStream.Length)
                 {
-                    // Reached end of valid records (file may have padding)
-                    break;
+                    // Each envelope: [plaintext_size(4 LE)][ciphertext(plaintext_size + PageOverhead)]
+                    var read = _walStream.Read(sizeBuf, 0, 4);
+                    if (read < 4) break;
+
+                    var plaintextSize = BinaryPrimitives.ReadInt32LittleEndian(sizeBuf);
+                    // Sanity check: valid range for a WAL record payload.
+                    if (plaintextSize < 1 || plaintextSize > 100 * 1024 * 1024) break;
+
+                    var ciphertextSize = plaintextSize + _crypto.PageOverhead;
+                    var cipherBuf = System.Buffers.ArrayPool<byte>.Shared.Rent(ciphertextSize);
+                    var plainBuf  = System.Buffers.ArrayPool<byte>.Shared.Rent(plaintextSize);
+                    try
+                    {
+                        if (_walStream.Read(cipherBuf, 0, ciphertextSize) < ciphertextSize)
+                            break;
+
+                        try
+                        {
+                            _crypto.Decrypt(0, cipherBuf.AsSpan(0, ciphertextSize), plainBuf.AsSpan(0, plaintextSize));
+                        }
+                        catch (CryptographicException)
+                        {
+                            // Authentication tag mismatch — corrupted or truncated record; stop.
+                            break;
+                        }
+
+                        var record = ParsePlaintextRecord(plainBuf.AsSpan(0, plaintextSize));
+                        if (record == null) break;
+                        records.Add(record.Value);
+                    }
+                    finally
+                    {
+                        System.Buffers.ArrayPool<byte>.Shared.Return(cipherBuf);
+                        // clearArray: true zeros decrypted page bytes so they are not
+                        // observable by subsequent renters of this pool slot.
+                        System.Buffers.ArrayPool<byte>.Shared.Return(plainBuf, clearArray: true);
+                    }
                 }
-                
-                WalRecord record;
-                
-                switch (type)
+            }
+            else
+            {
+                // ── Plaintext path (existing format, unchanged) ────────────────────────
+                _walStream.Position = 0;
+
+                // Allocate buffers outside loop to avoid CA2014 warning
+                Span<byte> headerBuf = stackalloc byte[16];
+
+                while (_walStream.Position < _walStream.Length)
                 {
-                    case WalRecordType.Begin:
-                    case WalRecordType.Commit:
-                    case WalRecordType.Abort:
-                        // Read common fields (txnId + timestamp = 16 bytes)
-                        var bytesRead = _walStream.Read(headerBuf);
-                        if (bytesRead < 16)
-                        {
-                            // Incomplete record, stop reading
-                            return records;
-                        }
-                        
-                        var txnId = BitConverter.ToUInt64(headerBuf[0..8]);
-                        var timestamp = BitConverter.ToInt64(headerBuf[8..16]);
-                        
-                        record = new WalRecord 
-                        { 
-                            Type = type, 
-                            TransactionId = txnId, 
-                            Timestamp = timestamp 
-                        };
+                    var typeByte = _walStream.ReadByte();
+                    if (typeByte == -1) break;
+
+                    var type = (WalRecordType)typeByte;
+
+                    // Check for invalid record type (file padding or corruption)
+                    if (typeByte == 0 || !Enum.IsDefined(typeof(WalRecordType), type))
+                    {
+                        // Reached end of valid records (file may have padding)
                         break;
-                        
-                    case WalRecordType.Write:
-                        // Write records have different format: txnId(8) + pageId(4) + afterSize(4)
-                        // Read txnId + pageId + afterSize = 16 bytes
-                        bytesRead = _walStream.Read(headerBuf);
-                        if (bytesRead < 16) 
-                        {
-                            // Incomplete write record header, stop reading
+                    }
+
+                    WalRecord record;
+
+                    switch (type)
+                    {
+                        case WalRecordType.Begin:
+                        case WalRecordType.Commit:
+                        case WalRecordType.Abort:
+                            // Read common fields (txnId + timestamp = 16 bytes)
+                            var bytesRead = _walStream.Read(headerBuf);
+                            if (bytesRead < 16)
+                            {
+                                // Incomplete record, stop reading
+                                return records;
+                            }
+
+                            var txnId = BitConverter.ToUInt64(headerBuf[0..8]);
+                            var timestamp = BitConverter.ToInt64(headerBuf[8..16]);
+
+                            record = new WalRecord
+                            {
+                                Type = type,
+                                TransactionId = txnId,
+                                Timestamp = timestamp
+                            };
+                            break;
+
+                        case WalRecordType.Write:
+                            // Write records have different format: txnId(8) + pageId(4) + afterSize(4)
+                            // Read txnId + pageId + afterSize = 16 bytes
+                            bytesRead = _walStream.Read(headerBuf);
+                            if (bytesRead < 16)
+                            {
+                                // Incomplete write record header, stop reading
+                                return records;
+                            }
+
+                            txnId = BitConverter.ToUInt64(headerBuf[0..8]);
+                            var pageId = BitConverter.ToUInt32(headerBuf[8..12]);
+                            var afterSize = BitConverter.ToInt32(headerBuf[12..16]);
+
+                            // Validate afterSize to prevent overflow or corruption
+                            if (afterSize < 0 || afterSize > 100 * 1024 * 1024) // Max 100MB per record
+                            {
+                                // Corrupted size, stop reading
+                                return records;
+                            }
+
+                            var afterImage = new byte[afterSize];
+
+                            // Read afterImage
+                            if (_walStream.Read(afterImage) < afterSize)
+                            {
+                                // Incomplete after image, stop reading
+                                return records;
+                            }
+
+                            record = new WalRecord
+                            {
+                                Type = type,
+                                TransactionId = txnId,
+                                Timestamp = 0, // Write records don't have timestamp
+                                PageId = pageId,
+                                AfterImage = afterImage
+                            };
+                            break;
+
+                        default:
+                            // Unknown record type, stop reading
                             return records;
-                        }
-                        
-                        txnId = BitConverter.ToUInt64(headerBuf[0..8]);
-                        var pageId = BitConverter.ToUInt32(headerBuf[8..12]);
-                        var afterSize = BitConverter.ToInt32(headerBuf[12..16]);
-                        
-                        // Validate afterSize to prevent overflow or corruption
-                        if (afterSize < 0 || afterSize > 100 * 1024 * 1024) // Max 100MB per record
-                        {
-                            // Corrupted size, stop reading
-                            return records;
-                        }
-                        
-                        var afterImage = new byte[afterSize];
-                        
-                        // Read afterImage
-                        if (_walStream.Read(afterImage) < afterSize)
-                        {
-                            // Incomplete after image, stop reading
-                            return records;
-                        }
-                        
-                        record = new WalRecord
-                        {
-                            Type = type,
-                            TransactionId = txnId,
-                            Timestamp = 0, // Write records don't have timestamp
-                            PageId = pageId,
-                            AfterImage = afterImage
-                        };
-                        break;
-                        
-                    default:
-                        // Unknown record type, stop reading
-                        return records;
+                    }
+
+                    records.Add(record);
                 }
-                
-                records.Add(record);
             }
 
             return records;
@@ -399,6 +673,58 @@ public sealed class WriteAheadLog : IWriteAheadLog
         finally
         {
             _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Parses a decrypted (or plaintext) record buffer into a <see cref="WalRecord"/>.
+    /// Returns <c>null</c> if the buffer is invalid or the record type is unknown.
+    /// </summary>
+    private static WalRecord? ParsePlaintextRecord(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 1) return null;
+
+        var typeByte = data[0];
+        var type = (WalRecordType)typeByte;
+
+        if (typeByte == 0 || !Enum.IsDefined(typeof(WalRecordType), type))
+            return null;
+
+        switch (type)
+        {
+            case WalRecordType.Begin:
+            case WalRecordType.Commit:
+            case WalRecordType.Abort:
+                if (data.Length < 17) return null;
+                return new WalRecord
+                {
+                    Type      = type,
+                    TransactionId = BitConverter.ToUInt64(data.Slice(1, 8)),
+                    Timestamp = BitConverter.ToInt64(data.Slice(9, 8))
+                };
+
+            case WalRecordType.Write:
+                if (data.Length < 17) return null;
+                var txnId     = BitConverter.ToUInt64(data.Slice(1, 8));
+                var pageId    = BitConverter.ToUInt32(data.Slice(9, 4));
+                var afterSize = BitConverter.ToInt32(data.Slice(13, 4));
+                if (afterSize < 0 || afterSize > 100 * 1024 * 1024) return null;
+                if (data.Length < 17 + afterSize) return null;
+
+                var afterImage = new byte[afterSize];
+                data.Slice(17, afterSize).CopyTo(afterImage);
+
+                return new WalRecord
+                {
+                    Type          = type,
+                    TransactionId = txnId,
+                    Timestamp     = 0, // Write records don't carry a timestamp
+                    PageId        = pageId,
+                    AfterImage    = afterImage
+                };
+
+            default:
+                return null;
         }
     }
 
@@ -413,6 +739,10 @@ public sealed class WriteAheadLog : IWriteAheadLog
             try
             {
                 _walStream?.Dispose();
+                // Best-effort: zero key material; never let a crypto disposal failure
+                // prevent the stream from being closed (matches PageFile pattern).
+                if (_crypto is IDisposable disposableCrypto)
+                    try { disposableCrypto.Dispose(); } catch { /* best-effort */ }
                 _disposed = true;
             }
             finally
@@ -425,6 +755,9 @@ public sealed class WriteAheadLog : IWriteAheadLog
         {
             // Best-effort: dispose stream even without lock to avoid resource leak
             _walStream?.Dispose();
+            // Best-effort: zero key material even when the lock could not be acquired.
+            if (_crypto is IDisposable disposableCrypto2)
+                try { disposableCrypto2.Dispose(); } catch { /* best-effort */ }
             _disposed = true;
             _lock.Dispose();
         }
