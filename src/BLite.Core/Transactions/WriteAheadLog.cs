@@ -702,6 +702,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
             try
             {
                 _walStream?.Dispose();
+                // Best-effort: zero key material; never let a crypto disposal failure
+                // prevent the stream from being closed (matches PageFile pattern).
                 if (_crypto is IDisposable disposableCrypto)
                     try { disposableCrypto.Dispose(); } catch { /* best-effort */ }
                 _disposed = true;
@@ -716,6 +718,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
         {
             // Best-effort: dispose stream even without lock to avoid resource leak
             _walStream?.Dispose();
+            // Best-effort: zero key material even when the lock could not be acquired.
             if (_crypto is IDisposable disposableCrypto2)
                 try { disposableCrypto2.Dispose(); } catch { /* best-effort */ }
             _disposed = true;

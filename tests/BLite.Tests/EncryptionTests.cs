@@ -491,9 +491,11 @@ public class EncryptionTests : IDisposable
         var rawBytes = File.ReadAllBytes(walPath);
         Assert.True(rawBytes.Length > AesGcmCryptoProvider.HeaderSize, "WAL file should be larger than the file header.");
 
-        // The known plaintext values must NOT appear verbatim in the WAL file.
-        var rawText = System.Text.Encoding.UTF8.GetString(rawBytes);
-        Assert.DoesNotContain("\xDE\xAD\xBE\xEF", rawText);
+        // The known plaintext bytes must NOT appear verbatim in the WAL file.
+        // Search the raw byte array directly to avoid any UTF-8 encoding artefacts.
+        var needle = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+        Assert.True(rawBytes.AsSpan().IndexOf(needle) == -1,
+            "Plaintext after-image bytes must not appear unencrypted in the WAL file.");
     }
 
     [Fact]
@@ -573,16 +575,22 @@ public class EncryptionTests : IDisposable
             var col = engine.GetOrCreateCollection("secrets");
             var doc = col.CreateDocument(["_id", "secret"], b => b
                 .AddString("secret", "WALTopSecretValue"));
+            // InsertAsync writes a Begin + Write record pair to the WAL before the
+            // caller explicitly commits.  The WAL file therefore holds the page
+            // after-image containing the secret even before CommitAsync is called.
             await col.InsertAsync(doc);
-            // Do NOT commit — this leaves the WAL intact with uncommitted data
-            // (the engine will abort on dispose, but the WAL file may still exist).
+            // Deliberately do NOT call CommitAsync — the engine aborts on dispose,
+            // but the WAL file content (written before the abort) exercises the
+            // encryption path we want to verify.
         }
 
         var walPath = Path.ChangeExtension(path, ".wal");
-        if (!File.Exists(walPath)) return; // WAL already checkpointed — test is vacuously satisfied.
+        if (!File.Exists(walPath)) return; // WAL was checkpointed/truncated — satisfied vacuously.
 
+        // Search the raw bytes so we avoid any UTF-8 encoding artefacts.
         var rawBytes = File.ReadAllBytes(walPath);
-        var rawText  = System.Text.Encoding.UTF8.GetString(rawBytes);
-        Assert.DoesNotContain("WALTopSecretValue", rawText);
+        var secretBytes = System.Text.Encoding.UTF8.GetBytes("WALTopSecretValue");
+        Assert.True(rawBytes.AsSpan().IndexOf(secretBytes) == -1,
+            "Plaintext secret must not appear unencrypted in the WAL file.");
     }
 }
