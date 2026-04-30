@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using BLite.Core.Encryption;
 
@@ -62,6 +63,12 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// Optional encryption provider. When non-null and <see cref="ICryptoProvider.FileHeaderSize"/>
     /// is greater than zero, each WAL record is AES-256-GCM encrypted before being written.
     /// Pass <c>null</c> or <see cref="NullCryptoProvider"/> to keep WAL records in plaintext.
+    /// <para>
+    /// <b>Ownership:</b> <see cref="WriteAheadLog"/> takes ownership of <paramref name="crypto"/>
+    /// and will dispose it when this instance is disposed. Do not share the same
+    /// <see cref="ICryptoProvider"/> instance with another component (e.g. <see cref="BLite.Core.Storage.PageFile"/>)
+    /// to avoid double-dispose.
+    /// </para>
     /// </param>
     /// <param name="writeTimeoutMs">Lock-acquisition timeout in milliseconds.</param>
     public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000)
@@ -84,6 +91,10 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
         // If the WAL file already exists with content and encryption is enabled,
         // read the file header to derive the encryption key before any I/O.
+        // Guard against legacy plaintext or corrupt WAL files by checking the BLCE
+        // magic before passing the header to the crypto provider (which would throw
+        // on a magic mismatch).  If the magic is absent we leave _cryptoInitialized
+        // false so the header will be re-written on the next record write.
         if (_crypto != null && _walStream.Length >= _crypto.FileHeaderSize)
         {
             var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
@@ -93,8 +104,16 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 var read = _walStream.Read(header, 0, _crypto.FileHeaderSize);
                 if (read == _crypto.FileHeaderSize)
                 {
-                    _crypto.LoadFromFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
-                    _cryptoInitialized = true;
+                    // Only load an encrypted header when the BLCE magic is present.
+                    // This allows legacy plaintext or corrupt WAL files to be opened
+                    // without throwing; the stale/plaintext content is discarded on
+                    // the next TruncateAsync / EnsureCryptoHeader call.
+                    var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0, 4));
+                    if (magic == 0x424C4345u) // "BLCE"
+                    {
+                        _crypto.LoadFromFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
+                        _cryptoInitialized = true;
+                    }
                 }
             }
             finally
@@ -120,17 +139,27 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
     /// <summary>
     /// Writes the 64-byte crypto file header to the WAL if it has not been written yet.
+    /// Always writes the header at offset 0 (truncating any existing stale content first)
+    /// so the WAL file is in a consistent state for the new encryption epoch.
     /// Must be called while holding <see cref="_lock"/>.
     /// </summary>
     private void EnsureCryptoHeader()
     {
         if (_crypto == null || _cryptoInitialized) return;
 
+        // Always start the new encrypted WAL at the beginning of the file.
+        // If the file has stale content (e.g., leftover plaintext from before encryption
+        // was enabled, or from a previous epoch after truncation), discard it so the
+        // header is never appended in the middle of the file.
+        if (_walStream!.Length != 0)
+            _walStream.SetLength(0);
+        _walStream.Position = 0;
+
         var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
         try
         {
             _crypto.GetFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
-            _walStream!.Write(header.AsSpan(0, _crypto.FileHeaderSize));
+            _walStream.Write(header.AsSpan(0, _crypto.FileHeaderSize));
             _cryptoInitialized = true;
         }
         finally
@@ -141,16 +170,22 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
     /// <summary>
     /// Async version of <see cref="EnsureCryptoHeader"/>.
+    /// Always writes the header at offset 0 (truncating any existing stale content first).
     /// </summary>
     private async ValueTask EnsureCryptoHeaderAsync(CancellationToken ct)
     {
         if (_crypto == null || _cryptoInitialized) return;
 
+        // Always start the new encrypted WAL at the beginning of the file.
+        if (_walStream!.Length != 0)
+            _walStream.SetLength(0);
+        _walStream.Position = 0;
+
         var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
         try
         {
             _crypto.GetFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
-            await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(header, 0, _crypto.FileHeaderSize), ct);
+            await _walStream.WriteAsync(new ReadOnlyMemory<byte>(header, 0, _crypto.FileHeaderSize), ct);
             _cryptoInitialized = true;
         }
         finally
@@ -174,13 +209,13 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
         await EnsureCryptoHeaderAsync(ct);
 
-        // Encrypted envelope: [plaintext_size(4)][nonce(12)][ciphertext(N)][tag(16)]
+        // Encrypted envelope: [plaintext_size(4 LE)][nonce(12)][ciphertext(N)][tag(16)]
         // where N = plaintext.Length and PageOverhead = 28 (12 nonce + 16 tag).
         var ciphertextSize = plaintext.Length + _crypto.PageOverhead;
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(4 + ciphertextSize);
         try
         {
-            BitConverter.TryWriteBytes(buf.AsSpan(0, 4), plaintext.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), plaintext.Length);
             _crypto.Encrypt(0, plaintext.Span, buf.AsSpan(4, ciphertextSize));
             await _walStream!.WriteAsync(new ReadOnlyMemory<byte>(buf, 0, 4 + ciphertextSize), ct);
         }
@@ -208,7 +243,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(4 + ciphertextSize);
         try
         {
-            BitConverter.TryWriteBytes(buf.AsSpan(0, 4), plaintext.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), plaintext.Length);
             _crypto.Encrypt(0, plaintext, buf.AsSpan(4, ciphertextSize));
             _walStream!.Write(buf.AsSpan(0, 4 + ciphertextSize));
         }
@@ -497,11 +532,11 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
                 while (_walStream.Position < _walStream.Length)
                 {
-                    // Each envelope: [plaintext_size(4)][ciphertext(plaintext_size + PageOverhead)]
+                    // Each envelope: [plaintext_size(4 LE)][ciphertext(plaintext_size + PageOverhead)]
                     var read = _walStream.Read(sizeBuf, 0, 4);
                     if (read < 4) break;
 
-                    var plaintextSize = BitConverter.ToInt32(sizeBuf, 0);
+                    var plaintextSize = BinaryPrimitives.ReadInt32LittleEndian(sizeBuf);
                     // Sanity check: valid range for a WAL record payload.
                     if (plaintextSize < 1 || plaintextSize > 100 * 1024 * 1024) break;
 
@@ -530,7 +565,9 @@ public sealed class WriteAheadLog : IWriteAheadLog
                     finally
                     {
                         System.Buffers.ArrayPool<byte>.Shared.Return(cipherBuf);
-                        System.Buffers.ArrayPool<byte>.Shared.Return(plainBuf);
+                        // clearArray: true zeros decrypted page bytes so they are not
+                        // observable by subsequent renters of this pool slot.
+                        System.Buffers.ArrayPool<byte>.Shared.Return(plainBuf, clearArray: true);
                     }
                 }
             }

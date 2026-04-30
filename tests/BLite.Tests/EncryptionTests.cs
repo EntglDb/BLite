@@ -575,20 +575,27 @@ public class EncryptionTests : IDisposable
             var col = engine.GetOrCreateCollection("secrets");
             var doc = col.CreateDocument(["_id", "secret"], b => b
                 .AddString("secret", "WALTopSecretValue"));
-            // InsertAsync writes a Begin + Write record pair to the WAL before the
-            // caller explicitly commits.  The WAL file therefore holds the page
-            // after-image containing the secret even before CommitAsync is called.
             await col.InsertAsync(doc);
-            // Deliberately do NOT call CommitAsync — the engine aborts on dispose,
-            // but the WAL file content (written before the abort) exercises the
-            // encryption path we want to verify.
+            // Commit so the WAL definitely contains at least one committed transaction;
+            // the WAL file may survive the dispose/checkpoint cycle.
+            await engine.CommitAsync();
         }
 
         var walPath = Path.ChangeExtension(path, ".wal");
-        if (!File.Exists(walPath)) return; // WAL was checkpointed/truncated — satisfied vacuously.
+
+        // The WAL file must exist (insert + commit always writes WAL records before
+        // checkpoint can truncate — the engine does not auto-checkpoint on CommitAsync
+        // unless the WAL exceeds MaxWalSize).  If the WAL was already checkpointed and
+        // truncated to empty, skip the plaintext check (encryption was already verified
+        // by the roundtrip test).
+        Assert.True(File.Exists(walPath),
+            "Expected the commit to leave a WAL file so the encryption test can inspect its on-disk content.");
+
+        var rawBytes = File.ReadAllBytes(walPath);
+        if (rawBytes.Length == 0)
+            return; // Checkpointed and emptied — vacuously satisfied.
 
         // Search the raw bytes so we avoid any UTF-8 encoding artefacts.
-        var rawBytes = File.ReadAllBytes(walPath);
         var secretBytes = System.Text.Encoding.UTF8.GetBytes("WALTopSecretValue");
         Assert.True(rawBytes.AsSpan().IndexOf(secretBytes) == -1,
             "Plaintext secret must not appear unencrypted in the WAL file.");
