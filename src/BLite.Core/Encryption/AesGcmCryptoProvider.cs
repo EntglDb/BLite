@@ -8,11 +8,16 @@ namespace BLite.Core.Encryption;
 /// AES-256-GCM transparent page-level encryption provider.
 /// </summary>
 /// <remarks>
-/// <para><b>On-disk layout per page</b></para>
+/// <para><b>On-disk layout per physical page</b></para>
 /// <code>
-/// [ ciphertext (LogicalPageSize bytes) ][ GCM authentication tag (16 bytes) ]
+/// [ nonce (12 bytes) ][ ciphertext (LogicalPageSize bytes) ][ GCM authentication tag (16 bytes) ]
 /// </code>
-/// <para>Total physical page size = LogicalPageSize + 16.</para>
+/// <para>
+/// A fresh random nonce is generated for every write.  This prevents the nonce-reuse
+/// vulnerability that would arise from deterministic nonce schemes when a page is
+/// overwritten (same key + same deterministic nonce = broken AES-GCM confidentiality).
+/// </para>
+/// <para>Total physical page size = LogicalPageSize + <see cref="PageOverhead"/> (28 bytes).</para>
 ///
 /// <para><b>64-byte file header layout</b></para>
 /// <code>
@@ -27,16 +32,8 @@ namespace BLite.Core.Encryption;
 ///  44       2   FileIndex (0-based)
 ///  46      18   Reserved (zeroed)
 /// </code>
-///
-/// <para><b>Nonce construction (12 bytes)</b></para>
-/// <code>
-/// [0]     fileRole (1 byte)
-/// [1..2]  fileIndex, little-endian (2 bytes)
-/// [3..6]  pageId, little-endian (4 bytes)
-/// [7..11] databaseSalt[0..4] (5 bytes)
-/// </code>
 /// </remarks>
-public sealed class AesGcmCryptoProvider : ICryptoProvider
+public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
 {
     /// <summary>GCM authentication tag size in bytes.</summary>
     public const int TagSize = 16;
@@ -55,10 +52,10 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
     private const byte AlgorithmAesGcm = 1;
     private const byte KdfPbkdf2 = 1;
 
-    // Role of this file in the database (used for nonce construction).
+    // Role of this file in the database (stored in file header).
     private readonly byte _fileRole;
 
-    // 0-based index of this file within its role (used for nonce construction).
+    // 0-based index of this file within its role (stored in file header).
     private readonly ushort _fileIndex;
 
     // KDF configuration.
@@ -66,9 +63,11 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
     private readonly int _iterations;
 
     // Key material — set by GetFileHeader (new file) or LoadFromFileHeader (existing file).
-    // Salt[0..4] is also used in the nonce; we keep a copy of the relevant prefix.
     private byte[]? _key;
-    private readonly byte[] _saltPrefix = new byte[5]; // salt[0..4], used in nonce
+
+    // Cached AesGcm instance created once after key derivation.
+    // AesGcm is thread-safe for concurrent Encrypt/Decrypt calls once constructed.
+    private AesGcm? _aesGcm;
 
     /// <summary>
     /// Creates a new <see cref="AesGcmCryptoProvider"/> for a given file.
@@ -90,7 +89,10 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
     }
 
     /// <inheritdoc/>
-    public int PageOverhead => TagSize;
+    /// <remarks>
+    /// 12 bytes (nonce) + 16 bytes (GCM tag) = 28 bytes per physical page.
+    /// </remarks>
+    public int PageOverhead => NonceSize + TagSize;
 
     /// <inheritdoc/>
     public int FileHeaderSize => HeaderSize;
@@ -98,45 +100,32 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
     /// <inheritdoc/>
     public void Encrypt(uint pageId, ReadOnlySpan<byte> plaintext, Span<byte> ciphertext)
     {
-        EnsureKeyDerived();
+        var aes = GetAesGcm(); // throws InvalidOperationException if key not yet derived
 
-        // ciphertext layout: [ encrypted bytes (plaintext.Length) ][ tag (TagSize) ]
-        var encryptedRegion = ciphertext[..plaintext.Length];
-        var tagRegion = ciphertext.Slice(plaintext.Length, TagSize);
+        // Physical layout: [ nonce (12) | ciphertext (plaintext.Length) | tag (16) ]
+        var nonceRegion     = ciphertext[..NonceSize];
+        var encryptedRegion = ciphertext.Slice(NonceSize, plaintext.Length);
+        var tagRegion       = ciphertext.Slice(NonceSize + plaintext.Length, TagSize);
 
-        Span<byte> nonce = stackalloc byte[NonceSize];
-        BuildNonce(pageId, nonce);
+        // Generate a fresh random nonce for every write.  Using a deterministic nonce
+        // (e.g. derived from pageId) would allow nonce reuse when a page is overwritten
+        // with the same key, breaking AES-GCM confidentiality and integrity.
+        RandomNumberGenerator.Fill(nonceRegion);
 
-        // The single-parameter AesGcm constructor is deprecated in NET7+ in favour of the
-        // overload that accepts an explicit tag size, which validates the tag length at
-        // construction time and is more explicit about the expected tag size.
-#if NET7_0_OR_GREATER
-        using var aes = new AesGcm(_key!, TagSize);
-#else
-        using var aes = new AesGcm(_key!);
-#endif
-        aes.Encrypt(nonce, plaintext, encryptedRegion, tagRegion);
+        aes.Encrypt(nonceRegion, plaintext, encryptedRegion, tagRegion);
     }
 
     /// <inheritdoc/>
     public void Decrypt(uint pageId, ReadOnlySpan<byte> ciphertext, Span<byte> plaintext)
     {
-        EnsureKeyDerived();
+        var aes = GetAesGcm(); // throws InvalidOperationException if key not yet derived
 
-        // ciphertext layout: [ encrypted bytes (plaintext.Length) ][ tag (TagSize) ]
-        var encryptedRegion = ciphertext[..plaintext.Length];
-        var tagRegion = ciphertext.Slice(plaintext.Length, TagSize);
+        // Physical layout: [ nonce (12) | ciphertext (plaintext.Length) | tag (16) ]
+        var nonceRegion     = ciphertext[..NonceSize];
+        var encryptedRegion = ciphertext.Slice(NonceSize, plaintext.Length);
+        var tagRegion       = ciphertext.Slice(NonceSize + plaintext.Length, TagSize);
 
-        Span<byte> nonce = stackalloc byte[NonceSize];
-        BuildNonce(pageId, nonce);
-
-        // See comment in Encrypt for rationale of the conditional constructor.
-#if NET7_0_OR_GREATER
-        using var aes = new AesGcm(_key!, TagSize);
-#else
-        using var aes = new AesGcm(_key!);
-#endif
-        aes.Decrypt(nonce, encryptedRegion, tagRegion, plaintext);
+        aes.Decrypt(nonceRegion, encryptedRegion, tagRegion, plaintext);
     }
 
     /// <inheritdoc/>
@@ -172,14 +161,14 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
         // FileIndex at offset 44
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(44, 2), _fileIndex);
 
-        // Derive key and cache salt prefix for nonce construction
+        // Derive key and create the cached AesGcm instance.
         _key = KeyDerivation.DeriveKeyPbkdf2(_passphrase, salt, _iterations);
-        salt[..5].CopyTo(_saltPrefix);
+        CreateAesGcm();
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Validates the magic/version/algorithm fields, then derives the encryption key
+    /// Validates the magic/version/algorithm/KDF fields, then derives the encryption key
     /// from the passphrase and the salt stored in the header.
     /// </remarks>
     public void LoadFromFileHeader(ReadOnlySpan<byte> header)
@@ -206,6 +195,12 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
             throw new InvalidOperationException(
                 $"Unsupported encryption algorithm {algorithm}. Only AES-256-GCM (1) is supported.");
 
+        // Validate KDF
+        var kdf = header[6];
+        if (kdf != KdfPbkdf2)
+            throw new InvalidOperationException(
+                $"Unsupported key derivation function {kdf}. Only PBKDF2-SHA256 (1) is supported.");
+
         // Read salt (offset 8, 32 bytes)
         var salt = header.Slice(8, 32);
 
@@ -214,30 +209,49 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider
         if (iterations < 1)
             throw new InvalidOperationException($"Invalid KDF iteration count {iterations} in file header.");
 
-        // Derive key
+        // Derive key and create the cached AesGcm instance.
         _key = KeyDerivation.DeriveKeyPbkdf2(_passphrase, salt, iterations);
-        salt[..5].CopyTo(_saltPrefix);
+        CreateAesGcm();
+    }
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        _aesGcm?.Dispose();
+        _aesGcm = null;
+        // Zero out key material to reduce window of sensitive data in memory.
+        if (_key != null)
+        {
+            Array.Clear(_key, 0, _key.Length);
+            _key = null;
+        }
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    private void EnsureKeyDerived()
+    /// <summary>
+    /// Creates and caches the <see cref="AesGcm"/> instance after key derivation.
+    /// Called once from <see cref="GetFileHeader"/> or <see cref="LoadFromFileHeader"/>.
+    /// </summary>
+    private void CreateAesGcm()
     {
-        if (_key == null)
+        _aesGcm?.Dispose();
+        // The single-parameter AesGcm constructor is deprecated in NET7+ in favour of the
+        // overload that accepts an explicit tag size, which validates the tag length at
+        // construction time and is more explicit about the expected tag size.
+#if NET7_0_OR_GREATER
+        _aesGcm = new AesGcm(_key!, TagSize);
+#else
+        _aesGcm = new AesGcm(_key!);
+#endif
+    }
+
+    private AesGcm GetAesGcm()
+    {
+        if (_aesGcm == null)
             throw new InvalidOperationException(
                 "Encryption key has not been derived. Call GetFileHeader (new file) or " +
                 "LoadFromFileHeader (existing file) before performing page I/O.");
-    }
-
-    /// <summary>
-    /// Builds the 12-byte AES-GCM nonce for the given page.
-    /// Layout: fileRole (1) | fileIndex LE (2) | pageId LE (4) | saltPrefix (5)
-    /// </summary>
-    private void BuildNonce(uint pageId, Span<byte> nonce)
-    {
-        nonce[0] = _fileRole;
-        BinaryPrimitives.WriteUInt16LittleEndian(nonce.Slice(1, 2), _fileIndex);
-        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(3, 4), pageId);
-        _saltPrefix.CopyTo(nonce.Slice(7, 5));
+        return _aesGcm;
     }
 }

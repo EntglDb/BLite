@@ -32,7 +32,7 @@ public interface ICryptoProvider
     /// <summary>
     /// Encrypts a single in-memory page into a temporary on-disk buffer.
     /// </summary>
-    /// <param name="pageId">Page ID, used to derive a deterministic nonce.</param>
+    /// <param name="pageId">Page ID (passed for context; implementations must not use it as a nonce).</param>
     /// <param name="plaintext">
     /// The in-memory page buffer. Must be exactly <c>LogicalPageSize</c> bytes.
     /// This span must <b>not</b> be modified by the implementation.
@@ -45,7 +45,7 @@ public interface ICryptoProvider
     /// <summary>
     /// Decrypts a single on-disk page buffer into the in-memory page destination.
     /// </summary>
-    /// <param name="pageId">Page ID, used to derive the same deterministic nonce.</param>
+    /// <param name="pageId">Page ID (passed for context; must match the value used during <see cref="Encrypt"/>).</param>
     /// <param name="ciphertext">
     /// The on-disk page buffer. Must be exactly <c>LogicalPageSize + PageOverhead</c> bytes.
     /// </param>

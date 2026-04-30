@@ -356,8 +356,22 @@ public sealed class PageFile : IPageStorage
                 }
             }
 
+            // Guard against truncated or corrupt files — the data region must be large
+            // enough to contain the crypto header and at least one complete page, and
+            // must be exactly aligned to the physical page size.
+            if (_fileStream.Length < _cryptoFileHeaderSize)
+                throw new System.IO.InvalidDataException(
+                    $"Corrupt or truncated page file '{_filePath}': length {_fileStream.Length} is " +
+                    $"smaller than the crypto header size {_cryptoFileHeaderSize}.");
+
+            long dataLength = _fileStream.Length - _cryptoFileHeaderSize;
+            if (dataLength % _physicalPageSize != 0)
+                throw new System.IO.InvalidDataException(
+                    $"Corrupt page file '{_filePath}': payload length {dataLength} is not aligned " +
+                    $"to the physical page size {_physicalPageSize}.");
+
             // Calculate next page ID accounting for the crypto header and physical page size.
-            _nextPageId = (uint)((_fileStream.Length - _cryptoFileHeaderSize) / _physicalPageSize);
+            _nextPageId = checked((uint)(dataLength / _physicalPageSize));
 
             _mappedFile = MemoryMappedFile.CreateFromFile(
                 _fileStream,
@@ -403,7 +417,10 @@ public sealed class PageFile : IPageStorage
     private int GetMinimumExistingFileSize()
         => _cryptoFileHeaderSize > 0 ? _cryptoFileHeaderSize : 32;
 
-    /// <summary>Reads exactly <paramref name="length"/> bytes from the file at the given offset.</summary>
+    /// <summary>Reads exactly <paramref name="buffer"/>.Length bytes from the file at the given offset.</summary>
+    /// <exception cref="System.IO.EndOfStreamException">
+    /// Thrown if the stream ends before the buffer is filled, indicating a truncated file.
+    /// </exception>
     private static void ReadBytesFromStream(FileStream stream, long offset, byte[] buffer)
     {
         stream.Position = offset;
@@ -411,7 +428,10 @@ public sealed class PageFile : IPageStorage
         while (read < buffer.Length)
         {
             int n = stream.Read(buffer, read, buffer.Length - read);
-            if (n == 0) break;
+            if (n == 0)
+                throw new System.IO.EndOfStreamException(
+                    $"Unexpected end of stream: expected {buffer.Length} bytes at offset {offset}, " +
+                    $"but only {read} were available. The file may be truncated or corrupt.");
             read += n;
         }
     }
@@ -457,9 +477,11 @@ public sealed class PageFile : IPageStorage
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            // clearArray: true — the buffer held plaintext page headers; clear it before
+            // returning to the pool so subsequent renters cannot read sensitive data.
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
         }
-        
+
         _fileStream!.Flush();
     }
 
@@ -523,7 +545,9 @@ public sealed class PageFile : IPageStorage
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buf);
+                    // clearArray: true — buf holds decrypted page data; clear before returning
+                    // to the pool so subsequent renters cannot read sensitive plaintext.
+                    ArrayPool<byte>.Shared.Return(buf, clearArray: true);
                 }
             }
             else
@@ -1082,7 +1106,11 @@ public sealed class PageFile : IPageStorage
             // 3. Then close file stream
             _fileStream?.Dispose();
             _fileStream = null;
-            
+
+            // 4. Dispose crypto provider (clears key material from memory).
+            if (_cryptoProvider is IDisposable disposableCrypto)
+                try { disposableCrypto.Dispose(); } catch { /* best-effort */ }
+
             _disposed = true;
         }
         finally

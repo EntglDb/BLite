@@ -158,7 +158,8 @@ public class EncryptionTests : IDisposable
     {
         var opts = new CryptoOptions("test", iterations: 1);
         var p = new AesGcmCryptoProvider(opts);
-        Assert.Equal(16, p.PageOverhead);
+        // PageOverhead = nonce (12) + GCM tag (16) = 28 bytes per physical page
+        Assert.Equal(28, p.PageOverhead);
         Assert.Equal(64, p.FileHeaderSize);
     }
 
@@ -177,8 +178,8 @@ public class EncryptionTests : IDisposable
         var plaintext = new byte[pageSize];
         new Random(1).NextBytes(plaintext);
 
-        // Encrypt
-        var ciphertext = new byte[pageSize + AesGcmCryptoProvider.TagSize];
+        // Encrypt — ciphertext buffer must be plaintext.Length + PageOverhead
+        var ciphertext = new byte[pageSize + provider.PageOverhead];
         provider.Encrypt(7, plaintext, ciphertext);
 
         // Ciphertext must differ from plaintext
@@ -202,13 +203,13 @@ public class EncryptionTests : IDisposable
         const int pageSize = 512;
         var plaintext = new byte[pageSize]; // all zeros
 
-        var ct0 = new byte[pageSize + AesGcmCryptoProvider.TagSize];
-        var ct1 = new byte[pageSize + AesGcmCryptoProvider.TagSize];
+        var ct0 = new byte[pageSize + provider.PageOverhead];
+        var ct1 = new byte[pageSize + provider.PageOverhead];
 
         provider.Encrypt(0, plaintext, ct0);
         provider.Encrypt(1, plaintext, ct1);
 
-        // Different page IDs → different nonces → different ciphertext
+        // Different page IDs → different random nonces → different ciphertext
         Assert.NotEqual(ct0, ct1);
     }
 
@@ -225,7 +226,7 @@ public class EncryptionTests : IDisposable
         const int pageSize = 512;
         var plaintext = new byte[pageSize];
         new Random(99).NextBytes(plaintext);
-        var ciphertext = new byte[pageSize + AesGcmCryptoProvider.TagSize];
+        var ciphertext = new byte[pageSize + writer.PageOverhead];
         writer.Encrypt(5, plaintext, ciphertext);
 
         // Reader side (same passphrase, loads from header)
@@ -248,7 +249,7 @@ public class EncryptionTests : IDisposable
 
         const int pageSize = 512;
         var plaintext = new byte[pageSize];
-        var ciphertext = new byte[pageSize + AesGcmCryptoProvider.TagSize];
+        var ciphertext = new byte[pageSize + writer.PageOverhead];
         writer.Encrypt(0, plaintext, ciphertext);
 
         // Wrong passphrase
@@ -275,9 +276,10 @@ public class EncryptionTests : IDisposable
     {
         var opts = new CryptoOptions("pass", iterations: 1);
         var provider = new AesGcmCryptoProvider(opts);
-        // Key not derived yet (neither GetFileHeader nor LoadFromFileHeader called)
+        // Key not derived yet (neither GetFileHeader nor LoadFromFileHeader called).
+        // Buffer sized for the new physical layout: plaintext (512) + nonce (12) + tag (16) = 540.
         Assert.Throws<InvalidOperationException>(() =>
-            provider.Encrypt(0, new byte[512], new byte[528]));
+            provider.Encrypt(0, new byte[512], new byte[540]));
     }
 
     // ── PageFile integration with AesGcmCryptoProvider ───────────────────────
@@ -287,31 +289,41 @@ public class EncryptionTests : IDisposable
     {
         var path = TempDb();
         var opts = new CryptoOptions("test-passphrase", iterations: 1);
-        var config = PageFileConfig.Default with
-        {
-            CryptoProvider = new AesGcmCryptoProvider(opts)
-        };
+        var provider = new AesGcmCryptoProvider(opts);
+        var config = PageFileConfig.Default with { CryptoProvider = provider };
+
+        uint allocatedPageId;
+        byte[] writeBuf;
+        int pageSize;
+        int physicalPageSize;
 
         // Create encrypted page file and write a page
         using (var pf = new PageFile(path, config))
         {
             pf.Open();
 
-            var pageId = pf.AllocatePage();
-            var writeBuf = new byte[pf.PageSize];
+            pageSize = pf.PageSize;
+            physicalPageSize = pageSize + provider.PageOverhead; // nonce + ciphertext + tag
+
+            allocatedPageId = pf.AllocatePage();
+            writeBuf = new byte[pageSize];
             new Random(0).NextBytes(writeBuf);
             writeBuf[0] = 0xDE;
             writeBuf[1] = 0xAD;
-            pf.WritePage(pageId, writeBuf);
+            pf.WritePage(allocatedPageId, writeBuf);
             pf.Flush();
         }
 
-        // Verify on-disk content is NOT the original plaintext (it's encrypted)
+        // Verify on-disk content at the correct physical offset is NOT the original plaintext.
+        // File layout: [ 64-byte crypto header ][ physicalPageSize * pageCount ]
         var rawContent = File.ReadAllBytes(path);
-        // The first 64 bytes are the crypto header; search for our 0xDE 0xAD pattern — should not appear at logical start
-        // The plaintext would normally appear at offset 64 (crypto header) + 2*PhysicalPageSize (skipping pages 0 and 1)
-        // We just verify that the file does not start with the raw page data
-        Assert.NotEqual(0xDE, rawContent[64]); // first byte of encrypted page 0 is not plaintext header
+        const int cryptoHeaderSize = 64;
+        int pageOffset = cryptoHeaderSize + (int)allocatedPageId * physicalPageSize;
+
+        // The on-disk bytes for our page must not equal the plaintext we wrote.
+        Assert.False(
+            rawContent.AsSpan(pageOffset, writeBuf.Length).SequenceEqual(writeBuf),
+            "The on-disk bytes for the allocated page should not match the plaintext when encryption is enabled.");
     }
 
     [Fact]
