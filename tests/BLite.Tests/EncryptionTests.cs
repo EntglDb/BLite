@@ -721,11 +721,6 @@ public class EncryptionTests : IDisposable
     public void EncryptionCoordinator_DifferentFilesGetDifferentSubKeys()
     {
         var masterKey = MakeMasterKey();
-
-        byte[] mainHeader = null!;
-        byte[] colHeader  = null!;
-        byte[] idxHeader  = null!;
-        byte[] walHeader  = null!;
         const int pageSize = 256;
         var plaintext = new byte[pageSize]; // all zeros — deterministic cipher would be obvious
 
@@ -734,19 +729,19 @@ public class EncryptionTests : IDisposable
         using (var coordinator = new EncryptionCoordinator(masterKey))
         {
             var mainProv = coordinator.CreateForMainFile();
-            mainHeader = new byte[mainProv.FileHeaderSize];
+            var mainHeader = new byte[mainProv.FileHeaderSize];
             mainProv.GetFileHeader(mainHeader);
 
             var colProv = coordinator.CreateForCollection(0);
-            colHeader = new byte[colProv.FileHeaderSize];
+            var colHeader = new byte[colProv.FileHeaderSize];
             colProv.GetFileHeader(colHeader);
 
             var idxProv = coordinator.CreateForIndex(0);
-            idxHeader = new byte[idxProv.FileHeaderSize];
+            var idxHeader = new byte[idxProv.FileHeaderSize];
             idxProv.GetFileHeader(idxHeader);
 
             var walProv = coordinator.CreateForWal();
-            walHeader = new byte[walProv.FileHeaderSize];
+            var walHeader = new byte[walProv.FileHeaderSize];
             walProv.GetFileHeader(walHeader);
 
             mainCt = new byte[pageSize + mainProv.PageOverhead];
@@ -761,7 +756,6 @@ public class EncryptionTests : IDisposable
         }
 
         // Each file uses a different subkey → different ciphertexts even for the same plaintext + pageId.
-        // (Random nonces also guarantee this, but we verify by decrypting with each other's provider.)
         // Simply assert the nonce+ciphertext slices differ (they MUST if keys differ or nonces differ).
         Assert.NotEqual(mainCt, colCt);
         Assert.NotEqual(mainCt, idxCt);

@@ -219,7 +219,7 @@ public sealed class EncryptionCoordinator : IDisposable
         {
             fileRole,
             (byte)(fileIndex & 0xFF),
-            (byte)((fileIndex >> 8) & 0xFF)
+            (byte)(fileIndex >> 8)
         };
         return KeyDerivation.DeriveKeyHkdf(_masterKey, _databaseSalt!, info, KeySize);
     }
