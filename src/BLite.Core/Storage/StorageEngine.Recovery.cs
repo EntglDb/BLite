@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using BLite.Core.Encryption;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -117,10 +118,10 @@ public sealed partial class StorageEngine
     /// </summary>
     public async Task BackupAsync(string destinationDbPath, CancellationToken ct = default)
     {
-        await BackupDetailedAsync(destinationDbPath, includeIndexes: true, ct);
+        await BackupDetailedAsync(destinationDbPath, includeIndexes: true, backupCryptoProvider: null, ct);
     }
 
-    internal async Task<StorageBackupStats> BackupDetailedAsync(string destinationDbPath, bool includeIndexes, CancellationToken ct = default)
+    internal async Task<StorageBackupStats> BackupDetailedAsync(string destinationDbPath, bool includeIndexes, ICryptoProvider? backupCryptoProvider = null, CancellationToken ct = default)
     {
 #if NET8_0_OR_GREATER
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDbPath);
@@ -141,12 +142,23 @@ public sealed partial class StorageEngine
             if (_walIndex.IsEmpty)
                 await _wal.TruncateAsync(ct).ConfigureAwait(false);
 
-            operations = BuildBackupPlan(destinationDbPath, includeIndexes);
-
-            foreach (var operation in operations)
+            if (backupCryptoProvider != null)
             {
-                ct.ThrowIfCancellationRequested();
-                await operation.CopyAsync(ct).ConfigureAwait(false);
+                // Re-encryption path: execute each operation inline so that the main-file
+                // backup (which calls GetFileHeader and may prime a coordinator salt) runs
+                // BEFORE sibling providers for collection/index files are created.
+                operations = await ExecuteReencryptedBackupAsync(
+                    destinationDbPath, includeIndexes, backupCryptoProvider, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                operations = BuildBackupPlan(destinationDbPath, includeIndexes);
+
+                foreach (var operation in operations)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await operation.CopyAsync(ct).ConfigureAwait(false);
+                }
             }
         }
         catch
@@ -334,6 +346,114 @@ public sealed partial class StorageEngine
             serverLayout.WalPath!,
             _config.IndexFilePath != null ? serverLayout.IndexFilePath : null,
             _config.CollectionDataDirectory != null ? serverLayout.CollectionDataDirectory : null);
+    }
+
+    /// <summary>
+    /// Executes a backup where every page is transcrypted using <paramref name="backupCryptoProvider"/>.
+    /// Operations are executed inline (not pre-built) so that the main-file backup —
+    /// which calls <see cref="ICryptoProvider.GetFileHeader"/> and may prime a coordinator
+    /// database-salt — always runs before sibling providers for collection/index files are created.
+    /// </summary>
+    private async Task<List<BackupCopyOperation>> ExecuteReencryptedBackupAsync(
+        string destinationDbPath,
+        bool includeIndexes,
+        ICryptoProvider backupCryptoProvider,
+        CancellationToken ct)
+    {
+        if (_pageFile is not PageFile mainPageFile)
+            throw new NotSupportedException("Re-encrypted backup requires the default file-based storage backend.");
+        if (_wal is not WriteAheadLog wal)
+            throw new NotSupportedException("Re-encrypted backup requires the default file-based WAL implementation.");
+        if (!includeIndexes && _indexFile != null)
+            throw new NotSupportedException("ExcludeIndexes is not supported for databases that use a separate index file.");
+
+        var targetLayout = GetBackupLayout(destinationDbPath);
+        var operations = new List<BackupCopyOperation>();
+
+        // 1. WAL: copy as-is.  After checkpoint+truncate the WAL is empty, so no
+        //    page-level re-encryption is required or possible.
+        operations.Add(new BackupCopyOperation(targetLayout.WalPath, _ => Task.CompletedTask));
+        await wal.BackupAsync(targetLayout.WalPath, ct).ConfigureAwait(false);
+
+        // 2. Main file: transcrypt with backupCryptoProvider.
+        //    This calls GetFileHeader which may set the coordinator database-salt,
+        //    enabling sibling provider creation in the following steps.
+        operations.Add(new BackupCopyOperation(destinationDbPath, _ => Task.CompletedTask));
+        await mainPageFile.TranscryptBackupAsync(destinationDbPath, backupCryptoProvider, ct).ConfigureAwait(false);
+
+        // 3. Collection files: create sibling providers (role=1) AFTER the main file
+        //    backup so that coordinator salt is available.
+        if (_config.CollectionDataDirectory != null && targetLayout.CollectionDirectory != null)
+        {
+            ushort collectionIdx = 0;
+            foreach (var sourcePath in Directory.EnumerateFiles(_config.CollectionDataDirectory)
+                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+            {
+                var fileName = Path.GetFileName(sourcePath);
+                if (Path.IsPathRooted(fileName))
+                    throw new InvalidOperationException(
+                        $"Collection file name '{fileName}' must not be an absolute path.");
+
+                var destPath = Path.Combine(targetLayout.CollectionDirectory, fileName);
+
+                if (string.Equals(fileName, ".slots", StringComparison.OrdinalIgnoreCase))
+                {
+                    operations.Add(new BackupCopyOperation(destPath, _ => Task.CompletedTask));
+                    await CopyClosedFileAsync(sourcePath, destPath, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                var collectionName = Path.GetFileNameWithoutExtension(sourcePath);
+                var sibling = backupCryptoProvider.CreateSiblingProvider(1, collectionIdx);
+                try
+                {
+                    operations.Add(new BackupCopyOperation(destPath, _ => Task.CompletedTask));
+                    if (_collectionFiles != null &&
+                        _collectionFiles.TryGetValue(collectionName, out var lazy) &&
+                        lazy.IsValueCreated &&
+                        lazy.Value is PageFile collectionPageFile)
+                    {
+                        await collectionPageFile.TranscryptBackupAsync(destPath, sibling, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Closed/unmapped file: re-encrypt by opening a temporary PageFile.
+                        var srcConfig = _config with
+                        {
+                            WalPath = null,
+                            IndexFilePath = null,
+                            CollectionDataDirectory = null
+                        };
+                        using var srcFile = new PageFile(sourcePath, srcConfig);
+                        srcFile.Open();
+                        await srcFile.TranscryptBackupAsync(destPath, sibling, ct).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    (sibling as IDisposable)?.Dispose();
+                }
+
+                collectionIdx++;
+            }
+        }
+
+        // 4. Index file: create sibling provider (role=2) AFTER the main file backup.
+        if (includeIndexes && _indexFile is PageFile indexPageFile && targetLayout.IndexPath != null)
+        {
+            var indexSibling = backupCryptoProvider.CreateSiblingProvider(2, 0);
+            try
+            {
+                operations.Add(new BackupCopyOperation(targetLayout.IndexPath, _ => Task.CompletedTask));
+                await indexPageFile.TranscryptBackupAsync(targetLayout.IndexPath, indexSibling, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                (indexSibling as IDisposable)?.Dispose();
+            }
+        }
+
+        return operations;
     }
 
     private static async Task CopyClosedFileAsync(string sourcePath, string destinationPath, CancellationToken ct)

@@ -204,7 +204,7 @@ public static class BLiteMigration
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>Copies all collections and KV entries from source to target.</summary>
-    private static async Task CopyAllAsync(BLiteEngine source, BLiteEngine target)
+    internal static async Task CopyAllAsync(BLiteEngine source, BLiteEngine target)
     {
         // Sync the C-BSON key dictionary first so that raw BSON bytes written by the
         // source engine are decodable by the target without re-serialisation.
@@ -344,5 +344,72 @@ public static class BLiteMigration
     {
         try { if (File.Exists(path)) File.Delete(path); }
         catch { /* best-effort */ }
+    }
+
+    /// <summary>
+    /// Deletes the server-layout companion directories and files for the given main-db path.
+    /// Specifically deletes the WAL, index file, collection directory, and main .db file.
+    /// Also deletes the adjacent single-file WAL (for sources that used the default WAL location).
+    /// Errors are silently suppressed (best-effort).
+    /// </summary>
+    internal static void SafeDeleteServerLayout(string dbPath)
+    {
+        SafeDelete(dbPath);
+        // Delete adjacent WAL (single-file layout default).
+        SafeDelete(Path.ChangeExtension(dbPath, ".wal"));
+        // Delete server-layout companion files.
+        var serverLayout = PageFileConfig.Server(dbPath);
+        if (serverLayout.WalPath != null) SafeDelete(serverLayout.WalPath);
+        if (serverLayout.IndexFilePath != null) SafeDelete(serverLayout.IndexFilePath);
+        if (serverLayout.CollectionDataDirectory != null && Directory.Exists(serverLayout.CollectionDataDirectory))
+            try { Directory.Delete(serverLayout.CollectionDataDirectory, recursive: true); } catch { }
+
+        // Remove empty wal/ directory if present.
+        var walDir = serverLayout.WalPath != null
+            ? Path.GetDirectoryName(serverLayout.WalPath) : null;
+        if (walDir != null && Directory.Exists(walDir))
+            try { Directory.Delete(walDir); } catch { }
+    }
+
+    /// <summary>
+    /// Deletes a single-file database and its adjacent WAL file.
+    /// Errors are silently suppressed (best-effort).
+    /// </summary>
+    internal static void SafeDeleteSingleFile(string dbPath)
+    {
+        SafeDelete(dbPath);
+        SafeDelete(Path.ChangeExtension(dbPath, ".wal"));
+    }
+
+    /// <summary>
+    /// Moves the server-layout companion files (WAL, index, collection directory) from
+    /// <paramref name="sourcePath"/> to the corresponding locations under
+    /// <paramref name="destPath"/>.  Called after the main .db file has already been moved.
+    /// </summary>
+    internal static void MoveServerLayoutFiles(string sourcePath, string destPath)
+    {
+        var src  = PageFileConfig.Server(sourcePath);
+        var dest = PageFileConfig.Server(destPath);
+
+        if (src.WalPath != null && File.Exists(src.WalPath) && dest.WalPath != null)
+        {
+            var walDir = Path.GetDirectoryName(dest.WalPath);
+            if (!string.IsNullOrEmpty(walDir)) Directory.CreateDirectory(walDir);
+            File.Move(src.WalPath, dest.WalPath);
+
+            // Remove the source wal/ directory if empty.
+            var srcWalDir = Path.GetDirectoryName(src.WalPath);
+            if (srcWalDir != null)
+                try { Directory.Delete(srcWalDir); } catch { }
+        }
+
+        if (src.IndexFilePath != null && File.Exists(src.IndexFilePath) && dest.IndexFilePath != null)
+            File.Move(src.IndexFilePath, dest.IndexFilePath);
+
+        if (src.CollectionDataDirectory != null && Directory.Exists(src.CollectionDataDirectory) && dest.CollectionDataDirectory != null)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dest.CollectionDataDirectory)!);
+            Directory.Move(src.CollectionDataDirectory, dest.CollectionDataDirectory);
+        }
     }
 }
