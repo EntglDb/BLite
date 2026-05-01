@@ -21,4 +21,31 @@ public enum MetricEventType : byte
     /// Distinct from <see cref="CollectionFind"/> which covers only <c>FindByIdAsync</c>.
     /// </summary>
     CollectionQuery     = 9,
+
+    // ── Security / audit event types ───────────────────────────────────────
+
+    /// <summary>
+    /// A generic audit event. The <see cref="MetricEvent.Tag"/> field carries the
+    /// audit event type name (e.g. a custom label supplied by an external audit sink).
+    /// </summary>
+    AuditEvent          = 10,
+
+    /// <summary>
+    /// A query that was rejected by BLQL hardening (e.g. unknown operator or
+    /// malformed filter JSON). Increments <c>SecurityFailedQueriesTotal</c> in
+    /// the metrics snapshot.
+    /// </summary>
+    SecurityFailedQuery = 11,
+
+    /// <summary>
+    /// Emitted when a VACUUM pass completes successfully on a collection.
+    /// <see cref="MetricEvent.BytesFreed"/> carries the bytes compacted during the pass.
+    /// </summary>
+    Vacuum              = 12,
+
+    /// <summary>
+    /// Emitted when a hot backup completes successfully.
+    /// <see cref="MetricEvent.ElapsedMicros"/> carries the backup duration.
+    /// </summary>
+    BackupCompleted     = 13,
 }

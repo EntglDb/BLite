@@ -1,3 +1,4 @@
+using BLite.Core.Metrics;
 using BLite.Core.Query.Blql;
 
 namespace BLite.Core;
@@ -58,10 +59,31 @@ public static class DynamicCollectionBlqlExtensions
     /// <summary>
     /// Creates a BLQL query builder from a JSON filter string (MQL-style).
     /// Parses the string using <see cref="BlqlFilterParser"/>.
+    /// If the filter string is rejected by BLQL hardening (unknown operator, malformed
+    /// JSON, etc.), the exception is re-thrown and a <c>SecurityFailedQuery</c> metric
+    /// event is published so that the failure is reflected in
+    /// <see cref="MetricsSnapshot.SecurityFailedQueriesTotal"/>.
     /// <example><code>
     /// collection.Query("{ \"status\": \"active\", \"age\": { \"$gt\": 18 } }")
     /// </code></example>
     /// </summary>
     public static BlqlQuery Query(this DynamicCollection collection, string filterJson)
-        => new BlqlQuery(collection).Filter(BlqlFilterParser.Parse(filterJson));
+    {
+        BlqlFilter filter;
+        try
+        {
+            filter = BlqlFilterParser.Parse(filterJson);
+        }
+        catch (FormatException)
+        {
+            collection.MetricsDispatcher?.Publish(new MetricEvent
+            {
+                Timestamp = System.Diagnostics.Stopwatch.GetTimestamp(),
+                Type      = MetricEventType.SecurityFailedQuery,
+                Success   = false,
+            });
+            throw;
+        }
+        return new BlqlQuery(collection).Filter(filter);
+    }
 }

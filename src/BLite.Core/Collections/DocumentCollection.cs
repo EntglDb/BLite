@@ -463,6 +463,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Timed out acquiring collection write lock (VacuumAsync).");
+
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        long bytesFreed = 0;
         try
         {
             var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -490,6 +493,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                         int freeBytes = compactedHdr.FreeSpaceEnd - compactedHdr.FreeSpaceStart;
                         if (freeBytes > 0)
                         {
+                            bytesFreed += freeBytes;
                             if (secureErase)
                                 buffer.AsSpan(compactedHdr.FreeSpaceStart, freeBytes).Clear();
 
@@ -523,6 +527,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+            {
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp     = sw.StartTimestamp,
+                    Type          = MetricEventType.Vacuum,
+                    ElapsedMicros = sw.GetElapsedMicros(),
+                    BytesFreed    = bytesFreed,
+                    Success       = true,
+                });
+            }
         }
     }
 

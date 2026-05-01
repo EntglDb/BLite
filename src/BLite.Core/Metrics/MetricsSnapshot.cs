@@ -75,6 +75,31 @@ public sealed class MetricsSnapshot
     public IReadOnlyDictionary<string, CollectionMetricsSnapshot> Collections { get; init; }
         = new Dictionary<string, CollectionMetricsSnapshot>();
 
+    // ── Security metrics ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Total audit events emitted since metrics were enabled, grouped by event type.
+    /// Key: event type name (e.g. <c>"vacuum"</c>, <c>"backup.completed"</c>,
+    /// <c>"security.failed_query"</c>).
+    /// </summary>
+    public IReadOnlyDictionary<string, long> AuditEventsTotal { get; init; }
+        = new Dictionary<string, long>();
+
+    /// <summary>Total queries rejected by BLQL hardening since metrics were enabled.</summary>
+    public long SecurityFailedQueriesTotal { get; init; }
+
+    /// <summary>UTC timestamp of the last successful VACUUM completion. <c>null</c> if no vacuum has run.</summary>
+    public DateTimeOffset? VacuumLastRunAt { get; init; }
+
+    /// <summary>Bytes compacted in the most recent VACUUM operation. 0 if no vacuum has run.</summary>
+    public long VacuumBytesFreed { get; init; }
+
+    /// <summary>UTC timestamp of the last successful backup completion. <c>null</c> if no backup has run.</summary>
+    public DateTimeOffset? BackupLastSuccessAt { get; init; }
+
+    /// <summary>Duration of the most recent successful backup in milliseconds. 0 if no backup has run.</summary>
+    public long BackupLastDurationMs { get; init; }
+
     /// <summary>UTC timestamp at which this snapshot was captured.</summary>
     public DateTimeOffset SnapshotTimestamp { get; init; }
 }

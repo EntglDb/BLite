@@ -54,7 +54,25 @@ internal sealed class MetricsDispatcher : IDisposable
     private readonly ConcurrentDictionary<string, CollectionCounters> _collections
         = new(StringComparer.OrdinalIgnoreCase);
 
-    public MetricsDispatcher()
+    // ── Security / audit counters ───────────────────────────────────────────
+    private readonly ConcurrentDictionary<string, AuditEventCounter> _auditEvents
+        = new(StringComparer.OrdinalIgnoreCase);
+    private long _securityFailedQueries;
+    private long _vacuumLastRunAtTicks;    // DateTimeOffset.UtcNow.Ticks; 0 = never
+    private long _vacuumBytesFreed;        // bytes compacted in last vacuum
+    private long _backupLastSuccessAtTicks;// DateTimeOffset.UtcNow.Ticks; 0 = never
+    private long _backupLastDurationMs;    // duration of last backup in milliseconds
+
+#if NET6_0_OR_GREATER
+    // ── OpenTelemetry / System.Diagnostics.Metrics instruments ─────────────
+    private readonly System.Diagnostics.Metrics.Meter? _meter;
+    private readonly System.Diagnostics.Metrics.Counter<long>? _meterSecurityFailedQueries;
+    private readonly System.Diagnostics.Metrics.Counter<long>? _meterVacuumTotal;
+    private readonly System.Diagnostics.Metrics.Counter<long>? _meterBackupTotal;
+    private readonly System.Diagnostics.Metrics.Counter<long>? _meterAuditEvents;
+#endif
+
+    public MetricsDispatcher(bool enableDiagnosticSource = false)
     {
         _channel = Channel.CreateUnbounded<MetricEvent>(new UnboundedChannelOptions
         {
@@ -62,6 +80,29 @@ internal sealed class MetricsDispatcher : IDisposable
             SingleWriter = false,
             AllowSynchronousContinuations = false
         });
+
+#if NET6_0_OR_GREATER
+        if (enableDiagnosticSource)
+        {
+            _meter = new System.Diagnostics.Metrics.Meter("BLite.Core");
+            _meterSecurityFailedQueries = _meter.CreateCounter<long>(
+                "blite.security.failed_queries",
+                unit: "queries",
+                description: "Total queries rejected by BLQL hardening.");
+            _meterVacuumTotal = _meter.CreateCounter<long>(
+                "blite.vacuum.total",
+                unit: "operations",
+                description: "Total VACUUM passes completed.");
+            _meterBackupTotal = _meter.CreateCounter<long>(
+                "blite.backup.completed_total",
+                unit: "operations",
+                description: "Total successful hot-backup operations.");
+            _meterAuditEvents = _meter.CreateCounter<long>(
+                "blite.audit.events_total",
+                unit: "events",
+                description: "Total audit events emitted, by event type.");
+        }
+#endif
 
         Task.Run(ProcessEventsAsync);
     }
@@ -122,6 +163,14 @@ internal sealed class MetricsDispatcher : IDisposable
             };
         }
 
+        // ── Security / audit snapshot ───────────────────────────────────────
+        var auditSnapshot = new Dictionary<string, long>(_auditEvents.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (k, v) in _auditEvents)
+            auditSnapshot[k] = Interlocked.Read(ref v.Count);
+
+        long vacuumTicks  = Interlocked.Read(ref _vacuumLastRunAtTicks);
+        long backupTicks  = Interlocked.Read(ref _backupLastSuccessAtTicks);
+
         return new MetricsSnapshot
         {
             TransactionBeginsTotal    = Interlocked.Read(ref _txBegins),
@@ -142,6 +191,12 @@ internal sealed class MetricsDispatcher : IDisposable
             AvgDeleteLatencyUs        = deletes > 0 ? (double)delLatSum / deletes : 0,
             AvgQueryLatencyUs         = queries > 0 ? (double)qryLatSum / queries : 0,
             Collections               = colSnapshots,
+            AuditEventsTotal          = auditSnapshot,
+            SecurityFailedQueriesTotal = Interlocked.Read(ref _securityFailedQueries),
+            VacuumLastRunAt           = vacuumTicks  > 0 ? new DateTimeOffset(vacuumTicks,  TimeSpan.Zero) : null,
+            VacuumBytesFreed          = Interlocked.Read(ref _vacuumBytesFreed),
+            BackupLastSuccessAt       = backupTicks  > 0 ? new DateTimeOffset(backupTicks,  TimeSpan.Zero) : null,
+            BackupLastDurationMs      = Interlocked.Read(ref _backupLastDurationMs),
             SnapshotTimestamp         = DateTimeOffset.UtcNow,
         };
     }
@@ -244,7 +299,52 @@ internal sealed class MetricsDispatcher : IDisposable
                     Interlocked.Add(ref c.QueryLatencySum, micros);
                 }
                 break;
+
+            case MetricEventType.AuditEvent:
+                if (evt.Tag != null)
+                {
+                    IncrementAuditEvent(evt.Tag);
+#if NET6_0_OR_GREATER
+                    _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", evt.Tag));
+#endif
+                }
+                break;
+
+            case MetricEventType.SecurityFailedQuery:
+                Interlocked.Increment(ref _securityFailedQueries);
+                IncrementAuditEvent("security.failed_query");
+#if NET6_0_OR_GREATER
+                _meterSecurityFailedQueries?.Add(1);
+                _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", "security.failed_query"));
+#endif
+                break;
+
+            case MetricEventType.Vacuum:
+                Interlocked.Exchange(ref _vacuumLastRunAtTicks, DateTimeOffset.UtcNow.Ticks);
+                Interlocked.Exchange(ref _vacuumBytesFreed, evt.BytesFreed);
+                IncrementAuditEvent("vacuum");
+#if NET6_0_OR_GREATER
+                _meterVacuumTotal?.Add(1);
+                _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", "vacuum"));
+#endif
+                break;
+
+            case MetricEventType.BackupCompleted:
+                Interlocked.Exchange(ref _backupLastSuccessAtTicks, DateTimeOffset.UtcNow.Ticks);
+                Interlocked.Exchange(ref _backupLastDurationMs, evt.ElapsedMicros / 1000);
+                IncrementAuditEvent("backup.completed");
+#if NET6_0_OR_GREATER
+                _meterBackupTotal?.Add(1);
+                _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", "backup.completed"));
+#endif
+                break;
         }
+    }
+
+    private void IncrementAuditEvent(string eventType)
+    {
+        var counter = _auditEvents.GetOrAdd(eventType, _ => new AuditEventCounter());
+        Interlocked.Increment(ref counter.Count);
     }
 
     private CollectionCounters GetOrAddCollection(string name)
@@ -255,6 +355,9 @@ internal sealed class MetricsDispatcher : IDisposable
         _cts.Cancel();
         _channel.Writer.TryComplete();
         _cts.Dispose();
+#if NET6_0_OR_GREATER
+        _meter?.Dispose();
+#endif
     }
 
     // ── Mutable per-collection accumulator (fields accessed via Interlocked) ─
@@ -269,5 +372,11 @@ internal sealed class MetricsDispatcher : IDisposable
         public long UpdateLatencySum;
         public long DeleteLatencySum;
         public long QueryLatencySum;
+    }
+
+    // ── Mutable per-audit-event-type counter (field accessed via Interlocked) ─
+    private sealed class AuditEventCounter
+    {
+        public long Count;
     }
 }

@@ -319,9 +319,9 @@ public sealed partial class StorageEngine : IDisposable
     /// Ensures the metrics dispatcher is initialized. No-op if already active.
     /// Called by <c>BLiteEngine.EnableMetrics()</c> before the first metric is published.
     /// </summary>
-    internal Metrics.MetricsDispatcher EnsureMetrics()
+    internal Metrics.MetricsDispatcher EnsureMetrics(bool enableDiagnosticSource = false)
     {
-        return _metrics ??= new Metrics.MetricsDispatcher();
+        return _metrics ??= new Metrics.MetricsDispatcher(enableDiagnosticSource);
     }
 
     /// <summary>

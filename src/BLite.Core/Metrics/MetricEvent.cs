@@ -34,4 +34,18 @@ public readonly struct MetricEvent
 
     /// <summary>Whether the operation completed successfully.</summary>
     public bool Success { get; init; }
+
+    /// <summary>
+    /// Contextual tag for typed events such as <see cref="MetricEventType.AuditEvent"/>.
+    /// Carries a human-readable label (e.g. <c>"vacuum"</c>, <c>"backup.completed"</c>).
+    /// <c>null</c> for events that do not require a tag.
+    /// </summary>
+    public string? Tag { get; init; }
+
+    /// <summary>
+    /// Number of bytes freed by an operation.
+    /// Used by <see cref="MetricEventType.Vacuum"/> to carry the bytes compacted.
+    /// 0 for operations that do not free bytes.
+    /// </summary>
+    public long BytesFreed { get; init; }
 }
