@@ -87,7 +87,7 @@ public class EncryptionTests : IDisposable
     [Fact]
     public void CryptoOptions_Ctor_ThrowsOnNullPassphrase()
     {
-        Assert.Throws<ArgumentNullException>(() => new CryptoOptions(null!));
+        Assert.Throws<ArgumentNullException>(() => new CryptoOptions((string)null!));
     }
 
     [Fact]
@@ -103,10 +103,10 @@ public class EncryptionTests : IDisposable
     }
 
     [Fact]
-    public void CryptoOptions_DefaultIterations_Are100000()
+    public void CryptoOptions_DefaultIterations_Are600000()
     {
         var opts = new CryptoOptions("test");
-        Assert.Equal(100_000, opts.Iterations);
+        Assert.Equal(600_000, opts.Iterations);
         Assert.Equal(KdfAlgorithm.Pbkdf2Sha256, opts.Kdf);
     }
 
@@ -622,7 +622,7 @@ public class EncryptionTests : IDisposable
     [Fact]
     public void EncryptionCoordinator_InvalidMasterKeySize_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => new EncryptionCoordinator(null!));
+        Assert.Throws<ArgumentNullException>(() => new EncryptionCoordinator((byte[])null!));
         Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[16]));
         Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[31]));
         Assert.Throws<ArgumentException>(() => new EncryptionCoordinator(new byte[33]));
@@ -1362,5 +1362,143 @@ public class EncryptionTests : IDisposable
         {
             using var _ = new BLiteEngine(dbPath, wrongCoordinator);
         });
+    }
+
+    // ── Ergonomic encryption-aware DocumentDbContext constructors ─────────────
+    // These tests exercise the constructors added to DocumentDbContext that mirror
+    // the encryption-aware constructors already present on BLiteEngine, ensuring
+    // typed (DocumentDbContext) and dynamic (BLiteEngine) modes expose a uniform
+    // encryption API surface.
+
+    [Fact]
+    public async Task DocumentDbContext_CryptoOptionsCtor_RoundTrip()
+    {
+        var dbPath = TempDb();
+        var opts = new CryptoOptions("typed-mode-passphrase", iterations: 1);
+
+        using (var ctx = new MultiFileTestDbContext(dbPath, opts))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "typed-encrypted", Tag = "ergo" });
+        }
+
+        using (var ctx2 = new MultiFileTestDbContext(dbPath, opts))
+        {
+            var e = await ctx2.Entries.FindByIdAsync(1);
+            Assert.NotNull(e);
+            Assert.Equal("typed-encrypted", e!.Payload);
+            Assert.Equal("ergo", e.Tag);
+        }
+    }
+
+    [Fact]
+    public void DocumentDbContext_CryptoOptionsCtor_NullPassphrase_Throws()
+    {
+        var dbPath = TempDb();
+        Assert.Throws<ArgumentNullException>(() => new MultiFileTestDbContext(dbPath, (CryptoOptions)null!));
+    }
+
+    [Fact]
+    public async Task DocumentDbContext_CoordinatorCtor_ServerMode_RoundTrip()
+    {
+        var dir = TempDir();
+        var dbPath = Path.Combine(dir, "typed_coord.db");
+        var masterKey = MakeMasterKey(0xA1);
+
+        using (var coordinator = new EncryptionCoordinator(masterKey))
+        using (var ctx = new MultiFileTestDbContext(dbPath, coordinator))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "coord-typed", Tag = "x" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 2, Payload = "coord-typed-2", Tag = "y" });
+        }
+
+        using (var coordinator2 = new EncryptionCoordinator(masterKey))
+        using (var ctx2 = new MultiFileTestDbContext(dbPath, coordinator2))
+        {
+            var e1 = await ctx2.Entries.FindByIdAsync(1);
+            var e2 = await ctx2.Entries.FindByIdAsync(2);
+            Assert.NotNull(e1);
+            Assert.NotNull(e2);
+            Assert.Equal("coord-typed", e1!.Payload);
+            Assert.Equal("coord-typed-2", e2!.Payload);
+        }
+    }
+
+    [Fact]
+    public void DocumentDbContext_CoordinatorCtor_NullCoordinator_Throws()
+    {
+        var dbPath = Path.Combine(TempDir(), "null_coord.db");
+        Assert.Throws<ArgumentNullException>(() =>
+            new MultiFileTestDbContext(dbPath, (EncryptionCoordinator)null!));
+    }
+
+    // ── Passphrase via raw bytes (P7) ─────────────────────────────────────────
+
+    [Fact]
+    public void CryptoOptions_BytesCtor_EmptySpan_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => new CryptoOptions(ReadOnlySpan<byte>.Empty));
+    }
+
+    [Fact]
+    public void CryptoOptions_BytesCtor_PassphraseStringIsEmpty()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes("hello");
+        var opts = new CryptoOptions(bytes, iterations: 1);
+        Assert.Equal(string.Empty, opts.Passphrase);
+        Assert.Equal(1, opts.Iterations);
+    }
+
+    [Fact]
+    public async Task AesGcmCryptoProvider_BytesPassphrase_RoundTrip()
+    {
+        var dbPath = TempDb();
+        var pwBytes = System.Text.Encoding.UTF8.GetBytes("byte-pass-secret-7654");
+        var opts = new CryptoOptions(pwBytes, iterations: 1);
+
+        using (var ctx = new MultiFileTestDbContext(dbPath, opts))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "bytes-mode", Tag = "t" });
+        }
+
+        // Reopen with a *different* CryptoOptions instance built from the same bytes
+        var pwBytes2 = System.Text.Encoding.UTF8.GetBytes("byte-pass-secret-7654");
+        var opts2 = new CryptoOptions(pwBytes2, iterations: 1);
+        using (var ctx2 = new MultiFileTestDbContext(dbPath, opts2))
+        {
+            var e = await ctx2.Entries.FindByIdAsync(1);
+            Assert.NotNull(e);
+            Assert.Equal("bytes-mode", e!.Payload);
+        }
+    }
+
+    [Fact]
+    public void CryptoOptions_ClearSecret_SubsequentProviderConstructionThrows()
+    {
+        var opts = new CryptoOptions("to-be-cleared", iterations: 1);
+        // Construct a provider once — this consumes a copy of the bytes.
+        using (var p1 = new AesGcmCryptoProvider(opts)) { /* ok */ }
+        // Clear the master copy. Subsequent provider creations must fail.
+        opts.ClearSecret();
+        Assert.Throws<InvalidOperationException>(() => new AesGcmCryptoProvider(opts));
+    }
+
+    [Fact]
+    public async Task CryptoOptions_StringAndBytes_AreInteroperable()
+    {
+        // Database written with string-ctor, opened with bytes-ctor and vice versa.
+        var dbPath = TempDb();
+        var stringOpts = new CryptoOptions("interop-pass", iterations: 1);
+        using (var ctx = new MultiFileTestDbContext(dbPath, stringOpts))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "interop", Tag = "i" });
+        }
+
+        var bytesOpts = new CryptoOptions(System.Text.Encoding.UTF8.GetBytes("interop-pass"), iterations: 1);
+        using (var ctx2 = new MultiFileTestDbContext(dbPath, bytesOpts))
+        {
+            var e = await ctx2.Entries.FindByIdAsync(1);
+            Assert.NotNull(e);
+            Assert.Equal("interop", e!.Payload);
+        }
     }
 }

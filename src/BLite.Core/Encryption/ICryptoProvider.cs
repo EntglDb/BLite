@@ -14,6 +14,16 @@ namespace BLite.Core.Encryption;
 /// instance is effectively immutable and its <see cref="Encrypt"/> / <see cref="Decrypt"/>
 /// methods may be called from multiple threads concurrently.
 /// </para>
+/// <para><b>Ownership</b></para>
+/// <para>
+/// Once an <see cref="ICryptoProvider"/> has been handed to a consumer
+/// (<see cref="BLite.Core.Storage.PageFile"/>, <see cref="BLite.Core.Transactions.WriteAheadLog"/>,
+/// or any sibling provider returned by <see cref="CreateSiblingProvider"/>), the consumer takes
+/// ownership and disposes the provider when it itself is disposed. Callers must therefore not
+/// share the same provider instance across multiple consumers — instead, let the
+/// <see cref="BLite.Core.Storage.StorageEngine"/> derive sibling providers automatically — to
+/// avoid double-dispose and use-after-dispose hazards.
+/// </para>
 /// </summary>
 public interface ICryptoProvider
 {

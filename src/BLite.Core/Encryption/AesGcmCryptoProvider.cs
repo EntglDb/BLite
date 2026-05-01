@@ -59,7 +59,9 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
     private readonly ushort _fileIndex;
 
     // KDF configuration.
-    private readonly string _passphrase;
+    // Passphrase bytes are obtained from CryptoOptions.CopyPassphraseBytes() so that we own
+    // a private copy that can be zeroed on Dispose without affecting the original options.
+    private byte[]? _passphraseBytes;
     private readonly int _iterations;
 
     // Key material — set by GetFileHeader (new file) or LoadFromFileHeader (existing file).
@@ -67,7 +69,9 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
 
     // Cached AesGcm instance created once after key derivation.
     // AesGcm is thread-safe for concurrent Encrypt/Decrypt calls once constructed.
-    private AesGcm? _aesGcm;
+    // Volatile so the reference written under PageFile's write-lock is visible to
+    // readers acquiring the read-lock without relying on the lock's barrier alone.
+    private volatile AesGcm? _aesGcm;
 
     /// <summary>
     /// Creates a new <see cref="AesGcmCryptoProvider"/> for a given file.
@@ -82,7 +86,7 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
     public AesGcmCryptoProvider(CryptoOptions options, byte fileRole = 0, ushort fileIndex = 0)
     {
         if (options == null) throw new ArgumentNullException(nameof(options));
-        _passphrase = options.Passphrase;
+        _passphraseBytes = options.CopyPassphraseBytes();
         _iterations = options.Iterations;
         _fileRole = fileRole;
         _fileIndex = fileIndex;
@@ -166,7 +170,7 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(44, 2), _fileIndex);
 
         // Derive key and create the cached AesGcm instance.
-        _key = KeyDerivation.DeriveKeyPbkdf2(_passphrase, salt, _iterations);
+        _key = KeyDerivation.DeriveKeyPbkdf2(GetPassphraseBytes(), salt, _iterations);
         CreateAesGcm();
     }
 
@@ -214,7 +218,7 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
             throw new InvalidOperationException($"Invalid KDF iteration count {iterations} in file header.");
 
         // Derive key and create the cached AesGcm instance.
-        _key = KeyDerivation.DeriveKeyPbkdf2(_passphrase, salt, iterations);
+        _key = KeyDerivation.DeriveKeyPbkdf2(GetPassphraseBytes(), salt, iterations);
         CreateAesGcm();
     }
 
@@ -224,15 +228,27 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
         _aesGcm?.Dispose();
         _aesGcm = null;
         // Zero out key material to reduce window of sensitive data in memory.
+        // Use CryptographicOperations.ZeroMemory which is guaranteed not to be
+        // optimised away by the JIT (unlike Array.Clear).
         if (_key != null)
         {
-            Array.Clear(_key, 0, _key.Length);
+            CryptographicOperations.ZeroMemory(_key);
             _key = null;
+        }
+        if (_passphraseBytes != null)
+        {
+            CryptographicOperations.ZeroMemory(_passphraseBytes);
+            _passphraseBytes = null;
         }
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
-
+    private byte[] GetPassphraseBytes()
+    {
+        return _passphraseBytes ?? throw new ObjectDisposedException(
+            nameof(AesGcmCryptoProvider),
+            "Passphrase bytes have been zeroed; cannot derive a new key from a disposed provider.");
+    }
     /// <summary>
     /// Creates and caches the <see cref="AesGcm"/> instance after key derivation.
     /// Called once from <see cref="GetFileHeader"/> or <see cref="LoadFromFileHeader"/>.

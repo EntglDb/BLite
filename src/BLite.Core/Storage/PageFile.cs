@@ -54,13 +54,37 @@ public readonly struct PageFileConfig
     /// Optional transparent page-level encryption provider.
     /// When <c>null</c> (the default), data is stored in plaintext and the file layout is
     /// identical to all previous versions of BLite (zero overhead, full backwards compatibility).
-    /// Set to <see cref="AesGcmCryptoProvider"/> to enable AES-256-GCM encryption at rest.
     /// <para>
     /// A single provider is sufficient for the entire database.  The
     /// <see cref="BLite.Core.Storage.StorageEngine"/> automatically derives sibling providers
     /// for the WAL, the index file, and per-collection files by calling
     /// <see cref="ICryptoProvider.CreateSiblingProvider"/> — so every physical file is
     /// encrypted with a distinct key while the caller only configures one provider.
+    /// </para>
+    /// <para><b>Single-file vs server (multi-file) layout</b></para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// In single-file mode (<see cref="WalDirectoryPath"/>, <see cref="IndexFilePath"/>,
+    /// <see cref="CollectionDataDirectory"/> all <c>null</c>) any <see cref="ICryptoProvider"/>
+    /// implementation is acceptable, including the simple
+    /// <see cref="BLite.Core.Encryption.AesGcmCryptoProvider"/> derived from a passphrase.
+    /// </description></item>
+    /// <item><description>
+    /// In server (multi-file) mode the provider <b>MUST</b> implement
+    /// <see cref="ICryptoProvider.CreateSiblingProvider"/> by deriving a unique sub-key per
+    /// physical file (HKDF), otherwise WAL records, index pages, and collection pages would
+    /// share the same AES-GCM key and reuse the same nonce space — a fatal break of GCM
+    /// security. The supported way to obtain such a provider is via
+    /// <see cref="BLite.Core.Encryption.CryptoOptions.FromMasterKey(System.ReadOnlySpan{byte})"/>;
+    /// the engine then constructs the appropriate <see cref="ICryptoProvider"/> internally.
+    /// </description></item>
+    /// </list>
+    /// <para><b>Ownership</b></para>
+    /// <para>
+    /// The <see cref="StorageEngine"/> takes ownership of the provider placed on the config
+    /// (and of every sibling provider it derives) and disposes them when the engine itself is
+    /// disposed. Do not dispose the provider yourself once the config has been handed to the
+    /// engine.
     /// </para>
     /// </summary>
     public ICryptoProvider? CryptoProvider { get; init; }

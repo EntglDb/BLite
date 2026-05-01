@@ -1,5 +1,6 @@
 using BLite.Core;
 using BLite.Core.Collections;
+using BLite.Core.Encryption;
 using BLite.Core.Metadata;
 using BLite.Core.Storage;
 
@@ -25,6 +26,26 @@ public partial class MultiFileTestDbContext : DocumentDbContext
 
     public MultiFileTestDbContext(string databasePath, PageFileConfig config)
         : base(databasePath, config)
+    {
+        InitializeCollections();
+    }
+
+    /// <summary>
+    /// Exercises the encryption-aware constructor
+    /// <see cref="DocumentDbContext(string, CryptoOptions, BLite.Core.KeyValue.BLiteKvOptions?)"/>.
+    /// </summary>
+    public MultiFileTestDbContext(string databasePath, CryptoOptions crypto)
+        : base(databasePath, crypto)
+    {
+        InitializeCollections();
+    }
+
+    /// <summary>
+    /// Exercises the coordinator-based encryption constructor
+    /// <see cref="DocumentDbContext(string, EncryptionCoordinator, PageFileConfig?, BLite.Core.KeyValue.BLiteKvOptions?)"/>.
+    /// </summary>
+    internal MultiFileTestDbContext(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null)
+        : base(databasePath, coordinator, baseConfig)
     {
         InitializeCollections();
     }

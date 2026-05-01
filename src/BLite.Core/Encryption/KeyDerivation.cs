@@ -23,6 +23,24 @@ internal static class KeyDerivation
     public static byte[] DeriveKeyPbkdf2(string passphrase, ReadOnlySpan<byte> salt, int iterations)
     {
         var passphraseBytes = Encoding.UTF8.GetBytes(passphrase);
+        try
+        {
+            return DeriveKeyPbkdf2(passphraseBytes, salt, iterations);
+        }
+        finally
+        {
+            // Zero the transient UTF8 copy so the secret does not linger on the GC heap.
+            CryptographicOperations.ZeroMemory(passphraseBytes);
+        }
+    }
+
+    /// <summary>
+    /// Derives a 256-bit key from raw passphrase bytes (typically UTF-8) using PBKDF2-HMAC-SHA256.
+    /// The caller is responsible for zeroing <paramref name="passphraseBytes"/> after the call.
+    /// </summary>
+    public static byte[] DeriveKeyPbkdf2(byte[] passphraseBytes, ReadOnlySpan<byte> salt, int iterations)
+    {
+        if (passphraseBytes is null) throw new ArgumentNullException(nameof(passphraseBytes));
         var saltArray = salt.ToArray();
 
 #if NET6_0_OR_GREATER

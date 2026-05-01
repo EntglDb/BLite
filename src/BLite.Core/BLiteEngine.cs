@@ -31,6 +31,9 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
     private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
+    // Owned coordinator (master-key/HKDF mode). Disposed with the engine so that the
+    // master key bytes are zeroed when the engine is disposed.
+    private readonly EncryptionCoordinator? _ownedCoordinator;
     private bool _disposed;
 
     public event Action<BackupStartedEvent>? BackupStarted;
@@ -84,26 +87,58 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
-    /// Creates a new BLiteEngine with encryption enabled, using AES-256-GCM.
+    /// Creates a new BLiteEngine with transparent AES-256-GCM encryption at rest.
     /// </summary>
-    /// <param name="databasePath">Path to the database file.</param>
-    /// <param name="crypto">Passphrase and key-derivation options.</param>
+    /// <param name="databasePath">Path to the database file (or main file in server mode).</param>
+    /// <param name="crypto">
+    /// Encryption configuration. Two modes are supported:
+    /// <list type="bullet">
+    /// <item><description>
+    /// Passphrase mode (<c>new CryptoOptions("…")</c> or
+    /// <c>new CryptoOptions(ReadOnlySpan&lt;byte&gt;)</c>) — single-file PBKDF2-SHA256.
+    /// </description></item>
+    /// <item><description>
+    /// Master-key mode (<see cref="CryptoOptions.FromMasterKey(System.ReadOnlySpan{byte})"/>)
+    /// — multi-file (server) layout with per-file HKDF-SHA256 subkeys. The engine internally
+    /// owns and disposes the underlying coordinator; its master-key bytes are zeroed on
+    /// <see cref="Dispose"/>.
+    /// </description></item>
+    /// </list>
+    /// </param>
     /// <param name="kvOptions">Optional Key-Value store configuration.</param>
-    public BLiteEngine(string databasePath, CryptoOptions crypto, BLiteKvOptions? kvOptions = null)
+    /// <param name="baseConfig">
+    /// Optional base page configuration (page size, growth block, lock timeouts).
+    /// Used as the base layout for master-key (server) mode; ignored in passphrase mode
+    /// (which always uses single-file <see cref="PageFileConfig.Default"/>).
+    /// </param>
+    public BLiteEngine(string databasePath, CryptoOptions crypto, BLiteKvOptions? kvOptions = null, PageFileConfig? baseConfig = null)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
         if (crypto == null)
             throw new ArgumentNullException(nameof(crypto));
 
-        // Do NOT use DetectFromFile here — the encrypted file begins with a 64-byte crypto
-        // header, not a page header, so the auto-detection heuristic would misread it and
-        // derive an incorrect page size.  Use Default (16 KB) and let the PageFile open path
-        // (which reads the crypto header and validates the key) handle existing files.
-        var config = PageFileConfig.Default with
+        PageFileConfig config;
+        if (crypto.IsMasterKeyMode)
         {
-            CryptoProvider = new AesGcmCryptoProvider(crypto)
-        };
+            // Server layout with per-file HKDF subkeys.
+            // Engine owns the coordinator so that the master key is zeroed on Dispose.
+            _ownedCoordinator = new EncryptionCoordinator(crypto);
+            config = PageFileConfig.Server(databasePath, baseConfig) with
+            {
+                CryptoProvider = _ownedCoordinator.CreateForMainFile()
+            };
+        }
+        else
+        {
+            // Single-file PBKDF2.
+            // Do NOT use DetectFromFile here — the encrypted file begins with a 64-byte crypto
+            // header, not a page header, so the auto-detection heuristic would misread it.
+            config = PageFileConfig.Default with
+            {
+                CryptoProvider = new AesGcmCryptoProvider(crypto)
+            };
+        }
 
         _databasePath = databasePath;
         _storage = new StorageEngine(databasePath, config);
@@ -112,42 +147,23 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     }
 
     /// <summary>
-    /// Creates a new <see cref="BLiteEngine"/> in multi-file (server) mode with
-    /// coordinator-managed per-file AES-256-GCM encryption.
-    /// <para>
-    /// Each physical file (main, index, WAL, per-collection) receives a unique 256-bit
-    /// subkey derived via HKDF-SHA256 from the coordinator's master key and the
-    /// database salt stored in the main file header.  This eliminates nonce-reuse risk
-    /// when multiple files contain pages with the same ID.
-    /// </para>
+    /// Internal constructor used by tests and by the encryption test fixtures to drive
+    /// the coordinator path explicitly. Not part of the public API.
     /// </summary>
-    /// <param name="databasePath">Path to the main database file.</param>
-    /// <param name="coordinator">
-    /// Coordinator that owns the master key and derives per-file subkeys.
-    /// The caller retains ownership — the coordinator is <b>not</b> disposed by the engine.
-    /// </param>
-    /// <param name="baseConfig">
-    /// Optional base page configuration (page size, growth block, lock timeouts).
-    /// Defaults to <see cref="PageFileConfig.Default"/> (16 KB pages).
-    /// Multi-file paths (WAL directory, index file, collection directory) are derived from
-    /// <paramref name="databasePath"/> via <see cref="PageFileConfig.Server"/>.
-    /// </param>
-    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
-    public BLiteEngine(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null, BLiteKvOptions? kvOptions = null)
+    internal BLiteEngine(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null, BLiteKvOptions? kvOptions = null)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
         if (coordinator == null)
             throw new ArgumentNullException(nameof(coordinator));
 
-        // Server layout: separate WAL directory, dedicated index file, per-collection directory.
-        // A single CryptoProvider (the main-file provider) is placed on the config; StorageEngine
-        // automatically calls CreateSiblingProvider for every sub-file (WAL, index, collections).
         var config = PageFileConfig.Server(databasePath, baseConfig) with
         {
             CryptoProvider = coordinator.CreateForMainFile()
         };
 
+        // Caller-owned coordinator: do NOT dispose with the engine (preserves the existing
+        // contract used by the encryption tests, which dispose the coordinator themselves).
         _databasePath = databasePath;
         _storage = new StorageEngine(databasePath, config);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
@@ -918,6 +934,8 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             collection.Dispose();
         _collections.Clear();
         _storage.Dispose();
+        // Owned coordinator (master-key mode) — zeroes the master key on Dispose.
+        _ownedCoordinator?.Dispose();
 
         GC.SuppressFinalize(this);
     }

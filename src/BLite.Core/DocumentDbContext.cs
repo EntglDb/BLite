@@ -1,4 +1,5 @@
 using BLite.Core.Collections;
+using BLite.Core.Encryption;
 using BLite.Core.KeyValue;
 using BLite.Core.Metadata;
 using BLite.Core.Storage;
@@ -24,6 +25,9 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     internal readonly CDC.ChangeStreamDispatcher _cdc;
     private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
+    // Owned coordinator (master-key/HKDF mode). Disposed with the context so that the
+    // master key bytes are zeroed when the context is disposed.
+    private readonly EncryptionCoordinator? _ownedCoordinator;
     protected bool _disposed;
 
     /// <summary>
@@ -86,6 +90,81 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
         DropOrphanCollections();
+    }
+
+    /// <summary>
+    /// Creates a new database context with transparent AES-256-GCM encryption at rest.
+    /// <para>
+    /// Mirrors <see cref="BLiteEngine(string, CryptoOptions, BLiteKvOptions?, PageFileConfig?)"/>
+    /// so the typed and dynamic modes expose a uniform encryption API surface.
+    /// </para>
+    /// </summary>
+    /// <param name="databasePath">Path to the database file (or main file in server mode).</param>
+    /// <param name="crypto">
+    /// Encryption configuration. Passphrase mode (PBKDF2 single-file) or master-key mode
+    /// (HKDF multi-file via <see cref="CryptoOptions.FromMasterKey(System.ReadOnlySpan{byte})"/>).
+    /// In master-key mode the context owns the underlying coordinator and zeros the master
+    /// key on <see cref="Dispose"/>.
+    /// </param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    /// <param name="baseConfig">
+    /// Optional base page configuration. Used as the base layout for master-key (server) mode;
+    /// ignored in passphrase mode (which always uses single-file <see cref="PageFileConfig.Default"/>).
+    /// </param>
+    protected DocumentDbContext(string databasePath, CryptoOptions crypto, BLiteKvOptions? kvOptions = null, PageFileConfig? baseConfig = null)
+    {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentNullException(nameof(databasePath));
+        if (crypto == null)
+            throw new ArgumentNullException(nameof(crypto));
+
+        PageFileConfig config;
+        if (crypto.IsMasterKeyMode)
+        {
+            _ownedCoordinator = new EncryptionCoordinator(crypto);
+            config = PageFileConfig.Server(databasePath, baseConfig) with
+            {
+                CryptoProvider = _ownedCoordinator.CreateForMainFile()
+            };
+        }
+        else
+        {
+            // Do NOT use DetectFromFile here — the encrypted file begins with a 64-byte crypto
+            // header, not a page header.
+            config = PageFileConfig.Default with
+            {
+                CryptoProvider = new AesGcmCryptoProvider(crypto)
+            };
+        }
+
+        _storage = new StorageEngine(databasePath, config);
+        _cdc = new CDC.ChangeStreamDispatcher();
+        _storage.RegisterCdc(_cdc);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+
+        var modelBuilder = new ModelBuilder();
+        OnModelCreating(modelBuilder);
+        _model = modelBuilder.GetEntityBuilders();
+        InitializeCollections();
+        DropOrphanCollections();
+    }
+
+    /// <summary>
+    /// Internal constructor used by tests and encryption test fixtures to drive
+    /// the coordinator path explicitly. Caller-owned coordinator (not disposed by the context).
+    /// </summary>
+    internal DocumentDbContext(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null, BLiteKvOptions? kvOptions = null)
+        : this(
+            databasePath,
+            PageFileConfig.Server(
+                databasePath ?? throw new ArgumentNullException(nameof(databasePath)),
+                baseConfig) with
+            {
+                CryptoProvider = (coordinator ?? throw new ArgumentNullException(nameof(coordinator))).CreateForMainFile()
+            },
+            kvOptions)
+    {
     }
 
     /// <summary>
@@ -380,6 +459,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
         _storage?.Dispose();
         _cdc?.Dispose();
+        _ownedCoordinator?.Dispose();
 
         GC.SuppressFinalize(this);
     }
