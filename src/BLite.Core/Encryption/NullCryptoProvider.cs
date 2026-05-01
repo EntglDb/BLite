@@ -39,4 +39,8 @@ public sealed class NullCryptoProvider : ICryptoProvider
     /// <inheritdoc/>
     /// <remarks>No-op: <see cref="FileHeaderSize"/> is 0 so there is nothing to read.</remarks>
     public void LoadFromFileHeader(ReadOnlySpan<byte> header) { }
+
+    /// <inheritdoc/>
+    /// <remarks>Returns the same singleton — no encryption for any file.</remarks>
+    public ICryptoProvider CreateSiblingProvider(byte fileRole, ushort fileIndex) => this;
 }

@@ -86,7 +86,11 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
         _iterations = options.Iterations;
         _fileRole = fileRole;
         _fileIndex = fileIndex;
+        _options = options;
     }
+
+    // Cached options reference for use by CreateSiblingProvider.
+    private readonly CryptoOptions _options;
 
     /// <inheritdoc/>
     /// <remarks>
@@ -254,4 +258,13 @@ public sealed class AesGcmCryptoProvider : ICryptoProvider, IDisposable
                 "LoadFromFileHeader (existing file) before performing page I/O.");
         return _aesGcm;
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Creates a new <see cref="AesGcmCryptoProvider"/> for the given file role/index using
+    /// the same passphrase and KDF settings.  Each sibling independently generates a fresh
+    /// random salt when its file is created, so every physical file gets a distinct key.
+    /// </remarks>
+    public ICryptoProvider CreateSiblingProvider(byte fileRole, ushort fileIndex)
+        => new AesGcmCryptoProvider(_options, fileRole, fileIndex);
 }

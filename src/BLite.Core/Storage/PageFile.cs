@@ -55,34 +55,15 @@ public readonly struct PageFileConfig
     /// When <c>null</c> (the default), data is stored in plaintext and the file layout is
     /// identical to all previous versions of BLite (zero overhead, full backwards compatibility).
     /// Set to <see cref="AesGcmCryptoProvider"/> to enable AES-256-GCM encryption at rest.
+    /// <para>
+    /// A single provider is sufficient for the entire database.  The
+    /// <see cref="BLite.Core.Storage.StorageEngine"/> automatically derives sibling providers
+    /// for the WAL, the index file, and per-collection files by calling
+    /// <see cref="ICryptoProvider.CreateSiblingProvider"/> — so every physical file is
+    /// encrypted with a distinct key while the caller only configures one provider.
+    /// </para>
     /// </summary>
     public ICryptoProvider? CryptoProvider { get; init; }
-
-    /// <summary>
-    /// Optional record-level encryption provider for the Write-Ahead Log (WAL).
-    /// When <c>null</c> (the default), WAL records are stored in plaintext.
-    /// Set to <see cref="AesGcmCryptoProvider"/> with <c>fileRole: 3</c> to enable
-    /// AES-256-GCM encryption of WAL records at rest.
-    /// </summary>
-    public ICryptoProvider? WalCryptoProvider { get; init; }
-
-    /// <summary>
-    /// Optional coordinator for multi-file HKDF-SHA256 subkey derivation.
-    /// <para>
-    /// When set in conjunction with <see cref="CryptoProvider"/>, the
-    /// <see cref="BLite.Core.Storage.StorageEngine"/> automatically derives a unique
-    /// AES-256-GCM subkey for each sub-file (index file, WAL, per-collection files)
-    /// using <c>HKDF-SHA256(masterKey, databaseSalt, info)</c> — preventing nonce
-    /// reuse across files that share the same page IDs.
-    /// </para>
-    /// <para>
-    /// The coordinator's <see cref="EncryptionCoordinator.CreateForMainFile"/> provider
-    /// must already be assigned to <see cref="CryptoProvider"/> before passing this
-    /// config to <see cref="BLite.Core.Storage.StorageEngine"/>.
-    /// The coordinator is <b>not</b> disposed by the engine; the caller retains ownership.
-    /// </para>
-    /// </summary>
-    public EncryptionCoordinator? EncryptionCoordinator { get; init; }
 
     /// <summary>
     /// Small pages for embedded scenarios with many tiny documents

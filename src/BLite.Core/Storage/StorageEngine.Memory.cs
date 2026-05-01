@@ -123,16 +123,16 @@ public sealed partial class StorageEngine
                 var filePath = CollectionFilePath(name);
                 var collConfig = AsStandaloneConfig(_config);
 
-                // When a coordinator is present, derive a per-collection subkey keyed on
+                // When encryption is configured, derive a per-collection provider keyed on
                 // the slot index so that collection files never share a key with each other
                 // or with the main/index file even when they contain the same page IDs.
-                if (_config.EncryptionCoordinator != null &&
+                if (_config.CryptoProvider != null &&
                     _collectionNameToSlot != null &&
                     _collectionNameToSlot.TryGetValue(name, out var slot))
                 {
                     collConfig = collConfig with
                     {
-                        CryptoProvider = _config.EncryptionCoordinator.CreateForCollection(slot)
+                        CryptoProvider = _config.CryptoProvider.CreateSiblingProvider(1, (ushort)slot)
                     };
                 }
 

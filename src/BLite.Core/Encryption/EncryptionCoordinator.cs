@@ -463,5 +463,25 @@ public sealed class EncryptionCoordinator : IDisposable
                     "before performing page I/O.");
             return _aesGcm;
         }
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Delegates to the owning <see cref="EncryptionCoordinator"/> so that the sibling
+        /// file receives a unique HKDF-SHA256-derived sub-key.
+        /// The main-file provider must have been opened (salt primed) before calling
+        /// this for any secondary role (collection, index, WAL).
+        /// </remarks>
+        public ICryptoProvider CreateSiblingProvider(byte fileRole, ushort fileIndex)
+        {
+            return fileRole switch
+            {
+                0 => _coordinator.CreateForMainFile(),
+                1 => _coordinator.CreateForCollection(fileIndex),
+                2 => _coordinator.CreateForIndex(fileIndex),
+                3 => _coordinator.CreateForWal(),
+                _ => throw new ArgumentOutOfRangeException(nameof(fileRole),
+                         $"Unknown file role: {fileRole}. Valid roles are 0 (main), 1 (collection), 2 (index), 3 (WAL).")
+            };
+        }
     }
 }
