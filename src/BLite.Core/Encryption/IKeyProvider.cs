@@ -32,7 +32,7 @@ public interface IKeyProvider
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
     /// A <see cref="ReadOnlyMemory{T}"/> containing exactly 32 bytes of key material.
-    /// The memory must remain valid until the <see cref="BLiteEngine"/> has finished
+    /// The memory must remain valid until the <see cref="BLite.Core.BLiteEngine"/> has finished
     /// opening the database (i.e. until the awaited <c>GetKeyAsync</c> call returns and
     /// the engine constructor has completed its initialization).
     /// </returns>

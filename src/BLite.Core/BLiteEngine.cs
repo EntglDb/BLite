@@ -204,6 +204,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
                 "Specify either EncryptionOptions.Passphrase or EncryptionOptions.KeyProvider, not both.",
                 nameof(options));
 
+        if (enc != null && enc.Algorithm != EncryptionAlgorithm.AesGcm256)
+            throw new NotSupportedException(
+                $"Encryption algorithm '{enc.Algorithm}' is not currently supported. " +
+                $"Only {nameof(EncryptionAlgorithm.AesGcm256)} is supported.");
+
         if (enc?.KeyProvider != null)
         {
             // ── Production path: external key management ───────────────────
@@ -222,14 +227,24 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             try
             {
                 var coordinator = new EncryptionCoordinator(masterKey);
-                var mainProvider = coordinator.CreateForMainFile();
-                var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                try
                 {
-                    CryptoProvider = mainProvider
-                };
+                    var mainProvider = coordinator.CreateForMainFile();
+                    var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                    {
+                        CryptoProvider = mainProvider
+                    };
 
-                _coordinator = coordinator;
-                _storage = new StorageEngine(options.Filename, config);
+                    _storage = new StorageEngine(options.Filename, config);
+                    // Only take ownership AFTER storage is successfully constructed; if
+                    // StorageEngine() throws, the catch block below disposes the coordinator.
+                    _coordinator = coordinator;
+                }
+                catch
+                {
+                    coordinator.Dispose();
+                    throw;
+                }
             }
             finally
             {
@@ -242,6 +257,16 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             // ── Development path: passphrase-based key derivation ──────────
             // Convenient for local development; not suitable for production.
             // Key is derived via PBKDF2-SHA256; per-file salt stored in file header.
+            //
+            // Multi-file (server) mode requires the EncryptionCoordinator for proper
+            // per-file key isolation. Reject any PageConfig that enables multi-file routing.
+            var cfg = options.PageConfig;
+            if (cfg.HasValue && (cfg.Value.IndexFilePath != null || cfg.Value.CollectionDataDirectory != null))
+                throw new ArgumentException(
+                    "EncryptionOptions.Passphrase is only supported in single-file mode. " +
+                    "Use EncryptionOptions.KeyProvider for multi-file (server) mode encryption.",
+                    nameof(options));
+
             var cryptoOptions = new CryptoOptions(enc.Passphrase, enc.Kdf, enc.KdfIterations);
             var baseConfig = options.PageConfig ?? PageFileConfig.Default;
             var config = baseConfig with
@@ -363,6 +388,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
                 "Specify either EncryptionOptions.Passphrase or EncryptionOptions.KeyProvider, not both.",
                 nameof(options));
 
+        if (enc != null && enc.Algorithm != EncryptionAlgorithm.AesGcm256)
+            throw new NotSupportedException(
+                $"Encryption algorithm '{enc.Algorithm}' is not currently supported. " +
+                $"Only {nameof(EncryptionAlgorithm.AesGcm256)} is supported.");
+
         if (enc?.KeyProvider != null)
         {
             var databaseName = System.IO.Path.GetFileNameWithoutExtension(options.Filename);
@@ -377,14 +407,22 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             try
             {
                 var coordinator = new EncryptionCoordinator(masterKey);
-                var mainProvider = coordinator.CreateForMainFile();
-                var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                try
                 {
-                    CryptoProvider = mainProvider
-                };
+                    var mainProvider = coordinator.CreateForMainFile();
+                    var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                    {
+                        CryptoProvider = mainProvider
+                    };
 
-                var storage = new StorageEngine(options.Filename, config);
-                return new BLiteEngine(storage, options.Filename, options.KvOptions, coordinator);
+                    var storage = new StorageEngine(options.Filename, config);
+                    return new BLiteEngine(storage, options.Filename, options.KvOptions, coordinator);
+                }
+                catch
+                {
+                    coordinator.Dispose();
+                    throw;
+                }
             }
             finally
             {

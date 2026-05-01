@@ -1641,4 +1641,71 @@ public class EncryptionTests : IDisposable
             Assert.Equal("async-value", val);
         }
     }
+
+    [Fact]
+    public void BLiteEngineOptions_UnsupportedAlgorithm_Throws()
+    {
+        var path = TempDb();
+        // Cast through byte to produce an out-of-range value without a named constant
+        var unsupported = (EncryptionAlgorithm)0xFF;
+        Assert.Throws<NotSupportedException>(() =>
+            new BLiteEngine(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions
+                {
+                    Passphrase = "test",
+                    Algorithm = unsupported
+                }
+            }));
+    }
+
+    [Fact]
+    public async Task BLiteEngineOptions_CreateAsync_UnsupportedAlgorithm_Throws()
+    {
+        var path = TempDb();
+        var unsupported = (EncryptionAlgorithm)0xFF;
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            BLiteEngine.CreateAsync(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions
+                {
+                    KeyProvider = new FixedKeyProvider(),
+                    Algorithm = unsupported
+                }
+            }));
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_Passphrase_MultiFilePageConfig_Throws()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "enc.db");
+        // PageConfig with CollectionDataDirectory set — should be rejected in passphrase mode
+        var serverConfig = PageFileConfig.Server(path);
+        Assert.Throws<ArgumentException>(() =>
+            new BLiteEngine(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions { Passphrase = "secret" },
+                PageConfig = serverConfig
+            }));
+    }
+
+    [Fact]
+    public void BLiteEngineOptions_Passphrase_IndexFilePath_Throws()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "enc.db");
+        // PageConfig with IndexFilePath set — should be rejected in passphrase mode
+        var cfgWithIndex = PageFileConfig.Default with { IndexFilePath = Path.Combine(dir, "enc.idx") };
+        Assert.Throws<ArgumentException>(() =>
+            new BLiteEngine(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions { Passphrase = "secret" },
+                PageConfig = cfgWithIndex
+            }));
+    }
 }
