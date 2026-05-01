@@ -1,106 +1,262 @@
-# BLite — Development Plan: GDPR Compliance
+# BLite — GDPR Compliance Plan (v5)
 
-> Date: April 27, 2026  
-> References: Regulation (EU) 2016/679 (GDPR), [MISSING_FEATURES.md](MISSING_FEATURES.md), [ENCRYPTION_PLAN.md](ENCRYPTION_PLAN.md), [DocumentCollection.cs](../../src/BLite.Core/Collections/DocumentCollection.cs), [ChangeStreamDispatcher.cs](../../src/BLite.Core/CDC/ChangeStreamDispatcher.cs)
-
----
-
-## Overview
-
-BLite is an embedded database: GDPR compliance responsibility lies primarily with the **data controller** (the application integrating BLite). However, the engine itself must provide the **technical primitives** that make compliance possible and auditable — following the **Privacy by Design** principle (Art. 25 GDPR).
-
-This document identifies current gaps and the plan to address them, organized by GDPR article.
+> **Audience:** AI coding agents and human contributors implementing the GDPR compliance feature set.  
+> **Status:** Authoritative spec. All GDPR GitHub issues link back to a section of this file.  
+> **Last revised:** May 1, 2026 (post-Encryption refactor).  
+> **References:** Regulation (EU) 2016/679 (GDPR), [ENCRYPTION_FIX_PLAN.md](ENCRYPTION_FIX_PLAN.md), [AUDIT_IMPLEMENTATION.md](AUDIT_IMPLEMENTATION.md), [MISSING_FEATURES.md](MISSING_FEATURES.md).
 
 ---
 
-## GDPR Article → BLite Feature Mapping
+## 0. Why this document exists
 
-| GDPR Article | Principle | Required feature | Status |
-|--------------|-----------|-----------------|--------|
-| Art. 5(1)(b) | Purpose limitation | Purpose tags on collections | ❌ Missing |
-| Art. 5(1)(c) | Data minimisation | Field-level masking / exclusion | ❌ Missing |
-| Art. 5(1)(e) | Storage limitation | Generalised retention policy | ⚠️ Partial (TimeSeries only) |
-| Art. 5(1)(f) | Integrity and confidentiality | Encryption at-rest | ❌ Missing |
-| Art. 15 | Right of access | Data subject export | ❌ Missing |
-| Art. 17 | Right to erasure | Secure erase / VACUUM | ⚠️ Partial |
-| Art. 20 | Data portability | Structured export formats | ❌ Missing |
-| Art. 25 | Privacy by Design | Secure defaults, minimisation | ⚠️ Partial |
-| Art. 30 | Records of processing | Audit trail | ❌ Not implemented |
-| Art. 32 | Security of processing | Encryption + Audit | ❌ Missing |
-| Art. 35 | DPIA | Impact assessment tooling | ❌ Missing |
+The Encryption feature was originally split into many narrow ShapeUp pitches. Each pitch was self-contained, but no single artifact described the **shared architecture, ownership rules, and cross-cutting invariants**. As a result, agentic implementations drifted (public types that should have been internal, missing `IDisposable` plumbing, ad-hoc `EncryptionCoordinator` arguments leaking into user-facing APIs) and a P14 refactor was required.
+
+This plan exists to prevent the same failure mode for GDPR. It defines, **before any code is written**:
+
+- The single canonical namespace and file layout.
+- All shared types, with ownership and lifetime.
+- The dependency graph between work packages.
+- Hard "do-not-touch" boundaries.
+- Per-WP acceptance criteria that are testable.
+
+Every GDPR issue **must** reference §2–§4 of this document and stay within those contracts. Any deviation requires updating this document **first**.
 
 ---
 
-## 1. Encryption at Rest (Art. 5(1)(f), Art. 32)
+## 1. Scope and non-scope
 
-> See [ENCRYPTION_PLAN.md](ENCRYPTION_PLAN.md) for full details.
+### What BLite must provide
 
-### Gap
-No encryption implemented. `.db`, WAL, and backup files are all plaintext.
+BLite is an embedded, in-process database. Under GDPR the **data controller is the host application**, never the database engine. BLite's role is to provide **technical primitives** that make compliance possible and auditable:
 
-### Actions
-1. Implement `ICryptoProvider` / `AesGcmCryptoProvider` in the storage layer
-2. Encrypt the WAL with the same derived key as the corresponding database file
-3. Encrypt all backup files (optionally with a separate backup key)
-4. Implement `EncryptionCoordinator` for multi-file (server) mode with per-file HKDF subkeys
-5. Document mandatory configuration for production environments
+1. A way to mark domain fields as personal data (compile-time metadata).
+2. A way to extract all data belonging to a single subject (Art. 15, 20).
+3. A way to inspect the database surface for compliance reporting (Art. 30).
+4. A way to suppress PII leakage through the change-data-capture (CDC) channel (Art. 5(1)(c)).
+5. A safe-default configuration profile that wires the above with encryption + audit + retention + secure erase (Art. 25).
+6. A DPIA-oriented documentation deliverable (Art. 35).
 
----
+### What BLite must **not** do
 
-## 2. Audit Trail (Art. 30, Art. 32)
+These are explicit **anti-goals**. An agent that proposes any of the following has misread the plan:
 
-> See [MISSING_FEATURES.md §1](MISSING_FEATURES.md) for full details.
-
-### Gap
-`src/BLite.Core/Audit/` does not exist. CDC is not a formal audit trail.
-
-### Actions
-1. Implement `IBLiteAuditSink` with a built-in JSONL file sink
-2. Record: who read/wrote/deleted, when, which collection, which document
-3. Guarantee the audit log is **append-only** and not modifiable by the application
-4. Support cryptographic signing of entries (optional, for high-compliance environments)
-
-### Audit log privacy
-- **Do not include the document payload** in audit entries by default — only `documentId`, `operation`, `timestamp`, `userId`
-- Payload capture may be enabled with `AuditOptions.CapturePayload = true` only if the data is not PII, or if it is already encrypted
+| Anti-goal | Reason |
+|---|---|
+| Decide what counts as "personal data" at runtime | Only the application can; BLite uses the `[PersonalData]` annotation as a hint. |
+| Auto-delete data based on detected PII | Erasure is an application decision; BLite exposes primitives, never policies. |
+| Encrypt individual BSON fields | Out of scope. Page-level AES-GCM is the only encryption surface. |
+| Implement a new audit module inside `BLite.Core/GDPR/` | Audit lives in `BLite.Core/Audit/` (see AUDIT_IMPLEMENTATION.md). GDPR consumes it. |
+| Wrap or re-export `ICryptoProvider`, `EncryptionCoordinator`, or `IBLiteAuditSink` from `BLite.Core/GDPR/` | These types belong to their owning modules. GDPR observes them via existing public/internal APIs only. |
+| Add a "compliance certification" claim anywhere in code or docs | BLite ships primitives, not certifications. The DPIA doc ships a legal disclaimer. |
+| Modify `EncryptionCoordinator`, `AesGcmCryptoProvider`, `CryptoOptions`, `WriteAheadLog`, or any `Storage/*` file as part of GDPR work | Encryption is feature-frozen post-P14. GDPR is purely a consumer. |
 
 ---
 
-## 3. Right of Access — Art. 15
+## 2. Architectural invariants (apply to **every** work package)
 
-### Gap
-No API to extract all data belonging to a single data subject.
+These rules are non-negotiable. Each WP must satisfy them before merge.
 
-### Proposed API
+### 2.1 Canonical namespace and folder
+
+All new GDPR types live in:
+
+```
+src/BLite.Core/GDPR/
+└── (one file per public type, PascalCase = filename)
+```
+
+- **Namespace:** `BLite.Core.GDPR`
+- **Public types:** annotated with one-paragraph XMLDoc explaining who creates and disposes them.
+- **No partial types across files.** Each public type is in exactly one file.
+- **No re-exports.** GDPR types do not surface `ICryptoProvider`, `IBLiteAuditSink`, or any storage-internal type in their public signatures.
+
+### 2.2 Ownership and lifetime
+
+| Type kind | Created by | Owned by | Disposed by |
+|---|---|---|---|
+| `SubjectQuery`, `SubjectDataReport` | host app or `BLiteEngine` extension | host app | host app (`SubjectDataReport : IDisposable` if it holds streams) |
+| `DatabaseInspectionReport`, `CollectionInfo` | `BLiteEngine.InspectDatabase()` | host app | not disposable (pure data record) |
+| `PersonalDataAttribute` | source-gen consumed at compile time | runtime metadata only | n/a |
+| `GdprMode` (enum) | host app via `EntityTypeBuilder<T>.HasGdprMode(...)` (per-collection, canonical surface) and optionally `BLiteKvOptions.DefaultGdprMode` (engine-wide default) | engine | engine |
+
+**Rule:** If a GDPR type holds an open file or a cryptographic secret, it **must** implement `IDisposable` and zeroize on dispose.
+
+### 2.3 Source-generator contract
+
+The v5 source generator pipeline already exists (`EntityAnalyzer` → `MapperGenerator` → `CodeGenerator` in [`src/BLite.SourceGenerators/`](../../src/BLite.SourceGenerators/)) and discovers attributes + fluent ModelBuilder calls. **WP1 extends this same pipeline; it does not introduce a parallel metadata infrastructure.**
+
+The generator is taught two new inputs:
+
+1. **Attribute path:** properties annotated with `[PersonalData]` (see §4.1).
+2. **Fluent path:** `modelBuilder.Entity<T>().Property(x => x.Email).HasPersonalData(DataSensitivity.Personal)` (additive extension on `PropertyBuilder<T,TProp>`).
+
+The generator emits, **on the already-generated mapper class for each entity**, two static read-only members:
 
 ```csharp
-// On BLiteEngine
-Task<SubjectDataReport> ExportSubjectDataAsync(
-    SubjectQuery query,
-    CancellationToken ct = default
-);
+// Augmentation of an existing generated mapper class (illustrative — WP1 final shape
+// must match the existing generated-class naming and accessor conventions in MapperGenerator/CodeGenerator):
+public static partial class XxxMapper // existing generated class for entity Xxx
+{
+    public static global::System.Collections.Generic.IReadOnlyList<
+        global::BLite.Core.GDPR.PersonalDataField> PersonalDataFields { get; } = new[]
+    {
+        new global::BLite.Core.GDPR.PersonalDataField("Email",   global::BLite.Core.GDPR.DataSensitivity.Personal,  IsTimestamp: false),
+        new global::BLite.Core.GDPR.PersonalDataField("Religion", global::BLite.Core.GDPR.DataSensitivity.Special,  IsTimestamp: false),
+    };
+
+    public static string? PersonalDataTimestampField { get; } = null;
+}
+```
+
+WP1 ships the supporting public type:
+
+```csharp
+namespace BLite.Core.GDPR;
+
+public readonly record struct PersonalDataField(
+    string PropertyName,
+    DataSensitivity Sensitivity,
+    bool IsTimestamp);
+```
+
+**Reflection fallback:** for entity types that are **not** routed through the BLite source generator (dynamic collections, third-party POCOs registered ad-hoc), `internal static class PersonalDataMetadataCache` resolves the same shape (`IReadOnlyList<PersonalDataField>` + nullable timestamp field) by scanning `[PersonalData]` reflectively and caching per `Type`. This is the **only** fallback path; consumers (Subject Export, Inspection) call a single internal resolver `PersonalDataResolver.Resolve(Type entityType)` that prefers source-gen and falls back to reflection.
+
+### 2.4 Cross-feature integration points (read-only consumption)
+
+GDPR consumes — never modifies — these existing surfaces:
+
+| Consumed surface | Used by | Read-only contract |
+|---|---|---|
+| `BLiteEngine.IsEncryptionEnabled` (or equivalent) | WP1 Inspection, WP3 Strict | bool flag derived from `CryptoOptions != null` and a non-`NullCryptoProvider` provider |
+| `BLiteEngine.GetCollectionNames()` | WP1 Subject Export, Inspection | enumeration of registered collection names |
+| `IBLiteAuditSink` (`BLite.Core.Audit`, scope of issue #83) | WP3 Strict | resolved from the engine; **WP3 does not implement a sink** — if #83 has not yet shipped, WP3 logs `GdprStrictAuditModuleAbsent` and continues |
+| `WatchOptions` (`BLite.Core.CDC`) | WP2 | extended in-place; CDC dispatcher applies the mask |
+| `RetentionPolicy` (`BLite.Core.Retention`, [`Retention/RetentionPolicy.cs`](../../src/BLite.Core/Retention/RetentionPolicy.cs)) — already shipped, configured per-collection via `EntityTypeBuilder<T>.HasRetentionPolicy(...)` | WP1 Inspection (projects into `RetentionPolicyInfo`), WP3 Strict (warns if missing on personal-data collections) | inspected for warnings and projected read-only; never modified by GDPR code |
+
+If a consumed surface does not yet exist (e.g., audit sink, retention), the WP **must** degrade gracefully: log a single startup warning naming the missing dependency, then continue. It must **not** throw, and it must **not** create a stand-in implementation of the missing module.
+
+### 2.5 Threading and async
+
+- All public IO methods are async with `CancellationToken ct = default`.
+- All collection scans use `IAsyncEnumerable<BsonDocument>` — never `List<BsonDocument>` materialization, except in the final consumer when serialization requires it.
+- Subject export must work on a database under concurrent writes (snapshot semantics inherited from `DocumentCollection.QueryAsync`).
+
+### 2.6 Error handling
+
+- **No new exception types** unless absolutely required. Reuse `InvalidOperationException`, `ArgumentException`, `OperationCanceledException`.
+- Strict-mode misconfiguration throws `InvalidOperationException` with a message of the form: `"GdprMode.Strict requires <feature>. Configure <option> or set GdprMode = GdprMode.None."`.
+- Subject export over a missing field returns an empty report — never throws.
+
+### 2.7 Test coverage gates
+
+Every WP ships with tests in `tests/BLite.Tests/Gdpr/`:
+
+- WP1: ≥ 15 tests covering attribute discovery, subject query roundtrip, inspection of empty/populated/encrypted databases.
+- WP2: ≥ 8 tests covering exclude/include/both options across CDC payload paths.
+- WP3: ≥ 6 tests covering strict-mode startup throw, warn, and successful happy path.
+- WP4: not applicable (docs).
+
+The full test suite (`dotnet test BLite.slnx -c Release`) must pass after each WP merges.
+
+---
+
+## 3. Namespace and file layout (canonical, exhaustive)
+
+The complete set of files introduced by the GDPR plan, by WP. Agents must not create files outside this list without updating this section first.
+
+### WP1 — Foundation
+
+| Path | Type kind | Defined in |
+|---|---|---|
+| `src/BLite.Core/GDPR/PersonalDataAttribute.cs` | `[AttributeUsage(AttributeTargets.Property)] public sealed class PersonalDataAttribute` | WP1 |
+| `src/BLite.Core/GDPR/DataSensitivity.cs` | `public enum DataSensitivity : byte { Personal = 1, Sensitive = 2, Special = 3 }` | WP1 |
+| `src/BLite.Core/GDPR/PersonalDataField.cs` | `public readonly record struct PersonalDataField(string PropertyName, DataSensitivity Sensitivity, bool IsTimestamp)` (see §2.3) | WP1 |
+| `src/BLite.Core/GDPR/PersonalDataResolver.cs` | `internal static class` — single resolver: source-gen first (looks up the generated mapper's static `PersonalDataFields` member via a generated registry hook), reflection fallback otherwise | WP1 |
+| `src/BLite.Core/GDPR/PersonalDataMetadataCache.cs` | `internal static class` — reflection-fallback cache, `ConcurrentDictionary<Type, IReadOnlyList<PersonalDataField>>` | WP1 |
+| `src/BLite.Core/Metadata/PropertyBuilderExtensions.Gdpr.cs` | `public static class` — `HasPersonalData<T,TProp>(this PropertyBuilder<T,TProp>, DataSensitivity = Personal, bool isTimestamp = false)` fluent extension recognised by the source generator | WP1 |
+| `src/BLite.Core/GDPR/SubjectQuery.cs` | `public sealed class SubjectQuery` | WP1 |
+| `src/BLite.Core/GDPR/SubjectDataReport.cs` | `public sealed class SubjectDataReport : IAsyncDisposable` | WP1 |
+| `src/BLite.Core/GDPR/SubjectExportFormat.cs` | `public enum SubjectExportFormat : byte { Json = 1, Csv = 2, Bson = 3 }` | WP1 |
+| `src/BLite.Core/GDPR/GdprEngineExtensions.cs` | `public static class` — `ExportSubjectDataAsync`, `InspectDatabase` | WP1 |
+| `src/BLite.Core/GDPR/DatabaseInspectionReport.cs` | `public sealed record DatabaseInspectionReport` | WP1 |
+| `src/BLite.Core/GDPR/CollectionInfo.cs` | `public sealed record CollectionInfo` | WP1 |
+| `src/BLite.Core/GDPR/IndexInfo.cs` | `public sealed record IndexInfo` | WP1 |
+| `src/BLite.Core/GDPR/RetentionPolicyInfo.cs` | `public sealed record RetentionPolicyInfo` — **read-only projection** of the existing `BLite.Core.Retention.RetentionPolicy`, see §4.3 | WP1 |
+| `src/BLite.SourceGenerators/Gdpr/PersonalDataAnalyzer.cs` | `internal static class` — extends `EntityAnalyzer` to harvest `[PersonalData]` and the fluent `HasPersonalData(...)` model-builder call | WP1 |
+| `src/BLite.SourceGenerators/Gdpr/PersonalDataEmitter.cs` | `internal static class` — extends `CodeGenerator` to emit the `PersonalDataFields` static member on the existing generated mapper class | WP1 |
+| `tests/BLite.Tests/Gdpr/PersonalDataAttributeTests.cs` | xUnit tests | WP1 |
+| `tests/BLite.Tests/Gdpr/SubjectExportTests.cs` | xUnit tests | WP1 |
+| `tests/BLite.Tests/Gdpr/DatabaseInspectionTests.cs` | xUnit tests | WP1 |
+
+### WP2 — CDC Field Masking
+
+| Path | Change |
+|---|---|
+| `src/BLite.Core/CDC/WatchOptions.cs` | **modify** — add `ExcludeFields` and `IncludeOnlyFields` properties |
+| `src/BLite.Core/CDC/ChangeStreamDispatcher.cs` | **modify** — apply mask when capturing payload |
+| `src/BLite.Core/GDPR/PayloadMask.cs` | new `internal static class` — pure BSON projection helper |
+| `tests/BLite.Tests/Gdpr/CdcMaskingTests.cs` | new |
+
+### WP3 — GdprMode.Strict
+
+| Path | Change |
+|---|---|
+| `src/BLite.Core/GDPR/GdprMode.cs` | new `public enum GdprMode : byte { None = 0, Strict = 1 }` |
+| `src/BLite.Core/GDPR/GdprModeAttribute.cs` | new `[AttributeUsage(AttributeTargets.Class)] public sealed class GdprModeAttribute(GdprMode mode) : Attribute` — for code-first per-entity configuration |
+| `src/BLite.Core/Metadata/EntityTypeBuilder.Gdpr.cs` | new — adds `EntityTypeBuilder<T>.HasGdprMode(GdprMode mode)` fluent method (mirrors `HasRetentionPolicy`); persists on the existing `EntityTypeBuilder<T>` in `Metadata/EntityTypeBuilder.cs` (additive only) |
+| `src/BLite.Core/KeyValue/BLiteKvOptions.cs` | **modify** — add `public GdprMode DefaultGdprMode { get; init; } = GdprMode.None;` (engine-wide default; per-collection wins when set) |
+| `src/BLite.Core/GDPR/GdprStrictValidator.cs` | new `internal static class` — invoked at engine open, **per collection**, after the catalog is loaded |
+| `tests/BLite.Tests/Gdpr/GdprStrictTests.cs` | new |
+
+### WP4 — DPIA documentation
+
+| Path | Change |
+|---|---|
+| `docs/DPIA_CHECKLIST.md` | new |
+
+---
+
+## 4. Public API contract (binding for all WPs)
+
+This section is the **single normative copy** of every public signature introduced by the plan. Issues quote from here verbatim.
+
+### 4.1 `[PersonalData]`
+
+```csharp
+namespace BLite.Core.GDPR;
+
+[AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
+public sealed class PersonalDataAttribute : Attribute
+{
+    /// <summary>Sensitivity tier. Default: Personal (Art. 4(1)).</summary>
+    public DataSensitivity Sensitivity { get; init; } = DataSensitivity.Personal;
+
+    /// <summary>True if this property holds the timestamp eligible for retention/MaxAge policies.</summary>
+    public bool IsTimestamp { get; init; }
+}
+
+public enum DataSensitivity : byte
+{
+    Personal = 1,    // Art. 4(1): name, email, address
+    Sensitive = 2,   // health, financial, SSN
+    Special = 3      // Art. 9 special categories: race, religion, biometrics, …
+}
+```
+
+### 4.2 Subject access (Art. 15) and portability (Art. 20)
+
+```csharp
+namespace BLite.Core.GDPR;
 
 public sealed class SubjectQuery
 {
-    /// <summary>
-    /// Name of the field that identifies the subject (e.g. "UserId", "Email")
-    /// </summary>
     public required string FieldName { get; init; }
-
-    /// <summary>
-    /// Value to search for
-    /// </summary>
     public required BsonValue FieldValue { get; init; }
-
-    /// <summary>
-    /// If null, searches all collections. Otherwise only the specified ones.
-    /// </summary>
     public IReadOnlyList<string>? Collections { get; init; }
-
-    public ExportFormat Format { get; init; } = ExportFormat.Json;
+    public SubjectExportFormat Format { get; init; } = SubjectExportFormat.Json;
 }
 
-public sealed class SubjectDataReport
+public sealed class SubjectDataReport : IAsyncDisposable
 {
     public DateTimeOffset GeneratedAt { get; init; }
     public BsonValue SubjectId { get; init; }
@@ -108,259 +264,361 @@ public sealed class SubjectDataReport
 
     public Task WriteToFileAsync(string path, CancellationToken ct = default);
     public Task WriteToStreamAsync(Stream stream, CancellationToken ct = default);
-}
-```
 
-### Files to create
-| File | Purpose |
-|------|---------|
-| `src/BLite.Core/GDPR/SubjectQuery.cs` | Data subject query |
-| `src/BLite.Core/GDPR/SubjectDataReport.cs` | Export result |
-| `src/BLite.Core/GDPR/GdprExtensions.cs` | Extension methods on `BLiteEngine` |
-
-### Estimate: 2–3 days
-
----
-
-## 4. Right to Erasure — Art. 17
-
-### Architectural boundary
-
-The **right to erasure is an application-layer obligation**, not a database primitive. BLite is an in-process, schema-less embedded store: it has no concept of "data subject", no knowledge of which fields identify a person, and no authority to decide which data may or must be deleted. Only the application holding the data — the data controller — can make that determination.
-
-BLite's role is to provide **complete, reliable, and physically effective deletion primitives** that the application can call when fulfilling an erasure request. The application is responsible for:
-- Identifying all collections and documents belonging to a data subject
-- Deciding the scope of deletion (single collection vs. all collections)
-- Triggering deletion at the appropriate point in its own workflow
-- Logging the erasure event in its own compliance records
-
-### What BLite must guarantee
-
-| Guarantee | Current state | Plan |
-|-----------|--------------|------|
-| Logical delete (document removed from queries) | ✅ Done (`DeleteAsync`) | — |
-| Physical page cleanup on `DropCollection` | ⚠️ Deferred | Fix in [MISSING_FEATURES.md §7](MISSING_FEATURES.md) |
-| Slot-level zero-fill after `DeleteAsync` | ❌ Missing | [MISSING_FEATURES.md §3](MISSING_FEATURES.md) |
-| VACUUM — physically compact and truncate file | ❌ Missing | [MISSING_FEATURES.md §3](MISSING_FEATURES.md) |
-| `TruncateAsync` on collection | ❌ Missing | [MISSING_FEATURES.md §7](MISSING_FEATURES.md) |
-
-### Encryption as erasure
-
-A well-known GDPR-accepted technique for embedded databases is **crypto-shredding**: if data is encrypted at-rest with a per-subject or per-collection key, deleting the key makes the ciphertext irrecoverable, satisfying Art. 17 without requiring physical overwrite. This requires the encryption layer described in [ENCRYPTION_PLAN.md](ENCRYPTION_PLAN.md).
-
-### Estimate: no dedicated BLite work — depends on §3 and §7 of MISSING_FEATURES.md
-
----
-
-## 5. Data Portability — Art. 20
-
-### Gap
-No export mechanism in a portable format (JSON, CSV).
-
-### Proposed API
-
-```csharp
-// Extends SubjectDataReport
-public sealed class SubjectDataReport
-{
-    // ...
     public Task ExportAsJsonAsync(Stream output, CancellationToken ct = default);
     public Task ExportAsCsvAsync(Stream output, string collection, CancellationToken ct = default);
-    public Task ExportAsBsonAsync(Stream output, CancellationToken ct = default); // for import into another BLite instance
+    public Task ExportAsBsonAsync(Stream output, CancellationToken ct = default);
+
+    public ValueTask DisposeAsync();
+}
+
+public static class GdprEngineExtensions
+{
+    public static Task<SubjectDataReport> ExportSubjectDataAsync(
+        this BLiteEngine engine,
+        SubjectQuery query,
+        CancellationToken ct = default);
+
+    public static DatabaseInspectionReport InspectDatabase(this BLiteEngine engine);
 }
 ```
 
-### Estimate: 1–2 days (closely tied to Art. 15)
+### 4.3 Database inspection (Art. 30)
 
----
-
-## 6. Data Minimisation (Art. 5(1)(c)) and Privacy by Design (Art. 25)
-
-### 6a. Field-level masking in CDC
-
-**Current issue**: `Watch()` in `DocumentCollection.cs` (L2956) with `capturePayload=true` exposes the full BSON document. If the document contains PII (e.g. email, SSN, health data), this is broadcast in plaintext to all observers.
-
-**Solution**:
 ```csharp
-// Add to WatchOptions:
+namespace BLite.Core.GDPR;
+
+public sealed record DatabaseInspectionReport(
+    string DatabasePath,
+    bool IsEncrypted,
+    bool IsAuditEnabled,
+    bool IsMultiFileMode,
+    IReadOnlyList<CollectionInfo> Collections);
+
+public sealed record CollectionInfo(
+    string Name,
+    long DocumentCount,
+    long StorageSizeBytes,
+    IReadOnlyList<IndexInfo> Indexes,
+    IReadOnlyList<string> PersonalDataFields,
+    RetentionPolicyInfo? RetentionPolicy);
+
+public sealed record IndexInfo(string Name, IReadOnlyList<string> Fields, bool IsUnique, bool IsEncrypted);
+/// <summary>Read-only projection of the existing <see cref="BLite.Core.Retention.RetentionPolicy"/> for inspection reports.</summary>
+public sealed record RetentionPolicyInfo(
+    string? TimestampField,
+    TimeSpan? MaxAge,
+    long? MaxDocumentCount,
+    long? MaxSizeBytes,
+    string Triggers); // RetentionTrigger.ToString() (e.g. "OnInsert, Scheduled")
+```
+
+### 4.4 CDC field masking (Art. 5(1)(c))
+
+```csharp
+// Modified type, additive only:
+namespace BLite.Core.CDC;
+
 public sealed class WatchOptions
 {
     public bool CapturePayload { get; init; } = false;
-
-    /// <summary>
-    /// If CapturePayload = true, these fields are stripped from the payload before notification.
-    /// </summary>
-    public IReadOnlyList<string> ExcludeFields { get; init; } = [];
-
-    /// <summary>
-    /// If set, only these fields are included in the payload.
-    /// </summary>
+    public IReadOnlyList<string> ExcludeFields { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string>? IncludeOnlyFields { get; init; }
 }
 ```
 
-### 6b. Field-level masking in queries
+**Masking rules (apply in this order, on a clone of the payload, only when `CapturePayload == true`):**
 
-Add **projection** support in LINQ/BLQL queries to exclude sensitive fields from results:
+1. If `IncludeOnlyFields` is non-null: produce a new `BsonDocument` containing only those keys (allowlist wins; `ExcludeFields` is ignored if both are set).
+2. Else if `ExcludeFields` is non-empty: remove those keys from the cloned document.
+3. Else: deliver the cloned document unchanged.
+
+If `CapturePayload == false`, both fields are irrelevant and CDC dispatch behaves exactly as today.
+
+### 4.5 GdprMode.Strict (Art. 25)
+
 ```csharp
-collection.Query()
-    .Where(x => x.CategoryId == 1)
-    .Select(x => new { x.Id, x.Name })  // excludes PII like Email, SSN
-    .ToListAsync();
-```
-> Verify whether LINQ projection is already supported — if so, document it as a minimisation tool.
+namespace BLite.Core.GDPR;
 
-### 6c. `[PersonalData]` annotations for Source Generators
+public enum GdprMode : byte { None = 0, Strict = 1 }
 
-Add a `[PersonalData]` attribute:
-```csharp
-[BLiteCollection]
-public class User
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = true)]
+public sealed class GdprModeAttribute : Attribute
 {
-    public int Id { get; set; }
-
-    [PersonalData]
-    public string Email { get; set; }
-
-    [PersonalData(Sensitivity = DataSensitivity.Sensitive)]
-    public string TaxCode { get; set; }
+    public GdprMode Mode { get; }
+    public GdprModeAttribute(GdprMode mode) => Mode = mode;
 }
 ```
 
-The Source Generator can:
-- Automatically generate the PII field list for subject export/deletion
-- Emit a warning if a `[PersonalData]` field is included in an unencrypted index
+**Canonical configuration surface (per-collection, mirrors `HasRetentionPolicy`):**
 
-### Estimate: 3–4 days
-
----
-
-## 7. Storage Limitation (Art. 5(1)(e))
-
-### Gap
-Retention exists only for TimeSeries. Regular collections have no automatic TTL.
-
-### Actions
-Implement the generalised retention policy described in [MISSING_FEATURES.md §4](MISSING_FEATURES.md), with support for:
-- `MaxAgeMs` on a `[PersonalData(IsTimestamp = true)]` field
-- Audit notification before automatic deletion
-- `RetentionPolicyApplied` event in CDC (optional, configurable)
-
-### Estimate: covered by MISSING_FEATURES §4 (3–4 days)
-
----
-
-## 8. Records of Processing Activities — Art. 30
-
-Art. 30 requires a written record of processing activities. BLite cannot create this register on behalf of the application, but it can provide a **structured template** and an **inspection API** to facilitate its compilation.
-
-### Inspection API
 ```csharp
-// On BLiteEngine
-DatabaseInspectionReport InspectDatabase();
+namespace BLite.Core.Metadata;
 
-public sealed class DatabaseInspectionReport
+public static class EntityTypeBuilderGdprExtensions
 {
-    public string DatabasePath { get; init; }
-    public bool IsEncrypted { get; init; }
-    public bool IsAuditEnabled { get; init; }
-    public IReadOnlyList<CollectionInfo> Collections { get; init; }
-}
-
-public sealed class CollectionInfo
-{
-    public string Name { get; init; }
-    public long DocumentCount { get; init; }
-    public IReadOnlyList<IndexInfo> Indexes { get; init; }
-    public IReadOnlyList<string> PersonalDataFields { get; init; }  // from [PersonalData] attributes
-    public RetentionPolicyInfo? RetentionPolicy { get; init; }
+    public static EntityTypeBuilder<T> HasGdprMode<T>(
+        this EntityTypeBuilder<T> builder,
+        global::BLite.Core.GDPR.GdprMode mode) where T : class;
 }
 ```
 
-### Estimate: 2 days
-
----
-
-## 9. Data Protection Impact Assessment (DPIA) — Art. 35
-
-BLite must provide documentation and tooling to support the data controller's DPIA.
-
-### DPIA checklist for applications using BLite
-
-Create `docs/DPIA_CHECKLIST.md` with:
-
-**Identified risks and mitigations**
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|-----------|
-| Unauthorised access to `.db` file | Medium | High | Encryption at-rest (ENCRYPTION_PLAN §2) |
-| Exfiltration via backup | Low | High | Backup encryption (ENCRYPTION_PLAN §6) |
-| Residual data after deletion | Medium | Medium | VACUUM / Secure Erase (MISSING_FEATURES §3) |
-| Compromised audit log | Low | High | Append-only sink, cryptographic signing |
-| Encryption key loss | Low | Critical | `IKeyProvider` with external KMS |
-| CDC PII leak | Medium | Medium | Field masking in `WatchOptions` |
-| Retention policy not enforced | Low | Medium | Retention policy + alert |
-
-### Estimate: 1 day (documentation only)
-
----
-
-## 10. Privacy by Default Configuration
-
-Add a GDPR compliance flag to `BLiteEngineOptions` that automatically sets recommended defaults:
+**Engine-wide default (used only when neither `[GdprMode]` nor `HasGdprMode(...)` is set on a collection):**
 
 ```csharp
-var db = new BLiteEngine(new BLiteEngineOptions
-{
-    Filename = "mydata.db",
-    GdprMode = GdprModeOptions.Strict
-    // Equivalent to:
-    // - Encryption = required (exception if not configured)
-    // - Audit = enabled (FileAuditSink at default path)
-    // - CDC CapturePayload default = false (immutable)
-    // - Secure erase on delete = true
-    // - Retention policy warning for collections with [PersonalData] fields
-});
+// Additive change to BLite.Core.KeyValue.BLiteKvOptions:
+public GdprMode DefaultGdprMode { get; init; } = GdprMode.None;
 ```
 
-| Setting | Standard default | `GdprMode.Strict` default |
-|---------|-----------------|--------------------------|
-| Encryption | Disabled | Required (exception if missing) |
-| Audit | Disabled | Enabled (file sink) |
-| CDC CapturePayload | false | false (immutable) |
-| Secure erase on delete | No | Yes |
-| Retention policy | Optional | Warning if `[PersonalData]` present without retention |
+Resolution order at engine open, per collection: `EntityTypeBuilder<T>.HasGdprMode` → `[GdprMode]` attribute on the entity type → `BLiteKvOptions.DefaultGdprMode` → `GdprMode.None`.
+
+**Strict-mode validation table (invoked at engine ctor, after all wiring):**
+
+| Invariant | Standard | Strict | On violation in Strict |
+|---|---|---|---|
+| Encryption configured (`CryptoOptions != null` and provider is not `NullCryptoProvider`) | optional | required | throw `InvalidOperationException` |
+| Audit sink registered (`IBLiteAuditSink` resolvable — scope of issue #83) | optional | required | if #83 has shipped and a sink is not configured, log a warning and continue (do not auto-construct a sink — sink defaults are owned by #83); if #83 has not shipped, log `GdprStrictAuditModuleAbsent` once and continue |
+| `WatchOptions.CapturePayload` default | `false` | `false` (unchanged) | n/a — but any explicit `true` in strict mode logs a warning |
+| Secure erase on delete | off | on | force `SecureEraseOnDelete = true`; log info |
+| Retention policy on collections with `[PersonalData]` fields | optional | warned | for each missing, log a single warning at startup |
+
+Strict mode never deletes existing data, never rotates keys, never modifies stored documents. It only validates configuration and logs once at startup.
 
 ---
 
-## Summary Roadmap
+## 5. Dependency graph
 
-| # | Feature | GDPR Article | Priority | Estimate | Dependency |
-|---|---------|-------------|----------|----------|-----------|
-| 1 | Encryption at-rest | Art. 32 | HIGH | 22 d | — |
-| 2 | Audit Trail | Art. 30, 32 | HIGH | 5–8 d | — |
-| 3 | Data Subject Export (Art. 15) | Art. 15 | HIGH | 2–3 d | — |
-| 4 | Secure Erase / VACUUM + complete Drop/Truncate | Art. 17 | HIGH | 4–6 d + 3–4 d | — |
-| 5 | Data Portability (Art. 20) | Art. 20 | MEDIUM | 1–2 d | #3 |
-| 6 | CDC field masking | Art. 5(1)(c) | MEDIUM | 1 d | — |
-| 7 | `[PersonalData]` attribute | Art. 25 | MEDIUM | 2–3 d | — |
-| 8 | Generalised retention | Art. 5(1)(e) | MEDIUM | 3–4 d | — |
-| 9 | Database inspection API | Art. 30 | LOW | 2 d | #7 |
-| 10 | `GdprMode.Strict` | Art. 25 | LOW | 1 d | #1, #2 |
-| 11 | DPIA Checklist | Art. 35 | LOW | 1 d | — |
+```
+WP1 (Foundation: PersonalData + Subject Export + Inspection)
+  ├── consumes: BLiteEngine.GetCollectionNames, IsEncryptionEnabled
+  ├── consumes (optional): IBLiteAuditSink (for IsAuditEnabled flag only)
+  └── consumes (optional): RetentionPolicy registry
 
-**Total estimate: 44–53 days** (significant overlap with MISSING_FEATURES and ENCRYPTION_PLAN)
+WP2 (CDC Masking)
+  └── independent — modifies CDC only
+
+WP3 (GdprMode.Strict)
+  ├── depends on WP1 (PersonalData metadata for retention warnings)
+  ├── depends on WP2 (CapturePayload-immutability hook)
+  ├── consumes: encryption module (must be configured)
+  ├── consumes: audit module (issue #83 — IBLiteAuditSink); graceful if #83 not yet shipped
+  └── consumes (graceful): VACUUM / SecureErase (MISSING_FEATURES §3)
+
+WP4 (DPIA docs)
+  └── depends on WP1, WP2, WP3 (documents what they ship)
+```
+
+**Implementation order:** WP1 → WP2 (parallel-safe with WP1) → WP3 → WP4. WP3 must not be merged before WP1 + WP2 because it references their public surface.
 
 ---
 
-## Legal Disclaimer
+## 6. Work packages — detailed specs
 
-> This document is a technical plan, not legal advice. GDPR compliance depends on the overall application implementation, not just the embedded database. Involving a Data Protection Officer (DPO) for the final assessment is strongly recommended.
+### WP1 — Foundation: `[PersonalData]` + Subject Export + Database Inspection
+
+**GDPR articles:** 4(1), 5(1)(c), 15, 20, 25, 30.  
+**GitHub issue:** rewrite of #89 (consolidates the closed #91 and #92).  
+**Estimate:** 4–6 days.
+
+#### A. Tasks (in order)
+
+1. Add the attribute and enum (§4.1) under `BLite.Core.GDPR/`. Add `PersonalDataField` record struct (§2.3).
+2. Add `PropertyBuilderExtensions.Gdpr.cs` (`HasPersonalData<T,TProp>(...)`) so the fluent path mirrors `HasConversion`/`HasIndex` already supported by the source generator.
+3. Add `PersonalDataResolver` (single resolver) and `PersonalDataMetadataCache` (reflection fallback, thread-safe, per-`Type` cached). Resolver order: generated-mapper static accessor → reflection over `[PersonalData]`.
+4. Extend the existing source generator (do not create a new `[Generator]` class): `PersonalDataAnalyzer` augments `EntityAnalyzer` to harvest `[PersonalData]` + the fluent `HasPersonalData` call (the same mechanism `MapperGenerator` already uses for `HasConversion`/`HasIndex`); `PersonalDataEmitter` augments `CodeGenerator` to emit `PersonalDataFields` and `PersonalDataTimestampField` on the **existing generated mapper class** for each entity.
+5. Add `SubjectQuery`, `SubjectExportFormat`, `SubjectDataReport` (§4.2).
+6. Implement `BLiteEngine.ExportSubjectDataAsync` extension:
+   - Resolve target collections: `query.Collections ?? engine.GetCollectionNames()`.
+   - For each collection, attempt indexed lookup on `query.FieldName` first; fall back to `BLiteEngine.FindAsync(collectionName, predicate, ct)` (existing `IAsyncEnumerable<BsonDocument>` primitive — see [`BLiteEngine.cs`](../../src/BLite.Core/BLiteEngine.cs)). For typed collections obtained through `GetCollection<TKey,T>()`, use `DocumentCollection<TKey,T>.ScanAsync` / `FindAllAsync`. **No new scan helper is added.**
+   - Stream results into a per-collection `IAsyncEnumerable<BsonDocument>` and aggregate into `DataByCollection`.
+   - Honor `ct` at every async hop.
+   - Empty result is a valid report — never throw.
+7. Add `DatabaseInspectionReport`, `CollectionInfo`, `IndexInfo`, `RetentionPolicyInfo` (§4.3). `RetentionPolicyInfo` is built by **projecting** the existing `BLite.Core.Retention.RetentionPolicy` instance returned by the catalog (`MaxAgeMs → MaxAge`, `MaxDocumentCount`, `MaxSizeBytes`, `TimestampField`, `Triggers.ToString()`) — **no duplication of state**.
+8. Implement `BLiteEngine.InspectDatabase`:
+   - Walk the catalog without doing IO beyond what `Catalog.Snapshot` already does.
+   - `IsEncrypted = engine has CryptoOptions and provider != NullCryptoProvider`.
+   - `IsAuditEnabled = audit sink registered` (resolved from the engine's audit hook; `false` if issue #83 has not yet shipped).
+   - `PersonalDataFields` resolved per collection via `PersonalDataResolver.Resolve(entityType)` (source-gen first, reflection fallback).
+   - `RetentionPolicy` populated by projecting the existing per-collection `RetentionPolicy` (or `null` if none configured).
+   - `StorageSizeBytes` in multi-file mode includes all sibling files; in single-file mode is the page count belonging to the collection × page size.
+9. Add three test files (§3 WP1 row).
+
+#### B. Acceptance criteria
+
+- A model with `[PersonalData] string Email` and `[PersonalData(Sensitivity = Special)] string Religion` exposes `PersonalDataFields = ["Email", "Religion"]` and `SensitiveFields = ["Religion"]` after a clean build.
+- `ExportSubjectDataAsync` over a 3-collection database returns documents only from collections containing the target field/value; unrelated collections appear with empty lists.
+- `ExportAsJsonAsync` produces valid UTF-8 JSON, schema `{ "generatedAt": ISO-8601, "subjectId": …, "data": { "<col>": [ … ] } }`.
+- `ExportAsCsvAsync` for a single collection emits header + one row per document; nested BSON values are JSON-stringified into the cell.
+- `ExportAsBsonAsync` emits a length-prefixed BLite-portable stream re-importable by `BLiteEngine.ImportAsync` (or, if no import API exists yet, by reading the documents back via the BSON reader — a roundtrip test must pass).
+- `InspectDatabase` on an encrypted multi-file database reports `IsEncrypted = true`, `IsMultiFileMode = true`, and lists all collection files in `StorageSizeBytes`.
+- `InspectDatabase` on a database with no `[PersonalData]` annotations and no source-gen reports `PersonalDataFields = []` (not null).
+
+#### C. Do-not-touch
+
+- Do not modify `BLiteEngine` ctors. Add functionality only via extension methods in `GdprEngineExtensions`.
+- Do not modify any file under `src/BLite.Core/Encryption/`, `src/BLite.Core/Storage/`, or `src/BLite.Core/Audit/`.
+- Do not introduce a new "GDPR runtime" service registered in the engine. The Foundation is stateless beyond the metadata cache.
 
 ---
 
-## Related files
-- [MISSING_FEATURES.md](MISSING_FEATURES.md)
-- [ENCRYPTION_PLAN.md](ENCRYPTION_PLAN.md)
-- [AUDIT_IMPLEMENTATION.md](AUDIT_IMPLEMENTATION.md)
-- [RFC.md](../../RFC.md)
+### WP2 — CDC Field Masking
+
+**GDPR article:** 5(1)(c).  
+**GitHub issue:** rewrite of #90.  
+**Estimate:** 1 day.
+
+#### A. Tasks
+
+1. Add `ExcludeFields` and `IncludeOnlyFields` to `WatchOptions` (§4.4). Defaults: empty array, null.
+2. In the CDC dispatch path (the same code that today handles `CapturePayload == true`), apply the masking rules from §4.4 on a **clone** of the BSON document before notifying observers.
+3. Add `internal static class PayloadMask` with two methods: `Allowlist(BsonDocument doc, IReadOnlyList<string> keep)` and `Blocklist(BsonDocument doc, IReadOnlyList<string> remove)`. Both return a new `BsonDocument`.
+4. Tests: round-trip every combination (none, exclude only, include only, both — allowlist must win).
+
+#### B. Acceptance criteria
+
+- With `CapturePayload = false`, observers receive the same payload they receive today (a regression test must lock this in).
+- With `CapturePayload = true` and `ExcludeFields = ["Email"]`, the dispatched document does not contain key `Email` and other keys are unchanged.
+- With both `IncludeOnlyFields` and `ExcludeFields` set, the allowlist wins and `ExcludeFields` is ignored (documented in XMLDoc).
+- The original in-memory page buffer is never mutated; assert via reference equality on the source page bytes after dispatch.
+
+#### C. Do-not-touch
+
+- Do not modify the storage page format.
+- Do not modify CDC subscription/transport.
+- Do not introduce a new options class — extend `WatchOptions` only.
+
+---
+
+### WP3 — `GdprMode.Strict` orchestration
+
+**GDPR article:** 25.  
+**GitHub issue:** rewrite of #93.  
+**Estimate:** 1–2 days (after WP1 + WP2 merged).
+
+#### A. Tasks
+
+1. Add `GdprMode` enum and `GdprModeAttribute` (§4.5) under `BLite.Core.GDPR/`.
+2. Add `EntityTypeBuilder<T>.HasGdprMode(GdprMode)` fluent extension in `src/BLite.Core/Metadata/EntityTypeBuilder.Gdpr.cs` (additive; mirrors the existing `HasRetentionPolicy` pattern in [`EntityTypeBuilder.cs`](../../src/BLite.Core/Metadata/EntityTypeBuilder.cs)). Persist the resolved mode on the existing `EntityTypeBuilder<T>` instance.
+3. Add `public GdprMode DefaultGdprMode { get; init; } = GdprMode.None;` to `BLite.Core.KeyValue.BLiteKvOptions` ([`KeyValue/BLiteKvOptions.cs`](../../src/BLite.Core/KeyValue/BLiteKvOptions.cs)). This is the **only** engine-wide options class in v5; do not introduce `BLiteEngineOptions`.
+4. Implement `internal static class GdprStrictValidator` with one entry point: `Apply(BLiteEngine engine, string collectionName, GdprMode resolvedMode, BLiteKvOptions options, ILogger? logger)`. Called at engine open, **per collection**, after the catalog is loaded.
+5. The validator implements the table in §4.5. Use a single dedicated `EventId` per emitted log line (`GdprStrictEncryptionMissing`, `GdprStrictAuditMissing`, `GdprStrictAuditModuleAbsent`, `GdprStrictRetentionWarning`, `GdprStrictSecureEraseEnabled`, `GdprStrictCdcCapturePayloadWarning`).
+6. Tests: throw when encryption missing on a Strict collection; warn when audit sink missing (when #83 is shipped) and emit `GdprStrictAuditModuleAbsent` (when #83 is not shipped); warn when retention missing on a `[PersonalData]` collection; do nothing when resolved mode is `GdprMode.None`.
+
+#### B. Acceptance criteria
+
+- Opening a `BLiteEngine` whose catalog contains a collection resolved to `GdprMode.Strict` and no `CryptoOptions` throws `InvalidOperationException` whose message contains `"GdprMode.Strict requires"`.
+- Opening with a Strict collection, encryption configured, audit module shipped (#83 closed) but no audit sink registered: engine starts, one warning emitted with EventId `GdprStrictAuditMissing` (no auto-construction).
+- Opening with a Strict collection, encryption configured, audit module **not** shipped (#83 still open): engine starts, exactly one log line with EventId `GdprStrictAuditModuleAbsent` is emitted (idempotent across multiple Strict collections).
+- Opening with a Strict collection, encryption + audit, but the collection has `[PersonalData]` fields and no retention configured: engine starts, one warning emitted per such collection with EventId `GdprStrictRetentionWarning`.
+- A collection resolved to `GdprMode.None` (default) must produce zero log lines from the validator regardless of engine configuration.
+
+#### C. Do-not-touch
+
+- Do not modify `CryptoOptions`, `EncryptionCoordinator`, or any encryption file.
+- Do not modify the `IBLiteAuditSink` interface or implement an audit sink — that is the scope of issue #83. WP3 only consumes the resolved sink (or its absence).
+- Do not implement retention or VACUUM as part of WP3 — only inspect their presence.
+- Do not introduce a `BLiteEngineOptions` class. The canonical options class is `BLiteKvOptions`.
+
+#### D. Graceful degradation matrix
+
+| Missing dependency | WP3 behavior |
+|---|---|
+| Audit module not yet implemented (issue #83 still open) | log a single warning `GdprStrictAuditModuleAbsent`, continue without throwing — never construct a stand-in sink |
+| Retention module not yet implemented | skip the retention warning loop silently |
+| `SecureEraseOnDelete` setting not yet implemented | log a warning `GdprStrictSecureEraseUnavailable`, continue |
+
+WP3 must not block on these dependencies. It may be merged before they land.
+
+---
+
+### WP4 — DPIA Documentation
+
+**GDPR article:** 35.  
+**GitHub issue:** rewrite of #94.  
+**Estimate:** 1 day.
+
+#### A. Deliverable
+
+Single file: `docs/DPIA_CHECKLIST.md`. Sections:
+
+1. Scope statement: BLite is an embedded in-process database; the data controller is the host application.
+2. Risk + mitigation table (rows enumerated below — every row is a separate Markdown row, never collapsed).
+3. Configuration checklist (encryption, audit, secure erase, retention, CDC masking).
+4. Integration checklist (what the application must implement: key management, access control, subject erasure workflow).
+5. GDPR article → BLite feature mapping (one row per article cited in §1 of this plan).
+6. Legal disclaimer.
+
+#### B. Mandatory risk rows (do not collapse)
+
+| Risk | Likelihood | Impact | BLite mitigation | Cross-reference |
+|---|---|---|---|---|
+| Unauthorised access to the `.db` file | Medium | High | Encryption at-rest (AES-256-GCM, page-level) | ENCRYPTION_FIX_PLAN.md |
+| Exfiltration via backup file | Low | High | Encrypted backups (same key derivation) | ENCRYPTION_FIX_PLAN.md |
+| Residual data after `DeleteAsync` | Medium | Medium | Slot-level secure erase; VACUUM | MISSING_FEATURES.md §3 |
+| Compromised audit log | Low | High | Append-only `FileAuditSink`; optional cryptographic signing | AUDIT_IMPLEMENTATION.md |
+| Encryption key loss | Low | Critical | `IKeyProvider` with external KMS | ENCRYPTION_PLAN.md |
+| CDC PII leak | Medium | Medium | Field masking via `WatchOptions.ExcludeFields`/`IncludeOnlyFields` | this plan §4.4 |
+| Retention policy not enforced | Low | Medium | Generalised retention + Strict-mode warning | MISSING_FEATURES.md §4, this plan §4.5 |
+| WAL plaintext exposure | Medium | High | WAL encryption (sibling provider, role = 3) | ENCRYPTION_PLAN.md |
+| Subject access request not actionable | Medium | Medium | `ExportSubjectDataAsync` (§4.2) | this plan §4.2 |
+| Compliance auditor lacks visibility | Low | Medium | `InspectDatabase` (§4.3) | this plan §4.3 |
+| Mis-configured GDPR-sensitive deployment | Medium | High | `GdprMode.Strict` (§4.5) | this plan §4.5 |
+
+#### C. Acceptance criteria
+
+- File compiles in Markdown lint (no broken cross-links to files in this repo).
+- Every risk row maps to a feature that either ships in v5 or is explicitly marked `(planned)`.
+- Legal disclaimer present at the bottom, text matches §9 of this plan verbatim.
+
+#### D. Do-not-touch
+
+- No legal claims of "GDPR-certified" or "GDPR-compliant out of the box".
+- No code changes.
+
+---
+
+## 7. Resolved design decisions (formerly open questions)
+
+All five questions originally listed here have been resolved against the v5 codebase. Decisions are now binding for all WPs; deviations require updating this section first.
+
+- **Q1 — Retention policy reuse (RESOLVED):** `RetentionPolicy` and `RetentionPolicyBuilder` already exist (see [`src/BLite.Core/Metadata/EntityTypeBuilder.cs`](../../src/BLite.Core/Metadata/EntityTypeBuilder.cs) and [`src/BLite.Core/DynamicCollection.cs`](../../src/BLite.Core/DynamicCollection.cs) — `EntityTypeBuilder<T>.HasRetentionPolicy(...)`, `DynamicCollection.SetRetentionPolicy(...)`, `BLiteEngine.SetRetentionPolicy(...)`/`GetTimeSeriesConfig(...)`). **WP1 `RetentionPolicyInfo` is a read-only projection of the existing `RetentionPolicy`** (with TTL field name and retention duration). It is not a new persistence type.
+- **Q2 — Configuration surface (RESOLVED):** the canonical pattern in v5 is **per-collection fluent configuration via `EntityTypeBuilder<T>`** (mirrors `HasRetentionPolicy`). WP3 ships `EntityTypeBuilder<T>.HasGdprMode(GdprMode)` and a `[GdprMode(GdprMode.Strict)]` attribute. The single shipping engine-wide options class is `BLiteKvOptions` ([`src/BLite.Core/KeyValue/BLiteKvOptions.cs`](../../src/BLite.Core/KeyValue/BLiteKvOptions.cs)); an engine-wide default `DefaultGdprMode` may be added there, but **per-entity configuration overrides it** and is the documented surface. There is no `BLiteEngineOptions` class in the codebase — do not invent one.
+- **Q3 — Source generator integration (RESOLVED):** the existing source-gen pipeline (`EntityAnalyzer` → `MapperGenerator` → `CodeGenerator` in `src/BLite.SourceGenerators/`) already discovers attributes and fluent ModelBuilder calls (e.g. `Property(...).HasConversion<T>()`, `HasIndex(...)`). **WP1 extends this same pipeline** to recognise (a) the `[PersonalData]` attribute on properties and (b) a fluent `PropertyBuilder<T,TProp>.HasPersonalData(...)` extension, and emits the personal-data metadata into the **already-generated entity mapper**. There is no separate `IPersonalDataMetadata` infrastructure: the generated mapper exposes `PersonalDataFields` (name list + categories) as a static property on the same generated class, with a reflection-based fallback for unmapped types.
+- **Q4 — Async streaming (RESOLVED):** `BLiteEngine.FindAllAsync(string collectionName, CancellationToken)` and `BLiteEngine.FindAsync(string collectionName, predicate, CancellationToken)` already return `IAsyncEnumerable<BsonDocument>` for **dynamic (by-name) collections** ([`src/BLite.Core/BLiteEngine.cs`](../../src/BLite.Core/BLiteEngine.cs#L643)). For typed access use `DocumentCollection<TKey,T>.ScanAsync` / `FindAllAsync`. **WP1 uses these existing primitives directly**; no new scan helper is added.
+- **Q5 — Audit sink default (RESOLVED):** the `IBLiteAuditSink` contract and its file-based default implementation are the scope of **issue #83** ([Audit] Audit Trail Module). **WP3 takes a hard dependency on #83** (`IBLiteAuditSink` from `BLite.Core` audit namespace) and does not invent a sink. Default file path policy lives in #83. WP3 only wires the existing sink into the Strict bootstrap and emits subject-export / inspection / masking events through it.
+
+---
+
+## 8. Cross-WP integration tests
+
+Beyond per-WP tests, three end-to-end tests live in `tests/BLite.Tests/Gdpr/EndToEndGdprTests.cs`:
+
+1. **Strict-mode happy path:** create an encrypted DB with `[PersonalData]` model, audit sink, retention; call `ExportSubjectDataAsync`; assert subject's data returned and an audit event recorded for the export operation.
+2. **Subject export with CDC masking:** open a watch with `ExcludeFields = ["Email"]`; insert and immediately export; assert CDC observers saw masked payload but `ExportSubjectDataAsync` returned full payload (export is a controller operation, masking is a CDC concern).
+3. **Inspection roundtrip:** populate a 3-collection DB; call `InspectDatabase`; assert counts match `CountAsync` and `IsEncrypted`/`IsAuditEnabled` agree with engine state.
+
+These tests are added in WP3 (the first point at which all surfaces are present).
+
+---
+
+## 9. Legal disclaimer (verbatim — must be cited in WP4)
+
+> This document is a technical plan, not legal advice. GDPR compliance depends on the overall application implementation, not on the embedded database alone. The host application acts as the data controller and is responsible for lawful processing, lawful basis, subject communication, and final compliance assessment. Engaging a Data Protection Officer (DPO) for the formal assessment is strongly recommended.
+
+---
+
+## 10. Glossary
+
+- **Data controller** — the entity that determines purposes and means of processing (the host application in BLite scenarios).
+- **Personal data** — any information relating to an identified or identifiable natural person (Art. 4(1)).
+- **Special categories** — Art. 9 categories: race, ethnic origin, political opinions, religion, trade-union membership, genetic/biometric/health data, sex life, sexual orientation.
+- **Subject access request (SAR)** — a request under Art. 15 for the data held about the subject; serviced by `ExportSubjectDataAsync`.
+- **Crypto-shredding** — making encrypted data irrecoverable by destroying the key; an accepted Art. 17 erasure technique. Out of scope for BLite v5 (no per-subject key support).
+
+---
+
+## 11. Change log
+
+- **2026-05-02** — §7 questions resolved against the v5 codebase: WP1 reuses existing `RetentionPolicy`; GDPR config is per-collection via `EntityTypeBuilder<T>.HasGdprMode` (mirroring `HasRetentionPolicy`); source-gen pipeline is **extended**, not duplicated, to emit personal-data metadata; WP1 uses existing `BLiteEngine.FindAllAsync(string,...)` streaming; WP3 takes a hard dependency on issue #83 for `IBLiteAuditSink`.
+- **2026-05-01** — full rewrite. Replaces the per-article ShapeUp pitches with a single architecture spec + 4 cohesive work packages. Issues #91 and #92 consolidated into WP1.
+- **2026-04-27** — original draft (per-article structure).
