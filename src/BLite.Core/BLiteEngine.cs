@@ -2,9 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
@@ -460,7 +458,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         InvokeHandlers(BackupStarted, new BackupStartedEvent(destinationDbPath, options, startedAt));
 
         var sw = Stopwatch.StartNew();
-        var stats = await _storage.BackupDetailedAsync(destinationDbPath, options.IncludeIndexes, options.BackupCryptoProvider, ct);
+        var stats = await _storage.BackupDetailedAsync(destinationDbPath, options.IncludeIndexes, ct);
         sw.Stop();
 
         var result = new BackupResult(destinationDbPath, stats.ManifestPath, sw.Elapsed, stats.FileCount, stats.TotalBytes);
@@ -899,178 +897,6 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         ThrowIfDisposed();
         var dispatcher = _storage.EnsureMetrics();
         return new Metrics.BLiteMetricsObservable(dispatcher, interval ?? TimeSpan.FromSeconds(1));
-    }
-
-    #endregion
-
-    #region Encryption Migration
-
-    /// <summary>
-    /// Migrates a plaintext BLite database to an AES-256-GCM coordinator-encrypted
-    /// (server-layout, multi-file) database.
-    /// <para>
-    /// The source database must be closed before calling this method.
-    /// All collections, KV entries, secondary indexes, and associated files are migrated
-    /// atomically: new files are written first, then the originals are replaced only after
-    /// every new file has been verified.
-    /// </para>
-    /// <para>
-    /// If <paramref name="existingPath"/> equals <paramref name="newPath"/> the migration is
-    /// performed in place: new files are written to a temporary location and then swapped over
-    /// the originals.  Otherwise the encrypted database is created at <paramref name="newPath"/>
-    /// and the source is left untouched.
-    /// </para>
-    /// </summary>
-    /// <param name="existingPath">Path to the existing plaintext <c>.db</c> file.</param>
-    /// <param name="newPath">
-    /// Destination <c>.db</c> path for the encrypted database.
-    /// When equal to <paramref name="existingPath"/> an in-place migration is performed.
-    /// </param>
-    /// <param name="keyProvider">Provider that supplies the 32-byte master key.</param>
-    /// <param name="ct">Cancellation token.</param>
-    public static async Task MigrateToEncryptedAsync(
-        string existingPath,
-        string newPath,
-        IKeyProvider keyProvider,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(existingPath))
-            throw new ArgumentNullException(nameof(existingPath));
-        if (string.IsNullOrWhiteSpace(newPath))
-            throw new ArgumentNullException(nameof(newPath));
-        if (keyProvider == null)
-            throw new ArgumentNullException(nameof(keyProvider));
-        if (!File.Exists(existingPath))
-            throw new FileNotFoundException($"Source database not found: '{existingPath}'", existingPath);
-
-        var masterKey = await keyProvider.GetKeyAsync(
-            Path.GetFileNameWithoutExtension(newPath), ct).ConfigureAwait(false);
-
-        bool isInPlace = string.Equals(
-            Path.GetFullPath(existingPath), Path.GetFullPath(newPath),
-            StringComparison.OrdinalIgnoreCase);
-
-        // Detect the source layout (single-file or server/multi-file).
-        // For plaintext files DetectFromFile reads the page-0 header directly.
-        // We keep the full detected config (including multi-file paths) so that
-        // all source collection/index files are read correctly.
-        var sourceConfig = PageFileConfig.DetectFromFile(existingPath) ?? PageFileConfig.Default;
-
-        var actualTargetPath = isInPlace ? existingPath + ".migrating" : newPath;
-        var coordinator = new EncryptionCoordinator(masterKey);
-        try
-        {
-            try
-            {
-                using (var source = new BLiteEngine(existingPath, sourceConfig))
-                using (var target = new BLiteEngine(actualTargetPath, coordinator))
-                {
-                    await BLiteMigration.CopyAllAsync(source, target).ConfigureAwait(false);
-                }
-            }
-            catch
-            {
-                BLiteMigration.SafeDeleteServerLayout(actualTargetPath);
-                throw;
-            }
-
-            if (isInPlace)
-            {
-                BLiteMigration.SafeDeleteServerLayout(existingPath);
-                File.Move(actualTargetPath, newPath);
-                // Move companion server-layout files to the final path.
-                BLiteMigration.MoveServerLayoutFiles(actualTargetPath, newPath);
-            }
-        }
-        finally
-        {
-            coordinator.Dispose();
-            CryptographicOperations.ZeroMemory(masterKey);
-        }
-    }
-
-    /// <summary>
-    /// Migrates a coordinator-encrypted (server-layout, multi-file) BLite database back to
-    /// a plaintext single-file database.
-    /// <para>
-    /// The source database must be closed before calling this method.
-    /// All collections, KV entries, secondary indexes, and associated files are migrated
-    /// atomically: new files are written first, then the originals are replaced only after
-    /// every new file has been verified.
-    /// </para>
-    /// <para>
-    /// If <paramref name="existingPath"/> equals <paramref name="newPath"/> the migration is
-    /// performed in place: a temporary plaintext file is written and then swapped over the
-    /// original.  The server-layout companion directories are removed after a successful swap.
-    /// Otherwise the plaintext database is created at <paramref name="newPath"/> and the
-    /// source is left untouched.
-    /// </para>
-    /// </summary>
-    /// <param name="existingPath">Path to the existing encrypted main <c>.db</c> file.</param>
-    /// <param name="newPath">
-    /// Destination <c>.db</c> path for the plaintext database.
-    /// When equal to <paramref name="existingPath"/> an in-place migration is performed.
-    /// </param>
-    /// <param name="keyProvider">Provider that supplies the 32-byte master key for decryption.</param>
-    /// <param name="ct">Cancellation token.</param>
-    public static async Task MigrateToPlaintextAsync(
-        string existingPath,
-        string newPath,
-        IKeyProvider keyProvider,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(existingPath))
-            throw new ArgumentNullException(nameof(existingPath));
-        if (string.IsNullOrWhiteSpace(newPath))
-            throw new ArgumentNullException(nameof(newPath));
-        if (keyProvider == null)
-            throw new ArgumentNullException(nameof(keyProvider));
-        if (!File.Exists(existingPath))
-            throw new FileNotFoundException($"Source database not found: '{existingPath}'", existingPath);
-
-        var masterKey = await keyProvider.GetKeyAsync(
-            Path.GetFileNameWithoutExtension(existingPath), ct).ConfigureAwait(false);
-
-        bool isInPlace = string.Equals(
-            Path.GetFullPath(existingPath), Path.GetFullPath(newPath),
-            StringComparison.OrdinalIgnoreCase);
-
-        var actualTargetPath = isInPlace ? existingPath + ".migrating" : newPath;
-        var coordinator = new EncryptionCoordinator(masterKey);
-        try
-        {
-            // Strip multi-file paths: BLiteEngine(path, coordinator) uses Server() layout
-            // automatically; we don't need to detect them manually.
-            var targetSingleFileConfig = PageFileConfig.Default
-                with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
-            try
-            {
-                using (var source = new BLiteEngine(existingPath, coordinator))
-                using (var target = new BLiteEngine(actualTargetPath, targetSingleFileConfig))
-                {
-                    await BLiteMigration.CopyAllAsync(source, target).ConfigureAwait(false);
-                }
-            }
-            catch
-            {
-                BLiteMigration.SafeDeleteSingleFile(actualTargetPath);
-                throw;
-            }
-
-            if (isInPlace)
-            {
-                BLiteMigration.SafeDeleteServerLayout(existingPath);
-                File.Move(actualTargetPath, newPath);
-                // Delete the temp WAL file (the target was checkpointed, so it is either
-                // empty or absent; clean up in case it was left on disk).
-                BLiteMigration.SafeDeleteSingleFile(actualTargetPath);
-            }
-        }
-        finally
-        {
-            coordinator.Dispose();
-            CryptographicOperations.ZeroMemory(masterKey);
-        }
     }
 
     #endregion

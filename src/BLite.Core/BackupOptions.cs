@@ -1,5 +1,3 @@
-using BLite.Core.Encryption;
-
 namespace BLite.Core;
 
 /// <summary>
@@ -23,27 +21,6 @@ public sealed class BackupOptions
     /// When true, includes the separate index file in the backup when the source database uses one.
     /// </summary>
     public bool IncludeIndexes { get; init; } = true;
-
-    /// <summary>
-    /// Optional encryption provider used to re-encrypt every page when writing the backup files.
-    /// <para>
-    /// When <c>null</c> (the default), the backup is written with the same encryption as the
-    /// source database — or in plaintext when the source database is not encrypted.
-    /// </para>
-    /// <para>
-    /// Supply an <see cref="AesGcmCryptoProvider"/> (passphrase) or a
-    /// <see cref="EncryptionCoordinator"/>-derived provider to produce a backup that is
-    /// encrypted with a different key, for example a cloud-backup-specific passphrase.
-    /// Each physical file in the backup receives a freshly generated salt, so the backup
-    /// key material is completely independent of the operational database.
-    /// </para>
-    /// <para>
-    /// <b>Note:</b> the caller retains ownership of the provider.
-    /// <see cref="BLiteEngine.BackupAsync(BackupOptions, System.Threading.CancellationToken)"/>
-    /// does not dispose it.
-    /// </para>
-    /// </summary>
-    public ICryptoProvider? BackupCryptoProvider { get; init; }
 }
 
 /// <summary>
