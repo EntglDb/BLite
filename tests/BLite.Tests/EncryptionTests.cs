@@ -1708,4 +1708,182 @@ public class EncryptionTests : IDisposable
                 PageConfig = cfgWithIndex
             }));
     }
+
+    // ── DocumentDbContext + IKeyProvider / BLiteEngineOptions ──────────────────
+
+    /// <summary>
+    /// Verifies that a DocumentDbContext subclass can open with BLiteEngineOptions (no encryption).
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_BLiteEngineOptions_NoEncryption_WriteAndReadBack()
+    {
+        var path = TempDb();
+        using (var ctx = new MultiFileTestDbContext(new BLiteEngineOptions { Filename = path }))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "plain", Tag = "x" });
+        }
+
+        using (var ctx2 = new MultiFileTestDbContext(new BLiteEngineOptions { Filename = path }))
+        {
+            var e = await ctx2.Entries.FindByIdAsync(1);
+            Assert.NotNull(e);
+            Assert.Equal("plain", e!.Payload);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that a DocumentDbContext subclass can open with passphrase encryption
+    /// using BLiteEngineOptions.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_BLiteEngineOptions_PassphraseEncryption_WriteAndReadBack()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "ctx_pass.db");
+        const string passphrase = "DocumentCtxPass!";
+
+        using (var ctx = new MultiFileTestDbContext(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { Passphrase = passphrase }
+        }))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "secret content", Tag = "a" });
+        }
+
+        using (var ctx2 = new MultiFileTestDbContext(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { Passphrase = passphrase }
+        }))
+        {
+            var e = await ctx2.Entries.FindByIdAsync(1);
+            Assert.NotNull(e);
+            Assert.Equal("secret content", e!.Payload);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that a DocumentDbContext subclass can open with an IKeyProvider (sync path)
+    /// and that data round-trips correctly.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_BLiteEngineOptions_KeyProvider_WriteAndReadBack()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "ctx_kp.db");
+        var masterKey = MakeMasterKey(0xC1);
+
+        using (var ctx = new MultiFileTestDbContext(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = new FixedKeyProvider(masterKey) }
+        }))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "KP entry 1", Tag = "alpha" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 2, Payload = "KP entry 2", Tag = "beta" });
+        }
+
+        using (var ctx2 = new MultiFileTestDbContext(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = new FixedKeyProvider(masterKey) }
+        }))
+        {
+            var all = await ctx2.Entries.FindAllAsync().ToListAsync();
+            Assert.Equal(2, all.Count);
+            Assert.Contains(all, e => e.Payload == "KP entry 1");
+            Assert.Contains(all, e => e.Payload == "KP entry 2");
+        }
+    }
+
+    /// <summary>
+    /// Verifies that GetKeyAsync is called exactly once per context open when using
+    /// IKeyProvider with DocumentDbContext (sync constructor path).
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_BLiteEngineOptions_KeyProvider_CalledOnceAtOpen()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "ctx_once.db");
+        var provider = new FixedKeyProvider();
+
+        using (var ctx = new MultiFileTestDbContext(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider }
+        }))
+        {
+            Assert.Equal(1, provider.GetKeyCallCount);
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "once", Tag = "t" });
+        }
+
+        Assert.Equal(1, provider.GetKeyCallCount);
+    }
+
+    /// <summary>
+    /// Verifies that the async factory (CreateAsync via BuildStorageFromOptionsAsync) produces
+    /// a fully functional DocumentDbContext subclass with IKeyProvider encryption.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_CreateAsync_KeyProvider_WriteAndReadBack()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "ctx_async.db");
+        var masterKey = MakeMasterKey(0xC2);
+        var provider1 = new FixedKeyProvider(masterKey);
+        var provider2 = new FixedKeyProvider(masterKey);
+
+        using (var ctx = await MultiFileTestDbContext.CreateAsync(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider1 }
+        }))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 10, Payload = "async ctx", Tag = "z" });
+        }
+
+        Assert.Equal(1, provider1.GetKeyCallCount);
+
+        using (var ctx2 = await MultiFileTestDbContext.CreateAsync(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = provider2 }
+        }))
+        {
+            var e = await ctx2.Entries.FindByIdAsync(10);
+            Assert.NotNull(e);
+            Assert.Equal("async ctx", e!.Payload);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that opening a DocumentDbContext with a wrong key throws CryptographicException.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_KeyProvider_WrongKeyOnReopen_Throws()
+    {
+        var dir = TempDir();
+        var path = Path.Combine(dir, "ctx_wrong.db");
+        var correctKey = MakeMasterKey(0xC3);
+        var wrongKey = MakeMasterKey(0xC4);
+
+        using (var ctx = new MultiFileTestDbContext(new BLiteEngineOptions
+        {
+            Filename = path,
+            Encryption = new EncryptionOptions { KeyProvider = new FixedKeyProvider(correctKey) }
+        }))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "private", Tag = "x" });
+        }
+
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() =>
+        {
+            using var _ = new MultiFileTestDbContext(new BLiteEngineOptions
+            {
+                Filename = path,
+                Encryption = new EncryptionOptions { KeyProvider = new FixedKeyProvider(wrongKey) }
+            });
+        });
+    }
 }

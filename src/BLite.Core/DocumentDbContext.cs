@@ -1,4 +1,5 @@
 using BLite.Core.Collections;
+using BLite.Core.Encryption;
 using BLite.Core.KeyValue;
 using BLite.Core.Metadata;
 using BLite.Core.Storage;
@@ -24,6 +25,9 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     internal readonly CDC.ChangeStreamDispatcher _cdc;
     private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
+    // Non-null only when this context created the coordinator internally (BLiteEngineOptions path).
+    // Null when an external coordinator was passed in (caller retains ownership).
+    private readonly EncryptionCoordinator? _coordinator;
     protected bool _disposed;
 
     /// <summary>
@@ -86,6 +90,255 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
         DropOrphanCollections();
+    }
+
+    /// <summary>
+    /// Creates a new database context from a unified <see cref="BLiteEngineOptions"/> object.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Supports the same three modes as <see cref="BLite.Core.BLiteEngine"/>:
+    /// no encryption, passphrase (development), or <see cref="IKeyProvider"/> (production).
+    /// </para>
+    /// <para>
+    /// When <see cref="EncryptionOptions.KeyProvider"/> is set this constructor blocks the
+    /// calling thread via <c>GetAwaiter().GetResult()</c>.  Prefer
+    /// <see cref="BuildStorageFromOptionsAsync"/> + the
+    /// <see cref="DocumentDbContext(StorageEngine, EncryptionCoordinator, BLiteKvOptions)"/>
+    /// constructor from an async factory method if you need to avoid a potential deadlock
+    /// on a UI thread or ASP.NET synchronization context.
+    /// </para>
+    /// </remarks>
+    /// <param name="options">Engine configuration.</param>
+    protected DocumentDbContext(BLiteEngineOptions options)
+    {
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+        if (string.IsNullOrWhiteSpace(options.Filename))
+            throw new ArgumentException("BLiteEngineOptions.Filename must not be null or whitespace.", nameof(options));
+
+        var enc = options.Encryption;
+
+        if (enc?.KeyProvider != null && enc.Passphrase != null)
+            throw new ArgumentException(
+                "Specify either EncryptionOptions.Passphrase or EncryptionOptions.KeyProvider, not both.",
+                nameof(options));
+
+        if (enc != null && enc.Algorithm != EncryptionAlgorithm.AesGcm256)
+            throw new NotSupportedException(
+                $"Encryption algorithm '{enc.Algorithm}' is not currently supported. " +
+                $"Only {nameof(EncryptionAlgorithm.AesGcm256)} is supported.");
+
+        if (enc?.KeyProvider != null)
+        {
+            var databaseName = System.IO.Path.GetFileNameWithoutExtension(options.Filename);
+            var keyMemory = enc.KeyProvider.GetKeyAsync(databaseName, CancellationToken.None)
+                                           .GetAwaiter().GetResult();
+
+            if (keyMemory.Length != 32)
+                throw new InvalidOperationException(
+                    $"IKeyProvider must return exactly 32 bytes (256-bit AES key) for database '{databaseName}'; " +
+                    $"got {keyMemory.Length} bytes.");
+
+            var masterKey = keyMemory.Span.ToArray();
+            try
+            {
+                var coordinator = new EncryptionCoordinator(masterKey);
+                try
+                {
+                    var mainProvider = coordinator.CreateForMainFile();
+                    var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                    {
+                        CryptoProvider = mainProvider
+                    };
+                    _storage = new StorageEngine(options.Filename, config);
+                    _coordinator = coordinator;
+                }
+                catch
+                {
+                    coordinator.Dispose();
+                    throw;
+                }
+            }
+            finally
+            {
+                Array.Clear(masterKey, 0, masterKey.Length);
+            }
+        }
+        else if (enc?.Passphrase != null)
+        {
+            var cfg = options.PageConfig;
+            if (cfg.HasValue && (cfg.Value.IndexFilePath != null || cfg.Value.CollectionDataDirectory != null))
+                throw new ArgumentException(
+                    "EncryptionOptions.Passphrase is only supported in single-file mode. " +
+                    "Use EncryptionOptions.KeyProvider for multi-file (server) mode encryption.",
+                    nameof(options));
+
+            var cryptoOptions = new CryptoOptions(enc.Passphrase, enc.Kdf, enc.KdfIterations);
+            var baseConfig = options.PageConfig ?? PageFileConfig.Default;
+            var config = baseConfig with
+            {
+                CryptoProvider = new AesGcmCryptoProvider(cryptoOptions)
+            };
+            _storage = new StorageEngine(options.Filename, config);
+        }
+        else
+        {
+            var config = options.PageConfig
+                ?? PageFileConfig.DetectFromFile(options.Filename)
+                ?? PageFileConfig.Default;
+            _storage = new StorageEngine(options.Filename, config);
+        }
+
+        _cdc = new CDC.ChangeStreamDispatcher();
+        _storage.RegisterCdc(_cdc);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, options.KvOptions);
+
+        var modelBuilder = new ModelBuilder();
+        OnModelCreating(modelBuilder);
+        _model = modelBuilder.GetEntityBuilders();
+        InitializeCollections();
+        DropOrphanCollections();
+    }
+
+    /// <summary>
+    /// Creates a database context from a pre-built <see cref="StorageEngine"/> and an optional
+    /// <see cref="EncryptionCoordinator"/> whose lifetime is managed by this context.
+    /// </summary>
+    /// <remarks>
+    /// Use this constructor together with <see cref="BuildStorageFromOptionsAsync"/> to implement
+    /// an async factory that properly awaits <see cref="IKeyProvider.GetKeyAsync"/>:
+    /// <code>
+    /// public static async Task&lt;MyDbContext&gt; CreateAsync(BLiteEngineOptions opts, CancellationToken ct = default)
+    /// {
+    ///     var (storage, coordinator) = await DocumentDbContext.BuildStorageFromOptionsAsync(opts, ct);
+    ///     return new MyDbContext(storage, coordinator, opts.KvOptions);
+    /// }
+    /// </code>
+    /// </remarks>
+    /// <param name="storage">A fully initialised <see cref="StorageEngine"/>.</param>
+    /// <param name="coordinator">
+    /// The <see cref="EncryptionCoordinator"/> that owns the master key, or <c>null</c> for
+    /// non-coordinator encryption modes. When non-null the context takes ownership and
+    /// disposes the coordinator on <see cref="Dispose"/>.
+    /// </param>
+    /// <param name="kvOptions">Optional Key-Value store configuration.</param>
+    protected DocumentDbContext(StorageEngine storage, EncryptionCoordinator? coordinator, BLiteKvOptions? kvOptions = null)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _coordinator = coordinator;
+        _cdc = new CDC.ChangeStreamDispatcher();
+        _storage.RegisterCdc(_cdc);
+        _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
+        _kvStore = new BLiteKvStore(_storage, kvOptions);
+
+        var modelBuilder = new ModelBuilder();
+        OnModelCreating(modelBuilder);
+        _model = modelBuilder.GetEntityBuilders();
+        InitializeCollections();
+        DropOrphanCollections();
+    }
+
+    /// <summary>
+    /// Asynchronously builds a <see cref="StorageEngine"/> from <see cref="BLiteEngineOptions"/>,
+    /// properly awaiting <see cref="IKeyProvider.GetKeyAsync"/> when a key provider is configured.
+    /// </summary>
+    /// <remarks>
+    /// Prefer this helper over the <see cref="DocumentDbContext(BLiteEngineOptions)"/> constructor
+    /// when <see cref="EncryptionOptions.KeyProvider"/> is set and you are running in an environment
+    /// with a synchronization context (UI thread, ASP.NET request context) where blocking on an
+    /// async call could cause a deadlock.
+    /// <para>
+    /// The returned <see cref="EncryptionCoordinator"/> (when non-null) is owned by the caller and
+    /// must be passed to a
+    /// <see cref="DocumentDbContext(StorageEngine, EncryptionCoordinator, BLiteKvOptions)"/>
+    /// constructor so that the context can dispose it.
+    /// </para>
+    /// </remarks>
+    /// <param name="options">Engine configuration.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// A tuple of the initialised <see cref="StorageEngine"/> and the optional
+    /// <see cref="EncryptionCoordinator"/> (non-null only for the <see cref="IKeyProvider"/> path).
+    /// </returns>
+    protected static async Task<(StorageEngine Storage, EncryptionCoordinator? Coordinator)>
+        BuildStorageFromOptionsAsync(BLiteEngineOptions options, CancellationToken ct = default)
+    {
+        if (options == null)
+            throw new ArgumentNullException(nameof(options));
+        if (string.IsNullOrWhiteSpace(options.Filename))
+            throw new ArgumentException("BLiteEngineOptions.Filename must not be null or whitespace.", nameof(options));
+
+        var enc = options.Encryption;
+
+        if (enc?.KeyProvider != null && enc.Passphrase != null)
+            throw new ArgumentException(
+                "Specify either EncryptionOptions.Passphrase or EncryptionOptions.KeyProvider, not both.",
+                nameof(options));
+
+        if (enc != null && enc.Algorithm != EncryptionAlgorithm.AesGcm256)
+            throw new NotSupportedException(
+                $"Encryption algorithm '{enc.Algorithm}' is not currently supported. " +
+                $"Only {nameof(EncryptionAlgorithm.AesGcm256)} is supported.");
+
+        if (enc?.KeyProvider != null)
+        {
+            var databaseName = System.IO.Path.GetFileNameWithoutExtension(options.Filename);
+            var keyMemory = await enc.KeyProvider.GetKeyAsync(databaseName, ct).ConfigureAwait(false);
+
+            if (keyMemory.Length != 32)
+                throw new InvalidOperationException(
+                    $"IKeyProvider must return exactly 32 bytes (256-bit AES key) for database '{databaseName}'; " +
+                    $"got {keyMemory.Length} bytes.");
+
+            var masterKey = keyMemory.Span.ToArray();
+            try
+            {
+                var coordinator = new EncryptionCoordinator(masterKey);
+                try
+                {
+                    var mainProvider = coordinator.CreateForMainFile();
+                    var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
+                    {
+                        CryptoProvider = mainProvider
+                    };
+                    var storage = new StorageEngine(options.Filename, config);
+                    return (storage, coordinator);
+                }
+                catch
+                {
+                    coordinator.Dispose();
+                    throw;
+                }
+            }
+            finally
+            {
+                Array.Clear(masterKey, 0, masterKey.Length);
+            }
+        }
+
+        if (enc?.Passphrase != null)
+        {
+            var cfg = options.PageConfig;
+            if (cfg.HasValue && (cfg.Value.IndexFilePath != null || cfg.Value.CollectionDataDirectory != null))
+                throw new ArgumentException(
+                    "EncryptionOptions.Passphrase is only supported in single-file mode. " +
+                    "Use EncryptionOptions.KeyProvider for multi-file (server) mode encryption.",
+                    nameof(options));
+
+            var cryptoOptions = new CryptoOptions(enc.Passphrase, enc.Kdf, enc.KdfIterations);
+            var baseConfig = options.PageConfig ?? PageFileConfig.Default;
+            var config = baseConfig with { CryptoProvider = new AesGcmCryptoProvider(cryptoOptions) };
+            return (new StorageEngine(options.Filename, config), null);
+        }
+
+        {
+            var config = options.PageConfig
+                ?? PageFileConfig.DetectFromFile(options.Filename)
+                ?? PageFileConfig.Default;
+            return (new StorageEngine(options.Filename, config), null);
+        }
     }
 
     /// <summary>
@@ -380,6 +633,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
         _storage?.Dispose();
         _cdc?.Dispose();
+        _coordinator?.Dispose();
 
         GC.SuppressFinalize(this);
     }

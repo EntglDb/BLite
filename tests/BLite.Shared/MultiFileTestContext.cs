@@ -1,7 +1,11 @@
 using BLite.Core;
 using BLite.Core.Collections;
+using BLite.Core.Encryption;
+using BLite.Core.KeyValue;
 using BLite.Core.Metadata;
 using BLite.Core.Storage;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace BLite.Tests;
 
@@ -27,6 +31,33 @@ public partial class MultiFileTestDbContext : DocumentDbContext
         : base(databasePath, config)
     {
         InitializeCollections();
+    }
+
+    /// <summary>
+    /// Opens a context using unified engine options (sync, supports passphrase and KeyProvider).
+    /// </summary>
+    public MultiFileTestDbContext(BLiteEngineOptions options)
+        : base(options)
+    {
+    }
+
+    /// <summary>
+    /// Private constructor used by the async factory <see cref="CreateAsync"/>.
+    /// </summary>
+    private MultiFileTestDbContext(StorageEngine storage, EncryptionCoordinator? coordinator, BLiteKvOptions? kvOptions)
+        : base(storage, coordinator, kvOptions)
+    {
+    }
+
+    /// <summary>
+    /// Asynchronously creates a context using unified engine options, properly awaiting
+    /// <see cref="IKeyProvider.GetKeyAsync"/> when a key provider is configured.
+    /// </summary>
+    public static async Task<MultiFileTestDbContext> CreateAsync(
+        BLiteEngineOptions options, CancellationToken ct = default)
+    {
+        var (storage, coordinator) = await BuildStorageFromOptionsAsync(options, ct).ConfigureAwait(false);
+        return new MultiFileTestDbContext(storage, coordinator, options.KvOptions);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
