@@ -31,6 +31,9 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     private readonly ConcurrentDictionary<string, DynamicCollection> _collections = new(StringComparer.OrdinalIgnoreCase);
     private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
+    // Non-null only when this engine created the coordinator internally (BLiteEngineOptions path).
+    // Null when an external coordinator was passed in (caller retains ownership).
+    private EncryptionCoordinator? _coordinator;
     private bool _disposed;
 
     public event Action<BackupStartedEvent>? BackupStarted;
@@ -222,12 +225,10 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
                 var mainProvider = coordinator.CreateForMainFile();
                 var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
                 {
-                    CryptoProvider = mainProvider,
-                    EncryptionCoordinator = coordinator
-                    // WalCryptoProvider intentionally null — StorageEngine calls
-                    // coordinator.CreateForWal() after the main file is opened (primes salt).
+                    CryptoProvider = mainProvider
                 };
 
+                _coordinator = coordinator;
                 _storage = new StorageEngine(options.Filename, config);
             }
             finally
@@ -245,8 +246,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             var baseConfig = options.PageConfig ?? PageFileConfig.Default;
             var config = baseConfig with
             {
-                CryptoProvider = new AesGcmCryptoProvider(cryptoOptions),
-                WalCryptoProvider = new AesGcmCryptoProvider(cryptoOptions, fileRole: 3)
+                CryptoProvider = new AesGcmCryptoProvider(cryptoOptions)
             };
 
             _storage = new StorageEngine(options.Filename, config);
@@ -278,10 +278,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// Used by <see cref="CreateAsync"/> to preserve the database path when constructing
     /// from an externally-built <see cref="StorageEngine"/>.
     /// </summary>
-    private BLiteEngine(StorageEngine storage, string? databasePath, BLiteKvOptions? kvOptions)
+    private BLiteEngine(StorageEngine storage, string? databasePath, BLiteKvOptions? kvOptions, EncryptionCoordinator? coordinator = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _databasePath = databasePath;
+        _coordinator = coordinator;
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
     }
@@ -379,12 +380,11 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
                 var mainProvider = coordinator.CreateForMainFile();
                 var config = PageFileConfig.Server(options.Filename, options.PageConfig) with
                 {
-                    CryptoProvider = mainProvider,
-                    EncryptionCoordinator = coordinator
+                    CryptoProvider = mainProvider
                 };
 
                 var storage = new StorageEngine(options.Filename, config);
-                return new BLiteEngine(storage, options.Filename, options.KvOptions);
+                return new BLiteEngine(storage, options.Filename, options.KvOptions, coordinator);
             }
             finally
             {
@@ -1103,6 +1103,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             collection.Dispose();
         _collections.Clear();
         _storage.Dispose();
+        _coordinator?.Dispose();
 
         GC.SuppressFinalize(this);
     }
