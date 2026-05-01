@@ -102,8 +102,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         // (which reads the crypto header and validates the key) handle existing files.
         var config = PageFileConfig.Default with
         {
-            CryptoProvider = new AesGcmCryptoProvider(crypto),
-            WalCryptoProvider = new AesGcmCryptoProvider(crypto, fileRole: 3)
+            CryptoProvider = new AesGcmCryptoProvider(crypto)
         };
 
         _databasePath = databasePath;
@@ -141,17 +140,12 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         if (coordinator == null)
             throw new ArgumentNullException(nameof(coordinator));
 
-        var mainProvider = coordinator.CreateForMainFile();
-
         // Server layout: separate WAL directory, dedicated index file, per-collection directory.
-        // Coordinator is stored in the config so StorageEngine can derive subkeys for each
-        // sub-file (index, WAL, per-collection) after the main file is opened.
+        // A single CryptoProvider (the main-file provider) is placed on the config; StorageEngine
+        // automatically calls CreateSiblingProvider for every sub-file (WAL, index, collections).
         var config = PageFileConfig.Server(databasePath, baseConfig) with
         {
-            CryptoProvider = mainProvider,
-            EncryptionCoordinator = coordinator
-            // WalCryptoProvider is intentionally null — StorageEngine calls
-            // coordinator.CreateForWal() after opening the main file (which primes the salt).
+            CryptoProvider = coordinator.CreateForMainFile()
         };
 
         _databasePath = databasePath;

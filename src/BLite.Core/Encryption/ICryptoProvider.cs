@@ -73,4 +73,26 @@ public interface ICryptoProvider
     /// Must be exactly <see cref="FileHeaderSize"/> bytes.
     /// </param>
     void LoadFromFileHeader(ReadOnlySpan<byte> header);
+
+    /// <summary>
+    /// Creates a sibling provider for a different physical file that belongs to the
+    /// same logical database, using the same underlying key material.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// File roles: 0 = main database, 1 = collection, 2 = index, 3 = WAL.
+    /// </para>
+    /// <para>
+    /// For <see cref="AesGcmCryptoProvider"/> (PBKDF2 mode) the sibling derives a fresh
+    /// key from the same passphrase and a new per-file random salt, guaranteeing that
+    /// different files never share a key even when they contain pages with the same ID.
+    /// </para>
+    /// <para>
+    /// For coordinator-managed providers (HKDF mode) the sibling is derived from the
+    /// same master key via HKDF-SHA256 with a file-role-specific context label.
+    /// </para>
+    /// </remarks>
+    /// <param name="fileRole">Role of the sibling file (0–3).</param>
+    /// <param name="fileIndex">0-based index within that role (e.g. collection slot).</param>
+    ICryptoProvider CreateSiblingProvider(byte fileRole, ushort fileIndex);
 }

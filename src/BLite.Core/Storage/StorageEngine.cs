@@ -101,22 +101,10 @@ public sealed partial class StorageEngine : IDisposable
         // Initialize storage infrastructure
         _pageFile = new PageFile(databasePath, config);
 
-        // Validate coordinator configuration before opening any files: if an
-        // EncryptionCoordinator is supplied, the main-file CryptoProvider must also be set
-        // (and must have been obtained via coordinator.CreateForMainFile()) so that the
-        // database salt is primed when the main file is opened.  Without this guard the
-        // subsequent coordinator.CreateForWal()/CreateForIndex() calls would throw a
-        // confusing InvalidOperationException about the salt not being initialised.
-        if (config.EncryptionCoordinator != null && config.CryptoProvider == null)
-            throw new InvalidOperationException(
-                "PageFileConfig.EncryptionCoordinator is set but PageFileConfig.CryptoProvider is null. " +
-                "When using an EncryptionCoordinator, assign coordinator.CreateForMainFile() to " +
-                "PageFileConfig.CryptoProvider so that the database salt is primed when the main " +
-                "file is opened.");
-
         _pageFile.Open();
-        // NOTE: Opening the main file primes the EncryptionCoordinator's database salt
-        // (if one is set), making CreateForIndex/CreateForCollection/CreateForWal available.
+        // NOTE: If CryptoProvider is a coordinator-managed provider, opening the main file
+        // primes the coordinator's database salt, making CreateSiblingProvider available
+        // for index, WAL, and per-collection files.
 
         // Phase 3: open separate index file if configured
         if (config.IndexFilePath != null)
@@ -125,10 +113,10 @@ public sealed partial class StorageEngine : IDisposable
             if (!string.IsNullOrWhiteSpace(idxDirectory))
                 Directory.CreateDirectory(idxDirectory);
 
-            // When a coordinator is present derive a dedicated index-file subkey so that
-            // index and data pages encrypted with the same pageId never share a key.
-            var idxConfig = config.EncryptionCoordinator != null
-                ? AsStandaloneConfig(config) with { CryptoProvider = config.EncryptionCoordinator.CreateForIndex(0) }
+            // Derive a dedicated index-file provider so that index and data pages
+            // encrypted with the same pageId never share a key.
+            var idxConfig = config.CryptoProvider != null
+                ? AsStandaloneConfig(config) with { CryptoProvider = config.CryptoProvider.CreateSiblingProvider(2, 0) }
                 : AsStandaloneConfig(config);
 
             _indexFile = new PageFile(config.IndexFilePath, idxConfig);
@@ -146,10 +134,9 @@ public sealed partial class StorageEngine : IDisposable
             LoadCollectionSlots();
         }
 
-        // When a coordinator is present derive a dedicated WAL subkey.
-        var walCryptoProvider = config.EncryptionCoordinator != null
-            ? config.EncryptionCoordinator.CreateForWal()
-            : config.WalCryptoProvider;
+        // When encryption is configured, derive a dedicated WAL provider from the main-file
+        // provider so that WAL records are always encrypted alongside the rest of the database.
+        var walCryptoProvider = config.CryptoProvider?.CreateSiblingProvider(3, 0);
 
         _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
@@ -343,5 +330,5 @@ public sealed partial class StorageEngine : IDisposable
     /// that should not itself spawn further sub-files.
     /// </summary>
     private static PageFileConfig AsStandaloneConfig(PageFileConfig config)
-        => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null, EncryptionCoordinator = null };
+        => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
 }

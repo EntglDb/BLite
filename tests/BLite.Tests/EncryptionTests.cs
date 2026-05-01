@@ -931,6 +931,285 @@ public class EncryptionTests : IDisposable
         coordinator.Dispose(); // must not throw
     }
 
+    // ── DocumentDbContext integration with encryption ─────────────────────────
+
+    /// <summary>
+    /// Verifies that a <see cref="DocumentDbContext"/> opened with an
+    /// <see cref="AesGcmCryptoProvider"/> can write documents, be closed, and
+    /// then be reopened with the same passphrase to read those documents back.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCryptoProvider_BasicWriteAndReadBack()
+    {
+        var dbPath = TempDb();
+        var opts = new CryptoOptions("ctx-basic-passphrase", iterations: 1);
+
+        // Write phase
+        {
+            var provider = new AesGcmCryptoProvider(opts);
+            var config = PageFileConfig.Default with { CryptoProvider = provider };
+            using var ctx = new MultiFileTestDbContext(dbPath, config);
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "Hello encrypted world", Tag = "alpha" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 2, Payload = "Secret payload", Tag = "beta" });
+        }
+
+        // Read-back phase — fresh provider instance, same passphrase
+        {
+            var provider2 = new AesGcmCryptoProvider(opts);
+            var config2 = PageFileConfig.Default with { CryptoProvider = provider2 };
+            using var ctx2 = new MultiFileTestDbContext(dbPath, config2);
+
+            var entry1 = await ctx2.Entries.FindByIdAsync(1);
+            var entry2 = await ctx2.Entries.FindByIdAsync(2);
+
+            Assert.NotNull(entry1);
+            Assert.Equal("Hello encrypted world", entry1!.Payload);
+            Assert.Equal("alpha", entry1.Tag);
+
+            Assert.NotNull(entry2);
+            Assert.Equal("Secret payload", entry2!.Payload);
+            Assert.Equal("beta", entry2.Tag);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that the raw on-disk bytes of an encrypted database do not contain
+    /// the inserted plaintext payload in readable form.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCryptoProvider_PlaintextNotVisibleOnDisk()
+    {
+        var dbPath = TempDb();
+        var opts = new CryptoOptions("ctx-disk-check", iterations: 1);
+        const string secretPayload = "PlaintextMustNotAppearOnDisk77665544";
+
+        var provider = new AesGcmCryptoProvider(opts);
+        var config = PageFileConfig.Default with { CryptoProvider = provider };
+        using (var ctx = new MultiFileTestDbContext(dbPath, config))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = secretPayload, Tag = "secret" });
+        }
+
+        var rawBytes = File.ReadAllBytes(dbPath);
+        var rawText = System.Text.Encoding.UTF8.GetString(rawBytes);
+        Assert.DoesNotContain(secretPayload, rawText);
+    }
+
+    /// <summary>
+    /// Verifies that opening an encrypted database with a wrong passphrase fails,
+    /// protecting against unauthorised access.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCryptoProvider_WrongPassphrase_Throws()
+    {
+        var dbPath = TempDb();
+        var correctOpts = new CryptoOptions("the-correct-passphrase", iterations: 1);
+        var wrongOpts   = new CryptoOptions("the-wrong-passphrase",   iterations: 1);
+
+        // Write with the correct passphrase
+        var correctProvider = new AesGcmCryptoProvider(correctOpts);
+        using (var ctx = new MultiFileTestDbContext(dbPath, PageFileConfig.Default with { CryptoProvider = correctProvider }))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "Private data", Tag = "x" });
+        }
+
+        // Attempt to open with the wrong passphrase — must throw
+        var wrongProvider = new AesGcmCryptoProvider(wrongOpts);
+        Assert.ThrowsAny<Exception>(() =>
+        {
+            using var _ = new MultiFileTestDbContext(dbPath, PageFileConfig.Default with { CryptoProvider = wrongProvider });
+        });
+    }
+
+    /// <summary>
+    /// Verifies that multiple documents inserted into an encrypted database all
+    /// survive a close/reopen cycle with correct payloads.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCryptoProvider_MultipleDocuments_AllSurviveReopen()
+    {
+        var dbPath = TempDb();
+        var opts = new CryptoOptions("ctx-multidoc-passphrase", iterations: 1);
+        const int count = 10;
+
+        // Write phase
+        {
+            var provider = new AesGcmCryptoProvider(opts);
+            var config = PageFileConfig.Default with { CryptoProvider = provider };
+            using var ctx = new MultiFileTestDbContext(dbPath, config);
+            for (int i = 1; i <= count; i++)
+                await ctx.Entries.InsertAsync(new MultiFileEntry { Id = i, Payload = $"Encrypted payload {i}", Tag = "batch" });
+        }
+
+        // Read-back phase
+        {
+            var provider2 = new AesGcmCryptoProvider(opts);
+            var config2 = PageFileConfig.Default with { CryptoProvider = provider2 };
+            using var ctx2 = new MultiFileTestDbContext(dbPath, config2);
+
+            var all = await ctx2.Entries.FindAllAsync().ToListAsync();
+            Assert.Equal(count, all.Count);
+            Assert.All(all, e => Assert.Equal("batch", e.Tag));
+            for (int i = 1; i <= count; i++)
+                Assert.Contains(all, e => e.Id == i && e.Payload == $"Encrypted payload {i}");
+        }
+    }
+
+    /// <summary>
+    /// Verifies that a <see cref="DocumentDbContext"/> in server-mode (separate WAL, index,
+    /// and collection files), encrypted via <see cref="EncryptionCoordinator"/>, can write
+    /// and correctly read back documents after a close/reopen cycle.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCoordinator_ServerMode_WriteAndReadBack()
+    {
+        var dir    = TempDir();
+        var dbPath = Path.Combine(dir, "serverenc.db");
+        var masterKey = MakeMasterKey(0xE0);
+
+        // Write phase
+        {
+            using var coordinator = new EncryptionCoordinator(masterKey);
+            var provider = coordinator.CreateForMainFile();
+            var config = PageFileConfig.Server(dbPath) with { CryptoProvider = provider };
+            using var ctx = new MultiFileTestDbContext(dbPath, config);
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "Alpha data", Tag = "a" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 2, Payload = "Beta data",  Tag = "b" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 3, Payload = "Gamma data", Tag = "c" });
+        }
+
+        // Read-back phase — fresh coordinator with the same master key
+        {
+            using var coordinator2 = new EncryptionCoordinator(masterKey);
+            var provider2 = coordinator2.CreateForMainFile();
+            var config2 = PageFileConfig.Server(dbPath) with { CryptoProvider = provider2 };
+            using var ctx2 = new MultiFileTestDbContext(dbPath, config2);
+
+            var e1 = await ctx2.Entries.FindByIdAsync(1);
+            var e3 = await ctx2.Entries.FindByIdAsync(3);
+
+            Assert.NotNull(e1);
+            Assert.Equal("Alpha data", e1!.Payload);
+            Assert.Equal("a", e1.Tag);
+
+            Assert.NotNull(e3);
+            Assert.Equal("Gamma data", e3!.Payload);
+            Assert.Equal("c", e3.Tag);
+
+            var all = await ctx2.Entries.FindAllAsync().ToListAsync();
+            Assert.Equal(3, all.Count);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that the plaintext payload is not present in any of the server-mode
+    /// files on disk (main database, index, WAL, and per-collection files).
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCoordinator_ServerMode_PlaintextNotInAnyFile()
+    {
+        var dir    = TempDir();
+        var dbPath = Path.Combine(dir, "encnoplain.db");
+        var masterKey = MakeMasterKey(0xE1);
+        const string secretPayload = "ServerModeSecretValue99887766ABCD";
+
+        using var coordinator = new EncryptionCoordinator(masterKey);
+        var provider = coordinator.CreateForMainFile();
+        var config = PageFileConfig.Server(dbPath) with { CryptoProvider = provider };
+        using (var ctx = new MultiFileTestDbContext(dbPath, config))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = secretPayload, Tag = "enc" });
+        }
+
+        var secretBytes = System.Text.Encoding.UTF8.GetBytes(secretPayload);
+        foreach (var filePath in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+        {
+            var bytes = File.ReadAllBytes(filePath);
+            Assert.True(bytes.AsSpan().IndexOf(secretBytes) == -1,
+                $"Plaintext payload was found unencrypted in file: {Path.GetFileName(filePath)}");
+        }
+    }
+
+    /// <summary>
+    /// Verifies that opening a server-mode encrypted database with a different master key
+    /// fails, protecting all files (main, index, WAL, collection) against unauthorised access.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCoordinator_ServerMode_WrongMasterKey_Throws()
+    {
+        var dir        = TempDir();
+        var dbPath     = Path.Combine(dir, "wrongkey.db");
+        var correctKey = MakeMasterKey(0xE2);
+        var wrongKey   = MakeMasterKey(0xE3);
+
+        // Write with the correct master key
+        {
+            using var coordinator = new EncryptionCoordinator(correctKey);
+            var provider = coordinator.CreateForMainFile();
+            var config = PageFileConfig.Server(dbPath) with { CryptoProvider = provider };
+            using var ctx = new MultiFileTestDbContext(dbPath, config);
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "Sensitive data", Tag = "x" });
+        }
+
+        // Attempt to open with a different master key — must throw
+        using var wrongCoordinator = new EncryptionCoordinator(wrongKey);
+        var wrongProvider = wrongCoordinator.CreateForMainFile();
+        var wrongConfig   = PageFileConfig.Server(dbPath) with { CryptoProvider = wrongProvider };
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() =>
+        {
+            using var _ = new MultiFileTestDbContext(dbPath, wrongConfig);
+        });
+    }
+
+    /// <summary>
+    /// Verifies that a secondary B-tree index defined on <see cref="MultiFileEntry.Tag"/>
+    /// works correctly against an encrypted server-mode database after a close/reopen cycle.
+    /// This exercises both the encrypted index file and the encrypted per-collection file.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_WithCoordinator_ServerMode_SecondaryIndexQuery_ReturnsCorrectResults()
+    {
+        var dir    = TempDir();
+        var dbPath = Path.Combine(dir, "idxenc.db");
+        var masterKey = MakeMasterKey(0xE4);
+
+        // Write phase — insert entries with different Tag values
+        {
+            using var coordinator = new EncryptionCoordinator(masterKey);
+            var provider = coordinator.CreateForMainFile();
+            var config = PageFileConfig.Server(dbPath) with { CryptoProvider = provider };
+            using var ctx = new EncIndexedContext(dbPath, config);
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "Red Apple",  Tag = "red" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 2, Payload = "Green Apple", Tag = "green" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 3, Payload = "Red Berry",  Tag = "red" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 4, Payload = "Blue Sky",   Tag = "blue" });
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 5, Payload = "Green Leaf", Tag = "green" });
+        }
+
+        // Query phase — fresh coordinator, verify index-driven LINQ queries return correct rows
+        {
+            using var coordinator2 = new EncryptionCoordinator(masterKey);
+            var provider2 = coordinator2.CreateForMainFile();
+            var config2 = PageFileConfig.Server(dbPath) with { CryptoProvider = provider2 };
+            using var ctx2 = new EncIndexedContext(dbPath, config2);
+
+            var reds = ctx2.Entries.AsQueryable().Where(e => e.Tag == "red").ToList();
+            Assert.Equal(2, reds.Count);
+            Assert.All(reds, e => Assert.Equal("red", e.Tag));
+
+            var greens = ctx2.Entries.AsQueryable().Where(e => e.Tag == "green").ToList();
+            Assert.Equal(2, greens.Count);
+            Assert.All(greens, e => Assert.Equal("green", e.Tag));
+
+            var blues = ctx2.Entries.AsQueryable().Where(e => e.Tag == "blue").ToList();
+            Assert.Single(blues);
+            Assert.Equal("Blue Sky", blues[0].Payload);
+
+            var all = ctx2.Entries.AsQueryable().ToList();
+            Assert.Equal(5, all.Count);
+        }
+    }
+
     [Fact]
     public void EncryptionCoordinator_PageFile_CreateAndRead()
     {
