@@ -408,7 +408,9 @@ public static class BLiteMigration
 
         if (src.CollectionDataDirectory != null && Directory.Exists(src.CollectionDataDirectory) && dest.CollectionDataDirectory != null)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dest.CollectionDataDirectory)!);
+            var destParentDir = Path.GetDirectoryName(dest.CollectionDataDirectory);
+            if (!string.IsNullOrEmpty(destParentDir))
+                Directory.CreateDirectory(destParentDir);
             Directory.Move(src.CollectionDataDirectory, dest.CollectionDataDirectory);
         }
     }
