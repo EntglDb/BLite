@@ -318,10 +318,15 @@ public sealed partial class StorageEngine : IDisposable
     /// <summary>
     /// Ensures the metrics dispatcher is initialized. No-op if already active.
     /// Called by <c>BLiteEngine.EnableMetrics()</c> before the first metric is published.
+    /// <para>
+    /// <paramref name="enableDiagnosticSource"/> is only honored on the <em>first</em> call;
+    /// subsequent calls (including from <c>EnableMetrics</c> after metrics are already running)
+    /// are no-ops and will not change the diagnostic-source configuration of the existing dispatcher.
+    /// </para>
     /// </summary>
-    internal Metrics.MetricsDispatcher EnsureMetrics()
+    internal Metrics.MetricsDispatcher EnsureMetrics(bool enableDiagnosticSource = false)
     {
-        return _metrics ??= new Metrics.MetricsDispatcher();
+        return _metrics ??= new Metrics.MetricsDispatcher(enableDiagnosticSource);
     }
 
     /// <summary>

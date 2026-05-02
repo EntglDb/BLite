@@ -13,7 +13,18 @@ public sealed class MetricsOptions
     public TimeSpan SnapshotInterval { get; init; } = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Default options: 1-second snapshot interval.
+    /// When <see langword="true"/>, registers a <c>Meter("BLite.Core")</c> with the security
+    /// counters as OpenTelemetry-compatible instruments (<c>Counter&lt;long&gt;</c>).
+    /// <para>
+    /// Only effective on .NET 6 and later targets; the option is silently ignored on
+    /// .NET Standard 2.1 where <c>System.Diagnostics.Metrics</c> is not available.
+    /// </para>
+    /// Defaults to <see langword="false"/>.
+    /// </summary>
+    public bool EnableDiagnosticSource { get; init; } = false;
+
+    /// <summary>
+    /// Default options: 1-second snapshot interval, diagnostic source disabled.
     /// </summary>
     public static MetricsOptions Default { get; } = new();
 }
