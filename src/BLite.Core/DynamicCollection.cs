@@ -1406,7 +1406,7 @@ public sealed class DynamicCollection : IDisposable
                     Timestamp     = sw.StartTimestamp,
                     Type          = Metrics.MetricEventType.Vacuum,
                     ElapsedMicros = sw.GetElapsedMicros(),
-                    BytesFreed    = success ? bytesFreed : 0,
+                    BytesFreed    = bytesFreed,
                     Success       = success,
                 });
             }

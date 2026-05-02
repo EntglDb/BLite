@@ -537,7 +537,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     Timestamp     = sw.StartTimestamp,
                     Type          = MetricEventType.Vacuum,
                     ElapsedMicros = sw.GetElapsedMicros(),
-                    BytesFreed    = success ? bytesFreed : 0,
+                    BytesFreed    = bytesFreed,
                     Success       = success,
                 });
             }
