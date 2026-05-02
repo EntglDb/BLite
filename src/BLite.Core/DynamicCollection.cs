@@ -83,6 +83,9 @@ public sealed class DynamicCollection : IDisposable
     // Secondary indexes: name → DynamicSecondaryIndex
     private readonly Dictionary<string, DynamicSecondaryIndex> _secondaryIndexes = new(StringComparer.OrdinalIgnoreCase);
 
+    // ── Internal access for extension methods ─────────────────────────────
+    internal Metrics.MetricsDispatcher? MetricsDispatcher => _storage.MetricsDispatcher;
+
     /// <summary>
     /// Creates or opens a dynamic collection.
     /// </summary>
@@ -1290,6 +1293,10 @@ public sealed class DynamicCollection : IDisposable
 
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Timed out acquiring collection write lock (VacuumAsync).");
+
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
+        long bytesFreed = 0;
+        bool success = false;
         try
         {
             var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1321,6 +1328,7 @@ public sealed class DynamicCollection : IDisposable
                         int freeBytes = compactedHdr.FreeSpaceEnd - compactedHdr.FreeSpaceStart;
                         if (freeBytes > 0)
                         {
+                            bytesFreed += freeBytes;
                             _storage.WritePage(pageId, transaction.TransactionId,
                                 buffer.AsSpan(0, _storage.PageSize));
                             SnapshotFsiForTransaction(transaction, pageId);
@@ -1385,10 +1393,23 @@ public sealed class DynamicCollection : IDisposable
                     _secondaryIndexes[name] = entry;
                 PersistIndexMetadata();
             }
+
+            success = true;
         }
         finally
         {
             _collectionLock.Release();
+            if (sw.IsActive)
+            {
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp     = sw.StartTimestamp,
+                    Type          = Metrics.MetricEventType.Vacuum,
+                    ElapsedMicros = sw.GetElapsedMicros(),
+                    BytesFreed    = bytesFreed,
+                    Success       = success,
+                });
+            }
         }
     }
 

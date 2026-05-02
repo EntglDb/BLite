@@ -479,6 +479,16 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
         var result = new BackupResult(destinationDbPath, stats.ManifestPath, sw.Elapsed, stats.FileCount, stats.TotalBytes);
         InvokeHandlers(BackupCompleted, new BackupCompletedEvent(result, options, DateTimeOffset.UtcNow));
+
+        // Publish backup metric — same hook that signals backup completion.
+        _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
+        {
+            Timestamp     = Stopwatch.GetTimestamp(),
+            Type          = Metrics.MetricEventType.BackupCompleted,
+            ElapsedMicros = (long)(sw.Elapsed.TotalMilliseconds * 1000),
+            Success       = true,
+        });
+
         return result;
     }
 
@@ -884,7 +894,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     public void EnableMetrics(Metrics.MetricsOptions? options = null)
     {
         ThrowIfDisposed();
-        _storage.EnsureMetrics();
+        _storage.EnsureMetrics(options?.EnableDiagnosticSource ?? false);
     }
 
     /// <summary>
