@@ -1296,6 +1296,7 @@ public sealed class DynamicCollection : IDisposable
 
         var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
         long bytesFreed = 0;
+        bool success = false;
         try
         {
             var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -1392,6 +1393,8 @@ public sealed class DynamicCollection : IDisposable
                     _secondaryIndexes[name] = entry;
                 PersistIndexMetadata();
             }
+
+            success = true;
         }
         finally
         {
@@ -1403,8 +1406,8 @@ public sealed class DynamicCollection : IDisposable
                     Timestamp     = sw.StartTimestamp,
                     Type          = Metrics.MetricEventType.Vacuum,
                     ElapsedMicros = sw.GetElapsedMicros(),
-                    BytesFreed    = bytesFreed,
-                    Success       = true,
+                    BytesFreed    = success ? bytesFreed : 0,
+                    Success       = success,
                 });
             }
         }

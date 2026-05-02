@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BLite.Core.Metrics;
 using BLite.Core.Query.Blql;
 
@@ -74,7 +75,7 @@ public static class DynamicCollectionBlqlExtensions
         {
             filter = BlqlFilterParser.Parse(filterJson);
         }
-        catch (FormatException)
+        catch (Exception ex) when (ex is FormatException or JsonException)
         {
             collection.MetricsDispatcher?.Publish(new MetricEvent
             {

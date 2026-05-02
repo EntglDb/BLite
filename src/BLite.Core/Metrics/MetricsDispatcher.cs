@@ -64,12 +64,35 @@ internal sealed class MetricsDispatcher : IDisposable
     private long _backupLastDurationMs;    // duration of last backup in milliseconds
 
 #if NET6_0_OR_GREATER
-    // ── OpenTelemetry / System.Diagnostics.Metrics instruments ─────────────
-    private readonly System.Diagnostics.Metrics.Meter? _meter;
-    private readonly System.Diagnostics.Metrics.Counter<long>? _meterSecurityFailedQueries;
-    private readonly System.Diagnostics.Metrics.Counter<long>? _meterVacuumTotal;
-    private readonly System.Diagnostics.Metrics.Counter<long>? _meterBackupTotal;
-    private readonly System.Diagnostics.Metrics.Counter<long>? _meterAuditEvents;
+    // ── Shared library-level OpenTelemetry / System.Diagnostics.Metrics instruments ──
+    // A single Meter per process prevents duplicate metric scopes when multiple engines run
+    // in the same process. Instruments are lazily created alongside the Meter.
+    private static readonly System.Diagnostics.Metrics.Meter s_meter =
+        new System.Diagnostics.Metrics.Meter("BLite.Core");
+    private static readonly System.Diagnostics.Metrics.Counter<long> s_meterSecurityFailedQueries =
+        s_meter.CreateCounter<long>(
+            "blite.security.failed_queries",
+            unit: "queries",
+            description: "Total queries rejected by BLQL hardening.");
+    private static readonly System.Diagnostics.Metrics.Counter<long> s_meterVacuumTotal =
+        s_meter.CreateCounter<long>(
+            "blite.vacuum.total",
+            unit: "operations",
+            description: "Total VACUUM passes completed.");
+    private static readonly System.Diagnostics.Metrics.Counter<long> s_meterBackupTotal =
+        s_meter.CreateCounter<long>(
+            "blite.backup.completed.total",
+            unit: "operations",
+            description: "Total successful hot-backup operations.");
+    private static readonly System.Diagnostics.Metrics.Counter<long> s_meterAuditEvents =
+        s_meter.CreateCounter<long>(
+            "blite.audit.events_total",
+            unit: "events",
+            description: "Total audit events emitted, by event type.");
+
+    // Per-instance flag: set to true when EnableDiagnosticSource was requested.
+    // Controls whether this dispatcher contributes to the shared OTel instruments.
+    private readonly bool _diagnosticSourceEnabled;
 #endif
 
     public MetricsDispatcher(bool enableDiagnosticSource = false)
@@ -82,26 +105,7 @@ internal sealed class MetricsDispatcher : IDisposable
         });
 
 #if NET6_0_OR_GREATER
-        if (enableDiagnosticSource)
-        {
-            _meter = new System.Diagnostics.Metrics.Meter("BLite.Core");
-            _meterSecurityFailedQueries = _meter.CreateCounter<long>(
-                "blite.security.failed_queries",
-                unit: "queries",
-                description: "Total queries rejected by BLQL hardening.");
-            _meterVacuumTotal = _meter.CreateCounter<long>(
-                "blite.vacuum.total",
-                unit: "operations",
-                description: "Total VACUUM passes completed.");
-            _meterBackupTotal = _meter.CreateCounter<long>(
-                "blite.backup.completed_total",
-                unit: "operations",
-                description: "Total successful hot-backup operations.");
-            _meterAuditEvents = _meter.CreateCounter<long>(
-                "blite.audit.events_total",
-                unit: "events",
-                description: "Total audit events emitted, by event type.");
-        }
+        _diagnosticSourceEnabled = enableDiagnosticSource;
 #endif
 
         Task.Run(ProcessEventsAsync);
@@ -305,7 +309,8 @@ internal sealed class MetricsDispatcher : IDisposable
                 {
                     IncrementAuditEvent(evt.Tag);
 #if NET6_0_OR_GREATER
-                    _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", evt.Tag));
+                    if (_diagnosticSourceEnabled)
+                        s_meterAuditEvents.Add(1, new KeyValuePair<string, object?>("event_type", evt.Tag));
 #endif
                 }
                 break;
@@ -314,18 +319,27 @@ internal sealed class MetricsDispatcher : IDisposable
                 Interlocked.Increment(ref _securityFailedQueries);
                 IncrementAuditEvent("security.failed_query");
 #if NET6_0_OR_GREATER
-                _meterSecurityFailedQueries?.Add(1);
-                _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", "security.failed_query"));
+                if (_diagnosticSourceEnabled)
+                {
+                    s_meterSecurityFailedQueries.Add(1);
+                    s_meterAuditEvents.Add(1, new KeyValuePair<string, object?>("event_type", "security.failed_query"));
+                }
 #endif
                 break;
 
             case MetricEventType.Vacuum:
-                Interlocked.Exchange(ref _vacuumLastRunAtTicks, DateTimeOffset.UtcNow.Ticks);
-                Interlocked.Exchange(ref _vacuumBytesFreed, evt.BytesFreed);
+                if (evt.Success)
+                {
+                    Interlocked.Exchange(ref _vacuumLastRunAtTicks, DateTimeOffset.UtcNow.Ticks);
+                    Interlocked.Exchange(ref _vacuumBytesFreed, evt.BytesFreed);
+                }
                 IncrementAuditEvent("vacuum");
 #if NET6_0_OR_GREATER
-                _meterVacuumTotal?.Add(1);
-                _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", "vacuum"));
+                if (_diagnosticSourceEnabled)
+                {
+                    s_meterVacuumTotal.Add(1);
+                    s_meterAuditEvents.Add(1, new KeyValuePair<string, object?>("event_type", "vacuum"));
+                }
 #endif
                 break;
 
@@ -334,8 +348,11 @@ internal sealed class MetricsDispatcher : IDisposable
                 Interlocked.Exchange(ref _backupLastDurationMs, evt.ElapsedMicros / 1000);
                 IncrementAuditEvent("backup.completed");
 #if NET6_0_OR_GREATER
-                _meterBackupTotal?.Add(1);
-                _meterAuditEvents?.Add(1, new KeyValuePair<string, object?>("event_type", "backup.completed"));
+                if (_diagnosticSourceEnabled)
+                {
+                    s_meterBackupTotal.Add(1);
+                    s_meterAuditEvents.Add(1, new KeyValuePair<string, object?>("event_type", "backup.completed"));
+                }
 #endif
                 break;
         }
@@ -355,9 +372,8 @@ internal sealed class MetricsDispatcher : IDisposable
         _cts.Cancel();
         _channel.Writer.TryComplete();
         _cts.Dispose();
-#if NET6_0_OR_GREATER
-        _meter?.Dispose();
-#endif
+        // The shared static Meter (s_meter) is intentionally NOT disposed here —
+        // it lives for the lifetime of the process and is shared across all engines.
     }
 
     // ── Mutable per-collection accumulator (fields accessed via Interlocked) ─

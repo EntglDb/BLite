@@ -557,6 +557,23 @@ public class SecurityMetricsTests : IDisposable
         Assert.Equal(0L, snap!.SecurityFailedQueriesTotal);
     }
 
+    [Fact]
+    public async Task SecurityFailedQueriesTotal_IncrementedOnMalformedJson()
+    {
+        var col = _engine.GetOrCreateCollection("blql_json");
+
+        // Malformed JSON throws JsonReaderException (a JsonException subclass) — must also be counted.
+        Assert.ThrowsAny<System.Text.Json.JsonException>(() =>
+            col.Query("{ not valid json !! }").ToList());
+
+        await Task.Delay(200);
+
+        var snap = _engine.GetMetrics();
+        Assert.NotNull(snap);
+        Assert.True(snap!.SecurityFailedQueriesTotal >= 1,
+            $"Expected SecurityFailedQueriesTotal >= 1 for malformed JSON, got {snap.SecurityFailedQueriesTotal}");
+    }
+
     // ── EnableDiagnosticSource option ─────────────────────────────────────────
 
     [Fact]
@@ -572,7 +589,6 @@ public class SecurityMetricsTests : IDisposable
         }
         finally
         {
-            engine2.Dispose();
             if (File.Exists(path2)) File.Delete(path2);
             var w = Path.ChangeExtension(path2, ".wal");
             if (File.Exists(w)) File.Delete(w);
