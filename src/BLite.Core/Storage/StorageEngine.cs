@@ -79,6 +79,9 @@ public sealed partial class StorageEngine : IDisposable
 
     private volatile bool _disposed;
 
+    // ── Audit ─────────────────────────────────────────────────────────────────
+    private volatile Audit.BLiteAuditOptions? _auditOptions;
+
     /// <summary>
     /// The lock timeout configuration for this engine, as specified in the <see cref="PageFileConfig"/>.
     /// Exposed so that higher-level components (collections, engine, sessions) can read the same settings.
@@ -336,4 +339,27 @@ public sealed partial class StorageEngine : IDisposable
     /// </summary>
     private static PageFileConfig AsStandaloneConfig(PageFileConfig config)
         => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
+
+    // ── Audit ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Configures the audit subsystem. Called by <c>BLiteEngine.ConfigureAudit()</c>
+    /// and <c>DocumentDbContext.ConfigureAudit()</c> after construction.
+    /// </summary>
+    internal void ConfigureAudit(Audit.BLiteAuditOptions options)
+    {
+        _auditOptions = options ?? throw new ArgumentNullException(nameof(options));
+        _auditMetrics = options.EnableMetrics ? new Audit.BLiteMetrics() : null;
+    }
+
+    private volatile Audit.BLiteMetrics? _auditMetrics;
+
+    /// <summary>In-process audit metrics. Non-null only when <see cref="Audit.BLiteAuditOptions.EnableMetrics"/> is <see langword="true"/>.</summary>
+    internal Audit.BLiteMetrics? AuditMetrics => _auditMetrics;
+
+    /// <summary>The configured audit sink, or <see langword="null"/> when audit is not configured.</summary>
+    internal Audit.IBLiteAuditSink? AuditSink => _auditOptions?.Sink;
+
+    /// <summary>The full audit options object, or <see langword="null"/> when audit is not configured.</summary>
+    internal Audit.BLiteAuditOptions? AuditOptions => _auditOptions;
 }
