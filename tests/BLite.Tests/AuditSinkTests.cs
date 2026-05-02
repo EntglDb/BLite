@@ -173,7 +173,7 @@ public class AuditSinkTests : IDisposable
     public async Task Query_ShouldInvokeAuditSink_ViaLinq()
     {
         var path = Path.Combine(Path.GetTempPath(), $"blite_qaudit_{Guid.NewGuid():N}.db");
-        var ctx = new MinimalDbContext(path);
+        using var ctx = new MinimalDbContext(path);
         try
         {
             var sink = new RecordingSink();
@@ -228,7 +228,7 @@ public class AuditSinkTests : IDisposable
     public async Task Metrics_TotalQueries_IncrementedAfterLinqQuery()
     {
         var path = Path.Combine(Path.GetTempPath(), $"blite_qmetric_{Guid.NewGuid():N}.db");
-        var ctx = new MinimalDbContext(path);
+        using var ctx = new MinimalDbContext(path);
         try
         {
             ctx.ConfigureAudit(new BLiteAuditOptions { EnableMetrics = true });
@@ -285,7 +285,7 @@ public class AuditSinkTests : IDisposable
     public async Task SlowQuery_ShouldEmitSlowOperationEvent_WhenThresholdZero()
     {
         var path = Path.Combine(Path.GetTempPath(), $"blite_slowq_{Guid.NewGuid():N}.db");
-        var ctx = new MinimalDbContext(path);
+        using var ctx = new MinimalDbContext(path);
         try
         {
             var sink = new RecordingSink();
@@ -440,7 +440,7 @@ public class AuditSinkTests : IDisposable
         System.Diagnostics.ActivitySource.AddActivityListener(listener);
 
         var path = Path.Combine(Path.GetTempPath(), $"blite_qact_{Guid.NewGuid():N}.db");
-        var ctx = new MinimalDbContext(path);
+        using var ctx = new MinimalDbContext(path);
         try
         {
             ctx.ConfigureAudit(new BLiteAuditOptions { EnableDiagnosticSource = true });

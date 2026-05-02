@@ -355,11 +355,7 @@ public sealed partial class StorageEngine : IDisposable
     private volatile Audit.BLiteMetrics? _auditMetrics;
 
     /// <summary>In-process audit metrics. Non-null only when <see cref="Audit.BLiteAuditOptions.EnableMetrics"/> is <see langword="true"/>.</summary>
-    internal Audit.BLiteMetrics? AuditMetrics
-    {
-        get => _auditMetrics;
-        private set => _auditMetrics = value;
-    }
+    internal Audit.BLiteMetrics? AuditMetrics => _auditMetrics;
 
     /// <summary>The configured audit sink, or <see langword="null"/> when audit is not configured.</summary>
     internal Audit.IBLiteAuditSink? AuditSink => _auditOptions?.Sink;
