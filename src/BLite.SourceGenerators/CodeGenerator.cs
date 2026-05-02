@@ -176,6 +176,9 @@ namespace BLite.SourceGenerators
                 GenerateIdAccessors(sb, entity);
             }
 
+            // Emit PersonalData static members (WP1)
+            Gdpr.PersonalDataEmitter.EmitPersonalDataMembers(sb, entity);
+
             sb.AppendLine($"    }}");
             
             return sb.ToString();

@@ -142,6 +142,22 @@ namespace BLite.SourceGenerators.Models
         public bool IsDictionary { get; set; }
         public string? DictionaryKeyType { get; set; }
         public string? DictionaryValueType { get; set; }
+
+        // ── Personal-data annotations (WP1) ──────────────────────────────────
+        /// <summary>True when this property is annotated with <c>[PersonalData]</c>.</summary>
+        public bool IsPersonalData { get; set; }
+
+        /// <summary>
+        /// Underlying byte value of <c>BLite.Core.GDPR.DataSensitivity</c>
+        /// (1 = Personal, 2 = Sensitive, 3 = Special).
+        /// Only meaningful when <see cref="IsPersonalData"/> is <see langword="true"/>.
+        /// </summary>
+        public byte PersonalDataSensitivityValue { get; set; } = 1; // Default: Personal
+
+        /// <summary>
+        /// True when this personal-data property holds the timestamp used by retention/MaxAge policies.
+        /// </summary>
+        public bool IsPersonalDataTimestamp { get; set; }
     }
 
     public class NestedTypeInfo

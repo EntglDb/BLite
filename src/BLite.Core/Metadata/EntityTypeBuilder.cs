@@ -1,3 +1,4 @@
+using BLite.Core.GDPR;
 using BLite.Core.Indexing;
 using System.Linq.Expressions;
 using BLite.Core.Retention;
@@ -26,6 +27,14 @@ public class EntityTypeBuilder<T> where T : class
     public string? TimeSeriesTtlField { get; private set; }
     public TimeSpan? TimeSeriesRetention { get; private set; }
     public RetentionPolicy? RetentionPolicy { get; private set; }
+
+    /// <summary>
+    /// Personal-data annotations set via the fluent
+    /// <see cref="PropertyBuilderGdprExtensions.HasPersonalData{T}"/> extension.
+    /// Key = property name, Value = (sensitivity, isTimestamp).
+    /// </summary>
+    public Dictionary<string, (DataSensitivity Sensitivity, bool IsTimestamp)> PersonalDataProperties { get; }
+        = new(StringComparer.Ordinal);
 
     public EntityTypeBuilder<T> ToCollection(string name)
     {
@@ -137,6 +146,19 @@ public class EntityTypeBuilder<T> where T : class
                 _parent.PropertyConverters[_propertyName] = typeof(TConverter);
             }
             return this;
+        }
+
+        /// <summary>
+        /// Records a personal-data annotation for this property on the parent builder.
+        /// Called by <see cref="PropertyBuilderGdprExtensions.HasPersonalData{T}"/>; not intended
+        /// for direct use.
+        /// </summary>
+        internal void SetPersonalData(DataSensitivity sensitivity, bool isTimestamp)
+        {
+            if (!string.IsNullOrEmpty(_propertyName))
+            {
+                _parent.PersonalDataProperties[_propertyName] = (sensitivity, isTimestamp);
+            }
         }
     }
 }

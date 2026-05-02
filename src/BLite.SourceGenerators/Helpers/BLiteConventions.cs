@@ -20,6 +20,7 @@ namespace BLite.SourceGenerators.Helpers
         public const string PropertyMethodName = "Property";
         public const string HasConversionMethodName = "HasConversion";
         public const string HasIndexMethodName = "HasIndex";
+        public const string HasPersonalDataMethodName = "HasPersonalData";
         public const string ValueConverterBaseName = "ValueConverter";
 
         // ── DocumentCollection generic shape ──────────────────────────────────
@@ -90,6 +91,7 @@ namespace BLite.SourceGenerators.Helpers
         public const string RangeAttribute = "Range";
         public const string SchemaNamedArg = "Schema";
         public const string TypeNameNamedArg = "TypeName";
+        public const string PersonalDataAttribute = "PersonalData";
 
         // ── Recursion / chain limits ──────────────────────────────────────────
         /// <summary>Maximum depth for recursive nested-type traversal during entity analysis.</summary>
