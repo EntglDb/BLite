@@ -30,9 +30,10 @@ public static class PropertyBuilderGdprExtensions
         bool isTimestamp = false)
         where T : class
     {
-        // The builder already holds the property name in its internal state
-        // (via _propertyName). We record the personal-data intent on the parent
-        // EntityTypeBuilder<T> so it is visible to the source generator at compile time.
+        // The source generator recognises `.HasPersonalData(...)` calls in OnModelCreating
+        // by analysing the syntax tree at compile time.  This runtime call also records
+        // the personal-data intent on the EntityTypeBuilder so host code can inspect it
+        // at runtime via the PersonalDataResolver reflection fallback.
         builder.SetPersonalData(sensitivity, isTimestamp);
         return builder;
     }

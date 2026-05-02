@@ -177,7 +177,7 @@ namespace BLite.SourceGenerators
             }
 
             // Emit PersonalData static members (WP1)
-            Gdpr.PersonalDataEmitter.EmitPersonalDataMembers(sb, entity);
+            Gdpr.PersonalDataEmitter.EmitPersonalDataMembers(sb, entity, isRoot);
 
             sb.AppendLine($"    }}");
             

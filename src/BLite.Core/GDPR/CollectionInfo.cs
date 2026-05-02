@@ -6,14 +6,14 @@ namespace BLite.Core.GDPR;
 /// </summary>
 /// <param name="Name">Collection name.</param>
 /// <param name="DocumentCount">
-/// Approximate number of documents in the collection.
-/// In single-file mode this is derived from a catalog estimate; in multi-file mode
-/// it reflects the actual page count.  Use <c>BLiteEngine.FindAllAsync</c> for a precise count.
+/// Always <c>0</c> in the current catalog-only snapshot — computing an exact count would
+/// require a full collection scan.  Use <c>BLiteEngine.FindAllAsync</c> for a precise count.
 /// </param>
 /// <param name="StorageSizeBytes">
 /// Size of the collection's storage in bytes.
-/// In multi-file mode this is the size of the dedicated collection file.
-/// In single-file mode this is an estimate based on page count × page size.
+/// In multi-file mode this is the size of the dedicated <c>&lt;collection&gt;.db</c> file
+/// (obtained via a single <see cref="System.IO.FileInfo.Length"/> call).
+/// In single-file mode this is always <c>0</c> because there is no dedicated file per collection.
 /// </param>
 /// <param name="Indexes">All secondary indexes registered on the collection.</param>
 /// <param name="PersonalDataFields">

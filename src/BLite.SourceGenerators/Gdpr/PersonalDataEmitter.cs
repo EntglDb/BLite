@@ -14,7 +14,7 @@ namespace BLite.SourceGenerators.Gdpr
         /// Appends the two personal-data static members to <paramref name="sb"/>, which must be
         /// positioned inside the (partial) mapper class body, before the closing <c>}</c>.
         /// </summary>
-        public static void EmitPersonalDataMembers(StringBuilder sb, EntityInfo entity)
+        public static void EmitPersonalDataMembers(StringBuilder sb, EntityInfo entity, bool isRoot = false)
         {
             var personalDataProps = new System.Collections.Generic.List<PropertyInfo>();
             string? timestampField = null;
@@ -29,6 +29,11 @@ namespace BLite.SourceGenerators.Gdpr
 
             sb.AppendLine();
             sb.AppendLine("    // ── GDPR personal-data metadata (WP1) ──");
+
+            // CollectionNameStatic: emitted only for root entities so InspectDatabase
+            // can find PersonalDataFields by collection name without instantiating the mapper.
+            if (isRoot)
+                sb.AppendLine($"    public static string CollectionNameStatic => \"{entity.CollectionName}\";");
 
             // PersonalDataFields
             if (personalDataProps.Count == 0)

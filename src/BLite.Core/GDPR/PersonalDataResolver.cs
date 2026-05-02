@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
@@ -15,21 +16,88 @@ namespace BLite.Core.GDPR;
 /// </summary>
 internal static class PersonalDataResolver
 {
+    // ── Per-entity-type cache ──────────────────────────────────────────────────
+    private static readonly ConcurrentDictionary<Type, IReadOnlyList<PersonalDataField>>
+        _typeCache = new();
+
+    // ── Per-collection-name cache (built lazily from all scanned mappers) ──────
+    private static readonly ConcurrentDictionary<string, IReadOnlyList<PersonalDataField>>
+        _collectionCache = new(StringComparer.OrdinalIgnoreCase);
+
+    // Guard to run the full-assembly scan at most once.
+    private static int _collectionCacheBuilt;
+
     /// <summary>
     /// Resolves personal-data fields for <paramref name="entityType"/>.
     /// Never returns <see langword="null"/>; returns an empty list when the type has no
     /// <see cref="PersonalDataAttribute"/> annotations and no generated metadata.
+    /// Results are cached per entity type after the first resolution.
     /// </summary>
     [RequiresUnreferencedCode("PersonalDataResolver uses reflection to discover generated mapper classes.")]
     public static IReadOnlyList<PersonalDataField> Resolve(Type entityType)
     {
-        // 1. Try to find the generated mapper class's static PersonalDataFields property.
-        var generated = TryResolveFromGeneratedMapper(entityType);
-        if (generated is not null)
-            return generated;
+        return _typeCache.GetOrAdd(entityType, static t =>
+        {
+            // 1. Try to find the generated mapper class's static PersonalDataFields property.
+            var generated = TryResolveFromGeneratedMapper(t);
+            if (generated is not null)
+                return generated;
 
-        // 2. Fall back to reflection-based cache.
-        return PersonalDataMetadataCache.Resolve(entityType);
+            // 2. Fall back to reflection-based cache.
+            return PersonalDataMetadataCache.Resolve(t);
+        });
+    }
+
+    /// <summary>
+    /// Resolves personal-data fields by collection name (used by <c>InspectDatabase</c>).
+    /// Scans loaded assemblies once for mapper types that have both
+    /// <c>CollectionNameStatic</c> and <c>PersonalDataFields</c> static properties,
+    /// then caches all results so subsequent calls are O(1) dictionary lookups.
+    /// Returns an empty list when no generated mapper is found for the collection.
+    /// </summary>
+    [RequiresUnreferencedCode("PersonalDataResolver scans loaded assemblies to build the collection → fields map.")]
+    public static IReadOnlyList<PersonalDataField> ResolveByCollectionName(string collectionName)
+    {
+        EnsureCollectionCacheBuilt();
+        return _collectionCache.TryGetValue(collectionName, out var fields)
+            ? fields
+            : Array.Empty<PersonalDataField>();
+    }
+
+    // Runs the full-assembly scan exactly once and populates _collectionCache.
+    [RequiresUnreferencedCode("PersonalDataResolver scans loaded assemblies for generated mapper classes.")]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection fallback; source-gen path is preferred and AOT-safe.")]
+    private static void EnsureCollectionCacheBuilt()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _collectionCacheBuilt, 1) != 0)
+            return;
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            foreach (var type in TryGetTypes(assembly))
+            {
+                if (type.Name is null || !type.Name.EndsWith("Mapper", StringComparison.Ordinal)) continue;
+                if (type.Namespace is null || !type.Namespace.EndsWith("_Mappers", StringComparison.Ordinal)) continue;
+
+                var colNameProp = type.GetProperty("CollectionNameStatic",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (colNameProp?.PropertyType != typeof(string)) continue;
+
+                var fieldsProp = type.GetProperty("PersonalDataFields",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (fieldsProp is null) continue;
+                if (!typeof(IReadOnlyList<PersonalDataField>).IsAssignableFrom(fieldsProp.PropertyType)) continue;
+
+                var colName = colNameProp.GetValue(null) as string;
+                if (string.IsNullOrEmpty(colName)) continue;
+
+                var fields = fieldsProp.GetValue(null) as IReadOnlyList<PersonalDataField>
+                    ?? Array.Empty<PersonalDataField>();
+
+                _collectionCache.TryAdd(colName, fields);
+            }
+        }
     }
 
     [RequiresUnreferencedCode("PersonalDataResolver scans loaded assemblies for generated mapper classes.")]

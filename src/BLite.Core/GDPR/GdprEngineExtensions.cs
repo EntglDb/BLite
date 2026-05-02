@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
 using BLite.Core.Storage;
 
@@ -21,6 +22,8 @@ public static class GdprEngineExtensions
     /// </summary>
     /// <remarks>
     /// <list type="bullet">
+    ///   <item>Matched documents are buffered in memory per collection so that the returned
+    ///         <see cref="SubjectDataReport"/> supports multiple export formats without re-scanning.</item>
     ///   <item>Collections that contain no matching documents appear in <see cref="SubjectDataReport.DataByCollection"/>
     ///         with an empty list — they are never omitted.</item>
     ///   <item>Cancellation is honoured at every <c>await</c> boundary.</item>
@@ -77,9 +80,12 @@ public static class GdprEngineExtensions
     // ── Database inspection (Art. 30) ────────────────────────────────────────
 
     /// <summary>
-    /// Returns a compliance snapshot of the database without doing any extra disk I/O beyond
-    /// the catalog that is already loaded in memory.
+    /// Returns a compliance snapshot of the database.
+    /// The catalog is read from the in-memory structures already loaded by the engine.
+    /// In multi-file mode, per-collection storage sizes are obtained with a lightweight
+    /// <see cref="FileInfo.Length"/> lookup (one stat call per collection).
     /// </summary>
+    [RequiresUnreferencedCode("InspectDatabase uses PersonalDataResolver which scans loaded assemblies for generated mapper classes.")]
     public static DatabaseInspectionReport InspectDatabase(this BLiteEngine engine)
     {
         if (engine is null) throw new ArgumentNullException(nameof(engine));
@@ -107,12 +113,18 @@ public static class GdprEngineExtensions
             var storageSizeBytes = ComputeStorageSizeBytes(storage, meta.Name);
             var retentionInfo    = RetentionPolicyInfo.From(meta.GeneralRetentionPolicy);
 
+            // Resolve personal-data field names via source-gen metadata (or reflection fallback).
+            var pdFields = PersonalDataResolver.ResolveByCollectionName(meta.Name);
+            var pdFieldNames = pdFields.Count == 0
+                ? Array.Empty<string>()
+                : pdFields.Select(f => f.PropertyName).ToArray();
+
             collections.Add(new CollectionInfo(
                 Name: meta.Name,
-                DocumentCount: 0,   // no-IO snapshot; use FindAllAsync for a precise count
+                DocumentCount: 0,   // not computed in catalog-only snapshot; use FindAllAsync for a precise count
                 StorageSizeBytes: storageSizeBytes,
                 Indexes: indexes,
-                PersonalDataFields: Array.Empty<string>(),
+                PersonalDataFields: pdFieldNames,
                 RetentionPolicy: retentionInfo));
         }
 
@@ -131,18 +143,15 @@ public static class GdprEngineExtensions
         var dir = storage.CollectionDataDirectory;
         if (dir is not null)
         {
-            // Multi-file mode: each collection has its own file named <collectionName>.blcol (or similar).
-            // We enumerate files matching the collection name (any extension) in the directory.
-            foreach (var file in Directory.EnumerateFiles(dir))
+            // Multi-file mode: each collection has a deterministic filename
+            // <collectionName.toLower()>.db in the collection-data directory.
+            var filePath = Path.Combine(dir, collectionName.ToLowerInvariant() + ".db");
+            try
             {
-                var stem = Path.GetFileNameWithoutExtension(file);
-                if (string.Equals(stem, collectionName, StringComparison.OrdinalIgnoreCase))
-                {
-                    try { return new FileInfo(file).Length; }
-                    catch { return 0; }
-                }
+                var fi = new FileInfo(filePath);
+                return fi.Exists ? fi.Length : 0;
             }
-            return 0;
+            catch { return 0; }
         }
 
         // Single-file mode: no easy per-collection size; return 0 (catalog-only, no IO).

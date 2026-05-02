@@ -267,17 +267,18 @@ public class SubjectExportTests : IDisposable
         Assert.True(ms.Length > 0, "BSON export of a matched document should produce bytes.");
 
         ms.Position = 0;
-        // Read back: each entry is [int32 size][BSON bytes]
+        // Standard BSON: first 4 bytes = total document size (little-endian, size includes itself).
         var sizeBuffer = new byte[4];
         int bytesRead = ms.Read(sizeBuffer, 0, 4);
         Assert.Equal(4, bytesRead);
-        int size = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(sizeBuffer);
-        Assert.True(size > 0, "BSON document size prefix must be > 0.");
+        int bsonDocSize = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(sizeBuffer);
+        Assert.True(bsonDocSize > 4, "BSON document size must be > 4 (includes the 4-byte size field).");
 
-        // Read the raw BSON bytes and verify they start with the BSON document size
-        var bsonBytes = new byte[size];
-        int docBytesRead = ms.Read(bsonBytes, 0, size);
-        Assert.Equal(size, docBytesRead);
+        // Read the full document from the start (size is inclusive).
+        ms.Position = 0;
+        var bsonBytes = new byte[bsonDocSize];
+        int docBytesRead = ms.Read(bsonBytes, 0, bsonDocSize);
+        Assert.Equal(bsonDocSize, docBytesRead);
 
         // Verify: the raw BSON data should contain the email value (as UTF-8 bytes)
         var emailUtf8 = System.Text.Encoding.UTF8.GetBytes("alice@example.com");

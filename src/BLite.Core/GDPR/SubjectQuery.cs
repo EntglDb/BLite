@@ -6,9 +6,6 @@ namespace BLite.Core.GDPR;
 /// Describes a subject-data lookup for Art. 15 (access) and Art. 20 (portability) requests.
 /// Pass an instance to <see cref="GdprEngineExtensions.ExportSubjectDataAsync"/>.
 /// </summary>
-/// <remarks>
-/// Created by the host application; owned and disposed by the host application.
-/// </remarks>
 public sealed class SubjectQuery
 {
     /// <summary>
@@ -18,7 +15,7 @@ public sealed class SubjectQuery
     public required string FieldName { get; init; }
 
     /// <summary>
-    /// The value the field must equal (e.g. <c>BsonValue.From("alice@example.com")</c>).
+    /// The value the field must equal (e.g. <c>BsonValue.FromString("alice@example.com")</c>).
     /// </summary>
     public required BsonValue FieldValue { get; init; }
 

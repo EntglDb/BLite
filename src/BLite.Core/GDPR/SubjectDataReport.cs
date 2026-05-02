@@ -121,36 +121,31 @@ public sealed class SubjectDataReport : IAsyncDisposable
 
     /// <summary>
     /// Serializes all matched documents to <paramref name="output"/> as a
-    /// length-prefixed BSON stream.  Each document is written as
-    /// <c>[int32 documentSize][BSON bytes]</c>.
-    /// The stream can be read back by reading the 4-byte size prefix and then
-    /// deserialising the raw BSON bytes.
+    /// self-delimiting BSON stream.  Each document is written as its raw BSON bytes;
+    /// the first 4 bytes of every document are already the BSON document size
+    /// (little-endian <c>int32</c>, inclusive of the size field itself), so the
+    /// stream is re-parseable by any standard BSON reader without an additional
+    /// length prefix.
     /// </summary>
     public async Task ExportAsBsonAsync(Stream output, CancellationToken ct = default)
     {
-        var sizeBuffer = new byte[4];
-
         foreach (var (_, docs) in DataByCollection)
         {
             foreach (var doc in docs)
             {
                 ct.ThrowIfCancellationRequested();
 
-                var rawData = doc.RawData;
-                // The raw data already contains the 4-byte BSON document size prefix.
-                // We write it as-is so the stream is re-parseable by a BSON reader.
-                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(sizeBuffer, rawData.Length);
-                await output.WriteAsync(sizeBuffer, 0, 4, ct).ConfigureAwait(false);
-                var arr = rawData.ToArray();
-                await output.WriteAsync(arr, 0, arr.Length, ct).ConfigureAwait(false);
+                // BsonDocument.RawData is a complete self-delimiting BSON document.
+                // The first 4 bytes are the document size (inclusive), so no extra
+                // framing is needed — write the memory directly to avoid a ToArray() copy.
+                await output.WriteAsync(doc.RawData, ct).ConfigureAwait(false);
             }
         }
     }
 
     /// <summary>
     /// Writes this report to a file at <paramref name="path"/> using
-    /// the format specified by the originating <see cref="SubjectQuery.Format"/>.
-    /// The format is inferred from the file extension when <paramref name="format"/> is omitted.
+    /// the specified <paramref name="format"/> (defaults to <see cref="SubjectExportFormat.Json"/>).
     /// </summary>
     public async Task WriteToFileAsync(
         string path,
