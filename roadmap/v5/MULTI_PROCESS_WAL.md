@@ -51,6 +51,52 @@ The shared index must therefore map `pageId → byte offset` in the WAL file, no
 
 ---
 
+## Multi-File Mode Analysis
+
+BLite supports a multi-file layout (`PageFileConfig.Server(...)`) where the main `.db`, the index `.idx`, and up to 64 per-collection `.db` files reside as separate `IPageStorage` instances. The question arises naturally: could multi-file mode allow one writer per physical file simultaneously (e.g., one process writes to collection A's file while another writes to collection B's file), and would that require a separate WAL per file?
+
+### Current architecture (verified in source)
+
+There is exactly **one `WriteAheadLog` instance** regardless of how many physical files exist. All physical files share it.
+
+Page IDs are globally encoded with target-file bits:
+
+| Bit range | Meaning |
+|-----------|---------|
+| `[31:30] = 00` | Main `.db` file |
+| `[31:30] = 10` | Index `.idx` file |
+| `[31:30] = 11` | Per-collection file (bits `[29:24]` = slot 0-63) |
+
+The `_walIndex` in `StorageEngine` is a single `ConcurrentDictionary<uint, byte[]>` keyed on these **global** page IDs. A single `PendingCommit` therefore routinely contains pages destined for different physical files. For example, inserting a document into a collection writes both:
+- A page in the collection file (document data)
+- One or more pages in the index file (BTree node update for the collection's BTree index)
+
+These two writes are part of the same transaction and reach the WAL as a single `BEGIN … WRITE … WRITE … COMMIT` sequence.
+
+### Why per-file WALs would not help
+
+Splitting into one WAL per physical file would require one of two things, both unacceptable:
+
+1. **Restrict transactions to a single physical file** — an `Insert<T>` touches at minimum the collection file and the index file in the same commit. Making these two separate atomic units would break BLite's ACID guarantee: a crash between the two commits would leave index and data out of sync.
+
+2. **Two-phase commit across WALs** — a prepare phase writes to all participating file WALs, a commit phase finalizes. This adds a round-trip to every write, multiplies fsync cost (one per file WAL instead of one shared), and makes crash recovery dramatically more complex (up to 66 WAL files = 64 collections + 1 index + 1 main, each requiring independent replay and coordination).
+
+Additionally, the group commit's core optimization — **one `FlushAsync()` per batch regardless of how many pages or files** — depends on all writes going to the same sequential stream. Splitting the stream across files eliminates this amortization.
+
+### What multi-file mode does gain in multi-process access
+
+Even with a single shared WAL, multi-file mode provides two natural parallelism benefits that require no SHM changes:
+
+1. **Parallel checkpoint I/O** — during checkpoint, pages for different physical files can be flushed concurrently (`Parallel.ForEach` over `_collectionFiles` + `_indexFile`). Each file has its own `FileStream` and `MemoryMappedFile` handle, so OS I/O can proceed in parallel across files. This is a pure optimization within Phase 6 of this plan.
+
+2. **Parallel post-checkpoint reads** — after checkpoint, each process reads from its own MMF handles (one per physical file). Reads for collection A's file and collection B's file hit different OS page-cache regions and different physical sectors simultaneously. No coordination needed.
+
+### Conclusion
+
+The SHM design remains **single-WAL** and does not need per-file writer locks, per-file WAL index segments, or per-file reader slot arrays. The one cross-process writer lock serializes all WAL writes, exactly as the in-process `_commitLock` does today. Multi-file mode's only specific contribution to this plan is enabling parallel checkpoint I/O in Phase 6.
+
+---
+
 ## Architecture
 
 ### Sidecar File: `.wal-shm`
@@ -241,7 +287,19 @@ public sealed class WalSharedMemory : IDisposable
 
 ### Phase 3 — Cross-Process Writer Serialization
 
-Replace the in-process `_commitLock` with a two-layer lock: first acquire the cross-process writer lock from SHM, then the in-process `_commitLock` (the in-process lock remains for safety in threaded scenarios).
+The in-process `_commitLock` (`SemaphoreSlim`) is **kept unchanged**. An OS-level writer lock is added as an inner guard, acquired *after* `_commitLock` and released *before* it. The mandatory lock order is:
+
+```
+1. await _commitLock.WaitAsync()          ← SemaphoreSlim, in-process, microseconds
+2. _shm.TryAcquireWriterLock(timeout)     ← OS lock (Mutex / fcntl), cross-process
+3. … write WAL records, FlushAsync() …
+4. _shm.ReleaseWriterLock()
+5. _commitLock.Release()
+```
+
+**Why individual writer threads are unaffected**: writer threads never hold `_commitLock` and never touch the OS lock. They post a `PendingCommit` to `_commitChannel` and await a `TaskCompletionSource<bool>`. The OS lock is acquired exactly once per group-commit batch (up to 64 transactions) by the single background group-commit writer task. In single-process mode (`EnableMultiProcessAccess = false`) steps 2 and 4 are entirely skipped — no performance regression.
+
+**Why this lock order is required**: the checkpoint path also acquires `_commitLock` first, then `_shm.TryAcquireCheckpointLock()`. Keeping both paths in the same `_commitLock → OS lock` order prevents any possibility of cross-lock deadlock between the writer and the checkpoint.
 
 Transaction ID allocation is redirected to `_shm.AllocateTransactionId()` when multi-process is active, replacing the local `Interlocked.Increment(ref _nextTransactionId)`.
 
@@ -331,24 +389,30 @@ CheckpointAsync():
   2. Acquire _shm.TryAcquireCheckpointLock(timeout)
   3. safeOffset = min(_wal.GetCurrentSize(), _shm.GetMinReaderOffset())
   4. Snapshot WAL index entries with walOffset <= safeOffset
-  5. Write those pages to PageFile; flush PageFile
-  6. _shm.WriteCheckpointedOffset(safeOffset)
-  7. Remove checkpointed entries from SHM WAL index
-  8. If safeOffset == _wal.GetCurrentSize() (full checkpoint):
+  5. (Multi-file mode) Group snapshot entries by target physical file
+  6. Write pages to their target PageFile:
+       Single-file:  sequential write loop
+       Multi-file:   Parallel.ForEach over (_pageFile, _indexFile, _collectionFiles[*])
+                     — each physical file written and flushed concurrently
+  7. _shm.WriteCheckpointedOffset(safeOffset)
+  8. Remove checkpointed entries from SHM WAL index
+  9. If safeOffset == _wal.GetCurrentSize() (full checkpoint):
        Truncate WAL file
        _shm.RebuildIndex([])   // empty index after full truncation
        _shm.AdvanceWalEndOffset(0)
-  9. Release checkpoint lock
-  10. Release _commitLock
+  10. Release checkpoint lock
+  11. Release _commitLock
 ```
+
+The `Parallel.ForEach` in step 6 is the only multi-file-specific addition. It requires no SHM changes: each physical file has an independent `FileStream` and `MemoryMappedFile` handle, so OS I/O can proceed on all files concurrently. The checkpoint lock in SHM still covers the entire batch as a single atomic operation.
 
 **Files to modify:**
 
 | File | Change |
 |------|--------|
-| `src/BLite.Core/Storage/StorageEngine.Recovery.cs` | Insert `_shm` checkpoint lock acquisition and `GetMinReaderOffset()` safe boundary |
+| `src/BLite.Core/Storage/StorageEngine.Recovery.cs` | Insert `_shm` checkpoint lock and `GetMinReaderOffset()` safe boundary; add parallel flush loop for multi-file mode |
 
-**Acceptance criteria**: a checkpoint does not truncate WAL records that a concurrently reading process still needs; after full checkpoint, SHM index is empty and `WalEndOffset = 0`.
+**Acceptance criteria**: a checkpoint does not truncate WAL records that a concurrently reading process still needs; after full checkpoint, SHM index is empty and `WalEndOffset = 0`; in multi-file mode, all collection files and the index file are flushed concurrently.
 
 ---
 
