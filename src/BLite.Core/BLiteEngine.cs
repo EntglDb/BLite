@@ -927,6 +927,32 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
 
     #endregion
 
+    #region Audit
+
+    /// <summary>
+    /// Configures the audit trail subsystem.
+    /// <para>
+    /// Call this method immediately after constructing the engine to activate audit hooks.
+    /// All hooks are guarded by a <see langword="null"/>-check so there is zero overhead
+    /// when audit is not configured.
+    /// </para>
+    /// </summary>
+    /// <param name="options">Audit configuration, including the optional sink, metrics, and thresholds.</param>
+    public void ConfigureAudit(Audit.BLiteAuditOptions options)
+    {
+        ThrowIfDisposed();
+        _storage.ConfigureAudit(options ?? throw new ArgumentNullException(nameof(options)));
+    }
+
+    /// <summary>
+    /// In-process audit metrics. Non-<see langword="null"/> only when
+    /// <see cref="Audit.BLiteAuditOptions.EnableMetrics"/> is <see langword="true"/> and
+    /// <see cref="ConfigureAudit"/> has been called.
+    /// </summary>
+    public Audit.BLiteMetrics? AuditMetrics => _storage.AuditMetrics;
+
+    #endregion
+
     #region Disposal
 
     private void ThrowIfDisposed()

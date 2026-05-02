@@ -177,14 +177,32 @@ public sealed partial class StorageEngine
         if (_writerGate != null && !await _writerGate.WaitAsync(gateTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Too many concurrent writers — admission gate full.");
 
+        // ── AUDIT: Phase 2 — Activity span (NET5+ only) ──────────────────────
+#if NET5_0_OR_GREATER
+        Activity? activity = _auditOptions?.EnableDiagnosticSource == true
+            ? Audit.BLiteDiagnostics.ActivitySource.StartActivity(Audit.BLiteDiagnostics.CommitActivityName)
+            : null;
+        activity?.SetTag("db.system", "blite");
+        activity?.SetTag("db.blite.transaction_id", transactionId.ToString());
+#endif
+        // ────────────────────────────────────────────────────────────────────
+
+        // ── AUDIT: Phase 1 — stopwatch ───────────────────────────────────────
+        var auditSw = _auditOptions is not null ? Stopwatch.StartNew() : null;
+        // ────────────────────────────────────────────────────────────────────
+
         var sw = _metrics != null ? Metrics.ValueStopwatch.StartNew() : default;
         bool success = false;
+        int pagesWritten = 0;
         try
         {
+            // Capture page count before the group commit removes the entry from the cache.
+            _walCache.TryGetValue(transactionId, out var pages);
+            pagesWritten = pages?.Count ?? 0;
+
             // Group commit path: post to the background writer and await its TCS.
             // The writer batches this commit with any other pending ones, issues one
             // WAL flush for the entire batch, then signals all waiters.
-            _walCache.TryGetValue(transactionId, out var pages);
             var pending = new PendingCommit(transactionId, pages);
             await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
             await pending.Completion.Task.ConfigureAwait(false);
@@ -201,6 +219,54 @@ public sealed partial class StorageEngine
                     ElapsedMicros = sw.GetElapsedMicros(),
                     Success       = success,
                 });
+
+            // ── AUDIT: emit ──────────────────────────────────────────────────
+            if (auditSw is not null)
+            {
+                auditSw.Stop();
+                var elapsed  = auditSw.Elapsed;
+                var walSize  = _wal.GetCurrentSize();
+                var userId   = (_auditOptions!.ContextProvider ?? Audit.AmbientAuditContext.Instance).GetCurrentUserId();
+
+#if NET5_0_OR_GREATER
+                activity?.SetTag("db.blite.pages_written", pagesWritten.ToString());
+                activity?.SetTag("db.blite.wal_size_bytes", walSize.ToString());
+                if (!success) activity?.SetStatus(ActivityStatusCode.Error, "Commit failed");
+                activity?.Dispose();
+                activity = null;
+#endif
+
+                if (success)
+                {
+                    var evt = new Audit.CommitAuditEvent(
+                        TransactionId:  transactionId,
+                        CollectionName: string.Empty,
+                        PagesWritten:   pagesWritten,
+                        WalSizeBytes:   walSize,
+                        Elapsed:        elapsed,
+                        UserId:         userId);
+
+                    _auditOptions.Sink?.OnCommit(evt);
+                    AuditMetrics?.RecordCommit();
+
+                    // Slow-commit detection
+                    if (_auditOptions.SlowQueryThreshold is { } threshold && elapsed > threshold)
+                    {
+                        _auditOptions.Sink?.OnSlowOperation(new Audit.SlowOperationEvent(
+                            Audit.SlowOperationType.Commit,
+                            CollectionName: string.Empty,
+                            Elapsed:        elapsed,
+                            Detail:         $"TxnId={transactionId}, Pages={pagesWritten}"));
+                    }
+                }
+            }
+#if NET5_0_OR_GREATER
+            else
+            {
+                activity?.Dispose();
+            }
+#endif
+            // ────────────────────────────────────────────────────────────────
         }
     }
     

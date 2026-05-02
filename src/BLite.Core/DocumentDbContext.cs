@@ -450,6 +450,30 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         return new Metrics.BLiteMetricsObservable(dispatcher, interval ?? TimeSpan.FromSeconds(1));
     }
 
+    // ── Audit ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Configures the audit trail subsystem.
+    /// <para>
+    /// Call this method immediately after constructing the context to activate audit hooks.
+    /// All hooks are guarded by a <see langword="null"/>-check so there is zero overhead
+    /// when audit is not configured.
+    /// </para>
+    /// </summary>
+    /// <param name="options">Audit configuration, including the optional sink, metrics, and thresholds.</param>
+    public void ConfigureAudit(Audit.BLiteAuditOptions options)
+    {
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
+        _storage.ConfigureAudit(options ?? throw new ArgumentNullException(nameof(options)));
+    }
+
+    /// <summary>
+    /// In-process audit metrics. Non-<see langword="null"/> only when
+    /// <see cref="Audit.BLiteAuditOptions.EnableMetrics"/> is <see langword="true"/> and
+    /// <see cref="ConfigureAudit"/> has been called.
+    /// </summary>
+    public Audit.BLiteMetrics? AuditMetrics => _storage?.AuditMetrics;
+
     public void Dispose()
     {
         if (_disposed)

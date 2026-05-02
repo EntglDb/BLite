@@ -86,6 +86,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     internal void SetConverterRegistry(ValueConverterRegistry registry) =>
         ConverterRegistry = registry ?? ValueConverterRegistry.Empty;
 
+    /// <summary>The name of this collection (lowercase). Exposed for audit and query components.</summary>
+    internal string CollectionName => _collectionName;
+
+    /// <summary>The storage engine backing this collection. Exposed for audit hooks.</summary>
+    internal StorageEngine Storage => _storage;
+
     /// <summary>
     /// Exposes the storage key map (field name → field ID) so that query components
     /// in the same assembly (e.g. <see cref="BTreeQueryProvider{TId,T}"/>) can pass
@@ -2044,6 +2050,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (docLength >= 0 && docLength < docData.Length)
             docData = docData[..docLength]; // trim to actual serialized size
+
+        // ── AUDIT: start ─────────────────────────────────────────────────────
+        var auditSw = (_storage.AuditSink is not null || _storage.AuditMetrics is not null)
+            ? System.Diagnostics.Stopwatch.StartNew()
+            : null;
+        // ────────────────────────────────────────────────────────────────────
+
         DocumentLocation location;
         if (_isTimeSeries)
         {
@@ -2069,6 +2082,35 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var key = _mapper.ToIndexKey(id);
         _primaryIndex.Insert(key, location, transaction.TransactionId);
         _indexManager.InsertIntoAll(entity, location, transaction);
+
+        // ── AUDIT: emit ──────────────────────────────────────────────────────
+        if (auditSw is not null)
+        {
+            auditSw.Stop();
+            var elapsed = auditSw.Elapsed;
+            var opts    = _storage.AuditOptions!;
+            var userId  = (opts.ContextProvider ?? Audit.AmbientAuditContext.Instance).GetCurrentUserId();
+            var evt     = new Audit.InsertAuditEvent(
+                TransactionId:    transaction.TransactionId,
+                CollectionName:   _collectionName,
+                DocumentSizeBytes: docData.Length,
+                Elapsed:          elapsed,
+                UserId:           userId);
+
+            _storage.AuditSink?.OnInsert(evt);
+            _storage.AuditMetrics?.RecordInsert(elapsed);
+
+            // Slow-insert detection
+            if (opts.SlowQueryThreshold is { } threshold && elapsed > threshold)
+            {
+                _storage.AuditSink?.OnSlowOperation(new Audit.SlowOperationEvent(
+                    Audit.SlowOperationType.Insert,
+                    CollectionName: _collectionName,
+                    Elapsed:        elapsed,
+                    Detail:         null));
+            }
+        }
+        // ────────────────────────────────────────────────────────────────────
 
         // Notify CDC
         await NotifyCdc(OperationType.Insert, id, transaction, docData);

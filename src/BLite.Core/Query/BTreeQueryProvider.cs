@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;
+using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
@@ -129,6 +131,79 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
     [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
     [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
     private async Task<TResult> ExecuteAsync<TResult>(Expression expression, CancellationToken cancellationToken)
+    {
+        // ── AUDIT: start ─────────────────────────────────────────────────────
+        var auditOpts = _collection.Storage.AuditOptions;
+        var auditSw   = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
+            ? Stopwatch.StartNew()
+            : null;
+
+#if NET5_0_OR_GREATER
+        Activity? activity = auditOpts?.EnableDiagnosticSource == true
+            ? BLiteDiagnostics.ActivitySource.StartActivity(BLiteDiagnostics.QueryActivityName)
+            : null;
+        activity?.SetTag("db.system",           "blite");
+        activity?.SetTag("db.collection.name",  _collection.CollectionName);
+#endif
+        // ────────────────────────────────────────────────────────────────────
+
+        try
+        {
+            var result = await ExecuteAsyncCore<TResult>(expression, cancellationToken).ConfigureAwait(false);
+
+            // ── AUDIT: emit on success ────────────────────────────────────────
+            if (auditSw is not null)
+            {
+                auditSw.Stop();
+                var elapsed = auditSw.Elapsed;
+                var opts    = _collection.Storage.AuditOptions!;
+                var userId  = (opts.ContextProvider ?? AmbientAuditContext.Instance).GetCurrentUserId();
+
+                var evt = new QueryAuditEvent(
+                    CollectionName: _collection.CollectionName,
+                    Strategy:       QueryStrategy.Unknown,
+                    IndexName:      null,
+                    ResultCount:    -1,
+                    Elapsed:        elapsed,
+                    UserId:         userId);
+
+                _collection.Storage.AuditSink?.OnQuery(evt);
+                _collection.Storage.AuditMetrics?.RecordQuery(QueryStrategy.Unknown, elapsed);
+
+                // Slow-query detection
+                if (opts.SlowQueryThreshold is { } threshold && elapsed > threshold)
+                {
+                    _collection.Storage.AuditSink?.OnSlowOperation(new SlowOperationEvent(
+                        SlowOperationType.Query,
+                        CollectionName: _collection.CollectionName,
+                        Elapsed:        elapsed,
+                        Detail:         null));
+                }
+            }
+
+#if NET5_0_OR_GREATER
+            // Always dispose the activity (even when metrics/sink not active) so ActivityStopped fires.
+            activity?.SetTag("db.blite.query_strategy", QueryStrategy.Unknown.ToString());
+            activity?.Dispose();
+            activity = null;
+#endif
+            // ────────────────────────────────────────────────────────────────
+
+            return result;
+        }
+        catch
+        {
+#if NET5_0_OR_GREATER
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.Dispose();
+#endif
+            throw;
+        }
+    }
+
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
+    private async Task<TResult> ExecuteAsyncCore<TResult>(Expression expression, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 

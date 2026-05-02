@@ -2,10 +2,12 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.Audit;
 using BLite.Core.CDC;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
@@ -681,6 +683,12 @@ public sealed class DynamicCollection : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
 
         var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
+        // ── AUDIT: start stopwatch if audit is configured ─────────────────────
+        var auditOpts = _storage.AuditOptions;
+        var auditSw   = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
+            ? Stopwatch.StartNew()
+            : null;
+        // ─────────────────────────────────────────────────────────────────────
         bool success = false;
         bool autoCommit = transaction == null;
 
@@ -724,6 +732,37 @@ public sealed class DynamicCollection : IDisposable
                     CollectionName = _collectionName,
                     Success        = success,
                 });
+
+            // ── AUDIT: emit ───────────────────────────────────────────────────
+            if (auditSw is not null && success)
+            {
+                auditSw.Stop();
+                var elapsed  = auditSw.Elapsed;
+                var userId   = (auditOpts!.ContextProvider ?? AmbientAuditContext.Instance).GetCurrentUserId();
+                var txId     = transaction?.TransactionId ?? 0UL;
+                var docBytes = document.RawData.Length;
+
+                var evt = new InsertAuditEvent(
+                    TransactionId:      txId,
+                    CollectionName:     _collectionName,
+                    DocumentSizeBytes:  docBytes,
+                    Elapsed:            elapsed,
+                    UserId:             userId);
+
+                auditOpts.Sink?.OnInsert(evt);
+                _storage.AuditMetrics?.RecordInsert(elapsed);
+
+                // Slow-insert detection
+                if (auditOpts.SlowQueryThreshold is { } threshold && elapsed > threshold)
+                {
+                    auditOpts.Sink?.OnSlowOperation(new SlowOperationEvent(
+                        SlowOperationType.Insert,
+                        CollectionName: _collectionName,
+                        Elapsed:        elapsed,
+                        Detail:         null));
+                }
+            }
+            // ─────────────────────────────────────────────────────────────────
         }
     }
 
