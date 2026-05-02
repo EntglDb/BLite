@@ -21,10 +21,14 @@ namespace BLite.Core.Audit;
 public static class BLiteDiagnostics
 {
     /// <summary>The name registered with <see cref="ActivitySource"/>.</summary>
-    public const string ActivitySourceName    = "BLite";
+    public const string ActivitySourceName = "BLite";
 
-    /// <summary>The version reported by the <see cref="ActivitySource"/>.</summary>
-    public const string ActivitySourceVersion = "4.4";
+    /// <summary>
+    /// The version reported by the <see cref="ActivitySource"/>.
+    /// Derived from the executing assembly's version to avoid maintenance drift.
+    /// </summary>
+    public static readonly string ActivitySourceVersion =
+        typeof(BLiteDiagnostics).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     /// <summary>Activity operation name for transaction commit spans.</summary>
     public const string CommitActivityName    = "blite.commit";

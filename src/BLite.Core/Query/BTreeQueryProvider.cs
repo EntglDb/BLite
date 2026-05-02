@@ -161,6 +161,8 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
 
                 var evt = new QueryAuditEvent(
                     CollectionName: _collection.CollectionName,
+                    // Phase 1: strategy resolution requires BTreeQueryVisitor integration
+                    // (index vs full-scan detection). Deferred to a future release.
                     Strategy:       QueryStrategy.Unknown,
                     IndexName:      null,
                     ResultCount:    -1,
