@@ -67,4 +67,11 @@ internal readonly struct ValueStopwatch
         if (!IsActive) return 0L;
         return (long)((Stopwatch.GetTimestamp() - _startTimestamp) * TicksToMicros);
     }
+
+    /// <summary>
+    /// Returns the elapsed time since <see cref="StartNew"/>, or <see cref="TimeSpan.Zero"/> when inactive.
+    /// Uses microsecond precision (1 µs = 10 TimeSpan ticks).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public TimeSpan GetElapsed() => new TimeSpan(GetElapsedMicros() * 10L);
 }

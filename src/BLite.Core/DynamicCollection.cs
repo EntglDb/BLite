@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -685,9 +684,9 @@ public sealed class DynamicCollection : IDisposable
         var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
         // ── AUDIT: start stopwatch if audit is configured ─────────────────────
         var auditOpts = _storage.AuditOptions;
-        var auditSw   = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
-            ? Stopwatch.StartNew()
-            : null;
+        var auditVsw  = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
+            ? Metrics.ValueStopwatch.StartNew()
+            : default;
         // ─────────────────────────────────────────────────────────────────────
         bool success = false;
         bool autoCommit = transaction == null;
@@ -734,10 +733,9 @@ public sealed class DynamicCollection : IDisposable
                 });
 
             // ── AUDIT: emit ───────────────────────────────────────────────────
-            if (auditSw is not null && success)
+            if (auditVsw.IsActive && success)
             {
-                auditSw.Stop();
-                var elapsed  = auditSw.Elapsed;
+                var elapsed  = auditVsw.GetElapsed();
                 var userId   = (auditOpts!.ContextProvider ?? AmbientAuditContext.Instance).GetCurrentUserId();
                 var txId     = transaction?.TransactionId ?? 0UL;
                 var docBytes = document.RawData.Length;
@@ -753,7 +751,7 @@ public sealed class DynamicCollection : IDisposable
                 _storage.AuditMetrics?.RecordInsert(elapsed);
 
                 // Slow-insert detection
-                if (auditOpts.SlowQueryThreshold is { } threshold && elapsed > threshold)
+                if (auditOpts.SlowOperationThreshold is { } threshold && elapsed > threshold)
                 {
                     auditOpts.Sink?.OnSlowOperation(new SlowOperationEvent(
                         SlowOperationType.Insert,

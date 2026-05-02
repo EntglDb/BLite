@@ -163,9 +163,6 @@ public class AuditSinkTests : IDisposable
         var doc = col.CreateDocument(["price"], b => b.AddDouble("price", 9.99));
         await _engine.InsertAsync("orders", doc);
 
-        // Give the group commit writer time to flush.
-        await Task.Delay(50);
-
         Assert.NotEmpty(sink.Commits);
         Assert.True(sink.Commits.All(e => e.Elapsed >= TimeSpan.Zero));
     }
@@ -176,7 +173,7 @@ public class AuditSinkTests : IDisposable
     public async Task Query_ShouldInvokeAuditSink_ViaLinq()
     {
         var path = Path.Combine(Path.GetTempPath(), $"blite_qaudit_{Guid.NewGuid():N}.db");
-        using var ctx = new MinimalDbContext(path);
+        var ctx = new MinimalDbContext(path);
         try
         {
             var sink = new RecordingSink();
@@ -224,9 +221,6 @@ public class AuditSinkTests : IDisposable
         var doc = col.CreateDocument(["t"], b => b.AddString("t", "click"));
         await _engine.InsertAsync("events", doc);
 
-        // Give group commit writer time to process.
-        await Task.Delay(50);
-
         Assert.True(metrics.TotalCommits >= 1, $"Expected at least 1 commit, got {metrics.TotalCommits}");
     }
 
@@ -234,7 +228,7 @@ public class AuditSinkTests : IDisposable
     public async Task Metrics_TotalQueries_IncrementedAfterLinqQuery()
     {
         var path = Path.Combine(Path.GetTempPath(), $"blite_qmetric_{Guid.NewGuid():N}.db");
-        using var ctx = new MinimalDbContext(path);
+        var ctx = new MinimalDbContext(path);
         try
         {
             ctx.ConfigureAudit(new BLiteAuditOptions { EnableMetrics = true });
@@ -276,7 +270,7 @@ public class AuditSinkTests : IDisposable
         {
             Sink               = sink,
             // Threshold = Zero so every insert triggers a slow event.
-            SlowQueryThreshold = TimeSpan.Zero
+            SlowOperationThreshold = TimeSpan.Zero
         });
 
         var col = _engine.GetOrCreateCollection("slow");
@@ -291,14 +285,14 @@ public class AuditSinkTests : IDisposable
     public async Task SlowQuery_ShouldEmitSlowOperationEvent_WhenThresholdZero()
     {
         var path = Path.Combine(Path.GetTempPath(), $"blite_slowq_{Guid.NewGuid():N}.db");
-        using var ctx = new MinimalDbContext(path);
+        var ctx = new MinimalDbContext(path);
         try
         {
             var sink = new RecordingSink();
             ctx.ConfigureAudit(new BLiteAuditOptions
             {
-                Sink               = sink,
-                SlowQueryThreshold = TimeSpan.Zero
+                Sink                   = sink,
+                SlowOperationThreshold = TimeSpan.Zero
             });
 
             await ctx.Users.InsertAsync(new BLite.Shared.User { Name = "Eve", Age = 40 });
@@ -320,15 +314,13 @@ public class AuditSinkTests : IDisposable
         var sink = new RecordingSink();
         _engine.ConfigureAudit(new BLiteAuditOptions
         {
-            Sink               = sink,
-            SlowQueryThreshold = TimeSpan.Zero
+            Sink                   = sink,
+            SlowOperationThreshold = TimeSpan.Zero
         });
 
         var col = _engine.GetOrCreateCollection("commits");
         var doc = col.CreateDocument(["z"], b => b.AddInt32("z", 0));
         await _engine.InsertAsync("commits", doc);
-
-        await Task.Delay(50);
 
         Assert.Contains(sink.SlowOps, e => e.OperationType == SlowOperationType.Commit);
     }
@@ -339,9 +331,9 @@ public class AuditSinkTests : IDisposable
         var sink = new RecordingSink();
         _engine.ConfigureAudit(new BLiteAuditOptions
         {
-            Sink               = sink,
+            Sink                   = sink,
             // Very high threshold — should never be exceeded in a unit test.
-            SlowQueryThreshold = TimeSpan.FromHours(1)
+            SlowOperationThreshold = TimeSpan.FromHours(1)
         });
 
         var col = _engine.GetOrCreateCollection("fast");
@@ -448,7 +440,7 @@ public class AuditSinkTests : IDisposable
         System.Diagnostics.ActivitySource.AddActivityListener(listener);
 
         var path = Path.Combine(Path.GetTempPath(), $"blite_qact_{Guid.NewGuid():N}.db");
-        using var ctx = new MinimalDbContext(path);
+        var ctx = new MinimalDbContext(path);
         try
         {
             ctx.ConfigureAudit(new BLiteAuditOptions { EnableDiagnosticSource = true });

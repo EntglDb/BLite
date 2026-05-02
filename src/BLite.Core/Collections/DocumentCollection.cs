@@ -2052,9 +2052,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             docData = docData[..docLength]; // trim to actual serialized size
 
         // ── AUDIT: start ─────────────────────────────────────────────────────
-        var auditSw = (_storage.AuditSink is not null || _storage.AuditMetrics is not null)
-            ? System.Diagnostics.Stopwatch.StartNew()
-            : null;
+        var auditVsw = (_storage.AuditSink is not null || _storage.AuditMetrics is not null)
+            ? ValueStopwatch.StartNew()
+            : default;
         // ────────────────────────────────────────────────────────────────────
 
         DocumentLocation location;
@@ -2084,10 +2084,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         _indexManager.InsertIntoAll(entity, location, transaction);
 
         // ── AUDIT: emit ──────────────────────────────────────────────────────
-        if (auditSw is not null)
+        if (auditVsw.IsActive)
         {
-            auditSw.Stop();
-            var elapsed = auditSw.Elapsed;
+            var elapsed = auditVsw.GetElapsed();
             var opts    = _storage.AuditOptions!;
             var userId  = (opts.ContextProvider ?? Audit.AmbientAuditContext.Instance).GetCurrentUserId();
             var evt     = new Audit.InsertAuditEvent(
@@ -2101,7 +2100,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             _storage.AuditMetrics?.RecordInsert(elapsed);
 
             // Slow-insert detection
-            if (opts.SlowQueryThreshold is { } threshold && elapsed > threshold)
+            if (opts.SlowOperationThreshold is { } threshold && elapsed > threshold)
             {
                 _storage.AuditSink?.OnSlowOperation(new Audit.SlowOperationEvent(
                     Audit.SlowOperationType.Insert,

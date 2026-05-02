@@ -80,7 +80,7 @@ public sealed partial class StorageEngine : IDisposable
     private volatile bool _disposed;
 
     // ── Audit ─────────────────────────────────────────────────────────────────
-    private Audit.BLiteAuditOptions? _auditOptions;
+    private volatile Audit.BLiteAuditOptions? _auditOptions;
 
     /// <summary>
     /// The lock timeout configuration for this engine, as specified in the <see cref="PageFileConfig"/>.
@@ -349,12 +349,17 @@ public sealed partial class StorageEngine : IDisposable
     internal void ConfigureAudit(Audit.BLiteAuditOptions options)
     {
         _auditOptions = options ?? throw new ArgumentNullException(nameof(options));
-        if (options.EnableMetrics)
-            AuditMetrics = new Audit.BLiteMetrics();
+        _auditMetrics = options.EnableMetrics ? new Audit.BLiteMetrics() : null;
     }
 
+    private volatile Audit.BLiteMetrics? _auditMetrics;
+
     /// <summary>In-process audit metrics. Non-null only when <see cref="Audit.BLiteAuditOptions.EnableMetrics"/> is <see langword="true"/>.</summary>
-    internal Audit.BLiteMetrics? AuditMetrics { get; private set; }
+    internal Audit.BLiteMetrics? AuditMetrics
+    {
+        get => _auditMetrics;
+        private set => _auditMetrics = value;
+    }
 
     /// <summary>The configured audit sink, or <see langword="null"/> when audit is not configured.</summary>
     internal Audit.IBLiteAuditSink? AuditSink => _auditOptions?.Sink;

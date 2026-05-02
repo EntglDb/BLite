@@ -21,8 +21,8 @@ public interface IBLiteAuditSink
     void OnCommit(CommitAuditEvent e) { }
 
     /// <summary>
-    /// Called when an operation exceeds <see cref="BLiteAuditOptions.SlowQueryThreshold"/>.
-    /// Requires <see cref="BLiteAuditOptions.SlowQueryThreshold"/> to be set.
+    /// Called when an operation exceeds <see cref="BLiteAuditOptions.SlowOperationThreshold"/>.
+    /// Requires <see cref="BLiteAuditOptions.SlowOperationThreshold"/> to be set.
     /// </summary>
     void OnSlowOperation(SlowOperationEvent e) { }
 }

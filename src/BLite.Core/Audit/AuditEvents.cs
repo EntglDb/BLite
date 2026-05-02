@@ -31,7 +31,7 @@ public readonly record struct QueryAuditEvent(
     /// <summary>The caller identity provided by <see cref="IAuditContextProvider"/>. <see langword="null"/> when not set.</summary>
     string? UserId);
 
-/// <summary>Emitted when an operation exceeds the configured <see cref="BLiteAuditOptions.SlowQueryThreshold"/>.</summary>
+/// <summary>Emitted when an operation exceeds the configured <see cref="BLiteAuditOptions.SlowOperationThreshold"/>.</summary>
 public readonly record struct SlowOperationEvent(
     SlowOperationType OperationType,
     string CollectionName,

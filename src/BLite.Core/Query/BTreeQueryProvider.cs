@@ -9,6 +9,7 @@ using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
+using BLite.Core.Metrics;
 using static BLite.Core.Query.IndexOptimizer;
 
 namespace BLite.Core.Query;
@@ -134,9 +135,9 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
     {
         // ── AUDIT: start ─────────────────────────────────────────────────────
         var auditOpts = _collection.Storage.AuditOptions;
-        var auditSw   = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
-            ? Stopwatch.StartNew()
-            : null;
+        var auditVsw  = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
+            ? ValueStopwatch.StartNew()
+            : default;
 
 #if NET5_0_OR_GREATER
         Activity? activity = auditOpts?.EnableDiagnosticSource == true
@@ -152,10 +153,9 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
             var result = await ExecuteAsyncCore<TResult>(expression, cancellationToken).ConfigureAwait(false);
 
             // ── AUDIT: emit on success ────────────────────────────────────────
-            if (auditSw is not null)
+            if (auditVsw.IsActive)
             {
-                auditSw.Stop();
-                var elapsed = auditSw.Elapsed;
+                var elapsed = auditVsw.GetElapsed();
                 var opts    = _collection.Storage.AuditOptions!;
                 var userId  = (opts.ContextProvider ?? AmbientAuditContext.Instance).GetCurrentUserId();
 
@@ -173,7 +173,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
                 _collection.Storage.AuditMetrics?.RecordQuery(QueryStrategy.Unknown, elapsed);
 
                 // Slow-query detection
-                if (opts.SlowQueryThreshold is { } threshold && elapsed > threshold)
+                if (opts.SlowOperationThreshold is { } threshold && elapsed > threshold)
                 {
                     _collection.Storage.AuditSink?.OnSlowOperation(new SlowOperationEvent(
                         SlowOperationType.Query,

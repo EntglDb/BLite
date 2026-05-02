@@ -183,12 +183,12 @@ public sealed partial class StorageEngine
             ? Audit.BLiteDiagnostics.ActivitySource.StartActivity(Audit.BLiteDiagnostics.CommitActivityName)
             : null;
         activity?.SetTag("db.system", "blite");
-        activity?.SetTag("db.blite.transaction_id", transactionId.ToString());
+        activity?.SetTag("db.blite.transaction_id", (long)transactionId);
 #endif
         // ────────────────────────────────────────────────────────────────────
 
         // ── AUDIT: Phase 1 — stopwatch ───────────────────────────────────────
-        var auditSw = _auditOptions is not null ? Stopwatch.StartNew() : null;
+        var auditVsw = _auditOptions is not null ? Metrics.ValueStopwatch.StartNew() : default;
         // ────────────────────────────────────────────────────────────────────
 
         var sw = _metrics != null ? Metrics.ValueStopwatch.StartNew() : default;
@@ -221,16 +221,15 @@ public sealed partial class StorageEngine
                 });
 
             // ── AUDIT: emit ──────────────────────────────────────────────────
-            if (auditSw is not null)
+            if (auditVsw.IsActive)
             {
-                auditSw.Stop();
-                var elapsed  = auditSw.Elapsed;
+                var elapsed  = auditVsw.GetElapsed();
                 var walSize  = _wal.GetCurrentSize();
                 var userId   = (_auditOptions!.ContextProvider ?? Audit.AmbientAuditContext.Instance).GetCurrentUserId();
 
 #if NET5_0_OR_GREATER
-                activity?.SetTag("db.blite.pages_written", pagesWritten.ToString());
-                activity?.SetTag("db.blite.wal_size_bytes", walSize.ToString());
+                activity?.SetTag("db.blite.pages_written", pagesWritten);
+                activity?.SetTag("db.blite.wal_size_bytes", walSize);
                 if (!success) activity?.SetStatus(ActivityStatusCode.Error, "Commit failed");
                 activity?.Dispose();
                 activity = null;
@@ -250,7 +249,7 @@ public sealed partial class StorageEngine
                     AuditMetrics?.RecordCommit();
 
                     // Slow-commit detection
-                    if (_auditOptions.SlowQueryThreshold is { } threshold && elapsed > threshold)
+                    if (_auditOptions.SlowOperationThreshold is { } threshold && elapsed > threshold)
                     {
                         _auditOptions.Sink?.OnSlowOperation(new Audit.SlowOperationEvent(
                             Audit.SlowOperationType.Commit,

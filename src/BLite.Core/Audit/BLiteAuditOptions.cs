@@ -10,27 +10,28 @@ public sealed class BLiteAuditOptions
     /// <summary>
     /// Custom audit sink. When <see langword="null"/> no <see cref="IBLiteAuditSink"/> callbacks are invoked.
     /// </summary>
-    public IBLiteAuditSink? Sink { get; set; }
+    public IBLiteAuditSink? Sink { get; init; }
 
     /// <summary>
     /// When <see langword="true"/>, populates the <see cref="BLiteMetrics"/> instance accessible via
-    /// <c>BLiteEngine.Metrics</c> / <c>DocumentDbContext.Metrics</c>.
+    /// <c>BLiteEngine.AuditMetrics</c> / <c>DocumentDbContext.AuditMetrics</c>.
     /// </summary>
-    public bool EnableMetrics { get; set; } = false;
+    public bool EnableMetrics { get; init; } = false;
 
     /// <summary>
     /// Provider that supplies the current caller identity.
     /// Defaults to <see cref="AmbientAuditContext"/> when <see langword="null"/>.
     /// </summary>
-    public IAuditContextProvider? ContextProvider { get; set; }
+    public IAuditContextProvider? ContextProvider { get; init; }
 
     // ── Phase 2 ─────────────────────────────────────────────────────────────
 
     /// <summary>
     /// When set, a <see cref="SlowOperationEvent"/> is emitted on the <see cref="Sink"/>
-    /// for any operation that exceeds this duration. <see langword="null"/> disables slow-operation detection.
+    /// for any operation (insert, query, or commit) that exceeds this duration.
+    /// <see langword="null"/> disables slow-operation detection.
     /// </summary>
-    public TimeSpan? SlowQueryThreshold { get; set; }
+    public TimeSpan? SlowOperationThreshold { get; init; }
 
     /// <summary>
     /// When <see langword="true"/>, emits <see cref="System.Diagnostics.Activity"/> spans via
@@ -41,5 +42,5 @@ public sealed class BLiteAuditOptions
     /// registered (the <c>ActivitySource.HasListeners()</c> check costs ~5 ns).
     /// </para>
     /// </summary>
-    public bool EnableDiagnosticSource { get; set; } = false;
+    public bool EnableDiagnosticSource { get; init; } = false;
 }

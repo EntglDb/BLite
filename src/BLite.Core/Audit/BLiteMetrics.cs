@@ -4,7 +4,7 @@ namespace BLite.Core.Audit;
 
 /// <summary>
 /// Cumulative thread-safe counters for BLite audit metrics.
-/// Accessible via <c>BLiteEngine.Metrics</c> / <c>DocumentDbContext.Metrics</c>
+/// Accessible via <c>BLiteEngine.AuditMetrics</c> / <c>DocumentDbContext.AuditMetrics</c>
 /// when <see cref="BLiteAuditOptions.EnableMetrics"/> is <see langword="true"/>.
 /// </summary>
 /// <remarks>
