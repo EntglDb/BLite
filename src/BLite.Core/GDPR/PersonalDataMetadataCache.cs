@@ -70,6 +70,8 @@ internal static class PersonalDataMetadataCache
     /// by attribute name to avoid a hard dependency on DataAnnotations), then
     /// <c>PropertyName.ToLowerInvariant()</c>.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075",
+        Justification = "Reflection fallback for dynamic entities. GetType().GetProperty() on ColumnAttribute is intentional and cached. Source-gen path is preferred and AOT-safe.")]
     private static string ResolveBsonFieldName(PropertyInfo prop)
     {
         // [JsonPropertyName("bsonkey")] — System.Text.Json (always available)

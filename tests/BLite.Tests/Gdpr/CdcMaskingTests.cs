@@ -290,38 +290,40 @@ public class CdcMaskingTests : IDisposable
         try
         {
             var dynamicDbPath = Path.Combine(Path.GetTempPath(), $"blite_cdcmask_dyn_{Guid.NewGuid():N}.db");
-            using var engine = new BLiteEngine(dynamicDbPath);
             try
             {
-                var col = engine.GetOrCreateCollection("dyntest");
-                var docFields = new[] { "email", "name" };
+                using (var engine = new BLiteEngine(dynamicDbPath))
+                {
+                    var col = engine.GetOrCreateCollection("dyntest");
+                    var docFields = new[] { "email", "name" };
 
-                var events = new List<BsonChangeEvent>();
+                    var events = new List<BsonChangeEvent>();
 
-                // First subscription — should emit the advisory.
-                using var sub1 = col.Watch(new WatchOptions { CapturePayload = true, RevealPersonalData = false })
-                    .Subscribe(e => events.Add(e));
+                    // First subscription — should emit the advisory.
+                    using var sub1 = col.Watch(new WatchOptions { CapturePayload = true, RevealPersonalData = false })
+                        .Subscribe(e => events.Add(e));
 
-                // Second subscription on the same collection — warning must NOT fire again.
-                using var sub2 = col.Watch(new WatchOptions { CapturePayload = true, RevealPersonalData = false })
-                    .Subscribe(_ => { });
+                    // Second subscription on the same collection — warning must NOT fire again.
+                    using var sub2 = col.Watch(new WatchOptions { CapturePayload = true, RevealPersonalData = false })
+                        .Subscribe(_ => { });
 
-                var doc = col.CreateDocument(docFields,
-                    b => b.AddString("email", "ivan@example.com").AddString("name", "Ivan"));
-                await col.InsertAsync(doc);
-                await engine.CommitAsync();
+                    var doc = col.CreateDocument(docFields,
+                        b => b.AddString("email", "ivan@example.com").AddString("name", "Ivan"));
+                    await col.InsertAsync(doc);
+                    await engine.CommitAsync();
 
-                await WaitForEvents(events, 1);
+                    await WaitForEvents(events, 1);
 
-                Assert.Single(events);
-                // Document must pass through unchanged (no masking for dynamic collections).
-                Assert.NotNull(events[0].Payload);
-                Assert.True(events[0].Payload!.TryGetValue("email", out var emailVal));
-                Assert.Equal("ivan@example.com", emailVal.AsString);
+                    Assert.Single(events);
+                    // Document must pass through unchanged (no masking for dynamic collections).
+                    Assert.NotNull(events[0].Payload);
+                    Assert.True(events[0].Payload!.TryGetValue("email", out var emailVal));
+                    Assert.Equal("ivan@example.com", emailVal.AsString);
 
-                // Exactly one advisory message for this collection.
-                var cdcLogs = logMessages.Where(m => m.Contains("dyntest") && m.Contains("CapturePayload")).ToList();
-                Assert.Single(cdcLogs);
+                    // Exactly one advisory message for this collection.
+                    var cdcLogs = logMessages.Where(m => m.Contains("dyntest") && m.Contains("CapturePayload")).ToList();
+                    Assert.Single(cdcLogs);
+                } // engine disposed here — file handle released before deletion
             }
             finally
             {
