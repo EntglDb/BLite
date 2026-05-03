@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Threading;
 using BLite.Bson;
 using BLite.Core.Collections;
+using BLite.Core.GDPR;
 using BLite.Core.Indexing;
 
 namespace BLite.Core.CDC;
@@ -14,22 +16,28 @@ internal sealed class ChangeStreamObservable<TId, T> : IObservable<ChangeStreamE
 {
     private readonly ChangeStreamDispatcher _dispatcher;
     private readonly string _collectionName;
-    private readonly bool _capturePayload;
+    private readonly WatchOptions _options;
     private readonly IDocumentMapper<TId, T> _mapper;
     private readonly ConcurrentDictionary<ushort, string> _keyReverseMap;
+    private readonly IReadOnlyDictionary<string, ushort> _forwardKeyMap;
+    private readonly IReadOnlyList<PersonalDataField> _personalDataFields;
 
     public ChangeStreamObservable(
-        ChangeStreamDispatcher dispatcher, 
-        string collectionName, 
-        bool capturePayload,
+        ChangeStreamDispatcher dispatcher,
+        string collectionName,
+        WatchOptions options,
         IDocumentMapper<TId, T> mapper,
-        ConcurrentDictionary<ushort, string> keyReverseMap)
+        ConcurrentDictionary<ushort, string> keyReverseMap,
+        IReadOnlyDictionary<string, ushort> forwardKeyMap,
+        IReadOnlyList<PersonalDataField> personalDataFields)
     {
         _dispatcher = dispatcher;
         _collectionName = collectionName;
-        _capturePayload = capturePayload;
+        _options = options;
         _mapper = mapper;
         _keyReverseMap = keyReverseMap;
+        _forwardKeyMap = forwardKeyMap;
+        _personalDataFields = personalDataFields;
     }
 
     public IDisposable Subscribe(IObserver<ChangeStreamEvent<TId, T>> observer)
@@ -43,7 +51,7 @@ internal sealed class ChangeStreamObservable<TId, T> : IObservable<ChangeStreamE
             SingleWriter = true
         });
 
-        var dispatcherSubscription = _dispatcher.Subscribe(_collectionName, _capturePayload, channel.Writer);
+        var dispatcherSubscription = _dispatcher.Subscribe(_collectionName, _options.CapturePayload, channel.Writer);
 
         // Background task to bridge Channel -> Observer
         var bridgeTask = Task.Run(() => BridgeChannelToObserverAsync(channel.Reader, observer, cts.Token));
@@ -61,14 +69,28 @@ internal sealed class ChangeStreamObservable<TId, T> : IObservable<ChangeStreamE
                 {
                     try
                     {
-                        // Deserializza ID
+                        // Deserialise ID
                         var eventId = _mapper.FromIndexKey(IndexKey.FromOwnedArray(internalEvent.IdBytes.ToArray()));
-                        
-                        // Deserializza Payload (se presente)
+
+                        // Deserialise payload (only when capture was requested and bytes are present).
                         T? entity = default;
-                        if (internalEvent.PayloadBytes.HasValue)
+                        if (_options.CapturePayload && internalEvent.PayloadBytes.HasValue)
                         {
-                            entity = _mapper.Deserialize(new BsonSpanReader(internalEvent.PayloadBytes.Value.Span, _keyReverseMap));
+                            // Clone the payload as a BsonDocument, apply the masking pipeline,
+                            // then deserialise from the (possibly masked) bytes.
+                            var rawDoc = new BsonDocument(
+                                internalEvent.PayloadBytes.Value.ToArray(),
+                                _keyReverseMap);
+
+                            var maskedDoc = PayloadMask.Apply(
+                                rawDoc,
+                                _options,
+                                _personalDataFields,
+                                _forwardKeyMap,
+                                _keyReverseMap);
+
+                            entity = _mapper.Deserialize(
+                                new BsonSpanReader(maskedDoc.RawData.Span, _keyReverseMap));
                         }
 
                         var externalEvent = new ChangeStreamEvent<TId, T>
@@ -85,8 +107,7 @@ internal sealed class ChangeStreamObservable<TId, T> : IObservable<ChangeStreamE
                     }
                     catch (Exception ex)
                     {
-                        // In case of deserialization error, we notify and continue if possible
-                        // Or we can stop the observer.
+                        // In case of deserialization error, notify and continue if possible.
                         observer.OnError(ex);
                     }
                 }

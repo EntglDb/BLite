@@ -51,7 +51,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_Insert_FiresEvent()
     {
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         await _col.InsertAsync(MakeDoc("Alice"));
         await _engine.CommitAsync();
@@ -67,7 +67,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_Insert_MultipleDocuments_FiresAllEvents()
     {
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         for (int i = 0; i < 5; i++)
             await _col.InsertAsync(MakeDoc($"Item{i}"));
@@ -85,7 +85,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_CapturePayload_True_PayloadIsSet()
     {
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: true).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = true }).Subscribe(e => events.Add(e));
 
         await _col.InsertAsync(MakeDoc("WithPayload"));
         await _engine.CommitAsync();
@@ -100,7 +100,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_CapturePayload_False_PayloadIsNull()
     {
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         await _col.InsertAsync(MakeDoc("NoPayload"));
         await _engine.CommitAsync();
@@ -121,7 +121,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
         await _engine.CommitAsync();
 
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         var updated = _col.CreateDocument(["name"],
             b => b.AddString("name", "Updated"));
@@ -144,7 +144,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
         await _engine.CommitAsync();
 
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         await _col.DeleteAsync(id);
         await _engine.CommitAsync();
@@ -161,7 +161,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_Dispose_StopsReceivingEvents()
     {
         var events = new List<BsonChangeEvent>();
-        var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         await _col.InsertAsync(MakeDoc("Before"));
         await _engine.CommitAsync();
@@ -186,8 +186,8 @@ public class DynamicChangeStreamObservableTests : IDisposable
         var events1 = new List<BsonChangeEvent>();
         var events2 = new List<BsonChangeEvent>();
 
-        using var sub1 = _col.Watch(capturePayload: false).Subscribe(e => events1.Add(e));
-        using var sub2 = _col.Watch(capturePayload: false).Subscribe(e => events2.Add(e));
+        using var sub1 = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events1.Add(e));
+        using var sub2 = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events2.Add(e));
 
         await _col.InsertAsync(MakeDoc("Shared"));
         await _engine.CommitAsync();
@@ -204,14 +204,14 @@ public class DynamicChangeStreamObservableTests : IDisposable
     [Fact]
     public void Watch_ReturnsNonNullObservable()
     {
-        var observable = _col.Watch(capturePayload: false);
+        var observable = _col.Watch(new WatchOptions { CapturePayload = false });
         Assert.NotNull(observable);
     }
 
     [Fact]
     public void Watch_Subscribe_ReturnsNonNullDisposable()
     {
-        var sub = _col.Watch(capturePayload: false).Subscribe(_ => { });
+        var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(_ => { });
         Assert.NotNull(sub);
         sub.Dispose();
     }
@@ -222,7 +222,7 @@ public class DynamicChangeStreamObservableTests : IDisposable
     public async Task Watch_Event_HasValidTimestampAndTransactionId()
     {
         var events = new List<BsonChangeEvent>();
-        using var sub = _col.Watch(capturePayload: false).Subscribe(e => events.Add(e));
+        using var sub = _col.Watch(new WatchOptions { CapturePayload = false }).Subscribe(e => events.Add(e));
 
         await _col.InsertAsync(MakeDoc("Stamped"));
         await _engine.CommitAsync();

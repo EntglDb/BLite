@@ -7,33 +7,56 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.GDPR;
 
 namespace BLite.Core.CDC;
 
 internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEvent>
 {
+    // Tracks collections for which the GDPR "no personal-data metadata" advisory has
+    // already been logged at least once, to satisfy the "log exactly once per collection"
+    // requirement from WP2.
+    private static readonly ConcurrentDictionary<string, byte> _warnedCollections = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly ChangeStreamDispatcher _dispatcher;
     private readonly string _collectionName;
-    private readonly bool _capturePayload;
+    private readonly WatchOptions _options;
     private readonly ConcurrentDictionary<ushort, string> _keyReverseMap;
     private readonly ConcurrentDictionary<string, ushort>? _forwardKeyMap;
 
     public DynamicChangeStreamObservable(
         ChangeStreamDispatcher dispatcher,
         string collectionName,
-        bool capturePayload,
+        WatchOptions options,
         ConcurrentDictionary<ushort, string> keyReverseMap,
         ConcurrentDictionary<string, ushort>? forwardKeyMap = null)
     {
         _dispatcher = dispatcher;
         _collectionName = collectionName;
-        _capturePayload = capturePayload;
+        _options = options;
         _keyReverseMap = keyReverseMap;
         _forwardKeyMap = forwardKeyMap;
+
+        // Log an advisory once per collection when CapturePayload=true and
+        // RevealPersonalData=false: personal-data metadata is unavailable for
+        // dynamic (untyped) collections, so rule 2 of the masking pipeline is a no-op.
+        // The consumer must use ExcludeFields / IncludeOnlyFields explicitly.
+        if (options.CapturePayload && !options.RevealPersonalData
+            && _warnedCollections.TryAdd(collectionName, 0))
+        {
+            Trace.TraceInformation(
+                "[BLite CDC] Dynamic collection '{0}' is watched with CapturePayload=true and " +
+                "RevealPersonalData=false, but no personal-data metadata is available for " +
+                "untyped collections (rule 2 of the masking pipeline is a no-op). " +
+                "Use ExcludeFields or IncludeOnlyFields to restrict the payload explicitly.",
+                collectionName);
+        }
     }
 
     public IDisposable Subscribe(IObserver<BsonChangeEvent> observer)
@@ -47,7 +70,7 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
             SingleWriter = true
         });
 
-        var subscription = _dispatcher.Subscribe(_collectionName, _capturePayload, channel.Writer);
+        var subscription = _dispatcher.Subscribe(_collectionName, _options.CapturePayload, channel.Writer);
         var bridgeTask = Task.Run(() => BridgeAsync(channel.Reader, observer, cts.Token));
 
         return new SubscriptionHandle(subscription, cts, channel.Writer, bridgeTask);
@@ -65,8 +88,17 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
                 while (reader.TryRead(out var e))
                 {
                     BsonDocument? payload = null;
-                    if (e.PayloadBytes.HasValue)
-                        payload = new BsonDocument(e.PayloadBytes.Value.ToArray(), _keyReverseMap, _forwardKeyMap);
+                    if (_options.CapturePayload && e.PayloadBytes.HasValue)
+                    {
+                        var rawDoc = new BsonDocument(e.PayloadBytes.Value.ToArray(), _keyReverseMap, _forwardKeyMap);
+
+                        // For dynamic collections the personal-data field list is always empty,
+                        // so rule 2 (MaskPersonalData) is a no-op.  ExcludeFields and
+                        // IncludeOnlyFields still apply.
+                        payload = _forwardKeyMap != null
+                            ? PayloadMask.Apply(rawDoc, _options, Array.Empty<PersonalDataField>(), _forwardKeyMap, _keyReverseMap)
+                            : rawDoc;
+                    }
 
                     observer.OnNext(new BsonChangeEvent
                     {
@@ -121,4 +153,10 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
             _writer.TryComplete();
         }
     }
+
+    /// <summary>
+    /// Clears the static "already warned" collection set.
+    /// For testing only — ensures each test sees a fresh warning state.
+    /// </summary>
+    internal static void ResetWarnedCollections() => _warnedCollections.Clear();
 }
