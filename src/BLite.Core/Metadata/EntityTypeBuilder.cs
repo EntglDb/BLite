@@ -36,6 +36,14 @@ public class EntityTypeBuilder<T> where T : class
     public Dictionary<string, (DataSensitivity Sensitivity, bool IsTimestamp)> PersonalDataProperties { get; }
         = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// GDPR enforcement profile for this collection.
+    /// Set via <see cref="EntityTypeBuilderGdprExtensions.HasGdprMode{T}"/> or
+    /// the <see cref="GDPR.GdprModeAttribute"/> class attribute.
+    /// Defaults to <see cref="GDPR.GdprMode.None"/> (no enforcement).
+    /// </summary>
+    public GDPR.GdprMode GdprMode { get; internal set; } = GDPR.GdprMode.None;
+
     public EntityTypeBuilder<T> ToCollection(string name)
     {
         CollectionName = name;
