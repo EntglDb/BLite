@@ -30,6 +30,9 @@ public enum GdprMode : byte
 /// Declarative per-class GDPR mode annotation.
 /// Place on an entity class to override the engine-wide
 /// <see cref="BLite.Core.KeyValue.BLiteKvOptions.DefaultGdprMode"/>.
+/// The attribute is read by <c>ModelBuilder.Entity&lt;T&gt;()</c> at model-building time;
+/// the fluent <c>EntityTypeBuilder&lt;T&gt;.HasGdprMode()</c> call takes precedence when
+/// called afterwards. Applies only to the <c>DocumentDbContext</c> (typed) path.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = true)]
 public sealed class GdprModeAttribute : Attribute

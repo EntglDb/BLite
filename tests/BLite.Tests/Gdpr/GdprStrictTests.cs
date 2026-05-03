@@ -65,6 +65,9 @@ public class GdprStrictTests : IDisposable
     private bool HasWarning(int eventId)
         => _listener.Messages.Any(m => m.Contains($"EventId:{eventId}"));
 
+    private int CountWarnings(int eventId)
+        => _listener.Messages.Count(m => m.Contains($"EventId:{eventId}"));
+
     // ── Test 1: GdprMode.None baseline — zero validator activity ─────────────
 
     /// <summary>
@@ -132,8 +135,7 @@ public class GdprStrictTests : IDisposable
 
         using var engine = new BLiteEngine(path, crypto, kvOpts);
 
-        Assert.True(HasWarning(GdprStrictValidator.GdprStrictAuditMissing),
-            "Expected GdprStrictAuditMissing (9002) warning when no audit sink is registered under Strict mode.");
+        Assert.Equal(1, CountWarnings(GdprStrictValidator.GdprStrictAuditMissing));
     }
 
     // ── Test 5: Strict forces SecureErase warning (not yet implemented) ────────
@@ -155,7 +157,7 @@ public class GdprStrictTests : IDisposable
             "Expected GdprStrictSecureEraseUnavailable (9006) warning when Strict mode is active.");
     }
 
-    // ── Test 6: GdprModeOptions enum values are correct ───────────────────────
+    // ── Test 6: GdprMode enum values are correct ─────────────────────────────
 
     /// <summary>
     /// Verifies the <see cref="GdprMode"/> enum contract: None = 0, Strict = 1.
@@ -206,6 +208,52 @@ public class GdprStrictTests : IDisposable
         Assert.Equal(GdprMode.Strict, attr.Mode);
     }
 
+    // ── Test 9b: [GdprModeAttribute] is read by ModelBuilder.Entity<T>() ─────
+
+    /// <summary>
+    /// <see cref="GdprModeAttribute"/> placed on an entity class must be read by
+    /// <see cref="ModelBuilder.Entity{T}"/> and seed <c>EntityTypeBuilder&lt;T&gt;.GdprMode</c>.
+    /// Fluent <c>HasGdprMode()</c> called afterwards must override the attribute value.
+    /// </summary>
+    [Fact]
+    public void ModelBuilder_Entity_ReadsGdprModeAttribute()
+    {
+        // AttributeEntity carries [GdprMode(Strict)] — verify the builder is seeded.
+        var modelBuilder = new ModelBuilder();
+        var builder = modelBuilder.Entity<AttributeEntity>();
+        Assert.Equal(GdprMode.Strict, builder.GdprMode);
+
+        // Fluent call must override the attribute.
+        builder.HasGdprMode(GdprMode.None);
+        Assert.Equal(GdprMode.None, builder.GdprMode);
+    }
+
+    /// <summary>Helper entity for the attribute-seeding test.</summary>
+    [GdprMode(GdprMode.Strict)]
+    private sealed class AttributeEntity { public int Id { get; set; } }
+
+    // ── Test 9c: DocumentDbContext — [GdprModeAttribute] entity + no encryption → throw ─
+
+    /// <summary>
+    /// A context whose entity class carries <c>[GdprMode(GdprMode.Strict)]</c> must
+    /// trigger the same encryption enforcement as the fluent <c>HasGdprMode(Strict)</c> path.
+    /// </summary>
+    [Fact]
+    public void DbContext_EntityWithGdprModeAttribute_NoEncryption_Throws()
+    {
+        var path = TempDb();
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new AttributeEntityDbContext(path));
+        Assert.Contains("GdprMode.Strict requires", ex.Message);
+    }
+
+    private sealed class AttributeEntityDbContext : DocumentDbContext
+    {
+        public AttributeEntityDbContext(string path) : base(path) { }
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<AttributeEntity>(); // [GdprMode(Strict)] on the class
+    }
+
     // ── Test 10: Strict + [PersonalData] collection without retention → warning ─
 
     /// <summary>
@@ -218,7 +266,7 @@ public class GdprStrictTests : IDisposable
     [Fact]
     public void GdprStrict_PersonalDataWithoutRetention_EmitsRetentionWarning()
     {
-        const string collectionName = "gdprpeople";
+        const string collectionName = "gdprpersons";
         var path = TempDb();
         var crypto = new CryptoOptions("gdpr-strict-test-passphrase");
         var kvOpts = new BLiteKvOptions { DefaultGdprMode = GdprMode.Strict };
@@ -235,14 +283,10 @@ public class GdprStrictTests : IDisposable
         // GdprPerson.Email carries [PersonalData] so the cache should produce ≥1 field
         // after the assembly scan. We trigger the scan here to avoid timing issues.
         var fields = PersonalDataResolver.ResolveByCollectionName(collectionName);
-        // Note: if the source generator has not emitted a mapper for GdprPerson,
-        // the reflection fallback is used but requires a mapper with CollectionNameStatic.
-        // In that case the test gracefully degrades and skips the assertion.
-        if (fields.Count == 0)
-        {
-            // Source-gen mapper not present for this entity — skip retention assertion.
-            return;
-        }
+        // The source-gen mapper for GdprPerson must exist (it is in BLite.Shared which
+        // is referenced by BLite.Tests and always compiled).  Assert to catch regressions
+        // rather than silently skipping the real assertion.
+        Assert.NotEmpty(fields);
 
         using var engine = new BLiteEngine(path, crypto, kvOpts);
 

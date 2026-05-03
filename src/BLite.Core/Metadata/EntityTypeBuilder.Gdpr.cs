@@ -10,7 +10,11 @@ public static class EntityTypeBuilderGdprExtensions
 {
     /// <summary>
     /// Configures the GDPR enforcement profile for this collection.
-    /// The resolved mode is inspected by <c>GdprStrictValidator</c> at engine open.
+    /// When building a <see cref="DocumentDbContext"/>, the resolved mode is inspected by
+    /// <c>GdprStrictValidator</c> at context construction time — the effective mode is the
+    /// engine-wide <see cref="BLite.Core.KeyValue.BLiteKvOptions.DefaultGdprMode"/> escalated
+    /// to <see cref="GdprMode.Strict"/> if any entity in the model has Strict configured.
+    /// For <c>BLiteEngine</c> (dynamic path), only the engine-wide default is used.
     /// </summary>
     /// <typeparam name="T">Entity type.</typeparam>
     /// <param name="builder">The entity type builder.</param>

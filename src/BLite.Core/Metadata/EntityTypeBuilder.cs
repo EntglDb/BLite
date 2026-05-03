@@ -49,8 +49,10 @@ public class EntityTypeBuilder<T> : IGdprModeAccessor where T : class
 
     /// <summary>
     /// GDPR enforcement profile for this collection.
-    /// Set via <see cref="EntityTypeBuilderGdprExtensions.HasGdprMode{T}"/> or
-    /// the <see cref="GDPR.GdprModeAttribute"/> class attribute.
+    /// Set via <see cref="EntityTypeBuilderGdprExtensions.HasGdprMode{T}"/> (fluent)
+    /// or by placing <see cref="GDPR.GdprModeAttribute"/> on the entity class — the
+    /// attribute is read by <see cref="ModelBuilder.Entity{T}"/> at model-building time,
+    /// and the fluent call takes precedence when called afterwards.
     /// Defaults to <see cref="GDPR.GdprMode.None"/> (no enforcement).
     /// </summary>
     public GDPR.GdprMode GdprMode { get; internal set; } = GDPR.GdprMode.None;

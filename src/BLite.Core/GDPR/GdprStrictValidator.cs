@@ -43,6 +43,9 @@ internal static class GdprStrictValidator
     /// <summary>A CDC Watch was configured with <c>CapturePayload = true</c> under Strict.</summary>
     internal const int GdprStrictCdcCapturePayloadWarning = 9007;
 
+    /// <summary><c>PersonalDataResolver</c> raised an unexpected error during retention inspection; check skipped.</summary>
+    internal const int GdprStrictInspectionError = 9008;
+
     // ── Entry point ──────────────────────────────────────────────────────────
 
     /// <summary>
@@ -84,13 +87,15 @@ internal static class GdprStrictValidator
         }
 
         // ── 2. Audit sink — warn if absent ───────────────────────────────────
-        // The audit module (IBLiteAuditSink / ConfigureAudit) is implemented.
-        // Log a warning when no sink has been registered so the operator is aware.
+        // ConfigureAudit() is a post-construction method, so the audit sink is never
+        // available at this point.  Emit an actionable reminder so the operator ensures
+        // ConfigureAudit() is called immediately after construction.
         if (storage.AuditSink is null)
         {
             TraceWarning(GdprStrictAuditMissing,
                 "GdprMode.Strict: no audit sink is registered. " +
-                "Call ConfigureAudit() with a non-null IBLiteAuditSink to satisfy Art. 30 logging requirements.");
+                "Ensure ConfigureAudit() with a non-null IBLiteAuditSink is called immediately " +
+                "after construction to satisfy Art. 30 logging requirements.");
         }
 
         // ── 3. Secure erase on delete — not yet a BLiteKvOptions setting ─────
@@ -116,15 +121,17 @@ internal static class GdprStrictValidator
                         $"GdprMode.Strict: collection '{meta.Name}' contains [PersonalData] fields " +
                         $"({string.Join(", ", pdFields.Select(f => f.PropertyName))}) " +
                         "but has no retention policy configured. " +
-                        "Configure via EntityTypeBuilder<T>.HasRetentionPolicy(...).");
+                        "Configure via EntityTypeBuilder<T>.HasRetentionPolicy(...). " +
+                        "Note: only collections with a generated source-gen mapper are checked by this inspector.");
                 }
             }
         }
         catch (Exception ex)
         {
             // Retention inspection is best-effort; never block engine startup.
-            Trace.TraceWarning(
-                $"[BLite GDPR WP3] Retention check skipped due to unexpected error: {ex.Message}");
+            TraceWarning(GdprStrictInspectionError,
+                $"GdprMode.Strict: retention inspection skipped due to an unexpected error ({ex.GetType().Name}: {ex.Message}). " +
+                "Verify that BLite.Core and its source-generated mappers are compatible.");
         }
     }
 
