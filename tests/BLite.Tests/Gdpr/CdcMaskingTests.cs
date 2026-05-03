@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using BLite.Bson;
 using BLite.Core;
@@ -23,8 +22,6 @@ public class CdcMaskingTests : IDisposable
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"blite_cdcmask_{Guid.NewGuid():N}.db");
         _db = new CdcMaskingTestContext(_dbPath);
-        // Reset per-test so warning-log tests are deterministic.
-        DynamicChangeStreamObservable.ResetWarnedCollections();
     }
 
     public void Dispose()
@@ -293,7 +290,7 @@ public class CdcMaskingTests : IDisposable
         try
         {
             var dynamicDbPath = Path.Combine(Path.GetTempPath(), $"blite_cdcmask_dyn_{Guid.NewGuid():N}.db");
-            using var engine = new BLiteEngine(dynamicDbPath);
+            var engine = new BLiteEngine(dynamicDbPath);
             try
             {
                 var col = engine.GetOrCreateCollection("dyntest");

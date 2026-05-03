@@ -57,8 +57,10 @@ internal static class PayloadMask
     /// Returns a new document where each personal-data key is replaced by
     /// <paramref name="maskValue"/>, or removed entirely when
     /// <paramref name="maskValue"/>.IsNull is <see langword="true"/>.
-    /// Field-name resolution maps <see cref="PersonalDataField.PropertyName"/> to the
-    /// BSON field name via <c>ToLowerInvariant()</c> (the BLite convention for BSON keys).
+    /// Field-name resolution uses <see cref="PersonalDataField.BsonFieldName"/> when
+    /// available (set by the source generator from <c>[BsonProperty]</c>,
+    /// <c>[JsonPropertyName]</c>, or <c>[Column]</c> attributes), falling back to
+    /// <c>PropertyName.ToLowerInvariant()</c>.
     /// </summary>
     public static BsonDocument MaskPersonalData(
         BsonDocument doc,
@@ -68,9 +70,10 @@ internal static class PayloadMask
         ConcurrentDictionary<ushort, string> reverseKeyMap)
     {
         // Build a case-insensitive set of BSON field names to mask.
+        // Prefer BsonFieldName (the actual serialized key) over the CLR property name.
         var maskKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in fields)
-            maskKeys.Add(f.PropertyName.ToLowerInvariant());
+            maskKeys.Add(f.BsonFieldName ?? f.PropertyName.ToLowerInvariant());
 
         var builder = new BsonDocumentBuilder(keyMap, reverseKeyMap);
         foreach (var (name, value) in doc.EnumerateFields())

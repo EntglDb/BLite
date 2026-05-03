@@ -9,6 +9,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -19,10 +20,13 @@ namespace BLite.Core.CDC;
 
 internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEvent>
 {
-    // Tracks collections for which the GDPR "no personal-data metadata" advisory has
-    // already been logged at least once, to satisfy the "log exactly once per collection"
-    // requirement from WP2.
-    private static readonly ConcurrentDictionary<string, byte> _warnedCollections = new(StringComparer.OrdinalIgnoreCase);
+    // Per-dispatcher set of collection names for which the GDPR advisory has been logged.
+    // ConditionalWeakTable scopes the dict to the dispatcher's lifetime — entries are freed
+    // when the engine (and its dispatcher) is GC'd, preventing unbounded growth in
+    // long-running processes that create many engines or many distinct collection names.
+    // There is no cross-engine collision because each engine has its own dispatcher instance.
+    private static readonly ConditionalWeakTable<ChangeStreamDispatcher, ConcurrentDictionary<string, byte>>
+        _warnedByDispatcher = new();
 
     private readonly ChangeStreamDispatcher _dispatcher;
     private readonly string _collectionName;
@@ -43,19 +47,26 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
         _keyReverseMap = keyReverseMap;
         _forwardKeyMap = forwardKeyMap;
 
-        // Log an advisory once per collection when CapturePayload=true and
-        // RevealPersonalData=false: personal-data metadata is unavailable for
-        // dynamic (untyped) collections, so rule 2 of the masking pipeline is a no-op.
-        // The consumer must use ExcludeFields / IncludeOnlyFields explicitly.
-        if (options.CapturePayload && !options.RevealPersonalData
-            && _warnedCollections.TryAdd(collectionName, 0))
+        // Log an advisory once per (dispatcher, collection) pair when:
+        //   • CapturePayload = true
+        //   • RevealPersonalData = false (masking would normally apply)
+        //   • IncludeOnlyFields = null (the allowlist already gives explicit intent;
+        //     no advisory is needed when the consumer has listed specific fields)
+        // The advisory informs consumers that rule 2 of the masking pipeline is a no-op
+        // for dynamic (untyped) collections, and they should use ExcludeFields /
+        // IncludeOnlyFields explicitly to restrict the payload.
+        if (options.CapturePayload && !options.RevealPersonalData && options.IncludeOnlyFields == null)
         {
-            Trace.TraceInformation(
-                "[BLite CDC] Dynamic collection '{0}' is watched with CapturePayload=true and " +
-                "RevealPersonalData=false, but no personal-data metadata is available for " +
-                "untyped collections (rule 2 of the masking pipeline is a no-op). " +
-                "Use ExcludeFields or IncludeOnlyFields to restrict the payload explicitly.",
-                collectionName);
+            var warned = _warnedByDispatcher.GetOrCreateValue(dispatcher);
+            if (warned.TryAdd(collectionName, 0))
+            {
+                Trace.TraceInformation(
+                    "[BLite CDC] Dynamic collection '{0}' is watched with CapturePayload=true and " +
+                    "RevealPersonalData=false, but no personal-data metadata is available for " +
+                    "untyped collections (rule 2 of the masking pipeline is a no-op). " +
+                    "Use ExcludeFields or IncludeOnlyFields to restrict the payload explicitly.",
+                    collectionName);
+            }
         }
     }
 
@@ -153,10 +164,4 @@ internal sealed class DynamicChangeStreamObservable : IObservable<BsonChangeEven
             _writer.TryComplete();
         }
     }
-
-    /// <summary>
-    /// Clears the static "already warned" collection set.
-    /// For testing only — ensures each test sees a fresh warning state.
-    /// </summary>
-    internal static void ResetWarnedCollections() => _warnedCollections.Clear();
 }

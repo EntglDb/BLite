@@ -2108,6 +2108,13 @@ public sealed class DynamicCollection : IDisposable
         new DynamicChangeStreamObservable(
             _storage.EnsureCdc(), _collectionName, options ?? new WatchOptions(), _storage.GetKeyReverseMap(), _storage.GetKeyMap());
 
+    /// <summary>
+    /// Subscribes to a live stream of changes on this collection.
+    /// Equivalent to <c>Watch(new WatchOptions { CapturePayload = capturePayload })</c>.
+    /// </summary>
+    public IObservable<BsonChangeEvent> Watch(bool capturePayload)
+        => Watch(new WatchOptions { CapturePayload = capturePayload });
+
     private Task NotifyCdcAsync(OperationType type, BsonId id, ITransaction transaction, ReadOnlyMemory<byte> docData = default)
     {
         if (_storage.Cdc == null) return Task.CompletedTask;

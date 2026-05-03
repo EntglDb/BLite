@@ -55,7 +55,8 @@ namespace BLite.SourceGenerators.Gdpr
                         $"        new global::BLite.Core.GDPR.PersonalDataField(" +
                         $"\"{p.Name}\", " +
                         $"global::BLite.Core.GDPR.DataSensitivity.{sensitivity}, " +
-                        $"IsTimestamp: {isTs}),");
+                        $"IsTimestamp: {isTs}, " +
+                        $"BsonFieldName: \"{p.BsonFieldName}\"),");
                 }
                 sb.AppendLine("    };");
             }

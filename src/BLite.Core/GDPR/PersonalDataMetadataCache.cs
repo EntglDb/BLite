@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using System.Text.Json.Serialization;
 
 namespace BLite.Core.GDPR;
 
@@ -44,7 +45,8 @@ internal static class PersonalDataMetadataCache
                 var attr = prop.GetCustomAttribute<PersonalDataAttribute>(inherit: true);
                 if (attr is null) continue;
 
-                list.Add(new PersonalDataField(prop.Name, attr.Sensitivity, attr.IsTimestamp));
+                var bsonFieldName = ResolveBsonFieldName(prop);
+                list.Add(new PersonalDataField(prop.Name, attr.Sensitivity, attr.IsTimestamp, bsonFieldName));
             }
         }
         catch
@@ -56,6 +58,37 @@ internal static class PersonalDataMetadataCache
         return list.Count == 0
             ? Array.Empty<PersonalDataField>()
             : list.AsReadOnly();
+    }
+
+    /// <summary>
+    /// Resolves the BSON field name for a property using the same priority order as the
+    /// BLite source generator: <c>[JsonPropertyName]</c> first, then <c>[Column]</c> (resolved
+    /// by attribute name to avoid a hard dependency on DataAnnotations), then
+    /// <c>PropertyName.ToLowerInvariant()</c>.
+    /// </summary>
+    private static string ResolveBsonFieldName(PropertyInfo prop)
+    {
+        // [JsonPropertyName("bsonkey")] — System.Text.Json (always available)
+        var jsonAttr = prop.GetCustomAttribute<JsonPropertyNameAttribute>(inherit: true);
+        if (jsonAttr?.Name is { Length: > 0 } jsonName)
+            return jsonName;
+
+        // [Column("bsonkey")] — System.ComponentModel.DataAnnotations.Schema
+        // Look up by type name to avoid adding a package reference.
+        foreach (var customAttr in prop.GetCustomAttributes(inherit: true))
+        {
+            if (customAttr.GetType().FullName == "System.ComponentModel.DataAnnotations.Schema.ColumnAttribute")
+            {
+                // ColumnAttribute.Name is a public string property
+                var nameProp = customAttr.GetType().GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
+                if (nameProp?.GetValue(customAttr) is string colName && colName.Length > 0)
+                    return colName;
+                break;
+            }
+        }
+
+        // BLite default: property name lowercased
+        return prop.Name.ToLowerInvariant();
     }
 
     /// <summary>
