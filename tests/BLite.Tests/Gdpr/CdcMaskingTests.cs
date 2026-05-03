@@ -292,8 +292,8 @@ public class CdcMaskingTests : IDisposable
         Trace.Listeners.Add(listener);
         try
         {
-            var dbPath2 = Path.Combine(Path.GetTempPath(), $"blite_cdcmask_dyn_{Guid.NewGuid():N}.db");
-            using var engine = new BLiteEngine(dbPath2);
+            var dynamicDbPath = Path.Combine(Path.GetTempPath(), $"blite_cdcmask_dyn_{Guid.NewGuid():N}.db");
+            using var engine = new BLiteEngine(dynamicDbPath);
             try
             {
                 var col = engine.GetOrCreateCollection("dyntest");
@@ -329,9 +329,9 @@ public class CdcMaskingTests : IDisposable
             finally
             {
                 engine.Dispose();
-                if (File.Exists(dbPath2)) File.Delete(dbPath2);
-                var wal2 = Path.ChangeExtension(dbPath2, ".wal");
-                if (File.Exists(wal2)) File.Delete(wal2);
+                if (File.Exists(dynamicDbPath)) File.Delete(dynamicDbPath);
+                var dynamicWal = Path.ChangeExtension(dynamicDbPath, ".wal");
+                if (File.Exists(dynamicWal)) File.Delete(dynamicWal);
             }
         }
         finally
