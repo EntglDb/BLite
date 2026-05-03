@@ -3502,20 +3502,79 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Subscribes to a change stream that notifies observers of changes to the collection.
     /// </summary>
-    /// <remarks>The returned observable emits events as changes are detected in the collection. Observers can
-    /// subscribe to receive real-time updates. The behavior of the event payload depends on the value of the
-    /// capturePayload parameter.</remarks>
-    /// <param name="capturePayload">true to include the full payload of changed documents in each event; otherwise, false to include only metadata
-    /// about the change. The default is false.</param>
-    /// <returns>An observable sequence of change stream events for the collection. Subscribers receive notifications as changes
-    /// occur.</returns>
-    /// <exception cref="InvalidOperationException">Thrown if change data capture (CDC) is not initialized for the storage.</exception>
-    public IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload = false)
+    /// <remarks>
+    /// The returned observable emits events as changes are detected in the collection.
+    /// When <see cref="WatchOptions.CapturePayload"/> is <see langword="true"/>, personal-data
+    /// fields (annotated with <c>[PersonalData]</c> or registered via <c>HasPersonalData</c>)
+    /// are masked by default (<c>RevealPersonalData</c> defaults to <see langword="false"/>).
+    /// </remarks>
+    /// <param name="options">
+    /// Controls payload capture and GDPR masking behaviour. Pass <see langword="null"/> (or
+    /// omit the argument) to use the default — no payload, GDPR-safe masking if payload is
+    /// later enabled.
+    /// </param>
+    /// <returns>An observable sequence of change stream events for the collection.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if CDC is not initialized for the storage.</exception>
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "Watch resolves personal-data fields via PersonalDataResolver which uses reflection.")]
+    public IObservable<ChangeStreamEvent<TId, T>> Watch(WatchOptions? options = null)
     {
         if (_storage.Cdc == null) throw new InvalidOperationException("CDC is not initialized.");
 
-        return new ChangeStreamObservable<TId, T>(_storage.Cdc, _collectionName, capturePayload, _mapper, _storage.GetKeyReverseMap());
+        var opts = options ?? new WatchOptions();
+
+        // Defensively copy the field lists so that mutations to the caller's collection
+        // after Watch() returns do not affect the registered masking policy.
+        // Only copy when the lists are non-empty (ExcludeFields) or non-null and non-empty
+        // (IncludeOnlyFields) to avoid unnecessary allocation for the common case.
+        var needsCopy = opts.ExcludeFields.Count > 0 || (opts.IncludeOnlyFields?.Count ?? 0) > 0;
+        var safeOpts = needsCopy
+            ? new WatchOptions
+            {
+                CapturePayload = opts.CapturePayload,
+                RevealPersonalData = opts.RevealPersonalData,
+                PersonalDataMaskValue = opts.PersonalDataMaskValue,
+                ExcludeFields = opts.ExcludeFields.Count > 0
+                    ? Array.AsReadOnly(opts.ExcludeFields.ToArray())
+                    : Array.Empty<string>(),
+                IncludeOnlyFields = opts.IncludeOnlyFields?.Count > 0
+                    ? Array.AsReadOnly(opts.IncludeOnlyFields.ToArray())
+                    : null
+            }
+            : opts;
+
+        // Resolve personal-data fields once at Watch() time and cache on the observable
+        // so the dispatch path is O(personalFields) per event, not O(types) per event.
+        // Skip the reflection work entirely when CapturePayload is false — the field list
+        // is irrelevant for metadata-only events.
+        var personalDataFields = safeOpts.CapturePayload
+            ? BLite.Core.GDPR.PersonalDataResolver.Resolve(typeof(T))
+            : Array.Empty<BLite.Core.GDPR.PersonalDataField>();
+
+        return new ChangeStreamObservable<TId, T>(
+            _storage.Cdc,
+            _collectionName,
+            safeOpts,
+            _mapper,
+            _storage.GetKeyReverseMap(),
+            _storage.GetFrozenKeyMap(),
+            personalDataFields);
     }
+
+    /// <summary>
+    /// Subscribes to a change stream that notifies observers of changes to the collection.
+    /// </summary>
+    /// <param name="capturePayload">
+    /// When <see langword="true"/>, each event includes the full BSON payload of the changed
+    /// document (after applying GDPR masking rules). When <see langword="false"/> (default),
+    /// only metadata is included.
+    /// </param>
+    /// <returns>An observable sequence of change stream events for the collection.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if CDC is not initialized for the storage.</exception>
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "Watch resolves personal-data fields via PersonalDataResolver which uses reflection.")]
+    public IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload)
+        => Watch(new WatchOptions { CapturePayload = capturePayload });
 
     private Task NotifyCdc(OperationType type, TId id, ITransaction transaction, ReadOnlyMemory<byte> docData = default)
     {

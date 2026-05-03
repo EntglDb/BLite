@@ -196,7 +196,16 @@ public interface IDocumentCollection<TId, T> where T : class
 
     // ── Change Data Capture (local engine only; remote throws NotSupportedException) ───
 
-    IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload = false);
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "Watch resolves personal-data fields via PersonalDataResolver which uses reflection.")]
+    IObservable<ChangeStreamEvent<TId, T>> Watch(WatchOptions? options = null);
+
+    /// <summary>
+    /// Subscribes to a change stream. Equivalent to <c>Watch(new WatchOptions { CapturePayload = capturePayload })</c>.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "Watch resolves personal-data fields via PersonalDataResolver which uses reflection.")]
+    IObservable<ChangeStreamEvent<TId, T>> Watch(bool capturePayload);
 }
 
 /// <summary>

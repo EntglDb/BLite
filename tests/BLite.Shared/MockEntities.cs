@@ -908,7 +908,7 @@ namespace BLite.Shared
     }
 
     /// <summary>
-    /// Entity with properties of a closed generic class type.
+    /// Entity with GenericWrapper properties for source-generator feature tests.
     /// </summary>
     public class EntityWithGenericProperty
     {
@@ -917,5 +917,23 @@ namespace BLite.Shared
 
         public GenericWrapper<string> StringWrapper { get; set; } = new();
         public GenericWrapper<int> IntWrapper { get; set; } = new();
+    }
+
+    // ── GDPR / CDC masking test entities ─────────────────────────────────────
+
+    /// <summary>
+    /// Entity used by <c>CdcMaskingTests</c> to exercise WP2 CDC field masking.
+    /// <c>Email</c> is annotated with <c>[PersonalData]</c> and is the field that should
+    /// be masked by default when <see cref="BLite.Core.CDC.WatchOptions.RevealPersonalData"/>
+    /// is <see langword="false"/>.
+    /// </summary>
+    public class GdprPerson
+    {
+        public int Id { get; set; }
+
+        [BLite.Core.GDPR.PersonalData]
+        public string Email { get; set; } = "";
+
+        public string Name { get; set; } = "";
     }
 }

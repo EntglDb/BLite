@@ -2097,13 +2097,23 @@ public sealed class DynamicCollection : IDisposable
     /// Subscribes to a live stream of changes on this collection.
     /// Calling this method initializes CDC for the underlying storage engine.
     /// </summary>
-    /// <param name="capturePayload">
-    /// When <c>true</c>, each event includes the full BSON payload of the changed document.
-    /// When <c>false</c>, only metadata (ID, operation type, timestamps) is included.
+    /// <param name="options">
+    /// Controls payload capture and GDPR masking behaviour. Pass <see langword="null"/> (or
+    /// omit the argument) to use the default — no payload.
+    /// Personal-data masking (rule 2) is always a no-op for dynamic collections because
+    /// no type metadata is available; use <see cref="WatchOptions.ExcludeFields"/> or
+    /// <see cref="WatchOptions.IncludeOnlyFields"/> to restrict the payload explicitly.
     /// </param>
-    public IObservable<BsonChangeEvent> Watch(bool capturePayload = false) =>
+    public IObservable<BsonChangeEvent> Watch(WatchOptions? options = null) =>
         new DynamicChangeStreamObservable(
-            _storage.EnsureCdc(), _collectionName, capturePayload, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
+            _storage.EnsureCdc(), _collectionName, options ?? new WatchOptions(), _storage.GetKeyReverseMap(), _storage.GetKeyMap());
+
+    /// <summary>
+    /// Subscribes to a live stream of changes on this collection.
+    /// Equivalent to <c>Watch(new WatchOptions { CapturePayload = capturePayload })</c>.
+    /// </summary>
+    public IObservable<BsonChangeEvent> Watch(bool capturePayload)
+        => Watch(new WatchOptions { CapturePayload = capturePayload });
 
     private Task NotifyCdcAsync(OperationType type, BsonId id, ITransaction transaction, ReadOnlyMemory<byte> docData = default)
     {
