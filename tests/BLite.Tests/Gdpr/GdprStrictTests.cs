@@ -212,30 +212,29 @@ public class GdprStrictTests : IDisposable
     /// Strict mode with a collection that has <c>[PersonalData]</c> fields but no
     /// retention policy must emit a warning with EventId
     /// <c>GdprStrictRetentionWarning</c> (9004).
-    /// The test relies on the reflection-based <c>PersonalDataResolver</c> recognising
+    /// The test relies on the reflection-based <c>PersonalDataResolver</c> recognizing
     /// the <c>[PersonalData]</c> attribute on <see cref="GdprPerson.Email"/>.
     /// </summary>
     [Fact]
     public void GdprStrict_PersonalDataWithoutRetention_EmitsRetentionWarning()
     {
+        const string collectionName = "gdprpeople";
         var path = TempDb();
         var crypto = new CryptoOptions("gdpr-strict-test-passphrase");
         var kvOpts = new BLiteKvOptions { DefaultGdprMode = GdprMode.Strict };
 
-        // Create an engine and a collection for GdprPerson.
-        // The reflection cache must be populated before the validator runs, so we
-        // create the collection in a separate engine first, then re-open under Strict.
+        // Create the collection in a non-Strict engine first so the catalog entry
+        // exists when the Strict engine re-opens the same file.
         using (var seed = new BLiteEngine(path, crypto))
         {
-            var col = seed.GetOrCreateCollection("gdprpeople");
-            // Ensure the collection is persisted in the catalog.
+            seed.GetOrCreateCollection(collectionName);
         }
 
-        // Warm up the PersonalDataResolver collection cache for "gdprpeople".
+        // Warm up the PersonalDataResolver collection cache for the collection.
         // ResolveByCollectionName uses the generated mapper (source-gen) or reflection.
         // GdprPerson.Email carries [PersonalData] so the cache should produce ≥1 field
         // after the assembly scan. We trigger the scan here to avoid timing issues.
-        var fields = PersonalDataResolver.ResolveByCollectionName("gdprpeople");
+        var fields = PersonalDataResolver.ResolveByCollectionName(collectionName);
         // Note: if the source generator has not emitted a mapper for GdprPerson,
         // the reflection fallback is used but requires a mapper with CollectionNameStatic.
         // In that case the test gracefully degrades and skips the assertion.

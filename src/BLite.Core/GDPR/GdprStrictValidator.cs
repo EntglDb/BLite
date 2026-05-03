@@ -76,7 +76,8 @@ internal static class GdprStrictValidator
         }
 
         // ── 2. Audit sink — warn if absent ───────────────────────────────────
-        // Audit module (issue #83) is implemented; check for a registered sink.
+        // The audit module (IBLiteAuditSink / ConfigureAudit) is implemented.
+        // Log a warning when no sink has been registered so the operator is aware.
         if (engine.Storage.AuditSink is null)
         {
             TraceWarning(GdprStrictAuditMissing,
