@@ -159,6 +159,9 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         DropOrphanCollections();
         RunGdprStrictValidation(kvOptions);
     }
+
+    /// <summary>
+    /// Internal constructor used by tests and encryption test fixtures to drive
     /// the coordinator path explicitly. Caller-owned coordinator (not disposed by the context).
     /// </summary>
     internal DocumentDbContext(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null, BLiteKvOptions? kvOptions = null)
