@@ -3525,7 +3525,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         // Defensively copy the field lists so that mutations to the caller's collection
         // after Watch() returns do not affect the registered masking policy.
-        var safeOpts = opts.ExcludeFields.Count > 0 || opts.IncludeOnlyFields != null
+        // Only copy when the lists are non-empty (ExcludeFields) or non-null and non-empty
+        // (IncludeOnlyFields) to avoid unnecessary allocation for the common case.
+        var needsCopy = opts.ExcludeFields.Count > 0 || (opts.IncludeOnlyFields?.Count ?? 0) > 0;
+        var safeOpts = needsCopy
             ? new WatchOptions
             {
                 CapturePayload = opts.CapturePayload,
@@ -3534,7 +3537,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 ExcludeFields = opts.ExcludeFields.Count > 0
                     ? Array.AsReadOnly(opts.ExcludeFields.ToArray())
                     : Array.Empty<string>(),
-                IncludeOnlyFields = opts.IncludeOnlyFields != null
+                IncludeOnlyFields = opts.IncludeOnlyFields?.Count > 0
                     ? Array.AsReadOnly(opts.IncludeOnlyFields.ToArray())
                     : null
             }

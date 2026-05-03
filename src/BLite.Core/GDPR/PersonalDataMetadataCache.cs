@@ -60,6 +60,10 @@ internal static class PersonalDataMetadataCache
             : list.AsReadOnly();
     }
 
+    // Cache the ColumnAttribute.Name PropertyInfo once it's first found, so subsequent
+    // calls don't repeat the GetProperty reflection lookup.
+    private static PropertyInfo? s_columnNameProp;
+
     /// <summary>
     /// Resolves the BSON field name for a property using the same priority order as the
     /// BLite source generator: <c>[JsonPropertyName]</c> first, then <c>[Column]</c> (resolved
@@ -79,9 +83,9 @@ internal static class PersonalDataMetadataCache
         {
             if (customAttr.GetType().FullName == "System.ComponentModel.DataAnnotations.Schema.ColumnAttribute")
             {
-                // ColumnAttribute.Name is a public string property
-                var nameProp = customAttr.GetType().GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
-                if (nameProp?.GetValue(customAttr) is string colName && colName.Length > 0)
+                // Lazily resolve and cache ColumnAttribute.Name PropertyInfo.
+                s_columnNameProp ??= customAttr.GetType().GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
+                if (s_columnNameProp?.GetValue(customAttr) is string colName && colName.Length > 0)
                     return colName;
                 break;
             }

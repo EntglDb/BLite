@@ -290,7 +290,7 @@ public class CdcMaskingTests : IDisposable
         try
         {
             var dynamicDbPath = Path.Combine(Path.GetTempPath(), $"blite_cdcmask_dyn_{Guid.NewGuid():N}.db");
-            var engine = new BLiteEngine(dynamicDbPath);
+            using var engine = new BLiteEngine(dynamicDbPath);
             try
             {
                 var col = engine.GetOrCreateCollection("dyntest");
@@ -325,7 +325,6 @@ public class CdcMaskingTests : IDisposable
             }
             finally
             {
-                engine.Dispose();
                 if (File.Exists(dynamicDbPath)) File.Delete(dynamicDbPath);
                 var dynamicWal = Path.ChangeExtension(dynamicDbPath, ".wal");
                 if (File.Exists(dynamicWal)) File.Delete(dynamicWal);
