@@ -152,7 +152,7 @@ If a consumed surface does not yet exist (e.g., audit sink, retention), the WP *
 Every WP ships with tests in `tests/BLite.Tests/Gdpr/`:
 
 - WP1: ≥ 15 tests covering attribute discovery, subject query roundtrip, inspection of empty/populated/encrypted databases.
-- WP2: ≥ 8 tests covering exclude/include/both options across CDC payload paths.
+- WP2: ≥ 8 tests covering personal-data default masking (the GDPR-safe default), opt-in `RevealPersonalData`, custom `PersonalDataMaskValue` (including `BsonValue.Null` = drop), `ExcludeFields`, `IncludeOnlyFields` (allowlist wins, allowlisted personal-data fields delivered in clear), and dynamic-stream no-op.
 - WP3: ≥ 6 tests covering strict-mode startup throw, warn, and successful happy path.
 - WP4: not applicable (docs).
 
@@ -192,10 +192,12 @@ The complete set of files introduced by the GDPR plan, by WP. Agents must not cr
 
 | Path | Change |
 |---|---|
-| `src/BLite.Core/CDC/WatchOptions.cs` | **modify** — add `ExcludeFields` and `IncludeOnlyFields` properties |
-| `src/BLite.Core/CDC/ChangeStreamDispatcher.cs` | **modify** — apply mask when capturing payload |
-| `src/BLite.Core/GDPR/PayloadMask.cs` | new `internal static class` — pure BSON projection helper |
-| `tests/BLite.Tests/Gdpr/CdcMaskingTests.cs` | new |
+| `src/BLite.Core/CDC/WatchOptions.cs` | **modify** — add `ExcludeFields`, `IncludeOnlyFields`, `RevealPersonalData` (default `false`), `PersonalDataMaskValue` (default `"***"`) |
+| `src/BLite.Core/CDC/ChangeStreamObservable.cs` | **modify** — capture the resolved personal-data field list at `Watch(...)` time and forward the masking policy to the dispatcher |
+| `src/BLite.Core/CDC/DynamicChangeStreamObservable.cs` | **modify** — same plumbing for dynamic streams; resolved personal-data list is empty (untyped) |
+| `src/BLite.Core/CDC/ChangeStreamDispatcher.cs` | **modify** — apply the four-step masking pipeline (§4.4) when capturing payload |
+| `src/BLite.Core/GDPR/PayloadMask.cs` | new `internal static class` — pure BSON projection helpers (`Allowlist`, `Blocklist`, `MaskPersonalData`) |
+| `tests/BLite.Tests/Gdpr/CdcMaskingTests.cs` | new — ≥ 8 tests covering personal-data default mask, opt-in reveal, allowlist override, custom mask value (incl. `BsonValue.Null` = drop), exclude, dynamic-stream no-op |
 
 ### WP3 — GdprMode.Strict
 
@@ -321,19 +323,43 @@ namespace BLite.Core.CDC;
 
 public sealed class WatchOptions
 {
+    /// <summary>When false (default), CDC delivers metadata only. When true, the dispatcher captures the BSON payload and applies the masking rules below.</summary>
     public bool CapturePayload { get; init; } = false;
+
+    /// <summary>
+    /// When true and <see cref="CapturePayload"/> is also true, fields annotated <see cref="BLite.Core.GDPR.PersonalDataAttribute"/>
+    /// (or registered via <c>HasPersonalData(...)</c>) are emitted **in clear**. When false (default), every personal-data field of the
+    /// watched collection's entity type is replaced with <see cref="PersonalDataMaskValue"/> on the cloned payload before dispatch.
+    /// This is the GDPR-safe default: the consumer must explicitly opt in to see personal data on the change stream.
+    /// </summary>
+    public bool RevealPersonalData { get; init; } = false;
+
+    /// <summary>
+    /// Replacement value used for personal-data fields when <see cref="RevealPersonalData"/> is false.
+    /// Default: <c>BsonValue.FromString("***")</c>. Set to <see cref="BsonValue.Null"/> to drop instead of mask.
+    /// </summary>
+    public BsonValue PersonalDataMaskValue { get; init; } = BsonValue.FromString("***");
+
+    /// <summary>Extra keys to remove from the cloned payload, in addition to the personal-data masking. Ignored when <see cref="IncludeOnlyFields"/> is non-null.</summary>
     public IReadOnlyList<string> ExcludeFields { get; init; } = Array.Empty<string>();
+
+    /// <summary>If non-null, the dispatched payload contains **only** these keys (allowlist). Wins over <see cref="ExcludeFields"/> and over the personal-data masking: if a personal-data field is on this allowlist it will be emitted in clear regardless of <see cref="RevealPersonalData"/>.</summary>
     public IReadOnlyList<string>? IncludeOnlyFields { get; init; }
 }
 ```
 
 **Masking rules (apply in this order, on a clone of the payload, only when `CapturePayload == true`):**
 
-1. If `IncludeOnlyFields` is non-null: produce a new `BsonDocument` containing only those keys (allowlist wins; `ExcludeFields` is ignored if both are set).
-2. Else if `ExcludeFields` is non-empty: remove those keys from the cloned document.
-3. Else: deliver the cloned document unchanged.
+1. If `IncludeOnlyFields` is non-null: produce a new `BsonDocument` containing only those keys (allowlist wins; both `ExcludeFields` and personal-data masking are skipped — the consumer has explicitly stated which fields they want, and that statement is authoritative).
+2. Else if `RevealPersonalData == false` and the watched collection has resolvable personal-data metadata (`PersonalDataResolver.Resolve(entityType)` returns a non-empty list): for each personal-data property name `P`, replace `clone[P]` with `PersonalDataMaskValue` (or remove the key if `PersonalDataMaskValue` is `BsonValue.Null`). Field-name resolution mirrors the existing mapper (the BSON key generated by the source generator / reflection fallback, **not** the CLR property name).
+3. Then, if `ExcludeFields` is non-empty: remove those keys from the cloned document.
+4. Else (after rules 2 and 3 have run, or if rule 2 did not apply): deliver the cloned document.
 
-If `CapturePayload == false`, both fields are irrelevant and CDC dispatch behaves exactly as today.
+For **dynamic / untyped collections** (no registered entity type, e.g. `DynamicChangeStreamObservable`), there is no personal-data metadata to resolve — rule 2 is a no-op and the consumer is expected to use `ExcludeFields` / `IncludeOnlyFields` explicitly. The dispatcher logs a single `info`-level event the first time a dynamic collection is watched with `CapturePayload = true` and `RevealPersonalData = false` to make this fact discoverable.
+
+If `CapturePayload == false`, all four masking fields are irrelevant and CDC dispatch behaves exactly as today (metadata-only event).
+
+**Default summary (the GDPR-safe path):** `new WatchOptions { CapturePayload = true }` — without setting anything else — masks every `[PersonalData]` field of the watched typed collection automatically. The user must say `RevealPersonalData = true` (or list the field in `IncludeOnlyFields`) to see clear values.
 
 ### 4.5 GdprMode.Strict (Art. 25)
 
@@ -465,27 +491,39 @@ WP4 (DPIA docs)
 
 **GDPR article:** 5(1)(c).  
 **GitHub issue:** rewrite of #90.  
-**Estimate:** 1 day.
+**Estimate:** 1–2 days.
+
+**Design intent.** During `Watch(...)` the consumer must be able to **explicitly** decide whether personal-data fields are delivered in clear or masked. The default is GDPR-safe: personal data is **masked**. The user opts in to see clear values via `RevealPersonalData = true` or by listing the specific field in `IncludeOnlyFields`.
 
 #### A. Tasks
 
-1. Add `ExcludeFields` and `IncludeOnlyFields` to `WatchOptions` (§4.4). Defaults: empty array, null.
-2. In the CDC dispatch path (the same code that today handles `CapturePayload == true`), apply the masking rules from §4.4 on a **clone** of the BSON document before notifying observers.
-3. Add `internal static class PayloadMask` with two methods: `Allowlist(BsonDocument doc, IReadOnlyList<string> keep)` and `Blocklist(BsonDocument doc, IReadOnlyList<string> remove)`. Both return a new `BsonDocument`.
-4. Tests: round-trip every combination (none, exclude only, include only, both — allowlist must win).
+1. Add `ExcludeFields`, `IncludeOnlyFields`, `RevealPersonalData`, `PersonalDataMaskValue` to `WatchOptions` (§4.4). Defaults: empty array; null; **false**; `BsonValue.FromString("***")`.
+2. Plumb the new fields end-to-end: `WatchOptions` → `ChangeStreamObservable` / `DynamicChangeStreamObservable` (carry the resolved personal-data field list and the mask value alongside `_capturePayload`) → `ChangeStreamDispatcher.Subscribe(...)` (extend the signature additively, or wrap the four masking inputs in a small `internal readonly record struct PayloadMaskingPolicy`).
+3. In the CDC dispatch path (the same code that today handles `CapturePayload == true`), apply the masking rules from §4.4 on a **clone** of the BSON document before notifying observers. The clone happens once per dispatch, regardless of how many observers are subscribed; per-observer policies are evaluated against that clone.
+4. Add `internal static class PayloadMask` with three methods, all returning a new `BsonDocument`:
+   - `Allowlist(BsonDocument doc, IReadOnlyList<string> keep)`
+   - `Blocklist(BsonDocument doc, IReadOnlyList<string> remove)`
+   - `MaskPersonalData(BsonDocument doc, IReadOnlyList<PersonalDataField> fields, BsonValue maskValue)` — replaces each personal-data key with `maskValue`, or removes the key when `maskValue.IsNull`.
+5. Resolve the personal-data field list once, at `Watch(...)` time, via `PersonalDataResolver.Resolve(entityType)` (WP1). Cache it on the observable so the dispatch path is O(personalFields) per event, not O(types) per event. For dynamic / untyped collections the list is empty and rule 2 of §4.4 is a no-op.
+6. Tests (≥ 8): round-trip every combination across both typed and dynamic streams — `CapturePayload = false`, `RevealPersonalData = true`, `RevealPersonalData = false` with one / many `[PersonalData]` fields, custom `PersonalDataMaskValue` (string and `BsonValue.Null`), `ExcludeFields` only, `IncludeOnlyFields` only (asserting that an allowlisted personal-data field IS emitted in clear), `IncludeOnlyFields` + `ExcludeFields` (allowlist wins), and a regression test that `CapturePayload = false` is byte-identical to today.
 
 #### B. Acceptance criteria
 
 - With `CapturePayload = false`, observers receive the same payload they receive today (a regression test must lock this in).
-- With `CapturePayload = true` and `ExcludeFields = ["Email"]`, the dispatched document does not contain key `Email` and other keys are unchanged.
+- With `CapturePayload = true` and **no other options set**, watching a typed collection whose entity has `[PersonalData] string Email` delivers a document where `Email == "***"` and all other keys are unchanged. The default behavior is GDPR-safe without any user configuration.
+- With `CapturePayload = true` and `RevealPersonalData = true`, every personal-data field is delivered in clear (only `ExcludeFields` / `IncludeOnlyFields` still apply).
+- With `CapturePayload = true`, `RevealPersonalData = false`, and `PersonalDataMaskValue = BsonValue.Null`, personal-data keys are **removed** from the cloned document instead of masked.
+- With `CapturePayload = true` and `IncludeOnlyFields = ["Email"]`, the dispatched document contains only `Email` **in clear**, regardless of `RevealPersonalData` (the allowlist is the consumer's authoritative statement of intent).
 - With both `IncludeOnlyFields` and `ExcludeFields` set, the allowlist wins and `ExcludeFields` is ignored (documented in XMLDoc).
+- For a dynamic collection (no registered entity type) with `CapturePayload = true` and `RevealPersonalData = false`, the dispatched document is unchanged (no metadata available) and a single info-level log is emitted on the first such subscription per collection.
 - The original in-memory page buffer is never mutated; assert via reference equality on the source page bytes after dispatch.
 
 #### C. Do-not-touch
 
 - Do not modify the storage page format.
-- Do not modify CDC subscription/transport.
-- Do not introduce a new options class — extend `WatchOptions` only.
+- Do not modify CDC subscription transport (`Channel<T>`, `IObservable<T>`).
+- Do not introduce a new public options class — extend `WatchOptions` only. The internal `PayloadMaskingPolicy` record struct (if introduced in task 2) stays `internal`.
+- Do not call `PersonalDataResolver.Resolve(entityType)` on the hot dispatch path — resolve once at `Watch(...)` time and cache on the observable.
 
 ---
 
