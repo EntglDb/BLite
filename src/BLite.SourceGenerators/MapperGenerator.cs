@@ -1093,6 +1093,12 @@ public readonly struct BLiteDiagnostic
                 }
             }
 
+            // Analyze OnModelCreating for HasPersonalData
+            if (onModelCreating != null)
+            {
+                Gdpr.PersonalDataAnalyzer.HarvestFromModelBuilder(onModelCreating, info.Entities, semanticModel);
+            }
+
             // Analyze properties to find DocumentCollection<TId, TEntity> or IDocumentCollection<TId, TEntity>
             var properties = classSymbol.GetMembers().OfType<IPropertySymbol>();
             foreach (var prop in properties)

@@ -44,6 +44,13 @@ namespace System.Diagnostics.CodeAnalysis
         public RequiresUnreferencedCodeAttribute(string message) => Message = message;
         public string Message { get; }
     }
+
+    [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+    internal sealed class UnconditionalSuppressMessageAttribute : Attribute
+    {
+        public UnconditionalSuppressMessageAttribute(string category, string checkId) { }
+        public string? Justification { get; set; }
+    }
 }
 
 namespace System.Collections.Generic

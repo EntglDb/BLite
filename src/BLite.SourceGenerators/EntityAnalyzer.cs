@@ -278,6 +278,9 @@ namespace BLite.SourceGenerators
                     }
 
                     properties.Add(propInfo);
+
+                    // PersonalData attribute harvest
+                    Gdpr.PersonalDataAnalyzer.HarvestFromProperty(prop, propInfo);
                 }
                 
                 currentType = currentType.BaseType;

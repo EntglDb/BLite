@@ -44,6 +44,12 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// </summary>
     internal StorageEngine Storage => _storage;
 
+    /// <summary>
+    /// The absolute path of the main database file, or <see langword="null"/> for in-memory engines.
+    /// Consumed by <c>GdprEngineExtensions.InspectDatabase</c>; read-only, no new backing field.
+    /// </summary>
+    internal string? DatabasePath => _databasePath;
+
     #region Constructors
 
     /// <summary>
