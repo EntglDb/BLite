@@ -25,7 +25,11 @@ internal static class PersonalDataResolver
         _collectionCache = new(StringComparer.OrdinalIgnoreCase);
 
     // Guard to run the full-assembly scan at most once.
-    private static int _collectionCacheBuilt;
+    // Double-checked locking: _collectionCacheBuilt flips to true only AFTER the scan
+    // has fully populated _collectionCache, so concurrent callers either see false
+    // (and serialize on _collectionCacheLock) or true (and observe a complete cache).
+    private static volatile bool _collectionCacheBuilt;
+    private static readonly object _collectionCacheLock = new();
 
     /// <summary>
     /// Resolves personal-data fields for <paramref name="entityType"/>.
@@ -70,33 +74,40 @@ internal static class PersonalDataResolver
         Justification = "Reflection fallback; source-gen path is preferred and AOT-safe.")]
     private static void EnsureCollectionCacheBuilt()
     {
-        if (System.Threading.Interlocked.Exchange(ref _collectionCacheBuilt, 1) != 0)
-            return;
+        if (_collectionCacheBuilt) return;
 
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        lock (_collectionCacheLock)
         {
-            foreach (var type in TryGetTypes(assembly))
+            if (_collectionCacheBuilt) return;
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                if (type.Name is null || !type.Name.EndsWith("Mapper", StringComparison.Ordinal)) continue;
-                if (type.Namespace is null || !type.Namespace.EndsWith("_Mappers", StringComparison.Ordinal)) continue;
+                foreach (var type in TryGetTypes(assembly))
+                {
+                    if (type.Name is null || !type.Name.EndsWith("Mapper", StringComparison.Ordinal)) continue;
+                    if (type.Namespace is null || !type.Namespace.EndsWith("_Mappers", StringComparison.Ordinal)) continue;
 
-                var colNameProp = type.GetProperty("CollectionNameStatic",
-                    BindingFlags.Public | BindingFlags.Static);
-                if (colNameProp?.PropertyType != typeof(string)) continue;
+                    var colNameProp = type.GetProperty("CollectionNameStatic",
+                        BindingFlags.Public | BindingFlags.Static);
+                    if (colNameProp?.PropertyType != typeof(string)) continue;
 
-                var fieldsProp = type.GetProperty("PersonalDataFields",
-                    BindingFlags.Public | BindingFlags.Static);
-                if (fieldsProp is null) continue;
-                if (!typeof(IReadOnlyList<PersonalDataField>).IsAssignableFrom(fieldsProp.PropertyType)) continue;
+                    var fieldsProp = type.GetProperty("PersonalDataFields",
+                        BindingFlags.Public | BindingFlags.Static);
+                    if (fieldsProp is null) continue;
+                    if (!typeof(IReadOnlyList<PersonalDataField>).IsAssignableFrom(fieldsProp.PropertyType)) continue;
 
-                var colName = colNameProp.GetValue(null) as string;
-                if (string.IsNullOrEmpty(colName)) continue;
+                    var colName = colNameProp.GetValue(null) as string;
+                    if (string.IsNullOrEmpty(colName)) continue;
 
-                var fields = fieldsProp.GetValue(null) as IReadOnlyList<PersonalDataField>
-                    ?? Array.Empty<PersonalDataField>();
+                    var fields = fieldsProp.GetValue(null) as IReadOnlyList<PersonalDataField>
+                        ?? Array.Empty<PersonalDataField>();
 
-                _collectionCache.TryAdd(colName, fields);
+                    _collectionCache.TryAdd(colName, fields);
+                }
             }
+
+            // Publish only after the cache is fully populated.
+            _collectionCacheBuilt = true;
         }
     }
 

@@ -1,6 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using BLite.Bson;
-using BLite.Core.Storage;
 
 namespace BLite.Core.GDPR;
 
@@ -10,6 +8,9 @@ namespace BLite.Core.GDPR;
 ///   <item><see cref="ExportSubjectDataAsync"/> — Art. 15 (access) + Art. 20 (portability).</item>
 ///   <item><see cref="InspectDatabase"/> — Art. 30 record-of-processing snapshot.</item>
 /// </list>
+/// A symmetric surface is provided on <see cref="DocumentDbContext"/> via
+/// <see cref="GdprDocumentDbContextExtensions"/> so both engine-first (dynamic) and
+/// code-first (typed) flows expose an identical GDPR API.
 /// </summary>
 public static class GdprEngineExtensions
 {
@@ -30,7 +31,7 @@ public static class GdprEngineExtensions
     ///   <item>Never throws for a missing field — returns an empty report instead.</item>
     /// </list>
     /// </remarks>
-    public static async Task<SubjectDataReport> ExportSubjectDataAsync(
+    public static Task<SubjectDataReport> ExportSubjectDataAsync(
         this BLiteEngine engine,
         SubjectQuery query,
         CancellationToken ct = default)
@@ -39,42 +40,12 @@ public static class GdprEngineExtensions
         if (query is null) throw new ArgumentNullException(nameof(query));
 
         var targetCollections = query.Collections ?? engine.ListCollections();
-        var fieldName  = query.FieldName;
-        var fieldValue = query.FieldValue;
 
-        var dataByCollection = new Dictionary<string, IReadOnlyList<BsonDocument>>(
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var colName in targetCollections)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var matched = new List<BsonDocument>();
-
-            await foreach (var doc in engine.FindAsync(colName,
-                d => FieldMatches(d, fieldName, fieldValue), ct).ConfigureAwait(false))
-            {
-                ct.ThrowIfCancellationRequested();
-                matched.Add(doc);
-            }
-
-            dataByCollection[colName] = matched;
-        }
-
-        return new SubjectDataReport
-        {
-            GeneratedAt        = DateTimeOffset.UtcNow,
-            SubjectId          = fieldValue,
-            DataByCollection   = dataByCollection,
-        };
-    }
-
-    private static bool FieldMatches(BsonDocument doc, string fieldName, BsonValue target)
-    {
-        if (!doc.TryGetValue(fieldName, out var val))
-            return false;
-
-        return val == target;
+        return GdprPrimitives.ExportSubjectDataAsync(
+            targetCollections,
+            scanFunc: (name, predicate, c) => engine.FindAsync(name, predicate, c),
+            query,
+            ct);
     }
 
     // ── Database inspection (Art. 30) ────────────────────────────────────────
@@ -90,81 +61,6 @@ public static class GdprEngineExtensions
     {
         if (engine is null) throw new ArgumentNullException(nameof(engine));
 
-        var storage = engine.Storage;
-        var isEncrypted    = storage.IsEncryptionEnabled;
-        var isAuditEnabled = storage.AuditSink is not null;
-        var isMultiFile    = storage.IsMultiFileMode;
-
-        var allMetadata = engine.GetAllCollectionsMetadata();
-        var collections = new List<CollectionInfo>(allMetadata.Count);
-
-        foreach (var meta in allMetadata)
-        {
-            var indexes = new List<IndexInfo>(meta.Indexes.Count);
-            foreach (var idx in meta.Indexes)
-            {
-                indexes.Add(new IndexInfo(
-                    Name: idx.Name,
-                    Fields: idx.PropertyPaths,
-                    IsUnique: idx.IsUnique,
-                    IsEncrypted: isEncrypted));
-            }
-
-            var storageSizeBytes = ComputeStorageSizeBytes(storage, meta.Name);
-            var retentionInfo    = RetentionPolicyInfo.From(meta.GeneralRetentionPolicy);
-
-            // Resolve personal-data field names via source-gen metadata (or reflection fallback).
-            var pdFields = PersonalDataResolver.ResolveByCollectionName(meta.Name);
-            var pdFieldNames = pdFields.Count == 0
-                ? Array.Empty<string>()
-                : pdFields.Select(f => f.PropertyName).ToArray();
-
-            collections.Add(new CollectionInfo(
-                Name: meta.Name,
-                DocumentCount: 0,   // not computed in catalog-only snapshot; use FindAllAsync for a precise count
-                StorageSizeBytes: storageSizeBytes,
-                Indexes: indexes,
-                PersonalDataFields: pdFieldNames,
-                RetentionPolicy: retentionInfo));
-        }
-
-        var dbPath = GetDatabasePath(engine);
-
-        return new DatabaseInspectionReport(
-            DatabasePath: dbPath,
-            IsEncrypted: isEncrypted,
-            IsAuditEnabled: isAuditEnabled,
-            IsMultiFileMode: isMultiFile,
-            Collections: collections);
-    }
-
-    private static long ComputeStorageSizeBytes(StorageEngine storage, string collectionName)
-    {
-        var dir = storage.CollectionDataDirectory;
-        if (dir is not null)
-        {
-            // Multi-file mode: each collection has a deterministic filename
-            // <collectionName.toLower()>.db in the collection-data directory.
-            var filePath = Path.Combine(dir, collectionName.ToLowerInvariant() + ".db");
-            try
-            {
-                var fi = new FileInfo(filePath);
-                return fi.Exists ? fi.Length : 0;
-            }
-            catch { return 0; }
-        }
-
-        // Single-file mode: no easy per-collection size; return 0 (catalog-only, no IO).
-        return 0;
-    }
-
-    private static string GetDatabasePath(BLiteEngine engine)
-    {
-        // BLiteEngine exposes _databasePath via the internal Storage property indirectly.
-        // For the inspection report we use the storage's filesystem path when available.
-        // The field is internal-only; we obtain it via the BackupAsync path convention
-        // by checking the backup plan, which is fragile. Instead, expose it safely:
-        // BLiteEngine._databasePath is private, so we use a dedicated internal property.
-        return engine.DatabasePath ?? string.Empty;
+        return GdprPrimitives.InspectDatabase(engine.Storage, engine.DatabasePath);
     }
 }

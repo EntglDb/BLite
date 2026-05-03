@@ -580,12 +580,14 @@ public class SecurityMetricsTests : IDisposable
     public void EnableMetrics_WithDiagnosticSource_DoesNotThrow()
     {
         var path2 = Path.Combine(Path.GetTempPath(), $"blite_diag_{Guid.NewGuid():N}.db");
-        using var engine2 = new BLiteEngine(path2);
         try
         {
-            // Should not throw on any supported target framework.
-            engine2.EnableMetrics(new BLite.Core.Metrics.MetricsOptions { EnableDiagnosticSource = true });
-            Assert.NotNull(engine2.GetMetrics());
+            using (var engine2 = new BLiteEngine(path2))
+            {
+                // Should not throw on any supported target framework.
+                engine2.EnableMetrics(new BLite.Core.Metrics.MetricsOptions { EnableDiagnosticSource = true });
+                Assert.NotNull(engine2.GetMetrics());
+            } // engine2 disposed here, before file deletion
         }
         finally
         {

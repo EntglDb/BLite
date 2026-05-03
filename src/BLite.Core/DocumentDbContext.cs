@@ -25,6 +25,11 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     internal readonly CDC.ChangeStreamDispatcher _cdc;
     private readonly FreeSpaceIndexProvider _freeSpaceIndexes;
     private readonly BLiteKvStore _kvStore;
+    // Optional: stores the file-system path supplied to path-based constructors.
+    // Null when the context was built from a pre-existing StorageEngine (e.g. in-memory).
+    // Surfaced via the internal Storage / DatabaseFilePath / FreeSpaceIndexes accessors
+    // consumed by GDPR extension methods (GdprDocumentDbContextExtensions).
+    private readonly string? _databasePath;
     // Owned coordinator (master-key/HKDF mode). Disposed with the context so that the
     // master key bytes are zeroed when the context is disposed.
     private readonly EncryptionCoordinator? _ownedCoordinator;
@@ -78,6 +83,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentNullException(nameof(databasePath));
 
+        _databasePath = databasePath;
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
         _storage.RegisterCdc(_cdc);
@@ -117,6 +123,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             throw new ArgumentNullException(nameof(databasePath));
         if (crypto == null)
             throw new ArgumentNullException(nameof(crypto));
+
+        _databasePath = databasePath;
 
         PageFileConfig config;
         if (crypto.IsMasterKeyMode)
@@ -208,6 +216,24 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             return _kvStore;
         }
     }
+
+    // ── Internal accessors used by GDPR extensions (BLite.Core.GDPR) ─────────
+    // These mirror the equivalent surface on BLiteEngine so that
+    // ExportSubjectDataAsync / InspectDatabase work uniformly on both
+    // engine-first (BLiteEngine) and code-first (DocumentDbContext) flows.
+
+    /// <summary>The underlying storage engine. Internal-only.</summary>
+    internal StorageEngine Storage => _storage;
+
+    /// <summary>
+    /// File-system path supplied to a path-based constructor, or <see langword="null"/>
+    /// when the context was built from a pre-existing <see cref="StorageEngine"/>
+    /// (e.g. in-memory backends).
+    /// </summary>
+    internal string? DatabaseFilePath => _databasePath;
+
+    /// <summary>Free-space index provider used to instantiate transient dynamic collections.</summary>
+    internal FreeSpaceIndexProvider FreeSpaceIndexes => _freeSpaceIndexes;
 
     /// <summary>
     /// Opens a new isolated session backed by this context's storage engine.
