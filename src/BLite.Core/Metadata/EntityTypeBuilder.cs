@@ -6,6 +6,17 @@ using BLite.Core.Retention;
 namespace BLite.Core.Metadata;
 
 /// <summary>
+/// Non-generic accessor that allows callers holding an untyped reference to an
+/// <see cref="EntityTypeBuilder{T}"/> (e.g. <c>DocumentDbContext._model</c>) to read
+/// the resolved <see cref="GdprMode"/> without reflection.
+/// </summary>
+internal interface IGdprModeAccessor
+{
+    /// <summary>The GDPR enforcement mode configured for this entity type.</summary>
+    GdprMode GdprMode { get; }
+}
+
+/// <summary>
 /// Fluent API for configuring entity mappings and indexes.
 /// 
 /// Configuration Priority (highest to lowest):
@@ -16,7 +27,7 @@ namespace BLite.Core.Metadata;
 /// The Source Generator analyzes OnModelCreating and embeds all configurations into the generated mapper.
 /// At runtime, only indexes are applied dynamically from ModelBuilder.
 /// </summary>
-public class EntityTypeBuilder<T> where T : class
+public class EntityTypeBuilder<T> : IGdprModeAccessor where T : class
 {
     public string? CollectionName { get; private set; }
     public List<IndexBuilder<T>> Indexes { get; } = new();

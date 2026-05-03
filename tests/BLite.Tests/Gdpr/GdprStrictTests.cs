@@ -249,4 +249,142 @@ public class GdprStrictTests : IDisposable
         Assert.True(HasWarning(GdprStrictValidator.GdprStrictRetentionWarning),
             "Expected GdprStrictRetentionWarning (9004) for a [PersonalData] collection without retention.");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DocumentDbContext path (WP3 — typed code-first surface)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Minimal context subclasses used by the DocumentDbContext tests below.
+
+    /// <summary>
+    /// Plain context with no model configuration (engine-wide GdprMode from kvOptions).
+    /// </summary>
+    private sealed class PlainStrictDbContext : DocumentDbContext
+    {
+        public PlainStrictDbContext(string path, BLiteKvOptions? kvOptions = null)
+            : base(path, kvOptions ?? BLiteKvOptions.Default) { }
+
+        public PlainStrictDbContext(string path, CryptoOptions crypto, BLiteKvOptions? kvOptions = null)
+            : base(path, crypto, kvOptions) { }
+    }
+
+    /// <summary>
+    /// Context that sets <see cref="GdprMode.Strict"/> on <see cref="GdprPerson"/> via
+    /// <see cref="EntityTypeBuilderGdprExtensions.HasGdprMode{T}"/> — no engine-wide default.
+    /// </summary>
+    private sealed class PerEntityStrictDbContext : DocumentDbContext
+    {
+        public PerEntityStrictDbContext(string path)
+            : base(path) { }
+
+        public PerEntityStrictDbContext(string path, CryptoOptions crypto)
+            : base(path, crypto) { }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<GdprPerson>().HasGdprMode(GdprMode.Strict);
+    }
+
+    // ── Test 11: DocumentDbContext — GdprMode.None baseline ──────────────────
+
+    /// <summary>
+    /// A <see cref="DocumentDbContext"/> with no GDPR configuration must emit zero
+    /// validator log lines (backwards-compatible baseline).
+    /// </summary>
+    [Fact]
+    public void DbContext_GdprModeNone_ZeroLogLines()
+    {
+        var path = TempDb();
+        using var ctx = new PlainStrictDbContext(path);
+
+        for (int id = 9001; id <= 9007; id++)
+            Assert.False(HasWarning(id), $"EventId {id} must NOT be emitted for GdprMode.None");
+    }
+
+    // ── Test 12: DocumentDbContext — engine-wide Strict + no encryption → throw ─
+
+    /// <summary>
+    /// <see cref="DocumentDbContext"/> constructed with
+    /// <see cref="BLiteKvOptions.DefaultGdprMode"/> = Strict and no encryption must
+    /// throw <see cref="InvalidOperationException"/> containing "GdprMode.Strict requires".
+    /// </summary>
+    [Fact]
+    public void DbContext_EngineWideStrict_NoEncryption_Throws()
+    {
+        var path = TempDb();
+        var kvOpts = new BLiteKvOptions { DefaultGdprMode = GdprMode.Strict };
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new PlainStrictDbContext(path, kvOpts));
+
+        Assert.Contains("GdprMode.Strict requires", ex.Message);
+    }
+
+    // ── Test 13: DocumentDbContext — engine-wide Strict + encryption → starts ──
+
+    /// <summary>
+    /// <see cref="DocumentDbContext"/> with engine-wide Strict and encryption must start
+    /// without throwing.
+    /// </summary>
+    [Fact]
+    public void DbContext_EngineWideStrict_WithEncryption_DoesNotThrow()
+    {
+        var path = TempDb();
+        var crypto = new CryptoOptions("ctx-strict-test");
+        var kvOpts = new BLiteKvOptions { DefaultGdprMode = GdprMode.Strict };
+
+        using var ctx = new PlainStrictDbContext(path, crypto, kvOpts);
+        Assert.NotNull(ctx);
+    }
+
+    // ── Test 14: DocumentDbContext — per-entity Strict + no encryption → throw ─
+
+    /// <summary>
+    /// A context that sets <c>HasGdprMode(Strict)</c> on an entity type without encryption
+    /// must throw, just as the engine-wide Strict path does.
+    /// </summary>
+    [Fact]
+    public void DbContext_PerEntityStrict_NoEncryption_Throws()
+    {
+        var path = TempDb();
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new PerEntityStrictDbContext(path));
+
+        Assert.Contains("GdprMode.Strict requires", ex.Message);
+    }
+
+    // ── Test 15: DocumentDbContext — per-entity Strict + encryption → starts ──
+
+    /// <summary>
+    /// A context with per-entity <c>HasGdprMode(Strict)</c> and encryption configured
+    /// must start without throwing.
+    /// </summary>
+    [Fact]
+    public void DbContext_PerEntityStrict_WithEncryption_DoesNotThrow()
+    {
+        var path = TempDb();
+        var crypto = new CryptoOptions("ctx-per-entity-strict-test");
+
+        using var ctx = new PerEntityStrictDbContext(path, crypto);
+        Assert.NotNull(ctx);
+    }
+
+    // ── Test 16: DocumentDbContext — Strict emits audit-missing warning ────────
+
+    /// <summary>
+    /// Strict <see cref="DocumentDbContext"/> with encryption but no audit sink must
+    /// emit <c>GdprStrictAuditMissing</c> (EventId 9002).
+    /// </summary>
+    [Fact]
+    public void DbContext_Strict_NoAudit_EmitsAuditMissingWarning()
+    {
+        var path = TempDb();
+        var crypto = new CryptoOptions("ctx-strict-audit-test");
+        var kvOpts = new BLiteKvOptions { DefaultGdprMode = GdprMode.Strict };
+
+        using var ctx = new PlainStrictDbContext(path, crypto, kvOpts);
+
+        Assert.True(HasWarning(GdprStrictValidator.GdprStrictAuditMissing),
+            "Expected GdprStrictAuditMissing (9002) from DocumentDbContext with no audit sink.");
+    }
 }

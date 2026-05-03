@@ -90,7 +90,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _storage = new StorageEngine(databasePath, config);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        GDPR.GdprStrictValidator.Apply(this, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
+        GDPR.GdprStrictValidator.Apply(_storage, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
     }
 
     /// <summary>
@@ -151,7 +151,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _storage = new StorageEngine(databasePath, config);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        GDPR.GdprStrictValidator.Apply(this, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
+        GDPR.GdprStrictValidator.Apply(_storage, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
     }
 
     /// <summary>
@@ -176,7 +176,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _storage = new StorageEngine(databasePath, config);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        GDPR.GdprStrictValidator.Apply(this, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
+        GDPR.GdprStrictValidator.Apply(_storage, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
     }
 
 
@@ -186,7 +186,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _databasePath = null;
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        GDPR.GdprStrictValidator.Apply(this, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
+        GDPR.GdprStrictValidator.Apply(_storage, kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None, kvOptions);
     }
 
     /// <summary>

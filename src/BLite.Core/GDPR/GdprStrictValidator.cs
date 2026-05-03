@@ -1,12 +1,14 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using BLite.Core.KeyValue;
+using BLite.Core.Storage;
 
 namespace BLite.Core.GDPR;
 
 /// <summary>
 /// Privacy-by-default validation for <see cref="GdprMode.Strict"/> (Art. 25).
-/// Invoked at <see cref="BLite.Core.BLiteEngine"/> construction end, once per engine.
+/// Invoked at <see cref="BLite.Core.BLiteEngine"/> and <see cref="BLite.Core.DocumentDbContext"/>
+/// construction end, once per engine/context.
 /// When <see cref="GdprMode"/> is <see cref="GdprMode.None"/> the method returns
 /// immediately and emits zero log lines.
 /// </summary>
@@ -44,12 +46,17 @@ internal static class GdprStrictValidator
     // ── Entry point ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Validates a Strict-mode engine configuration.
+    /// Validates a Strict-mode engine or context configuration.
+    /// Accepts the <see cref="StorageEngine"/> directly so the same logic covers both
+    /// <see cref="BLite.Core.BLiteEngine"/> (dynamic path) and
+    /// <see cref="BLite.Core.DocumentDbContext"/> (typed path).
     /// </summary>
-    /// <param name="engine">The engine being constructed.</param>
+    /// <param name="storage">The storage engine backing the engine or context.</param>
     /// <param name="resolvedMode">
-    /// The resolved GDPR mode for this engine (engine-wide default from
-    /// <see cref="BLiteKvOptions.DefaultGdprMode"/>).
+    /// The resolved GDPR mode. For <see cref="BLite.Core.BLiteEngine"/> this equals
+    /// <see cref="BLiteKvOptions.DefaultGdprMode"/>. For
+    /// <see cref="BLite.Core.DocumentDbContext"/> callers should pass the effective mode
+    /// (engine-wide default OR the strictest per-collection mode from the model).
     /// </param>
     /// <param name="options">Engine key-value options.</param>
     /// <exception cref="InvalidOperationException">
@@ -59,7 +66,7 @@ internal static class GdprStrictValidator
     [UnconditionalSuppressMessage("Trimming", "IL2026",
         Justification = "PersonalDataResolver is a reflection fallback; source-gen path is preferred.")]
     internal static void Apply(
-        BLite.Core.BLiteEngine engine,
+        StorageEngine storage,
         GdprMode resolvedMode,
         BLiteKvOptions? options)
     {
@@ -67,18 +74,19 @@ internal static class GdprStrictValidator
             return;
 
         // ── 1. Encryption — required ─────────────────────────────────────────
-        if (!engine.Storage.IsEncryptionEnabled)
+        if (!storage.IsEncryptionEnabled)
         {
             throw new InvalidOperationException(
                 "GdprMode.Strict requires encryption to be configured. " +
-                "Supply a CryptoOptions or EncryptionCoordinator to the BLiteEngine constructor. " +
+                "Supply a CryptoOptions or EncryptionCoordinator to the BLiteEngine constructor " +
+                "or DocumentDbContext constructor. " +
                 $"(EventId {GdprStrictEncryptionMissing})");
         }
 
         // ── 2. Audit sink — warn if absent ───────────────────────────────────
         // The audit module (IBLiteAuditSink / ConfigureAudit) is implemented.
         // Log a warning when no sink has been registered so the operator is aware.
-        if (engine.Storage.AuditSink is null)
+        if (storage.AuditSink is null)
         {
             TraceWarning(GdprStrictAuditMissing,
                 "GdprMode.Strict: no audit sink is registered. " +
@@ -96,7 +104,7 @@ internal static class GdprStrictValidator
         // ── 4. Retention — warn per [PersonalData] collection without policy ──
         try
         {
-            foreach (var meta in engine.Storage.GetAllCollectionsMetadata())
+            foreach (var meta in storage.GetAllCollectionsMetadata())
             {
                 if (meta.GeneralRetentionPolicy is not null)
                     continue;   // retention is configured — OK

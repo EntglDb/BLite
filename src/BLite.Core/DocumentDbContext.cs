@@ -96,6 +96,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
         DropOrphanCollections();
+        RunGdprStrictValidation(kvOptions);
     }
 
     /// <summary>
@@ -156,10 +157,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
         DropOrphanCollections();
+        RunGdprStrictValidation(kvOptions);
     }
-
-    /// <summary>
-    /// Internal constructor used by tests and encryption test fixtures to drive
     /// the coordinator path explicitly. Caller-owned coordinator (not disposed by the context).
     /// </summary>
     internal DocumentDbContext(string databasePath, EncryptionCoordinator coordinator, PageFileConfig? baseConfig = null, BLiteKvOptions? kvOptions = null)
@@ -203,6 +202,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
         DropOrphanCollections();
+        RunGdprStrictValidation(kvOptions);
     }
 
     /// <summary>
@@ -316,6 +316,34 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             _storage.DeleteCollectionMetadata(metadata.Name);
             _storage.DropCollectionFile(metadata.Name);
         }
+    }
+
+    /// <summary>
+    /// Computes the effective GDPR mode for this context (engine-wide default or the
+    /// strictest per-entity mode registered in <see cref="OnModelCreating"/>) and
+    /// delegates to <see cref="GDPR.GdprStrictValidator.Apply"/>.
+    /// Called at the end of every real (non-parameterless) constructor.
+    /// </summary>
+    private void RunGdprStrictValidation(BLiteKvOptions? kvOptions)
+    {
+        // Engine-wide default.
+        var effectiveMode = kvOptions?.DefaultGdprMode ?? GDPR.GdprMode.None;
+
+        // Escalate to Strict if any entity in the model has HasGdprMode(Strict).
+        if (effectiveMode != GDPR.GdprMode.Strict && _model != null)
+        {
+            foreach (var builderObj in _model.Values)
+            {
+                if (builderObj is Metadata.IGdprModeAccessor accessor &&
+                    accessor.GdprMode == GDPR.GdprMode.Strict)
+                {
+                    effectiveMode = GDPR.GdprMode.Strict;
+                    break;
+                }
+            }
+        }
+
+        GDPR.GdprStrictValidator.Apply(_storage, effectiveMode, kvOptions);
     }
 
     private readonly IReadOnlyDictionary<Type, object> _model;
