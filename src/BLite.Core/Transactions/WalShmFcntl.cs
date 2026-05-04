@@ -4,14 +4,26 @@ using System.Runtime.InteropServices;
 namespace BLite.Core.Transactions;
 
 /// <summary>
-/// Native interop for <c>fcntl(F_OFD_SETLK)</c> / traditional <c>fcntl(F_SETLK)</c>
-/// byte-range locks on Unix-like platforms (Linux, macOS, Android, iOS), plus
-/// <c>kill(pid, 0)</c> for PID liveness checks. These primitives are auto-released by
-/// the kernel when the owning process dies, which is what makes the cross-process
-/// writer lock crash-safe.
+/// Native interop for byte-range file locks used as the cross-process WAL writer lock
+/// on all platforms:
+/// <list type="bullet">
+/// <item><description><b>Windows:</b> <c>LockFileEx</c> / <c>UnlockFileEx</c> — file-handle locks,
+/// thread-agnostic (can be released from any thread), auto-released by the OS when the
+/// owning process exits or its file handle is closed. A named <c>Mutex</c> is intentionally
+/// <em>not</em> used because Windows <c>Mutex</c> is thread-owned (only the acquiring thread
+/// may call <c>ReleaseMutex</c>) which is incompatible with <c>async/await</c> continuations
+/// that may resume on a different thread pool thread.</description></item>
+/// <item><description><b>Linux:</b> <c>fcntl(F_OFD_SETLK)</c> — open-file-description locks,
+/// owned by the file description rather than the process/thread, auto-released on close.</description></item>
+/// <item><description><b>macOS/iOS:</b> <c>fcntl(F_SETLK)</c> — traditional POSIX advisory
+/// locks (per-process at the kernel level). An in-process companion <c>SemaphoreSlim</c> keyed
+/// by the SHM path provides intra-process mutual exclusion because <c>F_SETLK</c> does not
+/// distinguish between handles within the same process.</description></item>
+/// </list>
 /// <para>
-/// On Windows this class is unused — see <see cref="WalSharedMemory"/> which uses a
-/// named <see cref="System.Threading.Mutex"/> in the <c>Local\</c> namespace instead.
+/// All platforms also use the in-process <c>SemaphoreSlim</c> companion lock so that two
+/// <see cref="WalSharedMemory"/> instances opened on the same file within a single process
+/// properly exclude each other.
 /// </para>
 /// <para>
 /// Implemented with <see cref="DllImportAttribute"/> rather than the source-generated
@@ -49,18 +61,20 @@ internal static class WalShmFcntl
 
     private const short SEEK_SET = 0;
 
+    // ── Windows LockFileEx flags ─────────────────────────────────────────────
+    private const uint LOCKFILE_EXCLUSIVE_LOCK   = 0x00000002u;
+    private const uint LOCKFILE_FAIL_IMMEDIATELY = 0x00000001u;
+
     // We lock a single byte at a fixed offset that does not overlap any real SHM data.
-    // POSIX/Linux allow locking bytes past EOF.
+    // POSIX/Linux allow locking bytes past EOF; LockFileEx on Windows also permits this.
     private const long WriterLockByteOffset = 1L << 30; // 1 GiB
 
     // In-process, per-SHM-path coordination. On macOS/iOS the kernel-level F_SETLK is
     // per-process, so two WalSharedMemory instances in the *same* process backed by
-    // the same SHM file would not exclude each other via fcntl alone. This dictionary
-    // holds one SemaphoreSlim per absolute SHM path; every TryAcquireWriteLock /
-    // ReleaseWriteLock pair acquires/releases this in addition to the OS call.
-    // On Linux F_OFD_SETLK already provides correct intra-process exclusion, but the
-    // extra in-process lock is cheap (~uncontended SemaphoreSlim) and harmless, so
-    // we use it on every Unix-like platform for uniform semantics.
+    // the same SHM file would not exclude each other via fcntl alone. On Windows,
+    // LockFileEx is similarly per-handle but within-process locking behaviour can vary
+    // by Windows version. We always acquire this in-process lock first on all platforms
+    // for uniform semantics and guaranteed intra-process exclusion.
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> s_localLocksByPath
         = new(StringComparer.Ordinal);
 
@@ -72,6 +86,8 @@ internal static class WalShmFcntl
         var key = System.IO.Path.GetFullPath(shmFile.Name);
         return s_localLocksByPath.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
     }
+
+    // ── Unix structs / imports ────────────────────────────────────────────────
 
     // struct flock layout differs between Linux glibc and macOS libc — both are covered below.
 
@@ -104,55 +120,114 @@ internal static class WalShmFcntl
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     public static extern int Kill(int pid, int sig);
 
+    // ── Windows LockFileEx structs / imports ─────────────────────────────────
+
+    // OVERLAPPED structure used by LockFileEx/UnlockFileEx. We only use the offset
+    // fields (OffsetLow/OffsetHigh) to specify which byte to lock; hEvent is null so
+    // LockFileEx blocks (or returns immediately with LOCKFILE_FAIL_IMMEDIATELY).
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OVERLAPPED
+    {
+        public UIntPtr Internal;
+        public UIntPtr InternalHigh;
+        public uint    OffsetLow;
+        public uint    OffsetHigh;
+        public IntPtr  hEvent;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool LockFileEx(
+        IntPtr hFile,
+        uint   dwFlags,
+        uint   dwReserved,
+        uint   nNumberOfBytesToLockLow,
+        uint   nNumberOfBytesToLockHigh,
+        ref    OVERLAPPED lpOverlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UnlockFileEx(
+        IntPtr hFile,
+        uint   dwReserved,
+        uint   nNumberOfBytesToLockLow,
+        uint   nNumberOfBytesToLockHigh,
+        ref    OVERLAPPED lpOverlapped);
+
+    // ── Public API ───────────────────────────────────────────────────────────
+
     /// <summary>
-    /// Polls <c>fcntl(F_OFD_SETLK)</c> (Linux) / <c>fcntl(F_SETLK)</c> (macOS) with
-    /// exponential back-off until the lock is acquired or <paramref name="timeoutMs"/>
-    /// elapses. Returns <c>true</c> on success, <c>false</c> on timeout.
+    /// Acquires an exclusive byte-range lock on the SHM backing file with exponential
+    /// back-off until the lock is acquired or <paramref name="timeoutMs"/> elapses.
+    /// Returns <c>true</c> on success, <c>false</c> on timeout.
     /// <para>
-    /// Throws <see cref="IOException"/> if <c>fcntl</c> returns an unexpected errno
-    /// (i.e. anything other than <c>EACCES</c> / <c>EAGAIN</c>) — those indicate a
-    /// programming bug (bad fd, bad struct) rather than lock contention, and silently
-    /// retrying would just hide them as bogus timeouts.
+    /// On Windows: uses <c>LockFileEx</c> (thread-agnostic, auto-released on process
+    /// death). On Linux: <c>fcntl(F_OFD_SETLK)</c>. On macOS: <c>fcntl(F_SETLK)</c>.
+    /// All platforms additionally hold an in-process <c>SemaphoreSlim</c> to handle
+    /// same-process multi-instance exclusion.
+    /// </para>
+    /// <para>
+    /// Throws <see cref="IOException"/> if the underlying syscall returns an unexpected
+    /// error code — that indicates a programming bug (bad fd/handle) rather than lock
+    /// contention, and silently retrying would hide it as a bogus timeout.
     /// </para>
     /// </summary>
     public static bool TryAcquireWriteLock(FileStream shmFile, int timeoutMs)
     {
         // Take the in-process lock first so two engines in the same process can't both
-        // succeed at the per-process F_SETLK on macOS. Mandatory pair with the release
-        // in ReleaseWriteLock.
+        // succeed at the OS-level lock. Mandatory pair with the release in ReleaseWriteLock.
         var localLock = GetLocalLock(shmFile);
         if (!localLock.Wait(timeoutMs <= 0 ? 0 : timeoutMs))
             return false;
 
-        // On Unix, SafeFileHandle wraps a raw int file descriptor — ToInt32() is the
-        // correct extraction. (It throws OverflowException on 64-bit values, which
-        // can never happen for real fds.)
-        int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
-
-        var deadline = timeoutMs <= 0
-            ? DateTime.UtcNow                                     // single-shot try
-            : DateTime.UtcNow.AddMilliseconds(timeoutMs);
-
-        int sleepMs = 1;
-        while (true)
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            int errno;
-            if (TrySetLock(fd, F_WRLCK, out errno)) return true;
-            if (!IsLockContentionErrno(errno))
+            var deadline = timeoutMs <= 0
+                ? DateTime.UtcNow
+                : DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            int sleepMs = 1;
+            while (true)
             {
-                // Real failure (EBADF, EINVAL, etc.) — release our in-process lock and
-                // surface the error rather than silently spinning until the timeout.
-                localLock.Release();
-                throw new IOException(
-                    $"fcntl(F_SETLK, F_WRLCK) failed with errno={errno} on '{shmFile.Name}'.");
+                if (TryLockFileEx(shmFile)) return true;
+                if (DateTime.UtcNow >= deadline)
+                {
+                    localLock.Release();
+                    return false;
+                }
+                Thread.Sleep(sleepMs);
+                if (sleepMs < 16) sleepMs *= 2;
             }
-            if (DateTime.UtcNow >= deadline)
+        }
+        else
+        {
+            // On Unix, SafeFileHandle wraps a raw int file descriptor — ToInt32() is the
+            // correct extraction. (It throws OverflowException on 64-bit values, which
+            // can never happen for real fds.)
+            int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
+
+            var deadline = timeoutMs <= 0
+                ? DateTime.UtcNow                                     // single-shot try
+                : DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+            int sleepMs = 1;
+            while (true)
             {
-                localLock.Release();
-                return false;
+                int errno;
+                if (TrySetLock(fd, F_WRLCK, out errno)) return true;
+                if (!IsLockContentionErrno(errno))
+                {
+                    // Real failure (EBADF, EINVAL, etc.) — release our in-process lock and
+                    // surface the error rather than silently spinning until the timeout.
+                    localLock.Release();
+                    throw new IOException(
+                        $"fcntl(F_SETLK, F_WRLCK) failed with errno={errno} on '{shmFile.Name}'.");
+                }
+                if (DateTime.UtcNow >= deadline)
+                {
+                    localLock.Release();
+                    return false;
+                }
+                Thread.Sleep(sleepMs);
+                if (sleepMs < 16) sleepMs *= 2; // exponential back-off, capped at 16 ms
             }
-            Thread.Sleep(sleepMs);
-            if (sleepMs < 16) sleepMs *= 2; // exponential back-off, capped at 16 ms
         }
     }
 
@@ -161,10 +236,18 @@ internal static class WalShmFcntl
     {
         try
         {
-            int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
-            // Unlock failures here are best-effort; surfacing them would mask the
-            // primary error path (e.g. dispose during shutdown).
-            TrySetLock(fd, F_UNLCK, out _);
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Unlock failures are best-effort; ignore them to avoid masking primary errors.
+                TryUnlockFileEx(shmFile);
+            }
+            else
+            {
+                int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
+                // Unlock failures here are best-effort; surfacing them would mask the
+                // primary error path (e.g. dispose during shutdown).
+                TrySetLock(fd, F_UNLCK, out _);
+            }
         }
         finally
         {
@@ -173,6 +256,42 @@ internal static class WalShmFcntl
             GetLocalLock(shmFile).Release();
         }
     }
+
+    // ── Windows helpers ──────────────────────────────────────────────────────
+
+    private static bool TryLockFileEx(FileStream shmFile)
+    {
+        var ov = new OVERLAPPED
+        {
+            OffsetLow  = (uint)(WriterLockByteOffset & 0xFFFFFFFF),
+            OffsetHigh = (uint)(WriterLockByteOffset >> 32),
+        };
+        // LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY → non-blocking try for one byte.
+        return LockFileEx(
+            shmFile.SafeFileHandle.DangerousGetHandle(),
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            dwReserved: 0,
+            nNumberOfBytesToLockLow: 1,
+            nNumberOfBytesToLockHigh: 0,
+            ref ov);
+    }
+
+    private static void TryUnlockFileEx(FileStream shmFile)
+    {
+        var ov = new OVERLAPPED
+        {
+            OffsetLow  = (uint)(WriterLockByteOffset & 0xFFFFFFFF),
+            OffsetHigh = (uint)(WriterLockByteOffset >> 32),
+        };
+        UnlockFileEx(
+            shmFile.SafeFileHandle.DangerousGetHandle(),
+            dwReserved: 0,
+            nNumberOfBytesToLockLow: 1,
+            nNumberOfBytesToLockHigh: 0,
+            ref ov);
+    }
+
+    // ── Unix helpers ─────────────────────────────────────────────────────────
 
     private static bool IsLockContentionErrno(int errno)
     {

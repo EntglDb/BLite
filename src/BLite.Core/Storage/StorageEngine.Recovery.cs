@@ -43,32 +43,69 @@ public sealed partial class StorageEngine
         var sw = _metrics != null ? Metrics.ValueStopwatch.StartNew() : default;
         try
         {
+            // Phase 6: Compute the safe upper boundary for this checkpoint run.
+            // In multi-process mode we must not flush WAL entries whose records are
+            // still within the read window of an active cross-process reader.  The SHM
+            // reader-slot array gives us the minimum offset any live reader registered;
+            // we only checkpoint entries whose WAL offset is at or below that boundary.
+            long safeOffset = long.MaxValue;
+            if (_shm != null)
+                safeOffset = Math.Min(_wal.GetCurrentSize(), _shm.GetMinReaderOffset());
+
             var snapshot = _walIndex.ToArray();
             if (snapshot.Length == 0) return;
 
+            // Build the set of entries that are safe to checkpoint.
+            var toCheckpoint = new List<KeyValuePair<uint, byte[]>>(snapshot.Length);
             foreach (var kvp in snapshot)
+            {
+                if (_shm != null && _walOffsets != null)
+                {
+                    // Only include entries whose WAL record is within the safe window.
+                    if (_walOffsets.TryGetValue(kvp.Key, out long entryOffset) && entryOffset > safeOffset)
+                        continue; // reader still needs this WAL record — skip for now
+                }
+                toCheckpoint.Add(kvp);
+            }
+
+            if (toCheckpoint.Count == 0) return;
+
+            foreach (var kvp in toCheckpoint)
                 GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
 
-            await _pageFile.FlushAsync(ct);
+            // Phase 6: Parallel flush in multi-file mode.
+            var flushTasks = new List<Task>();
+            flushTasks.Add(_pageFile.FlushAsync(ct));
             if (_indexFile != null)
-                await _indexFile.FlushAsync(ct);
+                flushTasks.Add(_indexFile.FlushAsync(ct));
             if (_collectionFiles != null)
             {
                 foreach (var lazy in _collectionFiles.Values)
-                    if (lazy.IsValueCreated) await lazy.Value.FlushAsync(ct);
+                    if (lazy.IsValueCreated) flushTasks.Add(lazy.Value.FlushAsync(ct));
             }
+            await Task.WhenAll(flushTasks).ConfigureAwait(false);
 
-            // Drain _walIndex entries that we successfully flushed to disk.
-            // Safe without _commitLock because:
-            //  - ConcurrentDictionary ops are thread-safe
-            //  - ReferenceEquals ensures we only remove entries we actually flushed;
-            //    a concurrent commit that updated the same page uses a different byte[]
-            //    reference, so the check fails and the new version is preserved.
-            foreach (var kvp in snapshot)
+            // Drain _walIndex (and _walOffsets) entries that we successfully flushed.
+            // Track the highest checkpointed WAL offset in the same loop (avoids a
+            // second O(n) pass over toCheckpoint).
+            // ReferenceEquals check ensures we only remove the exact version we flushed.
+            long maxCheckpointedOffset = 0;
+            foreach (var kvp in toCheckpoint)
             {
                 if (_walIndex.TryGetValue(kvp.Key, out var current) && ReferenceEquals(current, kvp.Value))
+                {
                     _walIndex.TryRemove(kvp.Key, out _);
+                    // Track max offset while removing from _walOffsets.
+                    if (_walOffsets != null && _walOffsets.TryRemove(kvp.Key, out long removedOffset)
+                        && removedOffset > maxCheckpointedOffset)
+                        maxCheckpointedOffset = removedOffset;
+                }
             }
+
+            // Update the SHM checkpointed offset to communicate to other processes how
+            // far the page files have been flushed.
+            if (_shm != null && maxCheckpointedOffset > 0)
+                _shm.WriteCheckpointedOffset(maxCheckpointedOffset);
 
             // Truncate WAL only when _walIndex is fully drained.
             // _commitLock is still needed here to prevent truncating while the
@@ -100,12 +137,53 @@ public sealed partial class StorageEngine
                     // Double-check: new commits may have promoted entries
                     // between our IsEmpty check and acquiring the lock.
                     if (_walIndex.IsEmpty)
+                    {
                         await _wal.TruncateAsync(ct);
+                        // Reset the SHM WAL index and end offset so other processes
+                        // know the WAL has been cleared (Phase 4 / Phase 6).
+                        if (_shm != null)
+                        {
+                            _shm.RebuildIndex(System.Array.Empty<(uint, long)>());
+                            _shm.WriteWalEndOffset(0);
+                            _shm.WriteCheckpointedOffset(0);
+                            Volatile.Write(ref _lastKnownWalEndOffset, 0);
+                        }
+                    }
                 }
                 finally
                 {
                     if (shmHeld) { try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ } }
                     _commitLock.Release();
+                }
+            }
+            else if (_shm != null && !_walIndex.IsEmpty)
+            {
+                // Partial checkpoint: rebuild the SHM hash table with only the remaining
+                // (not-yet-checkpointed) survivors so it doesn't contain stale offsets for
+                // pages that were just flushed to the page file.
+                // This must be done under _commitLock + SHM writer lock to avoid races.
+                if (_commitLock.Wait(0))
+                {
+                    bool shmHeld = false;
+                    try
+                    {
+                        shmHeld = _shm.TryAcquireWriterLock(_config.LockTimeout.WriteTimeoutMs);
+                        if (shmHeld)
+                        {
+                            var survivors = new List<(uint, long)>(_walIndex.Count);
+                            foreach (var kvp in _walIndex)
+                            {
+                                if (_walOffsets != null && _walOffsets.TryGetValue(kvp.Key, out long off))
+                                    survivors.Add((kvp.Key, off));
+                            }
+                            _shm.RebuildIndex(survivors);
+                        }
+                    }
+                    finally
+                    {
+                        if (shmHeld) { try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ } }
+                        _commitLock.Release();
+                    }
                 }
             }
         }

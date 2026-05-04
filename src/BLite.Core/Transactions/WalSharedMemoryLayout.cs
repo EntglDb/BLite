@@ -36,4 +36,51 @@ internal static class WalSharedMemoryLayout
     /// <c>[long ProcessId (8)][long MaxReadOffset (8)]</c>.
     /// </summary>
     public const int ReaderSlotSize = 16;
+
+    // ── WAL index hash table (Phase 4) ────────────────────────────────────────
+    //
+    // A single open-addressing hash table mapping uint pageId → long walByteOffset.
+    // Stored immediately after the reader slot array in the SHM file.
+    //
+    // Slot layout (16 bytes, 8-byte aligned):
+    //   [long walOffset (8B)] — 0 = empty sentinel; valid WAL Write records are always at offset > 0
+    //   [uint pageId    (4B)] — written AFTER walOffset to ensure happens-before ordering for readers
+    //   [uint reserved  (4B)]
+    //
+    // Write protocol (writer holds exclusive _commitLock + SHM writer lock):
+    //   1. Locate slot by linear probe from hash(pageId).
+    //   2. For new entries: Volatile.Write(walOffset) then Volatile.Write(pageId).
+    //   3. For updates (same pageId already present): Volatile.Write(walOffset) only.
+    //
+    // Read protocol (lock-free; concurrent with writer):
+    //   1. Probe from hash(pageId).
+    //   2. At each slot: Volatile.Read(walOffset); if 0 → stop (not found).
+    //   3.                Volatile.Read(pageId); if matches → return walOffset.
+    //   4. Otherwise probe next slot. Wrap-around terminates the search.
+    //
+    // A reader that races a write may see a stale offset or miss the entry entirely;
+    // Phase 7 (incremental WAL replay on BeginTransaction) corrects staleness before
+    // any read in a new transaction.
+
+    /// <summary>Number of hash table slots. Must be a power of two.</summary>
+    public const int WalIndexCapacity = 4096;
+
+    /// <summary>Size of one hash table slot in bytes.</summary>
+    public const int WalIndexSlotSize = 16;
+
+    /// <summary>Total bytes occupied by the WAL index hash table.</summary>
+    public const int WalIndexTableBytes = WalIndexCapacity * WalIndexSlotSize; // 65536 bytes
+
+    /// <summary>
+    /// Returns the byte offset within the SHM file where the WAL index hash table begins.
+    /// This is immediately after the reader slot array and depends on <paramref name="maxReaders"/>.
+    /// </summary>
+    public static int GetWalIndexOffset(int maxReaders) =>
+        HeaderSize + maxReaders * ReaderSlotSize;
+
+    /// <summary>
+    /// Returns the total SHM file size in bytes for the given <paramref name="maxReaders"/> count.
+    /// </summary>
+    public static int GetShmFileSize(int maxReaders) =>
+        GetWalIndexOffset(maxReaders) + WalIndexTableBytes;
 }

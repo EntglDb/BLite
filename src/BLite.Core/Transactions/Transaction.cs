@@ -20,6 +20,13 @@ public sealed class Transaction : ITransaction
     private TransactionState _state;
     private bool _disposed;
 
+    /// <summary>
+    /// Index of the reader slot in the <c>.wal-shm</c> file, or <c>-1</c> when no
+    /// slot was acquired (single-process mode, or all slots were full at begin time).
+    /// Released automatically in <see cref="Dispose"/>.
+    /// </summary>
+    internal int ShmReaderSlotIndex { get; set; } = -1;
+
     public Transaction(ulong transactionId, 
                        StorageEngine storage,
                        IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
@@ -164,8 +171,29 @@ public sealed class Transaction : ITransaction
 
         if (_state == TransactionState.Active || _state == TransactionState.Preparing)
         {
-            // Auto-rollback if not committed
-            RollbackAsync().GetAwaiter().GetResult();
+            // Auto-rollback if not committed. Wrapped in try/catch so that a rollback
+            // failure (e.g. WAL write timeout, WAL stream closed) does not prevent reader-
+            // slot release below, which must always run to avoid pinning GetMinReaderOffset().
+            // Rollback failures are best-effort: the WAL abort record is advisory and the
+            // WAL cache is already cleared synchronously inside RollbackTransactionAsync.
+            try
+            {
+                RollbackAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception)
+            {
+                // Intentionally swallowed: rollback is best-effort on Dispose.
+                // The WAL cache entry for this transaction was already removed;
+                // a missing abort record only delays WAL cleanup, not data integrity.
+            }
+        }
+
+        // Release the cross-process reader slot (Phase 5).
+        // Unconditionally reached even when rollback above threw.
+        if (ShmReaderSlotIndex >= 0)
+        {
+            _storage.ReleaseReaderSlot(ShmReaderSlotIndex);
+            ShmReaderSlotIndex = -1;
         }
 
         _disposed = true;

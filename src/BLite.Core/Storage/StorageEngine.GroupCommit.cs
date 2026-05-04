@@ -149,6 +149,15 @@ public sealed partial class StorageEngine
 
         try
         {
+            // In multi-process mode we record the WAL byte offset at the start of each
+            // Write record so the SHM hash table can map pageId → offset. We use
+            // WriteDataRecordAndGetOffsetAsync which atomically captures the position
+            // inside the WAL write lock, ensuring PrepareTransactionAsync callers that
+            // also write to the WAL (without _commitLock) cannot shift the position
+            // between the snapshot and the actual write.
+            var wal = (_shm != null) ? (_wal as Transactions.WriteAheadLog) : null;
+            var pageOffsets = wal != null ? new List<(uint pageId, long walOffset)>() : null;
+
             foreach (var commit in batch)
             {
                 if (commit.Pages == null || commit.Pages.IsEmpty)
@@ -160,7 +169,18 @@ public sealed partial class StorageEngine
                 {
                     await _wal.WriteBeginRecordAsync(commit.TransactionId).ConfigureAwait(false);
                     foreach (var (pageId, data) in commit.Pages)
-                        await _wal.WriteDataRecordAsync(commit.TransactionId, pageId, data).ConfigureAwait(false);
+                    {
+                        // When multi-process mode is active, use the offset-returning variant
+                        // so the record start offset is captured atomically inside the WAL
+                        // write lock, preventing concurrent PrepareTransactionAsync writers
+                        // from shifting the stream position between snapshot and write.
+                        // In single-process mode, fall back to the standard write.
+                        if (wal != null)
+                            pageOffsets!.Add((pageId, await wal.WriteDataRecordAndGetOffsetAsync(
+                                commit.TransactionId, pageId, data).ConfigureAwait(false)));
+                        else
+                            await _wal.WriteDataRecordAsync(commit.TransactionId, pageId, data).ConfigureAwait(false);
+                    }
                     await _wal.WriteCommitRecordAsync(commit.TransactionId).ConfigureAwait(false);
                 }
             }
@@ -179,12 +199,34 @@ public sealed partial class StorageEngine
                 }
             }
 
+            // Update cross-process WAL index: populate the SHM hash table and the
+            // in-process _walOffsets dict so the Phase-6 checkpoint can apply the
+            // GetMinReaderOffset() safe boundary per entry.
+            if (_shm != null && pageOffsets != null && pageOffsets.Count > 0)
+            {
+                _shm.UpdatePageOffsets(pageOffsets);
+                if (_walOffsets != null)
+                {
+                    foreach (var (pageId, walOffset) in pageOffsets)
+                        _walOffsets[pageId] = walOffset;
+                }
+            }
+
             // Publish the new WAL end offset to other processes so their readers /
             // checkpointers see a consistent view.
-            _shm?.AdvanceWalEndOffset(_wal.GetCurrentSize());
+            long newWalEnd = _wal.GetCurrentSize();
+            _shm?.AdvanceWalEndOffset(newWalEnd);
+
+            // Advance _lastKnownWalEndOffset so that the next BeginTransaction call on
+            // this engine does not redundantly replay WAL records that we just committed
+            // (they are already in _walIndex from the lines above). This is safe because
+            // we hold _commitLock + SHM writer lock: no concurrent writer can insert
+            // records between our last write and the position we record here.
+            if (_shm != null)
+                Volatile.Write(ref _lastKnownWalEndOffset, newWalEnd);
 
             // Check if checkpoint is needed, but defer until after releasing the lock
-            needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
+            needsCheckpoint = newWalEnd > MaxWalSize;
         }
         catch (Exception ex)
         {

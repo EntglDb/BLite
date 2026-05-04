@@ -462,6 +462,380 @@ public sealed class WriteAheadLog : IWriteAheadLog
         }
     }
 
+    /// <summary>
+    /// Returns the current write position in the WAL stream without acquiring
+    /// <c>_lock</c>. Safe to call only when the caller already holds an exclusive
+    /// write-side guard (e.g. the StorageEngine <c>_commitLock</c> + SHM writer
+    /// lock), which prevents any concurrent WAL write from updating the position.
+    /// </summary>
+    internal long GetCurrentPositionNoLock() => _walStream?.Position ?? 0;
+
+    /// <summary>
+    /// Writes a WAL data record and returns the byte offset at which the record
+    /// starts in the WAL file. The offset is captured atomically inside the WAL
+    /// write lock — so no concurrent WAL writer (e.g. <c>PrepareTransactionAsync</c>)
+    /// can shift the stream position between the snapshot and the actual write.
+    /// Used by the group-commit path (Phase 4) to build the SHM page index.
+    /// </summary>
+    internal async ValueTask<long> WriteDataRecordAndGetOffsetAsync(
+        ulong transactionId, uint pageId, ReadOnlyMemory<byte> afterImage,
+        CancellationToken ct = default)
+    {
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
+        long startOffset;
+        try
+        {
+            // Capture position atomically with the write — no other writer can run here.
+            startOffset = _walStream?.Position ?? 0;
+
+            var headerSize = 17;
+            var totalSize = headerSize + afterImage.Length;
+            var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(totalSize);
+            try
+            {
+                buffer[0] = (byte)WalRecordType.Write;
+                BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
+                BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
+                BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
+                afterImage.Span.CopyTo(buffer.AsSpan(headerSize));
+                await WriteRawAsync(new ReadOnlyMemory<byte>(buffer, 0, totalSize), ct);
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+        return startOffset;
+    }
+
+    /// <summary>
+    /// Reads the page data for a Write WAL record that starts at
+    /// <paramref name="recordOffset"/> in the WAL file.  Used by the cross-process
+    /// read path (Phase 4) so that a process that missed a page in its local
+    /// <c>_walIndex</c> can fetch it directly from the WAL file.
+    /// </summary>
+    /// <param name="recordOffset">
+    /// Byte offset of the Write record (type byte) in the WAL file, as stored in
+    /// the SHM WAL index. For encrypted WALs this is the offset of the ciphertext
+    /// envelope; for plaintext WALs it is the offset of the raw record bytes.
+    /// </param>
+    /// <param name="expectedPageId">
+    /// The page ID the caller expects to find at this offset. If the stored page ID
+    /// does not match, <c>null</c> is returned (stale SHM entry).
+    /// </param>
+    /// <returns>
+    /// Decrypted page bytes, or <c>null</c> if the offset is out of range,
+    /// the record type is not Write, or the page ID does not match.
+    /// </returns>
+    internal byte[]? ReadPageAt(long recordOffset, uint expectedPageId)
+    {
+        if (_walStream == null || recordOffset <= 0 || recordOffset >= _walStream.Length)
+            return null;
+
+        if (_crypto != null)
+        {
+            // If the WAL was opened before the crypto header was written (e.g. the
+            // WAL file was empty at open time) we cannot decrypt — return null so
+            // the caller falls through to the page-file read.
+            if (!_cryptoInitialized) return null;
+            return ReadPageAtEncrypted(recordOffset, expectedPageId);
+        }
+
+        return ReadPageAtPlaintext(recordOffset, expectedPageId);
+    }
+
+    private byte[]? ReadPageAtPlaintext(long recordOffset, uint expectedPageId)
+    {
+        // Plaintext record layout at recordOffset:
+        //   [type(1)][txnId(8)][pageId(4)][dataLen(4)][data(dataLen)]
+        // Total header: 17 bytes
+        var header = new byte[17];
+        int bytesRead = ReadAtOffset(recordOffset, header);
+
+        if (bytesRead < 17) return null;
+        if (header[0] != (byte)WalRecordType.Write) return null;
+
+        var pageId = BitConverter.ToUInt32(header, 9);
+        if (pageId != expectedPageId) return null;
+
+        var dataLen = BitConverter.ToInt32(header, 13);
+        if (dataLen <= 0 || dataLen > 100 * 1024 * 1024) return null;
+
+        var data = new byte[dataLen];
+        bytesRead = ReadAtOffset(recordOffset + 17, data);
+
+        return bytesRead < dataLen ? null : data;
+    }
+
+    private byte[]? ReadPageAtEncrypted(long envelopeOffset, uint expectedPageId)
+    {
+        // Encrypted envelope layout at envelopeOffset:
+        //   [plaintext_size(4 LE)][ciphertext(plaintext_size + PageOverhead)]
+        // After decryption the plaintext is a WAL record as in ReadPageAtPlaintext.
+        var sizeBuf = new byte[4];
+        int bytesRead = ReadAtOffset(envelopeOffset, sizeBuf);
+
+        if (bytesRead < 4) return null;
+        var plaintextSize = BitConverter.ToInt32(sizeBuf, 0);
+        if (plaintextSize < 17 || plaintextSize > 100 * 1024 * 1024) return null;
+
+        var ciphertextSize = plaintextSize + _crypto!.PageOverhead;
+        var cipherBuf = System.Buffers.ArrayPool<byte>.Shared.Rent(ciphertextSize);
+        var plainBuf  = System.Buffers.ArrayPool<byte>.Shared.Rent(plaintextSize);
+        try
+        {
+            bytesRead = ReadAtOffset(envelopeOffset + 4, cipherBuf.AsSpan(0, ciphertextSize));
+
+            if (bytesRead < ciphertextSize) return null;
+
+            try
+            {
+                _crypto.Decrypt(0, cipherBuf.AsSpan(0, ciphertextSize), plainBuf.AsSpan(0, plaintextSize));
+            }
+            catch (System.Security.Cryptography.CryptographicException)
+            {
+                return null; // stale or corrupted envelope
+            }
+
+            if (plainBuf[0] != (byte)WalRecordType.Write) return null;
+            var pageId = BitConverter.ToUInt32(plainBuf, 9);
+            if (pageId != expectedPageId) return null;
+
+            var dataLen = BitConverter.ToInt32(plainBuf, 13);
+            if (dataLen <= 0 || 17 + dataLen > plaintextSize) return null;
+
+            var data = new byte[dataLen];
+            plainBuf.AsSpan(17, dataLen).CopyTo(data);
+            return data;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(cipherBuf);
+            System.Buffers.ArrayPool<byte>.Shared.Return(plainBuf, clearArray: true);
+        }
+    }
+
+    // ── Cross-platform positioned read ──────────────────────────────────────
+    //
+    // RandomAccess.Read is a .NET 6+ API that allows offset-based reads without
+    // affecting the stream position (making concurrent reads + writes safe).
+    // On netstandard2.1 we fall back to a seek+read on the write stream, which
+    // requires holding the WAL write lock (_lock) so that no concurrent WAL write
+    // can change _walStream.Position between our Seek and Read calls.
+
+    /// <summary>
+    /// Reads bytes at a specific offset in the WAL file without requiring
+    /// the WAL write lock to be pre-held. Thread-safe on .NET 6+ via
+    /// <c>RandomAccess</c>; on .NET Standard 2.1 the WAL write lock is acquired
+    /// briefly to serialise the seek+read with concurrent writers.
+    /// </summary>
+    private int ReadAtOffset(long offset, Span<byte> buffer)
+    {
+#if NET6_0_OR_GREATER
+        if (_walStream?.SafeFileHandle is { } handle)
+            return (int)System.IO.RandomAccess.Read(handle, buffer, offset);
+#endif
+        return ReadViaSeek(offset, buffer);
+    }
+
+    private int ReadAtOffset(long offset, byte[] buffer)
+    {
+#if NET6_0_OR_GREATER
+        if (_walStream?.SafeFileHandle is { } handle)
+            return (int)System.IO.RandomAccess.Read(handle, buffer, offset);
+#endif
+        return ReadViaSeek(offset, buffer);
+    }
+
+    // Seek-based fallback for platforms without RandomAccess.
+    // Acquires _lock to prevent WAL writers from changing _walStream.Position
+    // concurrently — the same lock they hold during WriteRawAsync / WriteRawSync.
+    private int ReadViaSeek(long offset, Span<byte> buffer)
+    {
+        if (!_lock.Wait(_writeTimeoutMs))
+            throw new TimeoutException("Timed out acquiring WAL read lock (seek fallback).");
+        try
+        {
+            _walStream!.Position = offset;
+            return _walStream.Read(buffer);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    // Overload for byte[] (avoids Span allocation on older runtimes).
+    private int ReadViaSeek(long offset, byte[] buffer)
+    {
+        if (!_lock.Wait(_writeTimeoutMs))
+            throw new TimeoutException("Timed out acquiring WAL read lock (seek fallback).");
+        try
+        {
+            _walStream!.Position = offset;
+            return _walStream.Read(buffer, 0, buffer.Length);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reads all committed pages from WAL records between
+    /// <paramref name="fromOffset"/> (inclusive) and <paramref name="toOffset"/>
+    /// (exclusive), replaying only fully committed transactions. Returns the
+    /// deduplicated list of <c>(pageId, data, walOffset)</c> tuples — latest committed
+    /// write per page wins — for population into the local <c>_walIndex</c> and
+    /// <c>_walOffsets</c> (Phase 7 replay).
+    /// </summary>
+    internal List<(uint pageId, byte[] data, long walOffset)> ReadCommittedPagesSince(long fromOffset, long toOffset)
+    {
+        if (_walStream == null || fromOffset >= toOffset) return new List<(uint, byte[], long)>();
+
+        // Track writes per transaction as (walOffset, data) so we can determine which
+        // version of a page is latest (highest walOffset) across concurrent transactions.
+        var txnWrites = new Dictionary<ulong, List<(long walOffset, uint pageId, byte[] data)>>();
+        var committed  = new HashSet<ulong>();
+
+        if (_crypto != null && _cryptoInitialized)
+        {
+            // Encrypted WAL records start after the per-file crypto header (64 bytes).
+            // When fromOffset falls inside the header region (e.g. first replay with
+            // lastKnown=0), advance past it to avoid misinterpreting the BLCE magic as
+            // a record envelope size.
+            long pos = (_crypto.FileHeaderSize > 0 && fromOffset < _crypto.FileHeaderSize)
+                ? _crypto.FileHeaderSize
+                : fromOffset;
+            var sizeBuf = new byte[4];
+            while (pos < toOffset)
+            {
+                var rb = ReadAtOffset(pos, sizeBuf);
+                if (rb < 4) break;
+
+                var plaintextSize = BitConverter.ToInt32(sizeBuf, 0);
+                if (plaintextSize < 1 || plaintextSize > 100 * 1024 * 1024) break;
+
+                var ciphertextSize = plaintextSize + _crypto!.PageOverhead;
+                var cipherBuf = System.Buffers.ArrayPool<byte>.Shared.Rent(ciphertextSize);
+                var plainBuf  = System.Buffers.ArrayPool<byte>.Shared.Rent(plaintextSize);
+                try
+                {
+                    rb = ReadAtOffset(pos + 4, cipherBuf.AsSpan(0, ciphertextSize));
+                    if (rb < ciphertextSize) break;
+
+                    try
+                    {
+                        _crypto.Decrypt(0, cipherBuf.AsSpan(0, ciphertextSize), plainBuf.AsSpan(0, plaintextSize));
+                    }
+                    catch (System.Security.Cryptography.CryptographicException) { break; }
+
+                    long recOffset = pos; // WAL offset of the envelope start
+                    var rec = ParsePlaintextRecord(plainBuf.AsSpan(0, plaintextSize));
+                    if (rec == null) break;
+                    ProcessRecord(rec.Value, recOffset, txnWrites, committed);
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<byte>.Shared.Return(cipherBuf);
+                    System.Buffers.ArrayPool<byte>.Shared.Return(plainBuf, clearArray: true);
+                }
+                pos += 4 + ciphertextSize;
+            }
+        }
+        else
+        {
+            // Plaintext path: scan records from fromOffset forward.
+            long pos = fromOffset;
+            var hdr = new byte[16];
+            while (pos < toOffset)
+            {
+                var typeBuf = new byte[1];
+                var tb = ReadAtOffset(pos, typeBuf);
+                if (tb < 1) break;
+
+                var type = (WalRecordType)typeBuf[0];
+                if (typeBuf[0] == 0) break; // end of written area
+                switch (type)
+                {
+                    case WalRecordType.Begin:
+                    case WalRecordType.Commit:
+                    case WalRecordType.Abort:
+                    {
+                        var rb = ReadAtOffset(pos + 1, hdr);
+                        if (rb < 16) goto done;
+                        var txnId = BitConverter.ToUInt64(hdr, 0);
+                        if (type == WalRecordType.Commit) committed.Add(txnId);
+                        pos += 1 + 16;
+                        break;
+                    }
+                    case WalRecordType.Write:
+                    {
+                        var rb = ReadAtOffset(pos + 1, hdr);
+                        if (rb < 16) goto done;
+                        var txnId   = BitConverter.ToUInt64(hdr, 0);
+                        var pageId  = BitConverter.ToUInt32(hdr, 8);
+                        var dataLen = BitConverter.ToInt32(hdr, 12);
+                        if (dataLen < 0 || dataLen > 100 * 1024 * 1024) goto done;
+                        var data = new byte[dataLen];
+                        rb = ReadAtOffset(pos + 1 + 16, data);
+                        if (rb < dataLen) goto done;
+                        long recOffset = pos; // offset of the Write type byte
+                        if (!txnWrites.TryGetValue(txnId, out var list))
+                            txnWrites[txnId] = list = new List<(long, uint, byte[])>();
+                        list.Add((recOffset, pageId, data));
+                        pos += 1 + 16 + dataLen;
+                        break;
+                    }
+                    default: goto done;
+                }
+            }
+            done: ;
+        }
+
+        // Emit one entry per page: the latest committed write (highest walOffset) wins.
+        // Iterate all committed transactions' writes in WAL order so that later commits
+        // overwrite earlier ones in the result dictionary (correct last-writer-wins semantics).
+        var latestPerPage = new Dictionary<uint, (long walOffset, byte[] data)>();
+        foreach (var txnId in committed)
+        {
+            if (!txnWrites.TryGetValue(txnId, out var writes)) continue;
+            foreach (var (walOffset, pageId, data) in writes)
+            {
+                if (!latestPerPage.TryGetValue(pageId, out var existing) || walOffset > existing.walOffset)
+                    latestPerPage[pageId] = (walOffset, data);
+            }
+        }
+
+        var result = new List<(uint, byte[], long)>(latestPerPage.Count);
+        foreach (var kvp in latestPerPage)
+            result.Add((kvp.Key, kvp.Value.data, kvp.Value.walOffset));
+        return result;
+    }
+
+    private static void ProcessRecord(
+        WalRecord rec,
+        long walOffset,
+        Dictionary<ulong, List<(long walOffset, uint pageId, byte[] data)>> txnWrites,
+        HashSet<ulong> committed)
+    {
+        if (rec.Type == WalRecordType.Commit)
+        {
+            committed.Add(rec.TransactionId);
+        }
+        else if (rec.Type == WalRecordType.Write && rec.AfterImage != null)
+        {
+            if (!txnWrites.TryGetValue(rec.TransactionId, out var list))
+                txnWrites[rec.TransactionId] = list = new List<(long, uint, byte[])>();
+            list.Add((walOffset, rec.PageId, rec.AfterImage));
+        }
+    }
+
     internal async Task BackupAsync(string destinationPath, CancellationToken ct = default)
     {
 #if NET8_0_OR_GREATER
