@@ -2,7 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace BLite.Studio.ViewModels.Explorer;
 
-public enum SidebarItemKind { FieldKeys, KvStore, Collection }
+public enum SidebarItemKind { FieldKeys, KvStore, Collection, Gdpr }
 
 public partial class SidebarItemViewModel : ObservableObject
 {

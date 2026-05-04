@@ -11,17 +11,19 @@ public partial class DatabaseExplorerViewModel : ObservableObject
 {
     private readonly BLiteEngine _engine;
 
-    public DatabaseExplorerViewModel(BLiteEngine engine, string dbPath)
+    public DatabaseExplorerViewModel(BLiteEngine engine, string dbPath, bool isEncrypted = false)
     {
-        _engine   = engine;
-        DbPath    = dbPath;
-        DbName    = System.IO.Path.GetFileName(dbPath);
+        _engine     = engine;
+        DbPath      = dbPath;
+        DbName      = System.IO.Path.GetFileName(dbPath);
+        IsEncrypted = isEncrypted;
 
         BuildSidebar();
     }
 
-    public string DbPath { get; }
-    public string DbName { get; }
+    public string DbPath      { get; }
+    public string DbName      { get; }
+    public bool   IsEncrypted { get; }
 
     // ── Sidebar ───────────────────────────────────────────────────────────────
     public ObservableCollection<SidebarItemViewModel> SidebarItems { get; } = [];
@@ -84,6 +86,13 @@ public partial class DatabaseExplorerViewModel : ObservableObject
             Label = "Key-Value Store",
         });
 
+        // GDPR
+        SidebarItems.Add(new SidebarItemViewModel
+        {
+            Kind  = SidebarItemKind.Gdpr,
+            Label = "GDPR",
+        });
+
         // Collections
         foreach (var name in _engine.ListCollections().OrderBy(n => n))
         {
@@ -121,6 +130,9 @@ public partial class DatabaseExplorerViewModel : ObservableObject
 
             SidebarItemKind.KvStore =>
                 new KvStoreDetailViewModel(_engine.KvStore),
+
+            SidebarItemKind.Gdpr =>
+                new GdprDetailViewModel(_engine),
 
             SidebarItemKind.Collection when SelectedItem.CollectionName is { } cn =>
                 new CollectionDetailViewModel(cn, _engine),

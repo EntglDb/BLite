@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Avalonia.Platform;
 using BLite.Core;
+using BLite.Core.Encryption;
 using BLite.Core.Storage;
 using BLite.Studio.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -114,6 +115,13 @@ public partial class MainWindowViewModel : ViewModelBase
         set { if (value) SelectedPreset = PagePreset.Large; }
     }
 
+    // ── Encryption ────────────────────────────────────────────────────────────
+    [ObservableProperty]
+    private bool _isEncryptionEnabled;
+
+    [ObservableProperty]
+    private string _encryptionPassphrase = string.Empty;
+
     // ── Access mode ───────────────────────────────────────────────────────────
     [ObservableProperty]
     private bool _isReadWrite = true;
@@ -180,6 +188,10 @@ public partial class MainWindowViewModel : ViewModelBase
     private BLiteEngine? _engine;
     private PageFileConfig? _openedConfig;
 
+    /// <summary>True when the open database was opened with encryption enabled.</summary>
+    [ObservableProperty]
+    private bool _isEncrypted;
+
     /// <summary>True when the open database uses a multi-file (server) layout.</summary>
     public bool IsMultiFile =>
         _openedConfig.HasValue &&
@@ -206,10 +218,11 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task OpenRecent(RecentConnectionViewModel recent)
     {
         // Pre-fill form fields with the stored settings
-        DatabasePath   = recent.FilePath;
-        SelectedPreset = (PagePreset)recent.PresetValue;
-        IsReadOnly     = recent.IsReadOnly;
-        IsReadWrite    = !recent.IsReadOnly;
+        DatabasePath          = recent.FilePath;
+        SelectedPreset        = (PagePreset)recent.PresetValue;
+        IsReadOnly            = recent.IsReadOnly;
+        IsReadWrite           = !recent.IsReadOnly;
+        IsEncryptionEnabled   = recent.IsEncrypted;
 
         await TryOpen(recent.FilePath, recent.PresetValue, recent.IsReadOnly);
     }
@@ -229,6 +242,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _engine          = null;
         _openedConfig    = null;
         IsDatabaseOpen   = false;
+        IsEncrypted      = false;
         StatusMessage    = null;
         OpenDatabaseName = null;
         Explorer         = null;
@@ -243,36 +257,50 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             _engine?.Dispose();
 
-            // Auto-detect page size and layout for existing files; fall back to user preset for new ones.
-            var detected = PageFileConfig.DetectFromFile(path);
-            var config   = detected ?? CurrentConfig;
-            if (detected.HasValue)
+            if (IsEncryptionEnabled)
             {
-                var access = IsReadOnly
-                    ? MemoryMappedFileAccess.Read
-                    : MemoryMappedFileAccess.ReadWrite;
-                config = detected.Value with { Access = access };
+                if (string.IsNullOrEmpty(EncryptionPassphrase))
+                    throw new InvalidOperationException("A passphrase is required when encryption is enabled.");
+
+                var crypto = new CryptoOptions(EncryptionPassphrase);
+                _engine       = new BLiteEngine(path, crypto);
+                _openedConfig = PageFileConfig.Default;
+            }
+            else
+            {
+                // Auto-detect page size and layout for existing files; fall back to user preset for new ones.
+                var detected = PageFileConfig.DetectFromFile(path);
+                var config   = detected ?? CurrentConfig;
+                if (detected.HasValue)
+                {
+                    var access = IsReadOnly
+                        ? MemoryMappedFileAccess.Read
+                        : MemoryMappedFileAccess.ReadWrite;
+                    config = detected.Value with { Access = access };
+                }
+
+                _engine       = new BLiteEngine(path, config);
+                _openedConfig = config;
             }
 
-            _engine       = new BLiteEngine(path, config);
-            _openedConfig = config;
-
             // Sync the preset selector to reflect the actual page size of the opened database.
-            SelectedPreset = config.PageSize switch
+            SelectedPreset = _openedConfig?.PageSize switch
             {
                 8192  => PagePreset.Small,
                 32768 => PagePreset.Large,
                 _     => PagePreset.Default,
             };
 
+            IsEncrypted = IsEncryptionEnabled;
+
             // Persist to history
-            await _history.AddOrUpdate(path, (int)SelectedPreset, readOnly, IsMultiFile);
+            await _history.AddOrUpdate(path, (int)SelectedPreset, readOnly, IsMultiFile, IsEncrypted);
             await LoadRecentConnectionsAsync();
 
             OpenDatabaseName = Path.GetFileName(path);
             StatusMessage    = null;
             IsDatabaseOpen   = true;
-            Explorer         = new DatabaseExplorerViewModel(_engine, path);
+            Explorer         = new DatabaseExplorerViewModel(_engine, path, IsEncrypted);
             OnPropertyChanged(nameof(IsMultiFile));
             OnPropertyChanged(nameof(LayoutDisplay));
         }

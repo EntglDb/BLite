@@ -1,15 +1,20 @@
+using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
+using BLite.Core.Encryption;
+using BLite.Core.GDPR;
 using BLite.Core.Storage;
 using BLite.Shared;
 using BLite.Tests;
 
-// ─── Layout selection ─────────────────────────────────────────────────────
+// ─── Layout / encryption selection ───────────────────────────────────────
 // Flags:
 //   --multi-file          : server layout (separate WAL, index, per-collection files)
 //   --layout=small|large  : override page size preset (default = Default / 16 KB)
+//   --encrypted           : enable AES-256-GCM encryption (passphrase: "secret")
 //   (no flag)             : classic single-file embedded layout
-var isMultiFile = args.Any(a => a.Equals("--multi-file", StringComparison.OrdinalIgnoreCase));
-var layoutArg   = args.FirstOrDefault(a => a.StartsWith("--layout=", StringComparison.OrdinalIgnoreCase));
+var isMultiFile  = args.Any(a => a.Equals("--multi-file",  StringComparison.OrdinalIgnoreCase));
+var isEncrypted  = args.Any(a => a.Equals("--encrypted",   StringComparison.OrdinalIgnoreCase));
+var layoutArg    = args.FirstOrDefault(a => a.StartsWith("--layout=", StringComparison.OrdinalIgnoreCase));
 PageFileConfig basePreset = layoutArg?.Split('=')[1].ToLowerInvariant() switch
 {
     "small" => PageFileConfig.Small,
@@ -18,7 +23,9 @@ PageFileConfig basePreset = layoutArg?.Split('=')[1].ToLowerInvariant() switch
 };
 
 // ─── Setup ────────────────────────────────────────────────────────────────
-var dbPath = Path.Combine(Path.GetTempPath(), "blie_demo", "blite_demo.db");
+const string EncryptionPassphrase = "secret";
+var dbPath = Path.Combine(Path.GetTempPath(), "blie_demo",
+    isEncrypted ? "blite_demo_encrypted.db" : "blite_demo.db");
 var config = isMultiFile
     ? PageFileConfig.Server(dbPath, basePreset)
     : basePreset;
@@ -40,11 +47,13 @@ string layoutLabel = isMultiFile
 Console.WriteLine("╔══════════════════════════════════════╗");
 Console.WriteLine("║       BLite Demo Database Seeder     ║");
 Console.WriteLine("╚══════════════════════════════════════╝");
-Console.WriteLine($"Layout : {layoutLabel}");
-Console.WriteLine($"Path   : {dbPath}");
+Console.WriteLine($"Layout    : {layoutLabel}");
+Console.WriteLine($"Encrypted : {(isEncrypted ? $"yes  (AES-256-GCM, passphrase: \"{EncryptionPassphrase}\")" : "no")}");
+Console.WriteLine($"Path      : {dbPath}");
 Console.WriteLine();
 
 var rng = new Random(42);
+CryptoOptions? cryptoOptions = isEncrypted ? new CryptoOptions(EncryptionPassphrase) : null;
 
 // ─── Helper lambdas ───────────────────────────────────────────────────────
 void DeleteIfExists(string path) { if (File.Exists(path)) File.Delete(path); }
@@ -79,7 +88,9 @@ Address RandAddress() => new() { Street = $"{Pick(streetNames)} {rng.Next(1, 200
 float[] RandVector(int dims) =>
     Enumerable.Range(0, dims).Select(_ => (float)rng.NextDouble()).ToArray();
 
-using var db = new TestDbContext(dbPath, config);
+using var db = isEncrypted
+    ? new TestDbContext(dbPath, cryptoOptions!)
+    : new TestDbContext(dbPath, config);
 
 // ─── Users ────────────────────────────────────────────────────────────────
 await SeedAsync("Users", async () =>
@@ -571,6 +582,10 @@ if (isMultiFile)
     Console.WriteLine($"WAL file       : {config.WalPath}");
     Console.WriteLine($"Collections dir: {config.CollectionDataDirectory}");
 }
+
+// ─── GDPR report ──────────────────────────────────────────────────────────
+await PrintGdprReportAsync(db);
+
 Console.WriteLine("Done.");
 
 db.Dispose();
@@ -581,4 +596,60 @@ async Task SeedAsync(string collectionName, Func<Task> action)
     Console.Write($"  Seeding {collectionName}...");
     await action();
     Console.WriteLine(" OK");
+}
+
+// ─── GDPR helpers ─────────────────────────────────────────────────────────
+[RequiresUnreferencedCode("InspectDatabase uses PersonalDataResolver.")]
+async Task PrintGdprReportAsync(TestDbContext ctx)
+{
+    Console.WriteLine("\n╔══════════════════════════════════════╗");
+    Console.WriteLine("║          GDPR Compliance Report      ║");
+    Console.WriteLine("╚══════════════════════════════════════╝");
+
+    var report = ctx.InspectDatabase();
+
+    Console.WriteLine($"  Encryption : {(report.IsEncrypted   ? "✔  AES-256-GCM" : "✗  none")}");
+    Console.WriteLine($"  Audit sink : {(report.IsAuditEnabled ? "✔  registered"  : "✗  none")}");
+    Console.WriteLine($"  Layout     : {(report.IsMultiFileMode ? "multi-file" : "single-file")}");
+    Console.WriteLine($"  Collections: {report.Collections.Count}");
+
+    var withPii = report.Collections.Where(c => c.PersonalDataFields.Count > 0).ToList();
+    if (withPii.Count == 0)
+    {
+        Console.WriteLine("  No collections with [PersonalData] fields found.");
+    }
+    else
+    {
+        Console.WriteLine("\n  Collections with personal-data fields:");
+        foreach (var c in withPii)
+            Console.WriteLine($"    {c.Name,-30} → {string.Join(", ", c.PersonalDataFields)}");
+    }
+
+    // ── Subject export demo (Art. 15 / Art. 20) ───────────────────────────
+    // Use a known seeded name ("Alice") from the Users collection to locate
+    // all documents that reference this data subject across every collection
+    // whose root entity type carries a [PersonalData] field named "name".
+    const string subjectName = "Alice";
+    {
+        Console.WriteLine($"\n  Art. 15/20 subject export — field: name, value: {subjectName}");
+
+        var query = new SubjectQuery
+        {
+            FieldName  = "name",
+            FieldValue = BsonValue.FromString(subjectName),
+            Format     = SubjectExportFormat.Json,
+        };
+
+        var subjectReport = await ctx.ExportSubjectDataAsync(query);
+        await using var _ = subjectReport;
+        var total = subjectReport.DataByCollection.Values.Sum(v => v.Count);
+        Console.WriteLine($"  Matching documents: {total}");
+
+        foreach (KeyValuePair<string, IReadOnlyList<BLite.Bson.BsonDocument>> kv in subjectReport.DataByCollection.Where(kv => kv.Value.Count > 0))
+            Console.WriteLine($"    {kv.Key}: {kv.Value.Count} document(s)");
+
+        var exportPath = Path.Combine(Path.GetDirectoryName(dbPath)!, "subject_export.json");
+        await subjectReport.WriteToFileAsync(exportPath, SubjectExportFormat.Json);
+        Console.WriteLine($"  Exported → {exportPath}");
+    }
 }

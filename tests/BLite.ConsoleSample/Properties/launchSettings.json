@@ -2,7 +2,7 @@
   "profiles": {
     "BLite.ConsoleSample": {
       "commandName": "Project",
-      "commandLineArgs": "--multi-file"
+      "commandLineArgs": "--multi-file --encrypted"
     }
   }
 }

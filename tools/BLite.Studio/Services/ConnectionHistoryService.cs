@@ -39,7 +39,7 @@ public sealed class ConnectionHistoryService : IDisposable
     /// Adds a new connection entry, or updates the timestamp if the same file path
     /// already exists in history.
     /// </summary>
-    public async Task AddOrUpdate(string filePath, int presetValue, bool isReadOnly, bool isMultiFile = false)
+    public async Task AddOrUpdate(string filePath, int presetValue, bool isReadOnly, bool isMultiFile = false, bool isEncrypted = false)
     {
         // Look for an existing record for this file path
         var existing = await _db.RecentConnections
@@ -51,6 +51,7 @@ public sealed class ConnectionHistoryService : IDisposable
             existing.PresetValue  = presetValue;
             existing.IsReadOnly   = isReadOnly;
             existing.IsMultiFile  = isMultiFile;
+            existing.IsEncrypted  = isEncrypted;
             existing.LastOpenedAt = DateTimeOffset.UtcNow;
             await _db.RecentConnections.UpdateAsync(existing);
         }
@@ -63,6 +64,7 @@ public sealed class ConnectionHistoryService : IDisposable
                 PresetValue   = presetValue,
                 IsReadOnly    = isReadOnly,
                 IsMultiFile   = isMultiFile,
+                IsEncrypted   = isEncrypted,
                 LastOpenedAt  = DateTimeOffset.UtcNow,
             });
         }

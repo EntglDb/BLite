@@ -18,6 +18,7 @@ public sealed class RecentConnectionViewModel
         PresetValue  = model.PresetValue;
         IsReadOnly   = model.IsReadOnly;
         IsMultiFile  = model.IsMultiFile;
+        IsEncrypted  = model.IsEncrypted;
         LastOpenedAt = model.LastOpenedAt;
     }
 
@@ -29,6 +30,7 @@ public sealed class RecentConnectionViewModel
     public int      PresetValue { get; }
     public bool     IsReadOnly  { get; }
     public bool     IsMultiFile { get; }
+    public bool     IsEncrypted { get; }
     public DateTimeOffset LastOpenedAt { get; }
 
     public string PresetLabel => PresetValue switch
@@ -39,6 +41,8 @@ public sealed class RecentConnectionViewModel
     };
 
     public string AccessLabel => IsReadOnly ? "Read-only" : "Read/Write";
+
+    public string EncryptedLabel => IsEncrypted ? "Encrypted" : string.Empty;
 
     /// <summary>Short human-readable timestamp ("oggi", "ieri", "3 giorni fa…")</summary>
     public string RelativeTime

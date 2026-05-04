@@ -13,6 +13,7 @@ namespace BLite.Shared
     public class User
     {
         public ObjectId Id { get; set; }
+        [BLite.Core.GDPR.PersonalData]
         public string Name { get; set; } = "";
         public int Age { get; set; }
     }
@@ -97,6 +98,7 @@ namespace BLite.Shared
     public class Person
     {
         public int Id { get; set; }
+        [BLite.Core.GDPR.PersonalData]
         public string Name { get; set; } = "";
         public int Age { get; set; }
     }
@@ -555,9 +557,15 @@ namespace BLite.Shared
 
     public class CustomerContact
     {
+        [BLite.Core.GDPR.PersonalData]
         public string FullName       { get; set; } = string.Empty;
+
+        [BLite.Core.GDPR.PersonalData]
         public string Email          { get; set; } = string.Empty;
+
+        [BLite.Core.GDPR.PersonalData]
         public string Phone          { get; set; } = string.Empty;
+
         public PostalAddress BillingAddress { get; set; } = new();
     }
 
@@ -741,7 +749,10 @@ namespace BLite.Shared
         [System.ComponentModel.DataAnnotations.Key]
         public int Id { get; set; }
 
+        [BLite.Core.GDPR.PersonalData]
         public string Email { get; set; } = string.Empty;
+
+        [BLite.Core.GDPR.PersonalData]
         public string Phone { get; set; } = string.Empty;
     }
 
@@ -752,6 +763,7 @@ namespace BLite.Shared
     public class PersonWithContact
     {
         public ObjectId Id { get; set; }
+        [BLite.Core.GDPR.PersonalData]
         public string Name { get; set; } = string.Empty;
         public ContactInfo? MainContact { get; set; }
         public List<ContactInfo> Contacts { get; set; } = new();

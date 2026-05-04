@@ -1,6 +1,7 @@
 using BLite.Bson;
 using BLite.Core;
 using BLite.Core.Collections;
+using BLite.Core.Encryption;
 using BLite.Core.Metadata;
 using BLite.Core.Indexing;
 using BLite.Shared;
@@ -101,6 +102,14 @@ public partial class TestDbContext : DocumentDbContext
     /// Use <see cref="PageFileConfig.Server(string, PageFileConfig?)"/> to open a multi-file database.
     /// </summary>
     public TestDbContext(string databasePath, PageFileConfig config) : base(databasePath, config)
+    {
+        InitializeCollections();
+    }
+
+    /// <summary>
+    /// Creates a new context with AES-256-GCM encryption at rest.
+    /// </summary>
+    public TestDbContext(string databasePath, CryptoOptions crypto) : base(databasePath, crypto)
     {
         InitializeCollections();
     }

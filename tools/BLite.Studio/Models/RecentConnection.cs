@@ -32,6 +32,9 @@ public class RecentConnection
     /// <summary>True when the database uses a multi-file (server) layout.</summary>
     public bool IsMultiFile { get; set; }
 
+    /// <summary>True when the database was opened with encryption (CryptoOptions).</summary>
+    public bool IsEncrypted { get; set; }
+
     /// <summary>UTC timestamp of the last successful open.</summary>
     public DateTimeOffset LastOpenedAt { get; set; } = DateTimeOffset.UtcNow;
 }
