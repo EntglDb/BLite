@@ -46,6 +46,11 @@ public sealed class WriteAheadLog : IWriteAheadLog
     private bool _disposed;
     private readonly int _writeTimeoutMs;
 
+    // Phase 0 of the multi-process WAL plan (roadmap/v5/MULTI_PROCESS_WAL.md):
+    // wired through but currently unused. Subsequent phases will gate FileShare
+    // relaxation, the .wal-shm sidecar, and cross-process locking on this flag.
+    private readonly bool _allowMultiProcessAccess;
+
     // Optional encryption provider. Non-null only when real encryption is configured
     // (i.e. crypto.FileHeaderSize > 0). NullCryptoProvider is treated as no encryption.
     private readonly ICryptoProvider? _crypto;
@@ -71,10 +76,17 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// </para>
     /// </param>
     /// <param name="writeTimeoutMs">Lock-acquisition timeout in milliseconds.</param>
-    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000)
+    /// <param name="allowMultiProcessAccess">
+    /// Phase 0 opt-in for the multi-process WAL feature
+    /// (see <c>roadmap/v5/MULTI_PROCESS_WAL.md</c>). Currently has no observable effect;
+    /// later phases will use it to relax <see cref="FileShare"/> and to coordinate
+    /// writers via the <c>.wal-shm</c> sidecar file.
+    /// </param>
+    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000, bool allowMultiProcessAccess = false)
     {
         _walPath = walPath ?? throw new ArgumentNullException(nameof(walPath));
         _writeTimeoutMs = writeTimeoutMs;
+        _allowMultiProcessAccess = allowMultiProcessAccess;
 
         // Treat providers that add no overhead (NullCryptoProvider) as no encryption so
         // the on-disk format stays byte-for-byte identical to the pre-encryption format.

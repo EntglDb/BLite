@@ -141,7 +141,7 @@ public sealed partial class StorageEngine : IDisposable
         // provider so that WAL records are always encrypted alongside the rest of the database.
         var walCryptoProvider = config.CryptoProvider?.CreateSiblingProvider(3, 0);
 
-        _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs);
+        _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs, config.AllowMultiProcessAccess);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();

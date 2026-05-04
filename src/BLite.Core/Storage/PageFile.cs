@@ -90,6 +90,30 @@ public readonly struct PageFileConfig
     public ICryptoProvider? CryptoProvider { get; init; }
 
     /// <summary>
+    /// When <c>true</c>, opt in to multi-process database access (N readers + 1 writer
+    /// across OS processes on the same host).
+    /// <para>
+    /// Defaults to <c>false</c>, in which case BLite preserves its long-standing
+    /// single-process semantics (every file opened with <see cref="FileShare.None"/>,
+    /// in-process synchronization only).
+    /// </para>
+    /// <para>
+    /// This flag is the configuration entry point for the multi-process WAL feature
+    /// described in <c>roadmap/v5/MULTI_PROCESS_WAL.md</c> (issue: "Multi-Process WAL
+    /// Access via .wal-shm sidecar file"). The full implementation — relaxed file shares,
+    /// the <c>.wal-shm</c> sidecar, cross-process writer / checkpoint locks, reader-slot
+    /// registration, and stale-PID recovery — is rolled out in subsequent phases. Until
+    /// those phases land, setting this flag has no observable runtime effect.
+    /// </para>
+    /// <para>
+    /// Not supported on WASM / browser runtimes (no filesystem locking, no shared
+    /// <see cref="System.IO.MemoryMappedFiles.MemoryMappedFile"/>) and not safe on
+    /// network filesystems (NFS / SMB) where file-locking semantics are unreliable.
+    /// </para>
+    /// </summary>
+    public bool AllowMultiProcessAccess { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()
