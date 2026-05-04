@@ -98,12 +98,17 @@ public sealed class WalSharedMemory : IDisposable
         }
     }
 
+    // Byte offset within the SHM file where the WAL index hash table starts.
+    // Computed once in the constructor and used for all hash table lookups.
+    private readonly int _walIndexOffset;
+
     private WalSharedMemory(string shmPath, int pageSize, int maxReaders)
     {
         _shmPath = shmPath;
         _pageSize = pageSize;
         _maxReaders = maxReaders;
-        _shmFileSize = WalSharedMemoryLayout.HeaderSize + maxReaders * WalSharedMemoryLayout.ReaderSlotSize;
+        _walIndexOffset = WalSharedMemoryLayout.GetWalIndexOffset(maxReaders);
+        _shmFileSize = WalSharedMemoryLayout.GetShmFileSize(maxReaders);
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -528,6 +533,128 @@ public sealed class WalSharedMemory : IDisposable
             if (offset < min) min = offset;
         }
         return min;
+    }
+
+    // ── WAL index hash table (Phase 4) ──────────────────────────────────────
+
+    /// <summary>
+    /// Looks up the WAL byte offset for the most recently committed version of
+    /// <paramref name="pageId"/> in the shared WAL index hash table.
+    /// </summary>
+    /// <returns>
+    /// The WAL byte offset (always &gt; 0) where the Write record for this page
+    /// starts, or <c>-1</c> if the page is not present in the index.
+    /// </returns>
+    /// <remarks>
+    /// Lock-free. May race with a concurrent writer (under the OS-level writer lock)
+    /// and return a stale offset or report a miss for an entry being written. This is
+    /// a transient inconsistency that Phase-7 incremental WAL replay corrects before
+    /// any read in a new transaction.
+    /// </remarks>
+    public long LookupPageOffset(uint pageId)
+    {
+        ThrowIfDisposed();
+        if (pageId == 0) return -1; // page 0 handled separately (reserved)
+        int capacity = WalSharedMemoryLayout.WalIndexCapacity;
+        int slotSize = WalSharedMemoryLayout.WalIndexSlotSize;
+        int start = (int)(pageId & (uint)(capacity - 1));
+
+        for (int i = 0; i < capacity; i++)
+        {
+            int slotBase = _walIndexOffset + ((start + i) & (capacity - 1)) * slotSize;
+            // Read walOffset first; 0 = empty → page not in table.
+            long walOffset = Volatile.Read(ref RefLong(slotBase));
+            if (walOffset == 0) return -1;
+            // Read pageId to confirm this slot belongs to the target page.
+            uint storedPageId = (uint)Volatile.Read(ref RefInt(slotBase + 8));
+            if (storedPageId == pageId) return walOffset;
+        }
+        return -1; // table is completely full (should not happen in practice)
+    }
+
+    /// <summary>
+    /// Updates the WAL index hash table with new <c>pageId → walOffset</c> mappings.
+    /// Must be called by the group-commit writer while holding both
+    /// <c>_commitLock</c> (in-process) and the SHM writer lock (cross-process).
+    /// </summary>
+    public void UpdatePageOffsets(IReadOnlyList<(uint pageId, long walOffset)> entries)
+    {
+        ThrowIfDisposed();
+        int capacity = WalSharedMemoryLayout.WalIndexCapacity;
+        int slotSize = WalSharedMemoryLayout.WalIndexSlotSize;
+
+        foreach (var (pageId, walOffset) in entries)
+        {
+            if (pageId == 0 || walOffset <= 0) continue;
+
+            int start = (int)(pageId & (uint)(capacity - 1));
+            bool inserted = false;
+            for (int i = 0; i < capacity; i++)
+            {
+                int slotBase = _walIndexOffset + ((start + i) & (capacity - 1)) * slotSize;
+                long existingOffset = Volatile.Read(ref RefLong(slotBase));
+                uint existingPageId = (uint)Volatile.Read(ref RefInt(slotBase + 8));
+
+                if (existingPageId == pageId)
+                {
+                    // Update existing entry: write new walOffset (pageId unchanged).
+                    // Single-writer guarantee means no concurrent update of this slot.
+                    Volatile.Write(ref RefLong(slotBase), walOffset);
+                    inserted = true;
+                    break;
+                }
+
+                if (existingOffset == 0)
+                {
+                    // Empty slot: write walOffset first, then pageId.
+                    // Readers that check walOffset==0 see an empty slot until
+                    // both fields are committed; this is safe (transient miss).
+                    Volatile.Write(ref RefLong(slotBase), walOffset);
+                    Volatile.Write(ref RefInt(slotBase + 8), (int)pageId);
+                    inserted = true;
+                    break;
+                }
+            }
+            // If 'inserted' is false the table is full — this is handled gracefully
+            // (readers fall through to the page file for this entry).
+            _ = inserted; // suppress unused-variable warning
+        }
+    }
+
+    /// <summary>
+    /// Clears the entire WAL index hash table and re-populates it with the supplied
+    /// survivor entries. Called after checkpoint to remove entries that have been
+    /// flushed to the page file, and after WAL truncation to reset to an empty index.
+    /// Must be called while holding both the in-process commit lock and the SHM
+    /// writer lock.
+    /// </summary>
+    public void RebuildIndex(IReadOnlyList<(uint pageId, long walOffset)> survivors)
+    {
+        ThrowIfDisposed();
+        // Zero the entire hash table.
+        int tableBytes = WalSharedMemoryLayout.WalIndexTableBytes;
+        var zeros = new byte[Math.Min(tableBytes, 4096)];
+        for (int written = 0; written < tableBytes; written += zeros.Length)
+        {
+            int n = Math.Min(zeros.Length, tableBytes - written);
+            _accessor!.WriteArray(_walIndexOffset + written, zeros, 0, n);
+        }
+        _accessor!.Flush();
+
+        // Re-insert survivors.
+        if (survivors.Count > 0)
+            UpdatePageOffsets(survivors);
+    }
+
+    /// <summary>
+    /// Writes <c>WalEndOffset</c> to an arbitrary value — used to reset the counter
+    /// to zero after WAL truncation. Unlike <see cref="AdvanceWalEndOffset"/>, this
+    /// method may lower the value.
+    /// </summary>
+    public void WriteWalEndOffset(long offset)
+    {
+        ThrowIfDisposed();
+        Volatile.Write(ref RefLong(WalSharedMemoryLayout.OffsetWalEndOffset), offset);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

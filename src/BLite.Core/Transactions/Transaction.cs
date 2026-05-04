@@ -20,6 +20,13 @@ public sealed class Transaction : ITransaction
     private TransactionState _state;
     private bool _disposed;
 
+    /// <summary>
+    /// Index of the reader slot in the <c>.wal-shm</c> file, or <c>-1</c> when no
+    /// slot was acquired (single-process mode, or all slots were full at begin time).
+    /// Released automatically in <see cref="Dispose"/>.
+    /// </summary>
+    internal int ShmReaderSlotIndex { get; set; } = -1;
+
     public Transaction(ulong transactionId, 
                        StorageEngine storage,
                        IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
@@ -166,6 +173,15 @@ public sealed class Transaction : ITransaction
         {
             // Auto-rollback if not committed
             RollbackAsync().GetAwaiter().GetResult();
+        }
+
+        // Release the cross-process reader slot (Phase 5).
+        // This must happen even if rollback throws, so it is placed after the rollback
+        // path. The slot release is idempotent and best-effort.
+        if (ShmReaderSlotIndex >= 0)
+        {
+            _storage.ReleaseReaderSlot(ShmReaderSlotIndex);
+            ShmReaderSlotIndex = -1;
         }
 
         _disposed = true;

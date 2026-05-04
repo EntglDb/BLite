@@ -34,6 +34,27 @@ public sealed partial class StorageEngine
             committedData.AsSpan(0, length).CopyTo(destination);
             return;
         }
+
+        // 2b. Cross-process WAL index lookup (Phase 4).
+        // When another process committed a page that our local _walIndex doesn't have,
+        // consult the SHM hash table to find the WAL byte offset, then read the page
+        // data directly from the WAL file.
+        if (_shm != null && _wal is Transactions.WriteAheadLog walFile)
+        {
+            long walOffset = _shm.LookupPageOffset(pageId);
+            if (walOffset > 0)
+            {
+                var pageData = walFile.ReadPageAt(walOffset, pageId);
+                if (pageData != null)
+                {
+                    // Populate local _walIndex to amortise future reads of this page.
+                    _walIndex[pageId] = pageData;
+                    var length = Math.Min(pageData.Length, destination.Length);
+                    pageData.AsSpan(0, length).CopyTo(destination);
+                    return;
+                }
+            }
+        }
         
         // 3. Read committed baseline from PageFile
         GetPageFile(pageId, out var physId).ReadPage(physId, destination);
@@ -69,6 +90,23 @@ public sealed partial class StorageEngine
             var length = Math.Min(committedData.Length, destination.Length);
             committedData.AsSpan(0, length).CopyTo(destination);
             return;
+        }
+
+        // Cross-process WAL lookup (Phase 4): check SHM index on miss.
+        if (_shm != null && _wal is Transactions.WriteAheadLog walFileH)
+        {
+            long walOffset = _shm.LookupPageOffset(pageId);
+            if (walOffset > 0)
+            {
+                var pageData = walFileH.ReadPageAt(walOffset, pageId);
+                if (pageData != null)
+                {
+                    _walIndex[pageId] = pageData;
+                    var length = Math.Min(pageData.Length, destination.Length);
+                    pageData.AsSpan(0, length).CopyTo(destination);
+                    return;
+                }
+            }
         }
 
         GetPageFile(pageId, out var physId).ReadPageHeader(physId, destination);
@@ -156,6 +194,27 @@ public sealed partial class StorageEngine
 #else
             return default;
 #endif
+        }
+
+        // 2b. Cross-process WAL index lookup (Phase 4) — synchronous read via RandomAccess.
+        if (_shm != null && _wal is Transactions.WriteAheadLog walFileAsync)
+        {
+            long walOffset = _shm.LookupPageOffset(pageId);
+            if (walOffset > 0)
+            {
+                var pageData = walFileAsync.ReadPageAt(walOffset, pageId);
+                if (pageData != null)
+                {
+                    _walIndex[pageId] = pageData;
+                    var length = Math.Min(pageData.Length, destination.Length);
+                    pageData.AsMemory(0, length).CopyTo(destination);
+#if NET5_0_OR_GREATER
+                    return ValueTask.CompletedTask;
+#else
+                    return default;
+#endif
+                }
+            }
         }
 
         // 3. PageFile — true async OS read

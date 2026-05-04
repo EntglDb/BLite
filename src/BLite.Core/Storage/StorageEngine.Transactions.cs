@@ -9,6 +9,43 @@ public sealed partial class StorageEngine
 
     public Transaction BeginTransaction(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
     {
+        // Phase 7: Incremental WAL replay for cross-process read freshness.
+        // Compare the SHM WAL end offset against the last offset this engine has
+        // replayed. If another process has committed since then, replay the new
+        // WAL records into _walIndex so reads in this transaction see fresh data.
+        if (_shm != null && _wal is Transactions.WriteAheadLog walForReplay)
+        {
+            long shmEnd = _shm.ReadWalEndOffset();
+            long lastKnown = Volatile.Read(ref _lastKnownWalEndOffset);
+            if (shmEnd > lastKnown)
+            {
+                // Attempt to claim the replay range; only the first thread wins —
+                // others will see the updated _lastKnownWalEndOffset and skip.
+                if (Interlocked.CompareExchange(ref _lastKnownWalEndOffset, shmEnd, lastKnown) == lastKnown)
+                {
+                    try
+                    {
+                        var newPages = walForReplay.ReadCommittedPagesSince(lastKnown, shmEnd);
+                        foreach (var (pid, data) in newPages)
+                        {
+                            // Only populate _walIndex if this engine hasn't already committed
+                            // a newer local version of this page. `_walOffsets` tracks pages
+                            // committed by THIS engine; if the page is present there, our
+                            // local _walIndex already has the fresher version.
+                            if (_walOffsets == null || !_walOffsets.ContainsKey(pid))
+                                _walIndex[pid] = data;
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort: a failed replay only means stale reads,
+                        // never data corruption. Reset so the next transaction retries.
+                        Interlocked.CompareExchange(ref _lastKnownWalEndOffset, lastKnown, shmEnd);
+                    }
+                }
+            }
+        }
+
         // In multi-process mode, allocate the transaction id from the shared SHM counter
         // so two processes never observe the same id. Falls back to the in-process
         // Interlocked counter when the SHM sidecar is not configured.
@@ -17,6 +54,19 @@ public sealed partial class StorageEngine
             : (ulong)Interlocked.Increment(ref _nextTransactionId);
         var transaction = new Transaction(txnId, this, isolationLevel);
         _activeTransactions[txnId] = transaction;
+
+        // Phase 5: Register a reader slot in the SHM so the checkpoint algorithm
+        // can determine the safe truncation boundary (minimum offset still needed
+        // by any active reader across all processes).
+        if (_shm != null)
+        {
+            long walEnd = _shm.ReadWalEndOffset();
+            if (_shm.TryAcquireReaderSlot(out int slotIndex, walEnd))
+                transaction.ShmReaderSlotIndex = slotIndex;
+            // If TryAcquireReaderSlot returns false (all slots full), the transaction
+            // proceeds without a slot — a degraded-but-safe fallback.
+        }
+
         _metrics?.Publish(new Metrics.MetricEvent
         {
             Timestamp  = Stopwatch.GetTimestamp(),

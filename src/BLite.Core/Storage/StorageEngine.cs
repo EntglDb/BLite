@@ -35,6 +35,17 @@ public sealed partial class StorageEngine : IDisposable
     // WAL index cache: PageId → PageData (from latest committed transaction)
     // Lazily populated on first read after commit
     private readonly ConcurrentDictionary<uint, byte[]> _walIndex;
+
+    // Tracks the WAL byte offset (record start) of the most recent committed Write
+    // record for each page. Populated alongside _walIndex in the group-commit path
+    // so that CheckpointAsync can bound its work to WAL entries ≤ the minimum reader
+    // offset (Phase 6). Only populated when _shm != null (multi-process mode).
+    private readonly ConcurrentDictionary<uint, long>? _walOffsets;
+
+    // Last WAL end-offset this engine has replayed into its local _walIndex.
+    // Compared against _shm.ReadWalEndOffset() on BeginTransaction to detect
+    // cross-process commits and trigger incremental WAL replay (Phase 7).
+    private long _lastKnownWalEndOffset;
     
     // Collection-per-file: collectionName → IPageStorage dedicated
     // Null if CollectionDataDirectory not configured (embedded mode, single file)
@@ -169,6 +180,7 @@ public sealed partial class StorageEngine : IDisposable
         {
             var shmPath = walPath + "-shm";
             _shm = Transactions.WalSharedMemory.Open(shmPath, config.PageSize);
+            _walOffsets = new ConcurrentDictionary<uint, long>();
 
             // If a previous writer crashed without releasing the writer lock, the
             // recorded PID will not be alive — clear it so this process (or another)
@@ -338,6 +350,16 @@ public sealed partial class StorageEngine : IDisposable
     internal CDC.ChangeStreamDispatcher EnsureCdc()
     {
         return _cdc ??= new CDC.ChangeStreamDispatcher();
+    }
+
+    /// <summary>
+    /// Releases a cross-process reader slot back to the SHM sidecar.
+    /// Called by <see cref="Transactions.Transaction.Dispose"/> after the transaction ends.
+    /// No-op when <see cref="_shm"/> is <c>null</c> or the slot index is invalid.
+    /// </summary>
+    internal void ReleaseReaderSlot(int slotIndex)
+    {
+        _shm?.ReleaseReaderSlot(slotIndex);
     }
 
     // ── Metrics ──────────────────────────────────────────────────────────────
