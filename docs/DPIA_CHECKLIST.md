@@ -27,17 +27,17 @@ BLite **does not** determine what counts as personal data at runtime, auto-delet
 
 The following table enumerates all engine-level risks identified in [`roadmap/v5/GDPR_PLAN.md`](../roadmap/v5/GDPR_PLAN.md) §6 WP4(B). Each row is listed separately; rows are never collapsed even when mitigations overlap.
 
-Features not yet available in the current release are marked **(planned)**.
+Features the engine will not implement are marked **(won't implement)** — the host application is responsible for those cases.
 
 | Risk | Likelihood | Impact | BLite mitigation | Cross-reference |
 |---|---|---|---|---|
 | Unauthorised access to the `.db` file | Medium | High | Encryption at-rest (AES-256-GCM, page-level) | [`roadmap/v5/ENCRYPTION_FIX_PLAN.md`](../roadmap/v5/ENCRYPTION_FIX_PLAN.md) |
 | Exfiltration via backup file | Low | High | Encrypted backups (same key derivation) | [`roadmap/v5/ENCRYPTION_FIX_PLAN.md`](../roadmap/v5/ENCRYPTION_FIX_PLAN.md) |
-| Residual data after `DeleteAsync` | Medium | Medium | Slot-level secure erase via `VacuumAsync` (`SecureErase = true`); `SecureEraseOnDelete` engine toggle **(planned)** | [`roadmap/v5/MISSING_FEATURES.md`](../roadmap/v5/MISSING_FEATURES.md) §3 |
-| Compromised audit log | Low | High | `IBLiteAuditSink` interface (shipped); append-only `FileAuditSink` with optional cryptographic signing **(planned)** | [`roadmap/v5/AUDIT_IMPLEMENTATION.md`](../roadmap/v5/AUDIT_IMPLEMENTATION.md) |
+| Residual data after `DeleteAsync` | Medium | Medium | Slot-level secure erase via `VacuumAsync` (`SecureErase = true`); per-delete `SecureEraseOnDelete` engine toggle **(won't implement — call `VacuumAsync` after deletion)** | [`roadmap/v5/MISSING_FEATURES.md`](../roadmap/v5/MISSING_FEATURES.md) §3 |
+| Compromised audit log | Low | High | `IBLiteAuditSink`; implement an append-only file sink with optional cryptographic signing in the host application **(won't implement in engine)** | [`roadmap/v5/AUDIT_IMPLEMENTATION.md`](../roadmap/v5/AUDIT_IMPLEMENTATION.md) |
 | Encryption key loss | Low | Critical | `IKeyProvider` with external KMS | [`roadmap/v5/ENCRYPTION_PLAN.md`](../roadmap/v5/ENCRYPTION_PLAN.md) |
 | CDC PII leak | Medium | Medium | Field masking via `WatchOptions.ExcludeFields`/`IncludeOnlyFields` | [`roadmap/v5/GDPR_PLAN.md`](../roadmap/v5/GDPR_PLAN.md) §4.4 |
-| Retention policy not enforced | Low | Medium | Strict-mode retention warning (shipped); generalised retention for non-timeseries collections **(planned)** | [`roadmap/v5/MISSING_FEATURES.md`](../roadmap/v5/MISSING_FEATURES.md) §4, [`roadmap/v5/GDPR_PLAN.md`](../roadmap/v5/GDPR_PLAN.md) §4.5 |
+| Retention policy not enforced | Low | Medium | Generalised retention policy (`HasRetentionPolicy`); `GdprMode.Strict` warns on missing retention | [`roadmap/v5/GDPR_PLAN.md`](../roadmap/v5/GDPR_PLAN.md) §4.5 |
 | WAL plaintext exposure | Medium | High | WAL encryption (sibling provider, role = 3) | [`roadmap/v5/ENCRYPTION_PLAN.md`](../roadmap/v5/ENCRYPTION_PLAN.md) |
 | Subject access request not actionable | Medium | Medium | `ExportSubjectDataAsync` | [`roadmap/v5/GDPR_PLAN.md`](../roadmap/v5/GDPR_PLAN.md) §4.2 |
 | Compliance auditor lacks visibility | Low | Medium | `InspectDatabase` | [`roadmap/v5/GDPR_PLAN.md`](../roadmap/v5/GDPR_PLAN.md) §4.3 |
@@ -51,8 +51,8 @@ The following settings **must** be enabled for any deployment that processes hig
 
 - [ ] **Encryption configured** — supply a `CryptoOptions` instance (passphrase or `IKeyProvider`) when opening the engine. Verify `DatabaseInspectionReport.IsEncryptionEnabled == true` after open.
 - [ ] **Audit sink registered** — implement and register `IBLiteAuditSink` via `BLiteEngine.ConfigureAudit(...)`. All subject-export and inspection operations emit audit events through this sink.
-- [ ] **Secure erase on vacuum** — call `VacuumAsync(new VacuumOptions { SecureErase = true })` as part of your maintenance schedule (and after bulk deletions of personal data) to overwrite freed page bytes. The `SecureEraseOnDelete` per-delete toggle is not yet available; track [`roadmap/v5/MISSING_FEATURES.md`](../roadmap/v5/MISSING_FEATURES.md) §3.
-- [ ] **Retention policy on `[PersonalData]` collections** — configure `HasRetentionPolicy(...)` on every `EntityTypeBuilder<T>` that carries `[PersonalData]` fields so that data is not retained beyond its lawful purpose. Full generalised retention triggers are planned; see [`roadmap/v5/MISSING_FEATURES.md`](../roadmap/v5/MISSING_FEATURES.md) §4.
+- [ ] **Secure erase on vacuum** — call `VacuumAsync(new VacuumOptions { SecureErase = true })` as part of your maintenance schedule and after bulk deletions of personal data to overwrite freed page bytes. A per-delete engine toggle will not be provided; the host application must call `VacuumAsync` explicitly as part of its erasure workflow.
+- [ ] **Retention policy on `[PersonalData]` collections** — configure `HasRetentionPolicy(...)` on every `EntityTypeBuilder<T>` that carries `[PersonalData]` fields so that data is not retained beyond its lawful purpose.
 - [ ] **CDC payload masking** — set `WatchOptions.ExcludeFields` or `WatchOptions.IncludeOnlyFields` on every `Watch(...)` call that may observe personal-data collections, or leave `CapturePayload = false` (the default) for streams that do not require payload visibility.
 - [ ] **`GdprMode = Strict` enabled** — set `DefaultGdprMode = GdprMode.Strict` in `BLiteKvOptions`, or call `.HasGdprMode(GdprMode.Strict)` per collection via `EntityTypeBuilder<T>`. Strict mode validates that encryption, audit, and retention are configured at engine-open time and logs actionable warnings for any gap.
 
@@ -65,7 +65,7 @@ The following responsibilities belong to the **host application** (the data cont
 - [ ] **External key management** — store encryption keys or passphrases in an external KMS or HSM. Implement `IKeyProvider` to supply keys at open time. Never embed raw key material in application source code or configuration files.
 - [ ] **Host-level access control on the `.db` file path** — restrict OS-level file permissions on the database file and its directory so that only the application process (and authorised administrators) can read or write the file. BLite has no independent access-control layer.
 - [ ] **Subject identifier convention** — choose a stable, consistent field name (e.g. `userId`, `subjectId`) as the `SubjectQuery.FieldName` for all `ExportSubjectDataAsync` calls. Annotate the corresponding property with `[PersonalData]` so it appears in `DatabaseInspectionReport`.
-- [ ] **Deletion workflow** — implement a subject-erasure workflow that: (1) calls `DeleteAsync` on all relevant documents, (2) calls `VacuumAsync(new VacuumOptions { SecureErase = true })` to physically overwrite freed pages, and (3) records the erasure in the external audit log. When `SecureEraseOnDelete` becomes available, add it to the engine options as an additional safeguard.
+- [ ] **Deletion workflow** — implement a subject-erasure workflow that: (1) calls `DeleteAsync` on all relevant documents, (2) calls `VacuumAsync(new VacuumOptions { SecureErase = true })` to physically overwrite freed pages, and (3) records the erasure in the external audit log. A built-in per-delete secure-erase toggle will not be provided; the explicit `VacuumAsync` call is the supported erasure mechanism.
 - [ ] **Audit log retention outside BLite** — define and enforce a retention policy for the external audit log produced by your `IBLiteAuditSink` implementation. BLite emits events but does not manage the long-term storage or deletion of audit records.
 
 ---
