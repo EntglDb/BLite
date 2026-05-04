@@ -1,8 +1,6 @@
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace BLite.Core.Transactions;
 
@@ -17,13 +15,18 @@ namespace BLite.Core.Transactions;
 /// it from scratch (the SHM is always reconstructible from the WAL).
 /// </para>
 /// <para>
-/// Cross-process locking:
+/// Cross-process locking (all platforms via <see cref="WalShmFcntl"/>):
 /// <list type="bullet">
-/// <item><description><b>Windows:</b> a named <see cref="Mutex"/> (in the <c>Local\</c> namespace,
-/// keyed by a hash of the WAL path). The OS auto-releases the mutex if the owner process dies.</description></item>
-/// <item><description><b>Linux/macOS/Android/iOS:</b> <c>fcntl(F_OFD_SETLK)</c> byte-range locks on
-/// the SHM file. The kernel auto-releases the lock if the owner process dies.</description></item>
+/// <item><description><b>Windows:</b> <c>LockFileEx</c>/<c>UnlockFileEx</c> byte-range locks
+/// on the SHM backing file. Thread-agnostic (can be released from any thread), auto-released by
+/// the OS when the owning process dies. A named <c>Mutex</c> is intentionally <em>not</em> used
+/// because it is thread-owned and incompatible with <c>async/await</c> continuations that may
+/// resume on a different thread pool thread.</description></item>
+/// <item><description><b>Linux/macOS/Android/iOS:</b> <c>fcntl(F_OFD_SETLK)</c> byte-range locks
+/// on the SHM file. The kernel auto-releases the lock if the owner process dies.</description></item>
 /// </list>
+/// All platforms also hold an in-process <c>SemaphoreSlim</c> (keyed by SHM path) for
+/// correct intra-process exclusion between multiple <see cref="WalSharedMemory"/> instances.
 /// </para>
 /// <para>Layout (see <c>WalSharedMemoryLayout</c> constants):</para>
 /// <code>
@@ -61,10 +64,6 @@ public sealed class WalSharedMemory : IDisposable
     // this pointer without taking the Acquire/Release ref-count cost on every call.
     private unsafe byte* _basePtr;
     private bool _basePtrAcquired;
-
-    // Cross-process writer lock primitives.
-    private readonly Mutex? _writerMutex;       // Windows
-    // Unix uses _backingFile's file descriptor with fcntl OFD locks (see WalShmFcntl).
 
     private bool _writerLockHeld;
     private bool _disposed;
@@ -109,29 +108,6 @@ public sealed class WalSharedMemory : IDisposable
         _maxReaders = maxReaders;
         _walIndexOffset = WalSharedMemoryLayout.GetWalIndexOffset(maxReaders);
         _shmFileSize = WalSharedMemoryLayout.GetShmFileSize(maxReaders);
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            _writerMutex = CreateWriterMutexWindows(shmPath);
-        }
-    }
-
-    private static Mutex CreateWriterMutexWindows(string shmPath)
-    {
-        // Local\ namespace mutex keyed by SHA-256 of the absolute SHM path so that two
-        // databases at different paths never collide. "Local\" scopes the mutex to the
-        // current Windows session, which is what we want for same-host coordination.
-        var absolutePath = System.IO.Path.GetFullPath(shmPath);
-        byte[] hashBytes;
-        using (var sha = SHA256.Create())
-        {
-            hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(absolutePath));
-        }
-        // Hex-encode the first 16 bytes (cross-target compatible, no Convert.ToHexString).
-        var sb = new StringBuilder(32);
-        for (int i = 0; i < 16; i++) sb.Append(hashBytes[i].ToString("x2"));
-        var name = $"Local\\BLite_walshm_w_{sb}";
-        return new Mutex(initiallyOwned: false, name: name, out _);
     }
 
     /// <summary>
@@ -356,37 +332,17 @@ public sealed class WalSharedMemory : IDisposable
     /// On success, records the current process ID into <c>WriterOwnerPid</c> for stale-PID
     /// recovery.
     /// <para>
-    /// <b>Not thread-safe / not re-entrant.</b> A single <see cref="WalSharedMemory"/>
-    /// instance must not have <see cref="TryAcquireWriterLock"/> / <see cref="ReleaseWriterLock"/>
-    /// called concurrently from multiple threads, and the calling thread is responsible for
-    /// not double-acquiring without an intervening release. BLite's group-commit path enforces
-    /// this naturally — every batch holds the in-process <c>_commitLock</c> for the lifetime
-    /// of the SHM lock acquisition, so only one thread at a time enters this method.
+    /// Thread-agnostic: the underlying <c>LockFileEx</c> (Windows) / <c>fcntl</c> (Unix) locks
+    /// are per file-handle, not per-thread, so <see cref="ReleaseWriterLock"/> may be called from
+    /// a different thread than the one that called <see cref="TryAcquireWriterLock"/>. This is
+    /// important for compatibility with <c>async/await</c> continuations in the group-commit writer.
     /// </para>
     /// </summary>
     public bool TryAcquireWriterLock(int timeoutMs)
     {
         ThrowIfDisposed();
 
-        bool acquired;
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            try
-            {
-                acquired = _writerMutex!.WaitOne(timeoutMs);
-            }
-            catch (AbandonedMutexException)
-            {
-                // Previous owner died without releasing. We now own the mutex.
-                // Treat this as a successful acquisition; the SHM WriterOwnerPid recovery
-                // path (Process.GetProcessById) will detect any inconsistent state.
-                acquired = true;
-            }
-        }
-        else
-        {
-            acquired = WalShmFcntl.TryAcquireWriteLock(_backingFile!, timeoutMs);
-        }
+        bool acquired = WalShmFcntl.TryAcquireWriteLock(_backingFile!, timeoutMs);
 
         if (acquired)
         {
@@ -406,14 +362,7 @@ public sealed class WalSharedMemory : IDisposable
         // doesn't see our (now-stale) PID.
         Volatile.Write(ref RefInt(WalSharedMemoryLayout.OffsetWriterOwnerPid), 0);
 
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            try { _writerMutex!.ReleaseMutex(); } catch (ApplicationException) { /* not held */ }
-        }
-        else
-        {
-            WalShmFcntl.ReleaseWriteLock(_backingFile!);
-        }
+        WalShmFcntl.ReleaseWriteLock(_backingFile!);
         _writerLockHeld = false;
     }
 
@@ -426,7 +375,7 @@ public sealed class WalSharedMemory : IDisposable
     /// <remarks>
     /// PID reuse is a theoretical concern; on practical timescales (an OS-level
     /// recycle of the same numeric PID before the next open) this check is sufficient.
-    /// The OS-level writer mutex / OFD lock additionally guarantees that a live writer
+    /// The OS-level file-range lock additionally guarantees that a live writer
     /// is never preempted, regardless of whether their PID was matched.
     /// </remarks>
     public bool ForceClearStaleWriter()
@@ -717,6 +666,5 @@ public sealed class WalSharedMemory : IDisposable
         try { _accessor?.Dispose(); } catch { }
         try { _mmf?.Dispose(); } catch { }
         try { _backingFile?.Dispose(); } catch { }
-        try { _writerMutex?.Dispose(); } catch { }
     }
 }

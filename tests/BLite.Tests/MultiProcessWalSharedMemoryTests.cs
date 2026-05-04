@@ -45,7 +45,8 @@ public sealed class MultiProcessWalSharedMemoryTests : IDisposable
         Assert.True(File.Exists(ShmPath()));
 
         // Re-read raw header bytes to confirm magic / version / page size are persisted.
-        byte[] header = File.ReadAllBytes(ShmPath());
+        // Use FileShare.ReadWrite because the MMF backing file remains open in the SHM instance.
+        byte[] header = ReadShmBytes(ShmPath(), 64);
         Assert.True(header.Length >= 64);
         int magic = BitConverter.ToInt32(header, 0);
         int version = BitConverter.ToInt32(header, 4);
@@ -69,8 +70,30 @@ public sealed class MultiProcessWalSharedMemoryTests : IDisposable
 
         // Re-opening must NOT throw; it detects bad magic and re-initialises.
         using var shm2 = WalSharedMemory.Open(ShmPath(), 4096);
-        byte[] header = File.ReadAllBytes(ShmPath());
+        // Read with FileShare.ReadWrite because the MMF backing file remains open.
+        byte[] header = ReadShmBytes(ShmPath(), 4);
         Assert.Equal(0x48534C42, BitConverter.ToInt32(header, 0));
+    }
+
+    /// <summary>
+    /// Reads up to <paramref name="count"/> bytes from the SHM file using FileShare.ReadWrite,
+    /// which is required on Windows because the active MMF keeps the file open with
+    /// ReadWrite access (File.ReadAllBytes uses FileShare.Read and would fail).
+    /// Returns only the bytes actually read (may be fewer than <paramref name="count"/> if
+    /// the file is shorter).
+    /// </summary>
+    private static byte[] ReadShmBytes(string path, int count)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var buf = new byte[count];
+        int read = 0;
+        while (read < count)
+        {
+            int n = fs.Read(buf, read, count - read);
+            if (n == 0) break;
+            read += n;
+        }
+        return read == count ? buf : buf[..read];
     }
 
     [Fact]
