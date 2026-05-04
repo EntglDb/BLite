@@ -73,10 +73,30 @@ public sealed partial class StorageEngine
             // Truncate WAL only when _walIndex is fully drained.
             // _commitLock is still needed here to prevent truncating while the
             // group-commit writer is appending new WAL records.
+            //
+            // In multi-process mode the SHM cross-process writer lock must also be held
+            // for the duration of the truncation: another process could be appending
+            // WAL records concurrently (its commit path acquires only its own
+            // _commitLock, not ours), and truncating the shared WAL file underneath it
+            // would corrupt the on-disk format. The lock order matches the commit path
+            // (in-process _commitLock → cross-process SHM writer lock) to avoid any
+            // possible cross-lock deadlock.
             if (_walIndex.IsEmpty && _commitLock.Wait(0))
             {
+                bool shmHeld = false;
                 try
                 {
+                    if (_shm != null)
+                    {
+                        shmHeld = _shm.TryAcquireWriterLock(_config.LockTimeout.WriteTimeoutMs);
+                        if (!shmHeld)
+                        {
+                            // Skip this truncation cycle rather than throw — a future
+                            // checkpoint will retry. Concurrent commits from another
+                            // process are a normal, recoverable condition.
+                            return;
+                        }
+                    }
                     // Double-check: new commits may have promoted entries
                     // between our IsEmpty check and acquiring the lock.
                     if (_walIndex.IsEmpty)
@@ -84,6 +104,7 @@ public sealed partial class StorageEngine
                 }
                 finally
                 {
+                    if (shmHeld) { try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ } }
                     _commitLock.Release();
                 }
             }

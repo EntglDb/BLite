@@ -90,6 +90,48 @@ public readonly struct PageFileConfig
     public ICryptoProvider? CryptoProvider { get; init; }
 
     /// <summary>
+    /// When <c>true</c>, opt in to multi-process database access (N readers + 1 writer
+    /// across OS processes on the same host).
+    /// <para>
+    /// Defaults to <c>false</c>, in which case BLite preserves its long-standing
+    /// single-process semantics: every file is opened with <see cref="FileShare.None"/>
+    /// (so a second process attempting to open the same database immediately fails with
+    /// <see cref="IOException"/>) and all coordination uses in-process primitives only.
+    /// </para>
+    /// <para>
+    /// When <c>true</c> (and the platform supports it):
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>The data file (<see cref="PageFile"/>) and the WAL are opened
+    ///     with <see cref="FileShare.ReadWrite"/> so multiple processes can hold them
+    ///     concurrently.</description></item>
+    ///   <item><description>A <c>.wal-shm</c> sidecar file is created next to the WAL.
+    ///     It carries an atomic transaction-id counter, the published WAL end offset,
+    ///     a writer-owner-PID stamp, and a bounded reader-slot table.</description></item>
+    ///   <item><description>Cross-process writer serialisation uses a named
+    ///     <see cref="System.Threading.Mutex"/> on Windows
+    ///     (<c>Local\BLite_walshm_w_&lt;sha&gt;</c>) and <c>fcntl(F_OFD_SETLK)</c>
+    ///     (Linux/Android) / <c>fcntl(F_SETLK)</c> (macOS/iOS) on Unix-like systems.
+    ///     Both primitives are auto-released by the kernel on owner crash.</description></item>
+    ///   <item><description>Transaction ids are allocated from the shared SHM counter
+    ///     so they are globally unique across processes.</description></item>
+    ///   <item><description>On open, a stale-PID check clears any writer-owner stamp
+    ///     left over from a crashed previous owner.</description></item>
+    /// </list>
+    /// <para>
+    /// Subsequent phases (see <c>roadmap/v5/MULTI_PROCESS_WAL.md</c>) will add a shared
+    /// WAL page→offset hash table for instant cross-process reader visibility, parallel
+    /// multi-file checkpoint flush, and reader-slot–bounded checkpoint truncation.
+    /// </para>
+    /// <para>
+    /// Not supported on WASM / browser runtimes (no filesystem locking, no shared
+    /// <see cref="System.IO.MemoryMappedFiles.MemoryMappedFile"/>) and not safe on
+    /// network filesystems (NFS / SMB) where file-locking semantics are unreliable.
+    /// </para>
+    /// </summary>
+    public bool AllowMultiProcessAccess { get; init; }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()
@@ -316,7 +358,7 @@ public sealed class PageFile : IPageStorage
                 _filePath,
                 FileMode.OpenOrCreate,
                 FileAccess.ReadWrite,
-                FileShare.None,
+                _config.AllowMultiProcessAccess ? FileShare.ReadWrite : FileShare.None,
                 bufferSize: 4096,
 #if NET6_0_OR_GREATER
                 FileOptions.RandomAccess | FileOptions.Asynchronous);

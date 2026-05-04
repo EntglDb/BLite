@@ -19,6 +19,12 @@ public sealed partial class StorageEngine : IDisposable
     private readonly IPageStorage _pageFile;                // data: Data, Overflow, Collection, KV, Dictionary, TimeSeries, Metadata
     private readonly IPageStorage? _indexFile;              // indices: Index, Vector, Spatial (null = uses _pageFile)
     private readonly IWriteAheadLog _wal;
+
+    // Cross-process WAL coordination sidecar (null in single-process mode).
+    // Owned by this engine; created in the constructor when
+    // PageFileConfig.AllowMultiProcessAccess is true and disposed in Dispose.
+    // See roadmap/v5/MULTI_PROCESS_WAL.md for the full design.
+    private readonly Transactions.WalSharedMemory? _shm;
     private CDC.ChangeStreamDispatcher? _cdc;
     private volatile Metrics.MetricsDispatcher? _metrics;
     
@@ -89,6 +95,14 @@ public sealed partial class StorageEngine : IDisposable
     internal LockTimeout LockTimeout => _config.LockTimeout;
     internal bool UsesSeparateCollectionFiles => _collectionFiles != null;
 
+    /// <summary>
+    /// Multi-process WAL coordination sidecar; <c>null</c> when
+    /// <see cref="PageFileConfig.AllowMultiProcessAccess"/> was not set on the config.
+    /// Exposed to internals (notably <c>BLite.Tests</c>) so cross-process behaviour can be
+    /// asserted from integration tests.
+    /// </summary>
+    internal Transactions.WalSharedMemory? SharedMemory => _shm;
+
     public StorageEngine(string databasePath, PageFileConfig config)
     {
         _config = config;
@@ -141,11 +155,27 @@ public sealed partial class StorageEngine : IDisposable
         // provider so that WAL records are always encrypted alongside the rest of the database.
         var walCryptoProvider = config.CryptoProvider?.CreateSiblingProvider(3, 0);
 
-        _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs);
+        _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs, config.AllowMultiProcessAccess);
         _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
         _walIndex = new ConcurrentDictionary<uint, byte[]>();
         _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
         _nextTransactionId = 0; // Interlocked.Increment pre-increments, so first txnId == 1.
+
+        // ── Multi-process WAL coordination (opt-in) ─────────────────────────
+        // When AllowMultiProcessAccess is true, open the .wal-shm sidecar that
+        // coordinates cross-process writers / readers (see roadmap/v5/MULTI_PROCESS_WAL.md).
+        // The SHM file lives next to the WAL so both have the same lifetime.
+        if (config.AllowMultiProcessAccess)
+        {
+            var shmPath = walPath + "-shm";
+            _shm = Transactions.WalSharedMemory.Open(shmPath, config.PageSize);
+
+            // If a previous writer crashed without releasing the writer lock, the
+            // recorded PID will not be alive — clear it so this process (or another)
+            // can re-acquire the lock. The OS-level mutex / OFD lock has already been
+            // auto-released by the kernel; this only clears our PID stamp.
+            _shm.ForceClearStaleWriter();
+        }
 
         // Admission gate: limits concurrent commit pressure on WAL/commit locks.
         _writerGate = config.LockTimeout.MaxConcurrentWriters > 0
@@ -291,6 +321,7 @@ public sealed partial class StorageEngine : IDisposable
         _metadataLock?.Dispose();
         _writerGate?.Dispose();
         _metrics?.Dispose();
+        _shm?.Dispose();
     }
 
     internal void RegisterCdc(CDC.ChangeStreamDispatcher cdc)

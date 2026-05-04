@@ -46,6 +46,22 @@ public sealed class WriteAheadLog : IWriteAheadLog
     private bool _disposed;
     private readonly int _writeTimeoutMs;
 
+    // When true, the WAL file is opened with FileShare.ReadWrite (so other processes
+    // can open the same WAL); when false, FileShare.None preserves the historical
+    // single-process semantics. Cross-process writer serialisation, atomic transaction-id
+    // allocation, the .wal-shm sidecar, and stale-PID recovery are owned by
+    // StorageEngine + WalSharedMemory; see roadmap/v5/MULTI_PROCESS_WAL.md.
+    private readonly bool _allowMultiProcessAccess;
+
+    /// <summary>
+    /// Whether this WAL was opened in multi-process mode
+    /// (<see cref="FileShare.ReadWrite"/> instead of <see cref="FileShare.None"/>).
+    /// Exposed to internals (notably <c>BLite.Tests</c>) so the
+    /// <see cref="BLite.Core.Storage.PageFileConfig.AllowMultiProcessAccess"/> forwarding
+    /// path can be asserted from integration tests without reflection.
+    /// </summary>
+    internal bool AllowMultiProcessAccess => _allowMultiProcessAccess;
+
     // Optional encryption provider. Non-null only when real encryption is configured
     // (i.e. crypto.FileHeaderSize > 0). NullCryptoProvider is treated as no encryption.
     private readonly ICryptoProvider? _crypto;
@@ -71,10 +87,19 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// </para>
     /// </param>
     /// <param name="writeTimeoutMs">Lock-acquisition timeout in milliseconds.</param>
-    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000)
+    /// <param name="allowMultiProcessAccess">
+    /// When <c>true</c>, opens the WAL file with <see cref="FileShare.ReadWrite"/> instead
+    /// of <see cref="FileShare.None"/> so other processes can open the same WAL.
+    /// Cross-process writer serialisation and the <c>.wal-shm</c> sidecar are owned by
+    /// the surrounding <see cref="BLite.Core.Storage.StorageEngine"/>; this WAL only
+    /// relaxes its own <see cref="FileShare"/> mode based on the flag. See
+    /// <c>roadmap/v5/MULTI_PROCESS_WAL.md</c> for the full design.
+    /// </param>
+    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000, bool allowMultiProcessAccess = false)
     {
         _walPath = walPath ?? throw new ArgumentNullException(nameof(walPath));
         _writeTimeoutMs = writeTimeoutMs;
+        _allowMultiProcessAccess = allowMultiProcessAccess;
 
         // Treat providers that add no overhead (NullCryptoProvider) as no encryption so
         // the on-disk format stays byte-for-byte identical to the pre-encryption format.
@@ -84,7 +109,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
             _walPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
-            FileShare.None,
+            _allowMultiProcessAccess ? FileShare.ReadWrite : FileShare.None,
             bufferSize: 64 * 1024);
         // REMOVED FileOptions.WriteThrough for SQLite-style lazy checkpointing
         // Durability is ensured by explicit Flush() calls

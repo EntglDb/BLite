@@ -124,6 +124,29 @@ public sealed partial class StorageEngine
                 commit.Completion.TrySetException(failure);
             return;
         }
+
+        // ── Cross-process writer serialization ──────────────────────────────
+        // When multi-process access is enabled, an inner OS-level lock guards the
+        // single shared WAL stream against any other process. The mandatory order is
+        // _commitLock (in-process) → SHM writer lock (cross-process), and the reverse
+        // on release. The checkpoint truncate path in StorageEngine.Recovery.cs
+        // acquires the same two locks in the same order around `TruncateAsync`, so
+        // there is no cross-lock deadlock.
+        bool shmLockHeld = false;
+        if (_shm != null)
+        {
+            shmLockHeld = _shm.TryAcquireWriterLock(_config.LockTimeout.WriteTimeoutMs);
+            if (!shmLockHeld)
+            {
+                failure = new TimeoutException(
+                    "Timed out acquiring cross-process WAL writer lock (.wal-shm).");
+                _commitLock.Release();
+                foreach (var commit in batch)
+                    commit.Completion.TrySetException(failure);
+                return;
+            }
+        }
+
         try
         {
             foreach (var commit in batch)
@@ -156,6 +179,10 @@ public sealed partial class StorageEngine
                 }
             }
 
+            // Publish the new WAL end offset to other processes so their readers /
+            // checkpointers see a consistent view.
+            _shm?.AdvanceWalEndOffset(_wal.GetCurrentSize());
+
             // Check if checkpoint is needed, but defer until after releasing the lock
             needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
         }
@@ -165,6 +192,11 @@ public sealed partial class StorageEngine
         }
         finally
         {
+            // Release in reverse order: SHM writer lock first, then in-process commit lock.
+            if (shmLockHeld)
+            {
+                try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ }
+            }
             _commitLock.Release();
         }
 

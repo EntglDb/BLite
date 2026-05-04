@@ -18,7 +18,7 @@ public class CdcTests : IDisposable
     public async Task Test_Cdc_Basic_Insert_Fires_Event()
     {
         var events = new List<ChangeStreamEvent<int, Person>>();
-        using var subscription = _db.People.Watch(new WatchOptions { CapturePayload = true }).Subscribe(e => events.Add(e));
+        using var subscription = _db.People.Watch(new WatchOptions { CapturePayload = true, RevealPersonalData = true }).Subscribe(e => events.Add(e));
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
         await _db.People.InsertAsync(person);
@@ -83,7 +83,7 @@ public class CdcTests : IDisposable
     public async Task Test_Cdc_Update_And_Delete()
     {
         var events = new List<ChangeStreamEvent<int, Person>>();
-        using var subscription = _db.People.Watch(new WatchOptions { CapturePayload = true }).Subscribe(e => events.Add(e));
+        using var subscription = _db.People.Watch(new WatchOptions { CapturePayload = true, RevealPersonalData = true }).Subscribe(e => events.Add(e));
 
         var person = new Person { Id = 1, Name = "John", Age = 30 };
         await _db.People.InsertAsync(person);
