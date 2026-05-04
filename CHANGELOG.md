@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="5.0.0-preview.0"></a>
+## [5.0.0-preview.0](https://www.github.com/EntglDb/BLite/releases/tag/v5.0.0-preview.0) (2026-05-04)
+
+### Features
+
+* Audit Trail Module — IBLiteAuditSink, BLiteMetrics, DiagnosticSource ([#109](https://www.github.com/EntglDb/BLite/issues/109)) ([d4bff36](https://www.github.com/EntglDb/BLite/commit/d4bff3652dbb35b689a4ed9568f9e1e5175de74b))
+* Core Crypto Layer — ICryptoProvider, AesGcmCryptoProvider, PageFile hooks ([#100](https://www.github.com/EntglDb/BLite/issues/100)) ([c2bfec6](https://www.github.com/EntglDb/BLite/commit/c2bfec6b9003b44ef083f1fb4e41a323189f9128))
+* Encrypt WAL records with AES-256-GCM (FileRole=3) ([#101](https://www.github.com/EntglDb/BLite/issues/101)) ([f2b8d4a](https://www.github.com/EntglDb/BLite/commit/f2b8d4a55da42747af23b6f2105cba14a0c64cdd))
+* EncryptionCoordinator for multi-file mode — per-file HKDF-SHA256 subkey derivation ([#102](https://www.github.com/EntglDb/BLite/issues/102)) ([5e4ca92](https://www.github.com/EntglDb/BLite/commit/5e4ca9219d37586d65fd77610c764200db080d65))
+* Generalized Retention Policy for All Collection Types ([#97](https://www.github.com/EntglDb/BLite/issues/97)) ([74094db](https://www.github.com/EntglDb/BLite/commit/74094db0e8d00d626e97c2cf059eb85c5c310f7f))
+* implement multi-process WAL via .wal-shm sidecar ([#116](https://www.github.com/EntglDb/BLite/issues/116)) ([60dc01b](https://www.github.com/EntglDb/BLite/commit/60dc01b727783b5d5f0a1442b66cca079d647c75))
+* Multi-process WAL phases 4/5/6/7 — SHM hash table, reader slots, bounded checkpoint, incremental replay ([#117](https://www.github.com/EntglDb/BLite/issues/117)) ([7ce44c1](https://www.github.com/EntglDb/BLite/commit/7ce44c1bf5706a61d602e14082abda7cb0662bdc))
+* Slot-level secure erase and VACUUM for GDPR Art. 17 compliance ([#96](https://www.github.com/EntglDb/BLite/issues/96)) ([646d940](https://www.github.com/EntglDb/BLite/commit/646d940a1d93aa63d8fd779ae630501a7642c852))
+* **gdpr:** WP1 — PersonalData annotation, Subject Export (Art. 15/20), Database Inspection (Art. 30) ([#111](https://www.github.com/EntglDb/BLite/issues/111)) ([dab21b6](https://www.github.com/EntglDb/BLite/commit/dab21b6fd09181d454b24ab44715f1bc087bfca0))
+* **gdpr:** WP2 — CDC Field Masking ([#112](https://www.github.com/EntglDb/BLite/issues/112)) ([0d6f3bc](https://www.github.com/EntglDb/BLite/commit/0d6f3bc5aa44788a6aa833426953a416f39cf959))
+* **gdpr-wp3:** GdprMode.Strict — privacy-by-default orchestration (Art. 25) ([#113](https://www.github.com/EntglDb/BLite/issues/113)) ([01ad3fa](https://www.github.com/EntglDb/BLite/commit/01ad3fab18f5f3d6993e0f50aa6ca9074f46bb00))
+
+### Bug Fixes
+
+* **studio:** correct dark mode backgrounds in Schema tab ([#115](https://www.github.com/EntglDb/BLite/issues/115)) ([d15e1c0](https://www.github.com/EntglDb/BLite/commit/d15e1c0456bb9850e82b8b1752e8140135fe84e2))
+
 <a name="4.4.2"></a>
 ## [4.4.2](https://www.github.com/EntglDb/BLite/releases/tag/v4.4.2) (2026-04-25)
 
