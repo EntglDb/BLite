@@ -304,12 +304,14 @@ public sealed class MultiProcessWalSharedMemoryTests : IDisposable
         using var b = new StorageEngine(dbPath, cfg);
 
         // Allocate from both in interleaved fashion. Every id must be unique because
-        // both engines share the SHM-backed counter.
+        // both engines share the SHM-backed counter. Dispose each transaction
+        // immediately so it doesn't linger in _activeTransactions and mask any
+        // lifecycle bugs.
         var ids = new HashSet<ulong>();
         for (int i = 0; i < 20; i++)
         {
-            var ta = a.BeginTransaction();
-            var tb = b.BeginTransaction();
+            using var ta = a.BeginTransaction();
+            using var tb = b.BeginTransaction();
             Assert.True(ids.Add(ta.TransactionId), $"duplicate tid {ta.TransactionId}");
             Assert.True(ids.Add(tb.TransactionId), $"duplicate tid {tb.TransactionId}");
         }

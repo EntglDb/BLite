@@ -200,8 +200,13 @@ public sealed class WalSharedMemory : IDisposable
         }
 
         // Validate magic / version / page-size; if anything is wrong, re-init in place.
-        // We use a CAS on the magic field so two processes racing to initialize a fresh
-        // SHM file don't both write conflicting headers.
+        // Two processes opening a brand-new SHM concurrently may both reach this branch
+        // and both call InitializeHeader; that is benign because the writes are
+        // idempotent (the same magic / version / page-size constants and zero atomic
+        // counters), and any concurrent reader observing a partially-written header
+        // will simply fail validation and re-initialize on its next open. The
+        // cross-process writer lock (Phase 3) is what actually serialises *mutations*
+        // to the counters; the header itself is write-once-with-fixed-content.
         if (needInit)
         {
             InitializeHeader();
@@ -344,12 +349,19 @@ public sealed class WalSharedMemory : IDisposable
     /// <summary>
     /// Acquires the cross-process writer lock. Blocks up to <paramref name="timeoutMs"/> ms.
     /// On success, records the current process ID into <c>WriterOwnerPid</c> for stale-PID
-    /// recovery. Idempotent within a single process while held (re-entrant calls return true).
+    /// recovery.
+    /// <para>
+    /// <b>Not thread-safe / not re-entrant.</b> A single <see cref="WalSharedMemory"/>
+    /// instance must not have <see cref="TryAcquireWriterLock"/> / <see cref="ReleaseWriterLock"/>
+    /// called concurrently from multiple threads, and the calling thread is responsible for
+    /// not double-acquiring without an intervening release. BLite's group-commit path enforces
+    /// this naturally — every batch holds the in-process <c>_commitLock</c> for the lifetime
+    /// of the SHM lock acquisition, so only one thread at a time enters this method.
+    /// </para>
     /// </summary>
     public bool TryAcquireWriterLock(int timeoutMs)
     {
         ThrowIfDisposed();
-        if (_writerLockHeld) return true;
 
         bool acquired;
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -477,8 +489,13 @@ public sealed class WalSharedMemory : IDisposable
         ref long pidSlot = ref RefLong(slotOffset);
         long myPid = CurrentProcessId;
         // CAS so we don't accidentally clear a slot reclaimed by another process.
-        Interlocked.CompareExchange(ref pidSlot, 0, myPid);
-        Volatile.Write(ref RefLong(slotOffset + 8), 0);
+        // Only clear MaxReadOffset when the PID was actually ours — otherwise we'd be
+        // zeroing another live reader's offset and could let checkpoint/truncation
+        // advance past their visible WAL range.
+        if (Interlocked.CompareExchange(ref pidSlot, 0, myPid) == myPid)
+        {
+            Volatile.Write(ref RefLong(slotOffset + 8), 0);
+        }
     }
 
     /// <summary>
@@ -498,9 +515,13 @@ public sealed class WalSharedMemory : IDisposable
             if (pid == 0) continue;
             if (!IsProcessAlive((int)pid))
             {
-                // Reclaim stale slot.
-                Interlocked.CompareExchange(ref pidSlot, 0, pid);
-                Volatile.Write(ref RefLong(slotOffset + 8), 0);
+                // Reclaim stale slot — but only zero the offset if our CAS actually
+                // cleared the dead PID. If a live process raced us and re-claimed
+                // the slot in the meantime, leave their MaxReadOffset alone.
+                if (Interlocked.CompareExchange(ref pidSlot, 0, pid) == pid)
+                {
+                    Volatile.Write(ref RefLong(slotOffset + 8), 0);
+                }
                 continue;
             }
             long offset = Volatile.Read(ref RefLong(slotOffset + 8));

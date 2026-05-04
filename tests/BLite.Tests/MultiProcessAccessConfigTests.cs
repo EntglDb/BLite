@@ -1,14 +1,19 @@
-using System.Reflection;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
 namespace BLite.Tests;
 
 /// <summary>
-/// Phase 0 of the multi-process WAL plan (roadmap/v5/MULTI_PROCESS_WAL.md):
-/// the opt-in <see cref="PageFileConfig.AllowMultiProcessAccess"/> flag is wired through
-/// to <see cref="WriteAheadLog"/> but has no observable runtime effect yet.
-/// These tests pin the public configuration surface so subsequent phases can rely on it.
+/// Pins the public configuration surface for the multi-process WAL feature
+/// (<c>roadmap/v5/MULTI_PROCESS_WAL.md</c>): the <see cref="PageFileConfig.AllowMultiProcessAccess"/>
+/// flag itself, default values across the canonical configs, and that the flag is
+/// forwarded into the <see cref="WriteAheadLog"/> owned by the <see cref="StorageEngine"/>.
+/// <para>
+/// Behavioural side effects of the flag (the <c>.wal-shm</c> sidecar, the
+/// <see cref="FileShare.ReadWrite"/> relaxation, two engines on the same files) are
+/// covered by <see cref="MultiProcessWalSharedMemoryTests"/>; this file only validates
+/// the configuration plumbing.
+/// </para>
 /// </summary>
 public class MultiProcessAccessConfigTests
 {
@@ -39,11 +44,7 @@ public class MultiProcessAccessConfigTests
         try
         {
             using var wal = new WriteAheadLog(walPath, crypto: null, writeTimeoutMs: 1_000, allowMultiProcessAccess: true);
-
-            var field = typeof(WriteAheadLog).GetField("_allowMultiProcessAccess",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(field);
-            Assert.True((bool)field!.GetValue(wal)!);
+            Assert.True(wal.AllowMultiProcessAccess);
         }
         finally
         {
@@ -58,15 +59,47 @@ public class MultiProcessAccessConfigTests
         try
         {
             using var wal = new WriteAheadLog(walPath, crypto: null);
-
-            var field = typeof(WriteAheadLog).GetField("_allowMultiProcessAccess",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.NotNull(field);
-            Assert.False((bool)field!.GetValue(wal)!);
+            Assert.False(wal.AllowMultiProcessAccess);
         }
         finally
         {
             if (File.Exists(walPath)) File.Delete(walPath);
+        }
+    }
+
+    /// <summary>
+    /// Behavioural assertion of the forwarding path that the previous review
+    /// flagged as missing: a <see cref="StorageEngine"/> built with the flag set
+    /// must produce a WAL that observably opens its file with <see cref="FileShare.ReadWrite"/>,
+    /// which we verify here by opening the same WAL path a second time
+    /// concurrently — an operation that fails with <see cref="IOException"/>
+    /// in single-process mode but succeeds in multi-process mode.
+    /// </summary>
+    [Fact]
+    public void StorageEngine_ForwardsAllowMultiProcessAccess_ToOwnedWal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"blite_mpcfg_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var dbPath = Path.Combine(dir, "fwd.db");
+            var cfg = PageFileConfig.Default with { AllowMultiProcessAccess = true };
+
+            using var engine = new StorageEngine(dbPath, cfg);
+
+            // The owned SHM sidecar is the externally observable evidence that the
+            // flag reached every layer (PageFile + WriteAheadLog + StorageEngine).
+            Assert.NotNull(engine.SharedMemory);
+
+            // And the WAL file must be openable by a second handle (FileShare.ReadWrite).
+            var walPath = Path.ChangeExtension(dbPath, ".wal");
+            Assert.True(File.Exists(walPath));
+            using var probe = new FileStream(walPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            Assert.True(probe.CanRead);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
         }
     }
 }

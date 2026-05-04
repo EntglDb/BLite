@@ -129,8 +129,9 @@ public sealed partial class StorageEngine
         // When multi-process access is enabled, an inner OS-level lock guards the
         // single shared WAL stream against any other process. The mandatory order is
         // _commitLock (in-process) → SHM writer lock (cross-process), and the reverse
-        // on release. The checkpoint path follows the same order, ensuring no possible
-        // cross-lock deadlock.
+        // on release. The checkpoint truncate path in StorageEngine.Recovery.cs
+        // acquires the same two locks in the same order around `TruncateAsync`, so
+        // there is no cross-lock deadlock.
         bool shmLockHeld = false;
         if (_shm != null)
         {

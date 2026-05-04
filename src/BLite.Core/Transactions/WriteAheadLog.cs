@@ -46,10 +46,21 @@ public sealed class WriteAheadLog : IWriteAheadLog
     private bool _disposed;
     private readonly int _writeTimeoutMs;
 
-    // Phase 0 of the multi-process WAL plan (roadmap/v5/MULTI_PROCESS_WAL.md):
-    // wired through but currently unused. Subsequent phases will gate FileShare
-    // relaxation, the .wal-shm sidecar, and cross-process locking on this flag.
+    // When true, the WAL file is opened with FileShare.ReadWrite (so other processes
+    // can open the same WAL); when false, FileShare.None preserves the historical
+    // single-process semantics. Cross-process writer serialisation, atomic transaction-id
+    // allocation, the .wal-shm sidecar, and stale-PID recovery are owned by
+    // StorageEngine + WalSharedMemory; see roadmap/v5/MULTI_PROCESS_WAL.md.
     private readonly bool _allowMultiProcessAccess;
+
+    /// <summary>
+    /// Whether this WAL was opened in multi-process mode
+    /// (<see cref="FileShare.ReadWrite"/> instead of <see cref="FileShare.None"/>).
+    /// Exposed to internals (notably <c>BLite.Tests</c>) so the
+    /// <see cref="BLite.Core.Storage.PageFileConfig.AllowMultiProcessAccess"/> forwarding
+    /// path can be asserted from integration tests without reflection.
+    /// </summary>
+    internal bool AllowMultiProcessAccess => _allowMultiProcessAccess;
 
     // Optional encryption provider. Non-null only when real encryption is configured
     // (i.e. crypto.FileHeaderSize > 0). NullCryptoProvider is treated as no encryption.
@@ -77,10 +88,12 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// </param>
     /// <param name="writeTimeoutMs">Lock-acquisition timeout in milliseconds.</param>
     /// <param name="allowMultiProcessAccess">
-    /// Phase 0 opt-in for the multi-process WAL feature
-    /// (see <c>roadmap/v5/MULTI_PROCESS_WAL.md</c>). Currently has no observable effect;
-    /// later phases will use it to relax <see cref="FileShare"/> and to coordinate
-    /// writers via the <c>.wal-shm</c> sidecar file.
+    /// When <c>true</c>, opens the WAL file with <see cref="FileShare.ReadWrite"/> instead
+    /// of <see cref="FileShare.None"/> so other processes can open the same WAL.
+    /// Cross-process writer serialisation and the <c>.wal-shm</c> sidecar are owned by
+    /// the surrounding <see cref="BLite.Core.Storage.StorageEngine"/>; this WAL only
+    /// relaxes its own <see cref="FileShare"/> mode based on the flag. See
+    /// <c>roadmap/v5/MULTI_PROCESS_WAL.md</c> for the full design.
     /// </param>
     public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000, bool allowMultiProcessAccess = false)
     {
