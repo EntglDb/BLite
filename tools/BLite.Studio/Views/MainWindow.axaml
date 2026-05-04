@@ -1152,7 +1152,7 @@
                              
                             <!-- Left col: Schema Fields (if present) -->
                             <StackPanel Grid.Column="0" Spacing="20" Margin="0,0,24,0">
-                              <Border Background="White" 
+                              <Border Background="{DynamicResource SystemControlBackgroundAltMediumHighBrush}" 
                                       BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                                       BorderThickness="1"
                                       CornerRadius="4" Padding="12">
@@ -1200,7 +1200,7 @@
                                 <TextBlock Text="Vector Source Configuration" FontWeight="SemiBold" FontSize="12"/>
                                 
                                 <!-- Entry Form -->
-                                <Border Background="White" 
+                                <Border Background="{DynamicResource SystemControlBackgroundAltMediumHighBrush}" 
                                         BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                                         BorderThickness="1"
                                         CornerRadius="4" Padding="12">
@@ -1244,7 +1244,7 @@
 
                             <!-- Right Col: Config settings -->
                             <StackPanel Grid.Column="1" Spacing="20">
-                              <Border Background="White" 
+                              <Border Background="{DynamicResource SystemControlBackgroundAltMediumHighBrush}" 
                                       BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                                       BorderThickness="1"
                                       CornerRadius="4" Padding="12">
