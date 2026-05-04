@@ -1,3 +1,4 @@
+using BLite.Core.Encryption;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
@@ -637,5 +638,58 @@ public sealed class MultiProcessWalSharedMemoryTests : IDisposable
 
         // 0xBB (B's version) should be visible, not 0xAA (A's older version).
         Assert.Equal(0xBB, buf[0]);
+    }
+
+    // ── Encrypted WAL multi-process ──────────────────────────────────────────
+
+    [Fact]
+    public async Task EncryptedWal_CrossEngine_CommitVisibleViaPhase7Replay()
+    {
+        // Validates that Phase 7 incremental WAL replay works correctly when both
+        // engines are configured with an encrypted WAL. Engine A commits a page;
+        // Engine B must be able to read it after BeginTransaction triggers replay.
+        // This exercises the encrypted branch of ReadCommittedPagesSince.
+        //
+        // Engine B is intentionally opened AFTER Engine A has committed so that the
+        // WAL file already contains the 64-byte BLCE crypto header — this ensures
+        // Engine B's WriteAheadLog initializes _cryptoInitialized=true on open.
+
+        var opts   = new CryptoOptions("mp_wal_test_passphrase", iterations: 1);
+        var cfgA   = PageFileConfig.Default with
+        {
+            AllowMultiProcessAccess = true,
+            CryptoProvider = new AesGcmCryptoProvider(opts),
+        };
+        var cfgB   = PageFileConfig.Default with
+        {
+            AllowMultiProcessAccess = true,
+            CryptoProvider = new AesGcmCryptoProvider(opts),
+        };
+
+        var dbPath = Path.Combine(_tempDir, "enc_phase7.db");
+
+        using var engineA = new StorageEngine(dbPath, cfgA);
+
+        // Engine A commits a page first so the WAL crypto header exists on disk.
+        var pageData = new byte[engineA.PageSize];
+        pageData[0] = 0xEE;
+        ulong txAId;
+        using (var txA = engineA.BeginTransaction())
+        {
+            engineA.WritePage(7, txA.TransactionId, pageData);
+            txAId = txA.TransactionId;
+            await txA.CommitAsync();
+        }
+
+        // Engine B opens AFTER the WAL crypto header has been written by A, so its
+        // WriteAheadLog instance can derive the decryption key from the file header.
+        using var engineB = new StorageEngine(dbPath, cfgB);
+
+        // Engine B begins a new transaction — Phase 7 replay decrypts and ingests A's commit.
+        using var txB = engineB.BeginTransaction();
+
+        var buf = new byte[engineB.PageSize];
+        engineB.ReadPage(7, txAId, buf.AsSpan());
+        Assert.Equal(0xEE, buf[0]);
     }
 }

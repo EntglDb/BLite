@@ -171,13 +171,25 @@ public sealed class Transaction : ITransaction
 
         if (_state == TransactionState.Active || _state == TransactionState.Preparing)
         {
-            // Auto-rollback if not committed
-            RollbackAsync().GetAwaiter().GetResult();
+            // Auto-rollback if not committed. Wrapped in try/catch so that a rollback
+            // failure (e.g. WAL write timeout, WAL stream closed) does not prevent reader-
+            // slot release below, which must always run to avoid pinning GetMinReaderOffset().
+            // Rollback failures are best-effort: the WAL abort record is advisory and the
+            // WAL cache is already cleared synchronously inside RollbackTransactionAsync.
+            try
+            {
+                RollbackAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception)
+            {
+                // Intentionally swallowed: rollback is best-effort on Dispose.
+                // The WAL cache entry for this transaction was already removed;
+                // a missing abort record only delays WAL cleanup, not data integrity.
+            }
         }
 
         // Release the cross-process reader slot (Phase 5).
-        // This must happen even if rollback throws, so it is placed after the rollback
-        // path. The slot release is idempotent and best-effort.
+        // Unconditionally reached even when rollback above threw.
         if (ShmReaderSlotIndex >= 0)
         {
             _storage.ReleaseReaderSlot(ShmReaderSlotIndex);

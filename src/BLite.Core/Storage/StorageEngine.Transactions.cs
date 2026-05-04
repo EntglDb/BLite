@@ -15,8 +15,18 @@ public sealed partial class StorageEngine
         // WAL records into _walIndex so reads in this transaction see fresh data.
         if (_shm != null && _wal is Transactions.WriteAheadLog walForReplay)
         {
-            long shmEnd = _shm.ReadWalEndOffset();
+            long shmEnd   = _shm.ReadWalEndOffset();
             long lastKnown = Volatile.Read(ref _lastKnownWalEndOffset);
+
+            // Detect WAL truncation by another process: shmEnd < lastKnown means the WAL
+            // was reset to 0 by a checkpoint and new records are already being appended.
+            // Reset our bookmark so the next iteration replays from the new base.
+            if (shmEnd < lastKnown)
+            {
+                Interlocked.CompareExchange(ref _lastKnownWalEndOffset, 0, lastKnown);
+                lastKnown = Volatile.Read(ref _lastKnownWalEndOffset);
+            }
+
             if (shmEnd > lastKnown)
             {
                 // Attempt to claim the replay range; only the first thread wins —
@@ -26,14 +36,19 @@ public sealed partial class StorageEngine
                     try
                     {
                         var newPages = walForReplay.ReadCommittedPagesSince(lastKnown, shmEnd);
-                        foreach (var (pid, data) in newPages)
+                        foreach (var (pid, data, walOffset) in newPages)
                         {
                             // Only populate _walIndex if this engine hasn't already committed
                             // a newer local version of this page. `_walOffsets` tracks pages
                             // committed by THIS engine; if the page is present there, our
                             // local _walIndex already has the fresher version.
                             if (_walOffsets == null || !_walOffsets.ContainsKey(pid))
+                            {
                                 _walIndex[pid] = data;
+                                // Record the WAL offset so CheckpointAsync can apply the
+                                // GetMinReaderOffset() safe boundary for this page (Phase 6).
+                                _walOffsets?[pid] = walOffset;
+                            }
                         }
                     }
                     catch

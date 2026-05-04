@@ -47,8 +47,10 @@ public sealed partial class StorageEngine
                 var pageData = walFile.ReadPageAt(walOffset, pageId);
                 if (pageData != null)
                 {
-                    // Populate local _walIndex to amortise future reads of this page.
+                    // Populate local _walIndex and _walOffsets to amortise future reads
+                    // and ensure CheckpointAsync respects the reader boundary (Phase 6).
                     _walIndex[pageId] = pageData;
+                    _walOffsets?[pageId] = walOffset;
                     var length = Math.Min(pageData.Length, destination.Length);
                     pageData.AsSpan(0, length).CopyTo(destination);
                     return;
@@ -102,6 +104,7 @@ public sealed partial class StorageEngine
                 if (pageData != null)
                 {
                     _walIndex[pageId] = pageData;
+                    _walOffsets?[pageId] = walOffset;
                     var length = Math.Min(pageData.Length, destination.Length);
                     pageData.AsSpan(0, length).CopyTo(destination);
                     return;
@@ -206,6 +209,7 @@ public sealed partial class StorageEngine
                 if (pageData != null)
                 {
                     _walIndex[pageId] = pageData;
+                    _walOffsets?[pageId] = walOffset;
                     var length = Math.Min(pageData.Length, destination.Length);
                     pageData.AsMemory(0, length).CopyTo(destination);
 #if NET5_0_OR_GREATER

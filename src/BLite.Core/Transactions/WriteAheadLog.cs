@@ -467,10 +467,51 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// <c>_lock</c>. Safe to call only when the caller already holds an exclusive
     /// write-side guard (e.g. the StorageEngine <c>_commitLock</c> + SHM writer
     /// lock), which prevents any concurrent WAL write from updating the position.
-    /// Used by the group-commit path to snapshot per-record WAL offsets for the
-    /// SHM page index (Phase 4).
     /// </summary>
     internal long GetCurrentPositionNoLock() => _walStream?.Position ?? 0;
+
+    /// <summary>
+    /// Writes a WAL data record and returns the byte offset at which the record
+    /// starts in the WAL file. The offset is captured atomically inside the WAL
+    /// write lock — so no concurrent WAL writer (e.g. <c>PrepareTransactionAsync</c>)
+    /// can shift the stream position between the snapshot and the actual write.
+    /// Used by the group-commit path (Phase 4) to build the SHM page index.
+    /// </summary>
+    internal async ValueTask<long> WriteDataRecordAndGetOffsetAsync(
+        ulong transactionId, uint pageId, ReadOnlyMemory<byte> afterImage,
+        CancellationToken ct = default)
+    {
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
+        long startOffset;
+        try
+        {
+            // Capture position atomically with the write — no other writer can run here.
+            startOffset = _walStream?.Position ?? 0;
+
+            var headerSize = 17;
+            var totalSize = headerSize + afterImage.Length;
+            var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(totalSize);
+            try
+            {
+                buffer[0] = (byte)WalRecordType.Write;
+                BitConverter.TryWriteBytes(buffer.AsSpan(1, 8), transactionId);
+                BitConverter.TryWriteBytes(buffer.AsSpan(9, 4), pageId);
+                BitConverter.TryWriteBytes(buffer.AsSpan(13, 4), afterImage.Length);
+                afterImage.Span.CopyTo(buffer.AsSpan(headerSize));
+                await WriteRawAsync(new ReadOnlyMemory<byte>(buffer, 0, totalSize), ct);
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+        return startOffset;
+    }
 
     /// <summary>
     /// Reads the page data for a Write WAL record that starts at
@@ -497,7 +538,13 @@ public sealed class WriteAheadLog : IWriteAheadLog
             return null;
 
         if (_crypto != null)
+        {
+            // If the WAL was opened before the crypto header was written (e.g. the
+            // WAL file was empty at open time) we cannot decrypt — return null so
+            // the caller falls through to the page-file read.
+            if (!_cryptoInitialized) return null;
             return ReadPageAtEncrypted(recordOffset, expectedPageId);
+        }
 
         return ReadPageAtPlaintext(recordOffset, expectedPageId);
     }
@@ -577,15 +624,15 @@ public sealed class WriteAheadLog : IWriteAheadLog
     //
     // RandomAccess.Read is a .NET 6+ API that allows offset-based reads without
     // affecting the stream position (making concurrent reads + writes safe).
-    // On netstandard2.1 we fall back to a locked seek+read on the write stream.
-
-    // Per-read lock protects the seek+read sequence on netstandard2.1.
-    private readonly object _readSeekLock = new();
+    // On netstandard2.1 we fall back to a seek+read on the write stream, which
+    // requires holding the WAL write lock (_lock) so that no concurrent WAL write
+    // can change _walStream.Position between our Seek and Read calls.
 
     /// <summary>
     /// Reads bytes at a specific offset in the WAL file without requiring
-    /// the WAL write lock. Thread-safe on .NET 6+ via <c>RandomAccess</c>;
-    /// on .NET Standard 2.1 a per-instance read-seek lock serialises access.
+    /// the WAL write lock to be pre-held. Thread-safe on .NET 6+ via
+    /// <c>RandomAccess</c>; on .NET Standard 2.1 the WAL write lock is acquired
+    /// briefly to serialise the seek+read with concurrent writers.
     /// </summary>
     private int ReadAtOffset(long offset, Span<byte> buffer)
     {
@@ -605,23 +652,37 @@ public sealed class WriteAheadLog : IWriteAheadLog
         return ReadViaSeek(offset, buffer);
     }
 
-    // Fallback seek-based read — callers must hold _readSeekLock.
+    // Seek-based fallback for platforms without RandomAccess.
+    // Acquires _lock to prevent WAL writers from changing _walStream.Position
+    // concurrently — the same lock they hold during WriteRawAsync / WriteRawSync.
     private int ReadViaSeek(long offset, Span<byte> buffer)
     {
-        lock (_readSeekLock)
+        if (!_lock.Wait(_writeTimeoutMs))
+            throw new TimeoutException("Timed out acquiring WAL read lock (seek fallback).");
+        try
         {
             _walStream!.Position = offset;
             return _walStream.Read(buffer);
+        }
+        finally
+        {
+            _lock.Release();
         }
     }
 
     // Overload for byte[] (avoids Span allocation on older runtimes).
     private int ReadViaSeek(long offset, byte[] buffer)
     {
-        lock (_readSeekLock)
+        if (!_lock.Wait(_writeTimeoutMs))
+            throw new TimeoutException("Timed out acquiring WAL read lock (seek fallback).");
+        try
         {
             _walStream!.Position = offset;
             return _walStream.Read(buffer, 0, buffer.Length);
+        }
+        finally
+        {
+            _lock.Release();
         }
     }
 
@@ -629,12 +690,13 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// Reads all committed pages from WAL records between
     /// <paramref name="fromOffset"/> (inclusive) and <paramref name="toOffset"/>
     /// (exclusive), replaying only fully committed transactions. Returns the
-    /// deduplicated list of <c>(pageId, data)</c> pairs — latest committed write per
-    /// page wins — for population into the local <c>_walIndex</c> (Phase 7 replay).
+    /// deduplicated list of <c>(pageId, data, walOffset)</c> tuples — latest committed
+    /// write per page wins — for population into the local <c>_walIndex</c> and
+    /// <c>_walOffsets</c> (Phase 7 replay).
     /// </summary>
-    internal List<(uint pageId, byte[] data)> ReadCommittedPagesSince(long fromOffset, long toOffset)
+    internal List<(uint pageId, byte[] data, long walOffset)> ReadCommittedPagesSince(long fromOffset, long toOffset)
     {
-        if (_walStream == null || fromOffset >= toOffset) return new List<(uint, byte[])>();
+        if (_walStream == null || fromOffset >= toOffset) return new List<(uint, byte[], long)>();
 
         // Track writes per transaction as (walOffset, data) so we can determine which
         // version of a page is latest (highest walOffset) across concurrent transactions.
@@ -643,8 +705,13 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
         if (_crypto != null && _cryptoInitialized)
         {
-            // Encrypted path: scan envelopes from fromOffset to toOffset.
-            long pos = fromOffset;
+            // Encrypted WAL records start after the per-file crypto header (64 bytes).
+            // When fromOffset falls inside the header region (e.g. first replay with
+            // lastKnown=0), advance past it to avoid misinterpreting the BLCE magic as
+            // a record envelope size.
+            long pos = (_crypto.FileHeaderSize > 0 && fromOffset < _crypto.FileHeaderSize)
+                ? _crypto.FileHeaderSize
+                : fromOffset;
             var sizeBuf = new byte[4];
             while (pos < toOffset)
             {
@@ -745,9 +812,9 @@ public sealed class WriteAheadLog : IWriteAheadLog
             }
         }
 
-        var result = new List<(uint, byte[])>(latestPerPage.Count);
+        var result = new List<(uint, byte[], long)>(latestPerPage.Count);
         foreach (var kvp in latestPerPage)
-            result.Add((kvp.Key, kvp.Value.data));
+            result.Add((kvp.Key, kvp.Value.data, kvp.Value.walOffset));
         return result;
     }
 

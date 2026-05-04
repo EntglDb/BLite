@@ -149,10 +149,12 @@ public sealed partial class StorageEngine
 
         try
         {
-            // In multi-process mode we need to record the WAL byte offset at the start
-            // of each Write record so the SHM hash table can map pageId → offset.
-            // We use GetCurrentPositionNoLock() (safe here because _commitLock and the
-            // SHM writer lock together make us the only active writer).
+            // In multi-process mode we record the WAL byte offset at the start of each
+            // Write record so the SHM hash table can map pageId → offset. We use
+            // WriteDataRecordAndGetOffsetAsync which atomically captures the position
+            // inside the WAL write lock, ensuring PrepareTransactionAsync callers that
+            // also write to the WAL (without _commitLock) cannot shift the position
+            // between the snapshot and the actual write.
             var wal = (_shm != null) ? (_wal as Transactions.WriteAheadLog) : null;
             var pageOffsets = wal != null ? new List<(uint pageId, long walOffset)>() : null;
 
@@ -168,12 +170,16 @@ public sealed partial class StorageEngine
                     await _wal.WriteBeginRecordAsync(commit.TransactionId).ConfigureAwait(false);
                     foreach (var (pageId, data) in commit.Pages)
                     {
-                        // Snapshot the write position BEFORE the record so the SHM index
-                        // stores the offset of this record's type byte (the record start).
-                        long recordStartOffset = wal?.GetCurrentPositionNoLock() ?? 0;
-                        await _wal.WriteDataRecordAsync(commit.TransactionId, pageId, data).ConfigureAwait(false);
-                        if (pageOffsets != null && recordStartOffset > 0)
-                            pageOffsets.Add((pageId, recordStartOffset));
+                        // When multi-process mode is active, use the offset-returning variant
+                        // so the record start offset is captured atomically inside the WAL
+                        // write lock, preventing concurrent PrepareTransactionAsync writers
+                        // from shifting the stream position between snapshot and write.
+                        // In single-process mode, fall back to the standard write.
+                        if (wal != null)
+                            pageOffsets!.Add((pageId, await wal.WriteDataRecordAndGetOffsetAsync(
+                                commit.TransactionId, pageId, data).ConfigureAwait(false)));
+                        else
+                            await _wal.WriteDataRecordAsync(commit.TransactionId, pageId, data).ConfigureAwait(false);
                     }
                     await _wal.WriteCommitRecordAsync(commit.TransactionId).ConfigureAwait(false);
                 }
