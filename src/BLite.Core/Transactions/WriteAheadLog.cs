@@ -96,7 +96,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
             _walPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
-            FileShare.None,
+            _allowMultiProcessAccess ? FileShare.ReadWrite : FileShare.None,
             bufferSize: 64 * 1024);
         // REMOVED FileOptions.WriteThrough for SQLite-style lazy checkpointing
         // Durability is ensured by explicit Flush() calls

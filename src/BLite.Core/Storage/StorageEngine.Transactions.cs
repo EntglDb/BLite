@@ -9,7 +9,12 @@ public sealed partial class StorageEngine
 
     public Transaction BeginTransaction(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
     {
-        var txnId = (ulong)Interlocked.Increment(ref _nextTransactionId);
+        // In multi-process mode, allocate the transaction id from the shared SHM counter
+        // so two processes never observe the same id. Falls back to the in-process
+        // Interlocked counter when the SHM sidecar is not configured.
+        var txnId = _shm != null
+            ? _shm.AllocateTransactionId()
+            : (ulong)Interlocked.Increment(ref _nextTransactionId);
         var transaction = new Transaction(txnId, this, isolationLevel);
         _activeTransactions[txnId] = transaction;
         _metrics?.Publish(new Metrics.MetricEvent

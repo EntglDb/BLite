@@ -340,7 +340,7 @@ public sealed class PageFile : IPageStorage
                 _filePath,
                 FileMode.OpenOrCreate,
                 FileAccess.ReadWrite,
-                FileShare.None,
+                _config.AllowMultiProcessAccess ? FileShare.ReadWrite : FileShare.None,
                 bufferSize: 4096,
 #if NET6_0_OR_GREATER
                 FileOptions.RandomAccess | FileOptions.Asynchronous);
