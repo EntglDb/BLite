@@ -11,6 +11,7 @@
         x:Class="BLite.Studio.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="BLite Studio"
+        Icon="avares://BLite.Studio/Assets/icon.png"
         Width="900" Height="680"
         MinWidth="640" MinHeight="480"
         WindowStartupLocation="CenterScreen">

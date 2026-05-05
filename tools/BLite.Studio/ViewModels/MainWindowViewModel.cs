@@ -262,9 +262,10 @@ public partial class MainWindowViewModel : ViewModelBase
                 if (string.IsNullOrEmpty(EncryptionPassphrase))
                     throw new InvalidOperationException("A passphrase is required when encryption is enabled.");
 
-                var crypto = new CryptoOptions(EncryptionPassphrase);
-                _engine       = new BLiteEngine(path, crypto);
-                _openedConfig = PageFileConfig.Default;
+                var crypto      = new CryptoOptions(EncryptionPassphrase);
+                var baseConfig  = new PageFileConfig { AllowMultiProcessAccess = true };
+                _engine       = new BLiteEngine(path, crypto, baseConfig: baseConfig);
+                _openedConfig = PageFileConfig.Default with { AllowMultiProcessAccess = true };
             }
             else
             {
@@ -279,6 +280,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     config = detected.Value with { Access = access };
                 }
 
+                config        = config with { AllowMultiProcessAccess = true };
                 _engine       = new BLiteEngine(path, config);
                 _openedConfig = config;
             }

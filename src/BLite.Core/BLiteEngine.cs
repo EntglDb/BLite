@@ -143,7 +143,8 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
             // header, not a page header, so the auto-detection heuristic would misread it.
             config = PageFileConfig.Default with
             {
-                CryptoProvider = new AesGcmCryptoProvider(crypto)
+                CryptoProvider = new AesGcmCryptoProvider(crypto),
+                AllowMultiProcessAccess = baseConfig?.AllowMultiProcessAccess ?? false
             };
         }
 
