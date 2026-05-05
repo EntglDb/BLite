@@ -13,6 +13,10 @@
 
 > **Compatibility**: Targets **net10.0** and **netstandard2.1** — works with .NET 5+, Unity, Xamarin, MAUI, and any netstandard2.1-compatible runtime.
 
+> [!NOTE]
+> **v5.0.0 Preview Available!** BLite 5 introduces transparent **AES-256-GCM encryption**, a formal **audit trail** (IBLiteAuditSink + OpenTelemetry), and full **GDPR compliance primitives** ([PersonalData], subject export, CDC masking, Strict mode). See [README-5.0.0-preview.0.md](README-5.0.0-preview.0.md) for the full feature guide.  
+> Install: `dotnet add package BLite --version 5.0.0-preview.0` — **GA planned for 30 May 2026.** Please [report issues on GitHub](https://github.com/EntglDb/BLite/issues).
+
 ---
 
 > [!IMPORTANT]
