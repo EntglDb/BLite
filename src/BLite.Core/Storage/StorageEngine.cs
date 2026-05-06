@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Threading.Channels;
+using BLite.Core.Audit;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -316,4 +317,28 @@ public sealed partial class StorageEngine : IDisposable
     /// </summary>
     private static PageFileConfig AsStandaloneConfig(PageFileConfig config)
         => config with { WalPath = null, IndexFilePath = null, CollectionDataDirectory = null };
+
+    // ── Audit ────────────────────────────────────────────────────────────────
+
+    private BLiteAuditOptions? _auditOptions;
+    private BLiteMetrics? _auditMetrics;
+
+    /// <summary>
+    /// Wires audit configuration into this engine. Instantiates a
+    /// <see cref="BLiteMetrics"/> instance when
+    /// <see cref="BLiteAuditOptions.EnableMetrics"/> is <c>true</c>. The sink
+    /// reference (if any) is read directly from <paramref name="options"/> on
+    /// each emission, so callers may swap it at runtime.
+    /// </summary>
+    internal void ConfigureAudit(BLiteAuditOptions options)
+    {
+        _auditOptions = options ?? throw new ArgumentNullException(nameof(options));
+        _auditMetrics = options.EnableMetrics ? new BLiteMetrics() : null;
+    }
+
+    internal BLiteMetrics? Metrics => _auditMetrics;
+
+    internal IBLiteAuditSink? AuditSink => _auditOptions?.Sink;
+
+    internal BLiteAuditOptions? AuditOptions => _auditOptions;
 }

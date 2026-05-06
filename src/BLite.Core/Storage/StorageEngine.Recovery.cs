@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using BLite.Core.Metrics;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -40,7 +41,7 @@ public sealed partial class StorageEngine
     {
         if (_walIndex.IsEmpty) return;
         if (Interlocked.CompareExchange(ref _checkpointRunning, 1, 0) != 0) return;
-        var sw = _metrics != null ? Metrics.ValueStopwatch.StartNew() : default;
+        var sw = _metrics != null ? ValueStopwatch.StartNew() : default;
         try
         {
             var snapshot = _walIndex.ToArray();
@@ -95,7 +96,7 @@ public sealed partial class StorageEngine
                 _metrics?.Publish(new Metrics.MetricEvent
                 {
                     Timestamp     = sw.StartTimestamp,
-                    Type          = Metrics.MetricEventType.Checkpoint,
+                    Type          = MetricEventType.Checkpoint,
                     ElapsedMicros = sw.GetElapsedMicros(),
                     Success       = true,
                 });

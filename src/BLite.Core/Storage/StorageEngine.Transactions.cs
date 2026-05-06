@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BLite.Core.Metrics;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -15,7 +16,7 @@ public sealed partial class StorageEngine
         _metrics?.Publish(new Metrics.MetricEvent
         {
             Timestamp  = Stopwatch.GetTimestamp(),
-            Type       = Metrics.MetricEventType.TransactionBegin,
+            Type       = MetricEventType.TransactionBegin,
             Success    = true,
         });
         return transaction;
@@ -177,7 +178,7 @@ public sealed partial class StorageEngine
         if (_writerGate != null && !await _writerGate.WaitAsync(gateTimeoutMs, ct).ConfigureAwait(false))
             throw new TimeoutException("Too many concurrent writers — admission gate full.");
 
-        var sw = _metrics != null ? Metrics.ValueStopwatch.StartNew() : default;
+        var sw = _metrics != null ? ValueStopwatch.StartNew() : default;
         bool success = false;
         try
         {
@@ -197,7 +198,7 @@ public sealed partial class StorageEngine
                 _metrics?.Publish(new Metrics.MetricEvent
                 {
                     Timestamp     = sw.StartTimestamp,
-                    Type          = Metrics.MetricEventType.TransactionCommit,
+                    Type          = MetricEventType.TransactionCommit,
                     ElapsedMicros = sw.GetElapsedMicros(),
                     Success       = success,
                 });
@@ -253,7 +254,7 @@ public sealed partial class StorageEngine
         _metrics?.Publish(new Metrics.MetricEvent
         {
             Timestamp = Stopwatch.GetTimestamp(),
-            Type      = Metrics.MetricEventType.TransactionRollback,
+            Type      = MetricEventType.TransactionRollback,
             Success   = true,
         });
     }

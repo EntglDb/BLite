@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using BLite.Core.Metrics;
 
 namespace BLite.Core.Storage;
 
@@ -183,7 +184,7 @@ public sealed partial class StorageEngine
             _metrics.Publish(new Metrics.MetricEvent
             {
                 Timestamp = System.Diagnostics.Stopwatch.GetTimestamp(),
-                Type      = Metrics.MetricEventType.GroupCommitBatch,
+                Type      = MetricEventType.GroupCommitBatch,
                 BatchSize = batch.Count,
                 Success   = failure == null,
             });
