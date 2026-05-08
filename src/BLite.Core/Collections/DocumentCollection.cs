@@ -1,8 +1,10 @@
 using BLite.Core.CDC;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using BLite.Bson;
+using BLite.Core.Audit;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
 using BLite.Core.Metrics;
@@ -43,6 +45,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     internal readonly BTreeIndex _primaryIndex;
     private readonly CollectionIndexManager<TId, T> _indexManager;
     private readonly string _collectionName;
+
+    /// <summary>
+    /// Collection name exposed for audit hooks (insert/query/storage events) so
+    /// they can tag emitted events without reaching into private state.
+    /// </summary>
+    internal string CollectionName => _collectionName;
 
     // Free space tracking: 16-bucket index for O(1) FindPage
     private readonly FreeSpaceIndex _fsi;
@@ -1534,34 +1542,56 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (docLength >= 0 && docLength < docData.Length)
             docData = docData[..docLength]; // trim to actual serialized size
-        DocumentLocation location;
-        if (_isTimeSeries)
-        {
-            // Wrap the already-serialized BSON bytes in a BsonDocument so InsertTimeSeries
-            // can read the timestamp field and manage TimeSeriesPage allocation/pruning.
-            var bsonDoc = new BsonDocument(docData.ToArray(), _storage.GetKeyReverseMap(), _storage.GetKeyMap());
-            var loc = _storage.InsertTimeSeries(_collectionName, bsonDoc, transaction);
-            location = new DocumentLocation(loc.PageId, (ushort)loc.SlotIndex);
-        }
-        else if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
-        {
-            var pageId = await FindPageWithSpace(docData.Length + SlotEntry.Size, transaction);
-            if (pageId == 0) pageId = await AllocateNewDataPage(transaction);
-            var slotIndex = await InsertIntoPage(pageId, docData, transaction);
-            location = new DocumentLocation(pageId, slotIndex);
-        }
-        else
-        {
-            var (pageId, slotIndex) = await InsertWithOverflow(docData, transaction);
-            location = new DocumentLocation(pageId, slotIndex);
-        }
 
-        var key = _mapper.ToIndexKey(id);
-        _primaryIndex.Insert(key, location, transaction.TransactionId);
-        _indexManager.InsertIntoAll(entity, location, transaction);
+        var auditOptions = _storage.AuditOptions;
+        var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
+        var auditDocSize = docData.Length;
+        try
+        {
+            DocumentLocation location;
+            if (_isTimeSeries)
+            {
+                // Wrap the already-serialized BSON bytes in a BsonDocument so InsertTimeSeries
+                // can read the timestamp field and manage TimeSeriesPage allocation/pruning.
+                var bsonDoc = new BsonDocument(docData.ToArray(), _storage.GetKeyReverseMap(), _storage.GetKeyMap());
+                var loc = _storage.InsertTimeSeries(_collectionName, bsonDoc, transaction);
+                location = new DocumentLocation(loc.PageId, (ushort)loc.SlotIndex);
+            }
+            else if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
+            {
+                var pageId = await FindPageWithSpace(docData.Length + SlotEntry.Size, transaction);
+                if (pageId == 0) pageId = await AllocateNewDataPage(transaction);
+                var slotIndex = await InsertIntoPage(pageId, docData, transaction);
+                location = new DocumentLocation(pageId, slotIndex);
+            }
+            else
+            {
+                var (pageId, slotIndex) = await InsertWithOverflow(docData, transaction);
+                location = new DocumentLocation(pageId, slotIndex);
+            }
 
-        // Notify CDC
-        await NotifyCdc(OperationType.Insert, id, transaction, docData);
+            var key = _mapper.ToIndexKey(id);
+            _primaryIndex.Insert(key, location, transaction.TransactionId);
+            _indexManager.InsertIntoAll(entity, location, transaction);
+
+            // Notify CDC
+            await NotifyCdc(OperationType.Insert, id, transaction, docData);
+        }
+        finally
+        {
+            if (auditSw is not null)
+            {
+                auditSw.Stop();
+                var elapsed = auditSw.Elapsed;
+                var evt = new InsertAuditEvent(
+                    transaction.TransactionId,
+                    _collectionName,
+                    auditDocSize,
+                    elapsed);
+                auditOptions!.Sink?.OnInsert(in evt);
+                _storage.Metrics?.RecordInsert(elapsed);
+            }
+        }
     }
 
     /// <summary>
