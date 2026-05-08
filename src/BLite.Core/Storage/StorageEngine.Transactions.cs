@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BLite.Core.Audit;
 using BLite.Core.Metrics;
 using BLite.Core.Transactions;
 
@@ -115,52 +116,77 @@ public sealed partial class StorageEngine
         // NOTE: No admission gate here — the caller (CommitTransactionAsync(Transaction, ct))
         // already acquired the gate. This method is also called from the group commit writer
         // which should not be gated.
-        bool needsCheckpoint = false;
+        var auditOptions = _auditOptions;
+        var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
+        int auditPagesWritten = 0;
 
-        if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
-            throw new TimeoutException("Timed out acquiring commit lock (CommitTransaction).");
         try
         {
-            // Get ALL pages from WAL cache (includes both data and index pages)
-            if (!_walCache.TryGetValue(transactionId, out var pages))
+            bool needsCheckpoint = false;
+
+            if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
+                throw new TimeoutException("Timed out acquiring commit lock (CommitTransaction).");
+            try
             {
-                // No writes for this transaction, just write commit record
+                // Get ALL pages from WAL cache (includes both data and index pages)
+                if (!_walCache.TryGetValue(transactionId, out var pages))
+                {
+                    // No writes for this transaction, just write commit record
+                    await _wal.WriteCommitRecordAsync(transactionId);
+                    await _wal.FlushAsync();
+                    return;
+                }
+
+                auditPagesWritten = pages.Count;
+
+                // 1. Write all changes to WAL (from cache, not writeSet!)
+                await _wal.WriteBeginRecordAsync(transactionId);
+
+                foreach (var (pageId, data) in pages)
+                {
+                    await _wal.WriteDataRecordAsync(transactionId, pageId, data);
+                }
+
+                // 2. Write commit record and flush
                 await _wal.WriteCommitRecordAsync(transactionId);
-                await _wal.FlushAsync();
-                return;
+                await _wal.FlushAsync(); // Durability: ensure WAL is on disk
+
+                // 3. Move pages from cache to WAL index (for reads)
+                _walCache.TryRemove(transactionId, out _);
+                foreach (var kvp in pages)
+                {
+                    _walIndex[kvp.Key] = kvp.Value;
+                }
+
+                // Check if checkpoint is needed, but defer it until after releasing the lock
+                needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
             }
-
-            // 1. Write all changes to WAL (from cache, not writeSet!)
-            await _wal.WriteBeginRecordAsync(transactionId);
-
-            foreach (var (pageId, data) in pages)
+            finally
             {
-                await _wal.WriteDataRecordAsync(transactionId, pageId, data);
+                _commitLock.Release();
             }
 
-            // 2. Write commit record and flush
-            await _wal.WriteCommitRecordAsync(transactionId);
-            await _wal.FlushAsync(); // Durability: ensure WAL is on disk
-
-            // 3. Move pages from cache to WAL index (for reads)
-            _walCache.TryRemove(transactionId, out _);
-            foreach (var kvp in pages)
+            // Fire checkpoint on a separate task so the caller isn't blocked.
+            if (needsCheckpoint)
             {
-                _walIndex[kvp.Key] = kvp.Value;
+                _ = Task.Run(() => CheckpointAsync());
             }
-
-            // Check if checkpoint is needed, but defer it until after releasing the lock
-            needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
         }
         finally
         {
-            _commitLock.Release();
-        }
-
-        // Fire checkpoint on a separate task so the caller isn't blocked.
-        if (needsCheckpoint)
-        {
-            _ = Task.Run(() => CheckpointAsync());
+            if (auditSw is not null)
+            {
+                auditSw.Stop();
+                var elapsed = auditSw.Elapsed;
+                var evt = new CommitAuditEvent(
+                    transactionId,
+                    string.Empty,
+                    auditPagesWritten,
+                    _wal.GetCurrentSize(),
+                    elapsed);
+                auditOptions!.Sink?.OnCommit(in evt);
+                _auditMetrics?.RecordCommit(elapsed);
+            }
         }
     }
 
@@ -179,6 +205,9 @@ public sealed partial class StorageEngine
             throw new TimeoutException("Too many concurrent writers — admission gate full.");
 
         var sw = _metrics != null ? ValueStopwatch.StartNew() : default;
+        var auditOptions = _auditOptions;
+        var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
+        int auditPagesWritten = 0;
         bool success = false;
         try
         {
@@ -186,6 +215,7 @@ public sealed partial class StorageEngine
             // The writer batches this commit with any other pending ones, issues one
             // WAL flush for the entire batch, then signals all waiters.
             _walCache.TryGetValue(transactionId, out var pages);
+            auditPagesWritten = pages?.Count ?? 0;
             var pending = new PendingCommit(transactionId, pages);
             await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
             await pending.Completion.Task.ConfigureAwait(false);
@@ -202,6 +232,20 @@ public sealed partial class StorageEngine
                     ElapsedMicros = sw.GetElapsedMicros(),
                     Success       = success,
                 });
+
+            if (auditSw is not null)
+            {
+                auditSw.Stop();
+                var elapsed = auditSw.Elapsed;
+                var evt = new CommitAuditEvent(
+                    transactionId,
+                    string.Empty,
+                    auditPagesWritten,
+                    _wal.GetCurrentSize(),
+                    elapsed);
+                auditOptions!.Sink?.OnCommit(in evt);
+                _auditMetrics?.RecordCommit(elapsed);
+            }
         }
     }
     
