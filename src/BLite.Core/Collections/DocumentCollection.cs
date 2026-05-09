@@ -52,6 +52,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// </summary>
     internal string CollectionName => _collectionName;
 
+    internal BLiteAuditOptions? AuditOptions => _storage.AuditOptions;
+    internal BLiteMetrics? AuditMetrics => _storage.Metrics;
+
     // Free space tracking: 16-bucket index for O(1) FindPage
     private readonly FreeSpaceIndex _fsi;
     // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.

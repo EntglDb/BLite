@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;
+using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Core.Indexing;
 using BLite.Core.Metadata;
@@ -132,120 +134,177 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // 1. Parse the LINQ expression tree into a flat QueryModel.
-        var visitor = new BTreeExpressionVisitor();
-        visitor.Visit(expression);
-        var model = visitor.GetModel();
+        var auditOptions = _collection.AuditOptions;
+        var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
+        QueryStrategy strategy = QueryStrategy.Unknown;
+        int auditResultCount = -1;
 
-        // ── Fast path: Count() / LongCount() terminal with no WHERE ─────────────
-        // Uses the primary BTree key scan (O(n) key reads, zero document reads).
-        // Disabled when Take/Skip are present — those shaping operators reduce the
-        // logical row-set before counting and must not be bypassed.
-        if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators
-            && !model.Take.HasValue && !model.Skip.HasValue)
+        try
         {
-            var count = await _collection.CountAsync(cancellationToken);
-            if (typeof(TResult) == typeof(int))    return (TResult)(object)count;
-            if (typeof(TResult) == typeof(long))   return (TResult)(object)(long)count;
-            if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
-        }
+            // 1. Parse the LINQ expression tree into a flat QueryModel.
+            var visitor = new BTreeExpressionVisitor();
+            visitor.Visit(expression);
+            var model = visitor.GetModel();
 
-        // ── Fast path: Count() / LongCount() terminal with WHERE predicate ────────
-        // Uses index key-only scan for indexed predicates (zero document reads) or a
-        // streaming count for non-indexed predicates (no large List<T> accumulation).
-        // Disabled when Take/Skip are present for the same reason as above.
-        if (model.IsCountOnly && model.WhereClause != null && !model.HasComplexOperators
-            && !model.Take.HasValue && !model.Skip.HasValue)
-        {
-            var count = await _collection.CountByPredicateAsync(model.WhereClause, cancellationToken);
-            if (typeof(TResult) == typeof(int))    return (TResult)(object)count;
-            if (typeof(TResult) == typeof(long))   return (TResult)(object)(long)count;
-            if (typeof(TResult) == typeof(object)) return (TResult)(object)count;
-        }
-
-        // ── Fast path: Sum / Average / Min / Max via BSON field-projection scan ─
-        // Reads only the target field from raw BSON — T is never fully instantiated.
-        // Fires for both no-WHERE and WHERE variants:
-        //   - No WHERE:  projector reads only the selector field.
-        //   - With WHERE: BsonProjectionCompiler merges WHERE + SELECT fields into one
-        //     BSON pass; documents that fail the WHERE return null and are skipped.
-        // HasComplexOperators is intentionally NOT checked here: VisitAggregate always
-        // sets it so that queries that cannot be pushed down fall back to EnumerableRewriter.
-        if (model.AggregateOp is not null && model.AggregateSelector is not null)
-        {
-            if (TryBsonAggregate<TResult>(model.AggregateOp, model.AggregateSelector, model.WhereClause, out var aggResult))
-                return aggResult;
-        }
-
-        // ── Push-down SELECT (+ optional WHERE) ───────────────────────────────
-        // Single-pass BSON projection: no T instantiation, no EnumerableRewriter.
-        // Only applicable when there is no post-scan ordering or paging.
-        if (model.SelectClause is not null
-            && model.OrderByClause is null
-            && !model.Take.HasValue
-            && !model.Skip.HasValue)
-        {
-            var pushed = TryPushDownSelect<TResult>(model.SelectClause, model.WhereClause);
-            if (pushed is not null) return pushed;
-        }
-
-        // 2. Data fetching.
-        // When Take (+ optional Skip) is present without complex operators or ordering that
-        // requires a full scan first, cap how many rows we need to materialise.
-        int fetchLimit = (model.Take.HasValue && model.OrderByClause == null && !model.HasComplexOperators)
-            ? (model.Skip.GetValueOrDefault() + model.Take.Value)
-            : int.MaxValue;
-
-        // ── Fast path: OrderBy(indexedField).Skip(S).Take(N) without WHERE ───────────
-        // Reads only skip+take entries from the index in sorted order, skipping the
-        // O(n log n) in-memory sort over all documents.  Skip is performed at the
-        // index-entry level (no document reads for skipped positions), so only the
-        // requested page window is ever deserialised.
-        if (model.WhereClause == null && model.OrderByClause != null && model.Take.HasValue)
-        {
-            var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
-            if (orderOpt is not null)
+            // ── Fast path: Count() / LongCount() terminal with no WHERE ─────────────
+            // Uses the primary BTree key scan (O(n) key reads, zero document reads).
+            // Disabled when Take/Skip are present — those shaping operators reduce the
+            // logical row-set before counting and must not be bypassed.
+            if (model.IsCountOnly && model.WhereClause == null && !model.HasComplexOperators
+                && !model.Take.HasValue && !model.Skip.HasValue)
             {
-                bool ascending = !model.OrderDescending;
-                int skip = model.Skip ?? 0;
-                int take = model.Take.Value;
-                var topN = new List<T>(take);
-                await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, skip, take, cancellationToken))
-                    topN.Add(item);
-                if (model.SelectClause != null)
-                    return ProjectEnumerable<TResult>(topN, model.SelectClause);
-                return TerminalReturn<TResult>(topN);
+                if (auditSw is not null) strategy = QueryStrategy.IndexScan;
+                var count = await _collection.CountAsync(cancellationToken);
+                if (typeof(TResult) == typeof(int))    { auditResultCount = count; return (TResult)(object)count; }
+                if (typeof(TResult) == typeof(long))   { auditResultCount = count; return (TResult)(object)(long)count; }
+                if (typeof(TResult) == typeof(object)) { auditResultCount = count; return (TResult)(object)count; }
+            }
+
+            // ── Fast path: Count() / LongCount() terminal with WHERE predicate ────────
+            // Uses index key-only scan for indexed predicates (zero document reads) or a
+            // streaming count for non-indexed predicates (no large List<T> accumulation).
+            // Disabled when Take/Skip are present for the same reason as above.
+            if (model.IsCountOnly && model.WhereClause != null && !model.HasComplexOperators
+                && !model.Take.HasValue && !model.Skip.HasValue)
+            {
+                if (auditSw is not null) strategy = DetermineFetchStrategy(model.WhereClause);
+                var count = await _collection.CountByPredicateAsync(model.WhereClause, cancellationToken);
+                if (typeof(TResult) == typeof(int))    { auditResultCount = count; return (TResult)(object)count; }
+                if (typeof(TResult) == typeof(long))   { auditResultCount = count; return (TResult)(object)(long)count; }
+                if (typeof(TResult) == typeof(object)) { auditResultCount = count; return (TResult)(object)count; }
+            }
+
+            // ── Fast path: Sum / Average / Min / Max via BSON field-projection scan ─
+            // Reads only the target field from raw BSON — T is never fully instantiated.
+            // Fires for both no-WHERE and WHERE variants:
+            //   - No WHERE:  projector reads only the selector field.
+            //   - With WHERE: BsonProjectionCompiler merges WHERE + SELECT fields into one
+            //     BSON pass; documents that fail the WHERE return null and are skipped.
+            // HasComplexOperators is intentionally NOT checked here: VisitAggregate always
+            // sets it so that queries that cannot be pushed down fall back to EnumerableRewriter.
+            if (model.AggregateOp is not null && model.AggregateSelector is not null)
+            {
+                if (TryBsonAggregate<TResult>(model.AggregateOp, model.AggregateSelector, model.WhereClause, out var aggResult))
+                {
+                    if (auditSw is not null) strategy = QueryStrategy.BsonScan;
+                    return aggResult;
+                }
+            }
+
+            // ── Push-down SELECT (+ optional WHERE) ───────────────────────────────
+            // Single-pass BSON projection: no T instantiation, no EnumerableRewriter.
+            // Only applicable when there is no post-scan ordering or paging.
+            if (model.SelectClause is not null
+                && model.OrderByClause is null
+                && !model.Take.HasValue
+                && !model.Skip.HasValue)
+            {
+                var pushed = TryPushDownSelect<TResult>(model.SelectClause, model.WhereClause);
+                if (pushed is not null)
+                {
+                    if (auditSw is not null) strategy = QueryStrategy.BsonScan;
+                    return pushed;
+                }
+            }
+
+            // 2. Data fetching.
+            // When Take (+ optional Skip) is present without complex operators or ordering that
+            // requires a full scan first, cap how many rows we need to materialise.
+            int fetchLimit = (model.Take.HasValue && model.OrderByClause == null && !model.HasComplexOperators)
+                ? (model.Skip.GetValueOrDefault() + model.Take.Value)
+                : int.MaxValue;
+
+            // ── Fast path: OrderBy(indexedField).Skip(S).Take(N) without WHERE ───────────
+            // Reads only skip+take entries from the index in sorted order, skipping the
+            // O(n log n) in-memory sort over all documents.  Skip is performed at the
+            // index-entry level (no document reads for skipped positions), so only the
+            // requested page window is ever deserialised.
+            if (model.WhereClause == null && model.OrderByClause != null && model.Take.HasValue)
+            {
+                var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
+                if (orderOpt is not null)
+                {
+                    if (auditSw is not null) strategy = QueryStrategy.IndexScan;
+                    bool ascending = !model.OrderDescending;
+                    int skip = model.Skip ?? 0;
+                    int take = model.Take.Value;
+                    var topN = new List<T>(take);
+                    await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, skip, take, cancellationToken))
+                        topN.Add(item);
+                    auditResultCount = topN.Count;
+                    if (model.SelectClause != null)
+                        return ProjectEnumerable<TResult>(topN, model.SelectClause);
+                    return TerminalReturn<TResult>(topN);
+                }
+            }
+
+            // ── General path: FetchAsync picks index / BSON scan / full scan ─────
+            // FetchAsync always applies the WHERE clause internally (all three strategies
+            // filter before yielding), so no residual WHERE step is needed afterwards.
+            if (auditSw is not null) strategy = DetermineFetchStrategy(model.WhereClause);
+
+            var sourceList = new List<T>();
+            bool whereAlreadyApplied = model.WhereClause != null;
+
+            await foreach (var item in _collection.FetchAsync(model.WhereClause, fetchLimit, cancellationToken))
+                sourceList.Add(item);
+
+            auditResultCount = sourceList.Count;
+            IEnumerable<T> sourceData = sourceList;
+
+            // ── Complex-operator fallback ──────────────────────────────────────────
+            // GroupBy, Join, Sum/Average/Min/Max with selectors — operators the direct
+            // pipeline cannot model.  We still benefit from index / BSON-scan fetch,
+            // then let EnumerableRewriter translate the remaining Queryable calls to
+            // Enumerable equivalents and compile the residual expression once.
+            if (model.HasComplexOperators)
+                return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
+
+            // When OrderBy is chained after Select, the key-selector parameter type is the
+            // projected type (e.g. DateTimeOffset), not T.  The direct pipeline builds a
+            // Func<T, object> from that lambda, which throws ArgumentException at runtime.
+            // Fall back to EnumerableRewriter which rewrites the full expression tree correctly.
+            if (model.OrderByClause != null && model.OrderByClause.Parameters[0].Type != typeof(T))
+                return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
+
+            // 3. Direct pipeline — no expression-tree rewrite, no EnumerableRewriter, no Compile().
+            return ExecutePipeline<TResult>(model, sourceData, whereAlreadyApplied);
+        }
+        finally
+        {
+            if (auditSw is not null)
+            {
+                auditSw.Stop();
+                var elapsed = auditSw.Elapsed;
+                var evt = new QueryAuditEvent(
+                    _collection.CollectionName,
+                    strategy,
+                    null,
+                    auditResultCount,
+                    elapsed);
+                auditOptions!.Sink?.OnQuery(in evt);
+                _collection.AuditMetrics?.RecordQuery(strategy, elapsed);
             }
         }
+    }
 
-        // ── General path: FetchAsync picks index / BSON scan / full scan ─────
-        // FetchAsync always applies the WHERE clause internally (all three strategies
-        // filter before yielding), so no residual WHERE step is needed afterwards.
-        var sourceList = new List<T>();
-        bool whereAlreadyApplied = model.WhereClause != null;
-
-        await foreach (var item in _collection.FetchAsync(model.WhereClause, fetchLimit, cancellationToken))
-            sourceList.Add(item);
-
-        IEnumerable<T> sourceData = sourceList;
-
-        // ── Complex-operator fallback ──────────────────────────────────────────
-        // GroupBy, Join, Sum/Average/Min/Max with selectors — operators the direct
-        // pipeline cannot model.  We still benefit from index / BSON-scan fetch,
-        // then let EnumerableRewriter translate the remaining Queryable calls to
-        // Enumerable equivalents and compile the residual expression once.
-        if (model.HasComplexOperators)
-            return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
-
-        // When OrderBy is chained after Select, the key-selector parameter type is the
-        // projected type (e.g. DateTimeOffset), not T.  The direct pipeline builds a
-        // Func<T, object> from that lambda, which throws ArgumentException at runtime.
-        // Fall back to EnumerableRewriter which rewrites the full expression tree correctly.
-        if (model.OrderByClause != null && model.OrderByClause.Parameters[0].Type != typeof(T))
-            return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
-
-        // 3. Direct pipeline — no expression-tree rewrite, no EnumerableRewriter, no Compile().
-        return ExecutePipeline<TResult>(model, sourceData, whereAlreadyApplied);
+    /// <summary>
+    /// Best-effort prediction of which strategy <see cref="DocumentCollection{TId,T}.FetchAsync"/>
+    /// will pick for the given <paramref name="whereClause"/>. Mirrors the branch order used
+    /// inside FetchAsync (index optimization first, then BSON-level predicate, then full scan).
+    /// Only invoked when audit is enabled, so the duplicated expression-tree walk is paid for
+    /// the observability benefit, not on the default zero-cost path.
+    /// </summary>
+    [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
+    [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
+    private QueryStrategy DetermineFetchStrategy(LambdaExpression? whereClause)
+    {
+        if (whereClause is null) return QueryStrategy.FullScan;
+        if (IndexOptimizer.TryOptimize<T>(whereClause, _collection.GetIndexes(), _converterRegistry) is not null)
+            return QueryStrategy.IndexScan;
+        if (BsonExpressionEvaluator.TryCompile<T>(whereClause, _converterRegistry, _collection.GetKeyMap()) is not null)
+            return QueryStrategy.BsonScan;
+        return QueryStrategy.FullScan;
     }
 
     /// <summary>
