@@ -1593,6 +1593,16 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     elapsed);
                 auditOptions!.Sink?.OnInsert(in evt);
                 _storage.Metrics?.RecordInsert(elapsed);
+
+                if (auditOptions.SlowQueryThreshold is { } slowInsert && elapsed > slowInsert)
+                {
+                    var slowEvt = new SlowOperationEvent(
+                        SlowOperationType.Insert,
+                        _collectionName,
+                        elapsed,
+                        $"size={auditDocSize}");
+                    auditOptions.Sink?.OnSlowOperation(in slowEvt);
+                }
             }
         }
     }

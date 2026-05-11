@@ -204,6 +204,16 @@ public sealed partial class StorageEngine
                     elapsed);
                 auditOptions!.Sink?.OnCommit(in evt);
                 _auditMetrics?.RecordCommit(elapsed);
+
+                if (auditOptions.SlowQueryThreshold is { } slowCommit && elapsed > slowCommit)
+                {
+                    var slowEvt = new SlowOperationEvent(
+                        SlowOperationType.Commit,
+                        string.Empty,
+                        elapsed,
+                        $"txn={transactionId} pages={auditPagesWritten}");
+                    auditOptions.Sink?.OnSlowOperation(in slowEvt);
+                }
             }
         }
     }
@@ -283,10 +293,20 @@ public sealed partial class StorageEngine
                     elapsed);
                 auditOptions!.Sink?.OnCommit(in evt);
                 _auditMetrics?.RecordCommit(elapsed);
+
+                if (auditOptions.SlowQueryThreshold is { } slowCommit && elapsed > slowCommit)
+                {
+                    var slowEvt = new SlowOperationEvent(
+                        SlowOperationType.Commit,
+                        string.Empty,
+                        elapsed,
+                        $"txn={transactionId} pages={auditPagesWritten}");
+                    auditOptions.Sink?.OnSlowOperation(in slowEvt);
+                }
             }
         }
     }
-    
+
     /// <summary>
     /// Marks a transaction as committed after WAL writes.
     /// Used for 2PC: after PrepareAsync() writes to WAL, this finalizes the commit.
