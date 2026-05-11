@@ -140,6 +140,13 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         string? auditIndexName = null;
         int auditResultCount = -1;
 
+        var activity = (auditOptions?.EnableDiagnosticSource == true)
+            ? BLiteDiagnostics.ActivitySource.StartActivity(BLiteDiagnostics.Activity.Query, ActivityKind.Client)
+            : null;
+        activity?.SetTag(BLiteDiagnostics.Tags.DbSystem, BLiteDiagnostics.Tags.DbSystemValue);
+        activity?.SetTag(BLiteDiagnostics.Tags.DbCollectionName, _collection.CollectionName);
+        activity?.SetTag(BLiteDiagnostics.Tags.DbOperation, "query");
+
         try
         {
             // 1. Parse the LINQ expression tree into a flat QueryModel.
@@ -271,8 +278,20 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
             // 3. Direct pipeline — no expression-tree rewrite, no EnumerableRewriter, no Compile().
             return ExecutePipeline<TResult>(model, sourceData, whereAlreadyApplied);
         }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
         finally
         {
+            if (activity is not null)
+            {
+                activity.SetTag(BLiteDiagnostics.Tags.QueryStrategy, strategy.ToString());
+                activity.SetTag(BLiteDiagnostics.Tags.QueryIndexName, auditIndexName);
+                activity.SetTag(BLiteDiagnostics.Tags.QueryResultCount, auditResultCount);
+                activity.Dispose();
+            }
             if (auditSw is not null)
             {
                 auditSw.Stop();
