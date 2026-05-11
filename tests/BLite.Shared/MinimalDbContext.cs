@@ -1,5 +1,6 @@
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Shared;
 
@@ -15,6 +16,11 @@ public partial class MinimalDbContext : DocumentDbContext
     public DocumentCollection<ObjectId, User> Users { get; set; } = null!;
 
     public MinimalDbContext(string databasePath) : base(databasePath)
+    {
+        InitializeCollections();
+    }
+
+    public MinimalDbContext(string databasePath, BLiteAuditOptions audit) : base(databasePath, audit)
     {
         InitializeCollections();
     }
