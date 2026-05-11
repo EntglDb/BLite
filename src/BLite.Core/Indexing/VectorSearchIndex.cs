@@ -98,12 +98,12 @@ public sealed class VectorSearchIndex
             return;
         }
 
-        // HNSW Core logic
+        // HNSW Core logic (Malkov & Yashunin 2018, Algorithm 1)
         // 3. Find current entry point
         var entryPoint = GetEntryPoint();
         var currentPoint = entryPoint;
 
-        // 4. Greedy search down to targetLevel+1
+        // 4. Greedy search through layers above targetLevel (ef=1)
         for (int l = entryPoint.MaxLevel; l > targetLevel; l--)
         {
             currentPoint = GreedySearch(currentPoint, vector, l, transaction);
@@ -112,60 +112,82 @@ public sealed class VectorSearchIndex
         // 5. Create the new node
         var newNode = AllocateNode(vector, docLocation, targetLevel, transaction);
 
-        // 6. For each layer from targetLevel down to 0
+        // 6. For each layer from min(targetLevel, entryPoint.MaxLevel) down to 0:
+        //    - Search with efConstruction → candidate set W
+        //    - Select up to Mmax neighbours (Mmax = 2*M at layer 0, M elsewhere)
+        //    - Bidirectionally link, then shrink neighbour's connections if oversized
+        //    - Use W as entry-point set for the next (lower) layer
         for (int l = Math.Min(targetLevel, entryPoint.MaxLevel); l >= 0; l--)
         {
-            var neighbors = SearchLayer(currentPoint, vector, _options.EfConstruction, l, transaction);
-            var selectedNeighbors = SelectNeighbors(neighbors, vector, _options.M, l, transaction);
-            
+            int mMax = (l == 0) ? (2 * _options.M) : _options.M;
+
+            // SearchLayer returns candidates ordered by ascending distance to vector.
+            var wEnum = SearchLayer(currentPoint, vector, _options.EfConstruction, l, transaction);
+            var w = wEnum as IList<NodeReference> ?? new List<NodeReference>(wEnum);
+
+            var selectedNeighbors = SelectNeighbors(w, vector, _options.M, transaction);
+
             foreach (var neighbor in selectedNeighbors)
             {
-                AddBidirectionalLink(newNode, neighbor, l, transaction);
+                Link(newNode, neighbor, l, transaction);
+                // Reverse link with shrinking on neighbour if over capacity.
+                LinkWithShrinking(neighbor, newNode, l, mMax, transaction);
             }
-            
-            // Move currentPoint down for next level if available
-            currentPoint = GreedySearch(currentPoint, vector, l, transaction);
+
+            // Standard HNSW: use the W candidate set as entry for the next lower layer.
+            // Pick the nearest candidate as the single entry point (current SearchLayer
+            // signature accepts a single entry point).
+            if (w.Count > 0)
+                currentPoint = w[0];
         }
 
-        // 7. UpdateAsync entry point if new node is higher
+        // 7. Update entry point if new node reached a higher layer than any existing one.
         if (targetLevel > entryPoint.MaxLevel)
         {
             UpdateEntryPoint(newNode, transaction);
         }
     }
 
-    // HNSW Algorithm 4 (Malkov & Yashunin, 2018): keeps candidates only when they are
-    // closer to the query than to every already-selected neighbour.
-    // This preserves "bridge" nodes between clusters, improving cross-cluster recall.
-    private List<NodeReference> SelectNeighbors(IEnumerable<NodeReference> candidates, float[] query, int m, int level, ITransaction? transaction)
+    // HNSW Algorithm 4 (Malkov & Yashunin, 2018) with keepPrunedConnections=true.
+    // Keeps the closer-to-query-than-to-existing-selected heuristic but tops the result
+    // up to `m` using the pruned (dominated) candidates in ascending distance order,
+    // so the out-degree never collapses below what the candidate pool can supply.
+    // `candidates` MUST be ordered by ascending distance to `query`.
+    private List<NodeReference> SelectNeighbors(IList<NodeReference> candidates, float[] query, int m, ITransaction? transaction)
     {
         var result = new List<NodeReference>(m);
+        var pruned = new List<NodeReference>();
+
         foreach (var e in candidates)
         {
+            if (result.Count >= m) break;
+
             float distEQ = VectorMath.Distance(query, LoadVector(e, transaction), _options.Metric);
             bool dominated = false;
             foreach (var r in result)
             {
                 float distER = VectorMath.Distance(LoadVector(e, transaction), LoadVector(r, transaction), _options.Metric);
-                if (distER < distEQ)
-                {
-                    dominated = true;
-                    break;
-                }
+                if (distER < distEQ) { dominated = true; break; }
             }
-            if (!dominated)
-                result.Add(e);
-            if (result.Count >= m) break;
+            if (dominated) pruned.Add(e);
+            else           result.Add(e);
         }
+
+        // keepPrunedConnections: top up with pruned candidates (already distance-ordered)
+        // so we always reach `m` neighbours when the pool allows it.
+        for (int i = 0; i < pruned.Count && result.Count < m; i++)
+            result.Add(pruned[i]);
+
         return result;
     }
 
-    private void AddBidirectionalLink(NodeReference node1, NodeReference node2, int level, ITransaction? transaction)
-    {
-        Link(node1, node2, level, transaction);
-        Link(node2, node1, level, transaction);
-    }
-
+    /// <summary>
+    /// Writes a one-way link from `from` to `to` at the given level.
+    /// Idempotent: if `to` is already in the link list, no-op.
+    /// If there is no empty slot, this function does NOT evict — call
+    /// <see cref="LinkWithShrinking"/> on the side that owns the connection
+    /// budget (typically the reverse direction) to enforce Mmax.
+    /// </summary>
     private void Link(NodeReference from, NodeReference to, int level, ITransaction? transaction)
     {
         var buffer = RentPageBuffer();
@@ -174,35 +196,84 @@ public sealed class VectorSearchIndex
             _storage.ReadPage(from.PageId, transaction?.TransactionId, buffer);
             var links = VectorPage.GetLinksSpan(buffer, from.NodeIndex, level, _options.Dimensions, _options.M);
 
-            int worstSlot = -1;
-            float worstDist = float.NegativeInfinity;
-            var fromVec = LoadVector(from, transaction);
-            var toVec   = LoadVector(to,   transaction);
-            float newDist = VectorMath.Distance(fromVec, toVec, _options.Metric);
-
             for (int i = 0; i < links.Length; i += 6)
             {
                 var existing = DocumentLocation.ReadFrom(links.Slice(i, 6));
                 if (existing.PageId == 0)
                 {
-                    // Empty slot — just write and return.
                     new DocumentLocation(to.PageId, (ushort)to.NodeIndex).WriteTo(links.Slice(i, 6));
                     WritePage(from.PageId, transaction, buffer);
                     return;
                 }
-
-                // Track the worst existing link for potential replacement.
-                var existRef = new NodeReference { PageId = existing.PageId, NodeIndex = existing.SlotIndex };
-                float d = VectorMath.Distance(fromVec, LoadVector(existRef, transaction), _options.Metric);
-                if (d > worstDist) { worstDist = d; worstSlot = i; }
+                if (existing.PageId == to.PageId && existing.SlotIndex == (ushort)to.NodeIndex)
+                    return; // already linked, idempotent
             }
+            // No empty slot: caller must invoke LinkWithShrinking instead.
+        }
+        finally { ReturnPageBuffer(buffer); }
+    }
 
-            // All slots full: replace worst neighbour only if `to` is closer (neighbour shrinking).
-            if (worstSlot >= 0 && newDist < worstDist)
+    /// <summary>
+    /// Adds `to` to `from`'s neighbour list at `level`. If the list (plus the new
+    /// candidate) exceeds <paramref name="mMax"/>, re-selects the best mMax using
+    /// the canonical HNSW heuristic (Algorithm 4) on the full union, then rewrites
+    /// the link slots. This is the "shrink connections" step from Algorithm 1.
+    /// </summary>
+    private void LinkWithShrinking(NodeReference from, NodeReference to, int level, int mMax, ITransaction? transaction)
+    {
+        var buffer = RentPageBuffer();
+        try
+        {
+            _storage.ReadPage(from.PageId, transaction?.TransactionId, buffer);
+            var links = VectorPage.GetLinksSpan(buffer, from.NodeIndex, level, _options.Dimensions, _options.M);
+            int slotCount = links.Length / 6;
+
+            // Collect current neighbours and check for duplicate / empty slot fast path.
+            var current = new List<NodeReference>(slotCount);
+            int firstEmpty = -1;
+            for (int i = 0; i < links.Length; i += 6)
             {
-                new DocumentLocation(to.PageId, (ushort)to.NodeIndex).WriteTo(links.Slice(worstSlot, 6));
-                WritePage(from.PageId, transaction, buffer);
+                var existing = DocumentLocation.ReadFrom(links.Slice(i, 6));
+                if (existing.PageId == 0)
+                {
+                    if (firstEmpty < 0) firstEmpty = i;
+                    continue;
+                }
+                if (existing.PageId == to.PageId && existing.SlotIndex == (ushort)to.NodeIndex)
+                    return; // already present
+                current.Add(new NodeReference { PageId = existing.PageId, NodeIndex = existing.SlotIndex });
             }
+
+            // Fast path: empty slot available — just write it in place.
+            if (firstEmpty >= 0)
+            {
+                new DocumentLocation(to.PageId, (ushort)to.NodeIndex).WriteTo(links.Slice(firstEmpty, 6));
+                WritePage(from.PageId, transaction, buffer);
+                return;
+            }
+
+            // No empty slot AND list does not yet include `to`: run neighbour shrinking.
+            // Build the candidate set (existing + new) sorted by distance to `from`.
+            var fromVec = LoadVector(from, transaction);
+            var union = new List<(NodeReference Node, float Dist)>(current.Count + 1);
+            foreach (var c in current)
+                union.Add((c, VectorMath.Distance(fromVec, LoadVector(c, transaction), _options.Metric)));
+            union.Add((to, VectorMath.Distance(fromVec, LoadVector(to, transaction), _options.Metric)));
+            union.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+
+            var ordered = new List<NodeReference>(union.Count);
+            foreach (var u in union) ordered.Add(u.Node);
+
+            var selected = SelectNeighbors(ordered, fromVec, mMax, transaction);
+
+            // Rewrite the slot area: clear then write selected neighbours.
+            links.Clear();
+            for (int i = 0; i < selected.Count && i < slotCount; i++)
+            {
+                new DocumentLocation(selected[i].PageId, (ushort)selected[i].NodeIndex)
+                    .WriteTo(links.Slice(i * 6, 6));
+            }
+            WritePage(from.PageId, transaction, buffer);
         }
         finally { ReturnPageBuffer(buffer); }
     }
