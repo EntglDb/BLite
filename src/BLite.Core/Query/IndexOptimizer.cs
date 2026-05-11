@@ -95,10 +95,25 @@ internal static class IndexOptimizer
 
     [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
     public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
-    {
-        if (model.WhereClause == null) return null;
+        => TryOptimize<T>(model, indexes, out _, registry);
 
-        return OptimizeExpression(model.WhereClause.Body, model.WhereClause.Parameters[0], indexes, registry);
+    /// <summary>
+    /// Variant that surfaces the selected index name through an <c>out</c> parameter so
+    /// callers (audit/diagnostics) can record it without inspecting the full
+    /// <see cref="OptimizationResult"/>. The parameter is <c>null</c> when no index matches.
+    /// </summary>
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
+    public static OptimizationResult? TryOptimize<T>(QueryModel model, IEnumerable<CollectionIndexInfo> indexes, out string? selectedIndexName, ValueConverterRegistry? registry = null)
+    {
+        if (model.WhereClause == null)
+        {
+            selectedIndexName = null;
+            return null;
+        }
+
+        var result = OptimizeExpression(model.WhereClause.Body, model.WhereClause.Parameters[0], indexes, registry);
+        selectedIndexName = result?.IndexName;
+        return result;
     }
 
     /// <summary>
@@ -107,7 +122,20 @@ internal static class IndexOptimizer
     /// </summary>
     [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
     public static OptimizationResult? TryOptimize<T>(LambdaExpression whereClause, IEnumerable<CollectionIndexInfo> indexes, ValueConverterRegistry? registry = null)
-        => OptimizeExpression(whereClause.Body, whereClause.Parameters[0], indexes, registry);
+        => TryOptimize<T>(whereClause, indexes, out _, registry);
+
+    /// <summary>
+    /// Variant that surfaces the selected index name through an <c>out</c> parameter so
+    /// callers (audit/diagnostics) can record it without inspecting the full
+    /// <see cref="OptimizationResult"/>. The parameter is <c>null</c> when no index matches.
+    /// </summary>
+    [RequiresDynamicCode("Index optimization may use Expression.Compile() to evaluate complex expressions.")]
+    public static OptimizationResult? TryOptimize<T>(LambdaExpression whereClause, IEnumerable<CollectionIndexInfo> indexes, out string? selectedIndexName, ValueConverterRegistry? registry = null)
+    {
+        var result = OptimizeExpression(whereClause.Body, whereClause.Parameters[0], indexes, registry);
+        selectedIndexName = result?.IndexName;
+        return result;
+    }
 
     /// <summary>
     /// Attempts to satisfy an <c>OrderBy[Descending](field).Skip(S).Take(N)</c> query entirely

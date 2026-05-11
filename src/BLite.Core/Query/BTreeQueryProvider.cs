@@ -137,6 +137,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         var auditOptions = _collection.AuditOptions;
         var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
         QueryStrategy strategy = QueryStrategy.Unknown;
+        string? auditIndexName = null;
         int auditResultCount = -1;
 
         try
@@ -167,7 +168,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
             if (model.IsCountOnly && model.WhereClause != null && !model.HasComplexOperators
                 && !model.Take.HasValue && !model.Skip.HasValue)
             {
-                if (auditSw is not null) strategy = DetermineFetchStrategy(model.WhereClause);
+                if (auditSw is not null) strategy = DetermineFetchStrategy(model.WhereClause, out auditIndexName);
                 var count = await _collection.CountByPredicateAsync(model.WhereClause, cancellationToken);
                 if (typeof(TResult) == typeof(int))    { auditResultCount = count; return (TResult)(object)count; }
                 if (typeof(TResult) == typeof(long))   { auditResultCount = count; return (TResult)(object)(long)count; }
@@ -224,7 +225,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
                 var orderOpt = IndexOptimizer.TryOptimizeOrderBy(model, _collection.GetIndexes());
                 if (orderOpt is not null)
                 {
-                    if (auditSw is not null) strategy = QueryStrategy.IndexScan;
+                    if (auditSw is not null) { strategy = QueryStrategy.IndexScan; auditIndexName = orderOpt.IndexName; }
                     bool ascending = !model.OrderDescending;
                     int skip = model.Skip ?? 0;
                     int take = model.Take.Value;
@@ -241,7 +242,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
             // ── General path: FetchAsync picks index / BSON scan / full scan ─────
             // FetchAsync always applies the WHERE clause internally (all three strategies
             // filter before yielding), so no residual WHERE step is needed afterwards.
-            if (auditSw is not null) strategy = DetermineFetchStrategy(model.WhereClause);
+            if (auditSw is not null) strategy = DetermineFetchStrategy(model.WhereClause, out auditIndexName);
 
             var sourceList = new List<T>();
             bool whereAlreadyApplied = model.WhereClause != null;
@@ -279,7 +280,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
                 var evt = new QueryAuditEvent(
                     _collection.CollectionName,
                     strategy,
-                    null,
+                    auditIndexName,
                     auditResultCount,
                     elapsed);
                 auditOptions!.Sink?.OnQuery(in evt);
@@ -297,10 +298,11 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
     /// </summary>
     [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
     [RequiresUnreferencedCode("BLite LINQ queries use reflection to resolve methods and types at runtime. Ensure all entity types and their members are preserved.")]
-    private QueryStrategy DetermineFetchStrategy(LambdaExpression? whereClause)
+    private QueryStrategy DetermineFetchStrategy(LambdaExpression? whereClause, out string? indexName)
     {
+        indexName = null;
         if (whereClause is null) return QueryStrategy.FullScan;
-        if (IndexOptimizer.TryOptimize<T>(whereClause, _collection.GetIndexes(), _converterRegistry) is not null)
+        if (IndexOptimizer.TryOptimize<T>(whereClause, _collection.GetIndexes(), out indexName, _converterRegistry) is not null)
             return QueryStrategy.IndexScan;
         if (BsonExpressionEvaluator.TryCompile<T>(whereClause, _converterRegistry, _collection.GetKeyMap()) is not null)
             return QueryStrategy.BsonScan;
