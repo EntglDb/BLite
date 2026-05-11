@@ -531,6 +531,18 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     /// </summary>
     public Audit.BLiteMetrics? AuditMetrics => _storage?.AuditMetrics;
 
+    /// <summary>
+    /// Forces an immediate checkpoint: merges all committed WAL records into the main data
+    /// file. Call this before disposing the context when you need the database file to be
+    /// fully self-contained (e.g., before copying or shipping the file).
+    /// </summary>
+    public Task CheckpointAsync(CancellationToken ct = default)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(GetType().Name);
+        return _storage.CheckpointAsync(ct);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -543,6 +555,33 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _ownedCoordinator?.Dispose();
 
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Checkpoints the WAL (merging all committed records into the main data file) and then
+    /// releases all resources. Prefer this over <see cref="Dispose"/> when you need the
+    /// database file to be fully self-contained after the context is closed.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        try
+        {
+            if (_storage != null)
+                await _storage.CheckpointAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _storage?.Dispose();
+            _cdc?.Dispose();
+            _ownedCoordinator?.Dispose();
+
+            GC.SuppressFinalize(this);
+        }
     }
 
     /// <summary>

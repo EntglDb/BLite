@@ -1,4 +1,5 @@
-﻿using BLite.Shared;
+﻿using BLite.Core;
+using BLite.Shared;
 using System.Security.Cryptography;
 
 namespace BLite.Tests;
@@ -121,6 +122,55 @@ public class DbContextTests : IDisposable
         
         var walPath = Path.ChangeExtension(_dbPath, ".wal");
         Assert.True(File.Exists(walPath));
+    }
+
+    [Fact]
+    public async Task DbContext_CheckpointAsync_PersistsDataToPageFile()
+    {
+        // Insert data and call CheckpointAsync explicitly via the public API.
+        await using (var db = new TestDbContext(_dbPath))
+        {
+            await db.Users.InsertAsync(new User { Name = "Alice", Age = 30 });
+            // Checkpoint flushes the WAL into the main page file.
+            await db.CheckpointAsync();
+        }
+
+        // Re-open: data must be visible without replaying the WAL from scratch.
+        await using var db2 = new TestDbContext(_dbPath);
+        var all = await db2.Users.FindAllAsync().ToListAsync();
+        Assert.Single(all);
+        Assert.Equal("Alice", all[0].Name);
+    }
+
+    [Fact]
+    public async Task DbContext_DisposeAsync_CheckpointsBeforeClose()
+    {
+        // Insert data and dispose via DisposeAsync (which checkpoints automatically).
+        await using (var db = new TestDbContext(_dbPath))
+        {
+            await db.Users.InsertAsync(new User { Name = "Bob", Age = 25 });
+        }
+
+        // Re-open: data must survive without any explicit checkpoint call.
+        await using var db2 = new TestDbContext(_dbPath);
+        var all = await db2.Users.FindAllAsync().ToListAsync();
+        Assert.Single(all);
+        Assert.Equal("Bob", all[0].Name);
+    }
+
+    [Fact]
+    public async Task DbContext_CheckpointAsync_IsExposedOnInterface()
+    {
+        // Verify the method is accessible through the interface.
+        IDocumentDbContext db = new TestDbContext(_dbPath);
+        await using (db)
+        {
+            await db.Set<User>().InsertAsync(new User { Name = "Carol", Age = 40 });
+            await db.CheckpointAsync();
+        }
+
+        await using var db2 = new TestDbContext(_dbPath);
+        Assert.Single(await db2.Users.FindAllAsync().ToListAsync());
     }
 
     public void Dispose()
