@@ -1,5 +1,6 @@
 using BLite.Bson;
 using BLite.Core;
+using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Core.Metadata;
 using BLite.Core.Indexing;
@@ -101,6 +102,11 @@ public partial class TestDbContext : DocumentDbContext
     /// Use <see cref="PageFileConfig.Server(string, PageFileConfig?)"/> to open a multi-file database.
     /// </summary>
     public TestDbContext(string databasePath, PageFileConfig config) : base(databasePath, config)
+    {
+        InitializeCollections();
+    }
+
+    public TestDbContext(string databasePath, BLiteAuditOptions audit) : base(databasePath, audit)
     {
         InitializeCollections();
     }
