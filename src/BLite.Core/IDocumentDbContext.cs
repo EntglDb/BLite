@@ -12,7 +12,7 @@ namespace BLite.Core;
 /// <summary>
 /// Defines the contract for a document database context.
 /// </summary>
-public interface IDocumentDbContext : IDisposable, ITransactionHolder
+public interface IDocumentDbContext : IDisposable, IAsyncDisposable, ITransactionHolder
 {
     /// <summary>
     /// Provides access to the embedded Key-Value store that shares the same database file.
@@ -41,6 +41,13 @@ public interface IDocumentDbContext : IDisposable, ITransactionHolder
     /// Gets the document collection for the specified entity type using a custom key type.
     /// </summary>
     IDocumentCollection<TId, T> Set<TId, T>() where T : class;
+
+    /// <summary>
+    /// Forces an immediate checkpoint: merges all committed WAL records into the main data
+    /// file. Call this before disposing the context when you need the database file to be
+    /// fully self-contained (e.g., before copying or shipping the file).
+    /// </summary>
+    Task CheckpointAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Begins a new transaction synchronously.
