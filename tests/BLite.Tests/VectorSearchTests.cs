@@ -235,7 +235,7 @@ public class VectorSearchTests
 
     // ── multi-page chain: 20 nodes across 5 pages ────────────────────────────
 
-    [Fact(Skip ="Skipped for now VectorSearch needs fixes")]
+    [Fact]
     public async Task Test_VectorSearch_MultiPageChain_RecallCorrect()
     {
         string dbPath = TempDb();
@@ -340,7 +340,7 @@ public class VectorSearchTests
     // query ([0.1, 0.1, 0.1] → expected P00) occasionally returns P07 because the random
     // level assignment produces a graph topology that traps the greedy search. Investigate
     // whether raising EfConstruction / efSearch or seeding the RNG fixes the recall.
-    [Fact(Skip = "Flaky: HNSW top-1 recall not guaranteed on small datasets — see TODO above")]
+    [Fact]
     public async Task Test_VectorSearch_BruteForceRecall_Top1()
     {
         string dbPath = TempDb();
