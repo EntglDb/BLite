@@ -120,6 +120,13 @@ public sealed partial class StorageEngine
         var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
         int auditPagesWritten = 0;
 
+        var activity = (auditOptions?.EnableDiagnosticSource == true)
+            ? BLiteDiagnostics.ActivitySource.StartActivity(BLiteDiagnostics.Activity.Commit, ActivityKind.Internal)
+            : null;
+        activity?.SetTag(BLiteDiagnostics.Tags.DbSystem, BLiteDiagnostics.Tags.DbSystemValue);
+        activity?.SetTag(BLiteDiagnostics.Tags.DbOperation, "commit");
+        activity?.SetTag(BLiteDiagnostics.Tags.TransactionId, transactionId);
+
         try
         {
             bool needsCheckpoint = false;
@@ -172,8 +179,19 @@ public sealed partial class StorageEngine
                 _ = Task.Run(() => CheckpointAsync());
             }
         }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
         finally
         {
+            if (activity is not null)
+            {
+                activity.SetTag(BLiteDiagnostics.Tags.PagesWritten, auditPagesWritten);
+                activity.SetTag(BLiteDiagnostics.Tags.WalSizeBytes, _wal.GetCurrentSize());
+                activity.Dispose();
+            }
             if (auditSw is not null)
             {
                 auditSw.Stop();
@@ -209,6 +227,14 @@ public sealed partial class StorageEngine
         var auditSw = auditOptions is not null ? Stopwatch.StartNew() : null;
         int auditPagesWritten = 0;
         bool success = false;
+
+        var activity = (auditOptions?.EnableDiagnosticSource == true)
+            ? BLiteDiagnostics.ActivitySource.StartActivity(BLiteDiagnostics.Activity.Commit, ActivityKind.Internal)
+            : null;
+        activity?.SetTag(BLiteDiagnostics.Tags.DbSystem, BLiteDiagnostics.Tags.DbSystemValue);
+        activity?.SetTag(BLiteDiagnostics.Tags.DbOperation, "commit");
+        activity?.SetTag(BLiteDiagnostics.Tags.TransactionId, transactionId);
+
         try
         {
             // Group commit path: post to the background writer and await its TCS.
@@ -221,6 +247,11 @@ public sealed partial class StorageEngine
             await pending.Completion.Task.ConfigureAwait(false);
             success = true;
         }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
         finally
         {
             _writerGate?.Release();
@@ -232,6 +263,13 @@ public sealed partial class StorageEngine
                     ElapsedMicros = sw.GetElapsedMicros(),
                     Success       = success,
                 });
+
+            if (activity is not null)
+            {
+                activity.SetTag(BLiteDiagnostics.Tags.PagesWritten, auditPagesWritten);
+                activity.SetTag(BLiteDiagnostics.Tags.WalSizeBytes, _wal.GetCurrentSize());
+                activity.Dispose();
+            }
 
             if (auditSw is not null)
             {
