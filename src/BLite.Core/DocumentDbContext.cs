@@ -1,3 +1,4 @@
+using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Core.KeyValue;
 using BLite.Core.Metadata;
@@ -113,6 +114,37 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         OnModelCreating(modelBuilder);
         _model = modelBuilder.GetEntityBuilders();
         InitializeCollections();
+    }
+
+    /// <summary>
+    /// Creates a new database context with audit configuration. Wires the supplied
+    /// <see cref="BLiteAuditOptions"/> into the underlying storage engine so insert,
+    /// query, and commit hooks emit events through the configured sink and update
+    /// the in-process <see cref="BLiteMetrics"/> counters.
+    /// </summary>
+    protected DocumentDbContext(string databasePath, BLiteAuditOptions audit)
+        : this(databasePath)
+    {
+        _storage.ConfigureAudit(audit ?? throw new ArgumentNullException(nameof(audit)));
+    }
+
+    /// <summary>
+    /// Creates a new database context with full configuration: page, key-value store, and audit.
+    /// </summary>
+    protected DocumentDbContext(string databasePath, PageFileConfig config, BLiteKvOptions? kvOptions, BLiteAuditOptions audit)
+        : this(databasePath, config, kvOptions)
+    {
+        _storage.ConfigureAudit(audit ?? throw new ArgumentNullException(nameof(audit)));
+    }
+
+    /// <summary>
+    /// Creates a database context backed by a pre-built <see cref="StorageEngine"/>
+    /// and audit configuration.
+    /// </summary>
+    protected DocumentDbContext(StorageEngine storage, BLiteAuditOptions audit, BLiteKvOptions? kvOptions = null)
+        : this(storage, kvOptions)
+    {
+        _storage.ConfigureAudit(audit ?? throw new ArgumentNullException(nameof(audit)));
     }
 
     /// <summary>
@@ -272,6 +304,14 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         => throw new InvalidOperationException($"No collection registered for entity type '{typeof(T).Name}' with key type '{typeof(TId).Name}'.");
 
     // ── Metrics ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// In-memory audit counters exposed when an audit configuration with
+    /// <see cref="BLiteAuditOptions.EnableMetrics"/> was supplied at construction.
+    /// Returns <c>null</c> when audit was not configured, or when metrics were
+    /// disabled in the audit options.
+    /// </summary>
+    public BLiteMetrics? Metrics => _storage.Metrics;
 
     /// <summary>
     /// Enables the metrics subsystem. After this call, the engine starts collecting

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BLite.Bson;
+using BLite.Core.Audit;
 using BLite.Core.Collections;
 using BLite.Core.KeyValue;
 using BLite.Core.Storage;
@@ -79,6 +80,27 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         _storage = new StorageEngine(databasePath, config);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
+    }
+
+    /// <summary>
+    /// Creates a new BLiteEngine with audit configuration. Wires the supplied
+    /// <see cref="BLiteAuditOptions"/> into the underlying storage engine so insert,
+    /// query, and commit hooks emit events through the configured sink and update
+    /// the in-process <see cref="BLiteMetrics"/> counters.
+    /// </summary>
+    public BLiteEngine(string databasePath, BLiteAuditOptions audit)
+        : this(databasePath)
+    {
+        _storage.ConfigureAudit(audit ?? throw new ArgumentNullException(nameof(audit)));
+    }
+
+    /// <summary>
+    /// Creates a new BLiteEngine with full configuration: page, key-value store, and audit.
+    /// </summary>
+    public BLiteEngine(string databasePath, PageFileConfig config, BLiteKvOptions? kvOptions, BLiteAuditOptions audit)
+        : this(databasePath, config, kvOptions)
+    {
+        _storage.ConfigureAudit(audit ?? throw new ArgumentNullException(nameof(audit)));
     }
 
     /// <summary>
@@ -679,6 +701,14 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     #endregion
 
     #region Metrics
+
+    /// <summary>
+    /// In-memory audit counters exposed when an audit configuration with
+    /// <see cref="BLiteAuditOptions.EnableMetrics"/> was supplied at construction.
+    /// Returns <c>null</c> when audit was not configured, or when metrics were
+    /// disabled in the audit options.
+    /// </summary>
+    public BLiteMetrics? Metrics => _storage.Metrics;
 
     /// <summary>
     /// Enables the metrics subsystem. After this call, the engine starts collecting
