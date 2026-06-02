@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="5.0.0"></a>
+## [5.0.0](https://www.github.com/EntglDb/BLite/releases/tag/v5.0.0) (2026-06-02)
+
 <a name="5.0.0-preview.1"></a>
 ## [5.0.0-preview.1](https://www.github.com/EntglDb/BLite/releases/tag/v5.0.0-preview.1) (2026-05-11)
 
