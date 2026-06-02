@@ -7,15 +7,17 @@
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-.NET%2010%20%7C%20netstandard2.1-purple)
-![Status](https://img.shields.io/badge/status-active%20development-orange)
+![Status](https://img.shields.io/badge/status-stable-brightgreen)
 
 **BLite** is an embedded, ACID-compliant, document-oriented database built from scratch for **maximum performance** and **zero allocation**. It leverages modern .NET features like `Span<T>`, `Memory<T>`, and Source Generators to eliminate runtime overhead.
 
 > **Compatibility**: Targets **net10.0** and **netstandard2.1** — works with .NET 5+, Unity, Xamarin, MAUI, and any netstandard2.1-compatible runtime.
 
 > [!NOTE]
-> **v5.0.0 Preview Available!** BLite 5 introduces transparent **AES-256-GCM encryption**, a formal **audit trail** (IBLiteAuditSink + OpenTelemetry), and full **GDPR compliance primitives** ([PersonalData], subject export, CDC masking, Strict mode). See [README-5.0.0-preview.0.md](README-5.0.0-preview.0.md) for the full feature guide.  
-> Install: `dotnet add package BLite --version 5.0.0-preview.0` — **GA planned for 30 May 2026.** Please [report issues on GitHub](https://github.com/EntglDb/BLite/issues).
+> **v5.0.0 is now available!** BLite 5 introduces transparent **AES-256-GCM encryption at rest**, a formal **audit trail** (IBLiteAuditSink, BLiteMetrics, OpenTelemetry), full **GDPR compliance primitives** ([PersonalData], subject export, CDC field masking, GdprMode.Strict), **multi-process WAL** (.wal-shm), and **generalized retention policies**. See the sections below for details, or install now:
+> ```
+> dotnet add package BLite --version 5.0.0
+> ```
 
 ---
 
@@ -193,7 +195,118 @@ modelBuilder.Entity<Order>()
 var order = collection.FindById(new OrderId("ORD-123"));
 ```
 
-### 📡 Change Data Capture (CDC)
+### � Encryption at Rest *(v5.0.0)*
+Transparent **AES-256-GCM** page-level encryption. Pages are encrypted before writing to disk and decrypted after reading — the rest of the engine (LINQ, CDC, WAL, transactions) works unchanged.
+
+```csharp
+// Passphrase mode (PBKDF2-SHA256, 600 000 iterations)
+using var db = new AppDb("users.db", new CryptoOptions("my-secret-passphrase"));
+
+// Master-key mode (HKDF-SHA256 — KMS / HSM friendly)
+byte[] masterKey = await myKeyVault.GetKeyAsync("blite-prod");
+using var db = new AppDb("users.db", CryptoOptions.FromMasterKey(masterKey));
+
+// Offline migration (plaintext ↔ encrypted)
+await BLiteEngine.MigrateToEncryptedAsync("old.db", "new-encrypted.db", keyProvider);
+await BLiteEngine.MigrateToPlaintextAsync("old-encrypted.db", "new-plain.db", keyProvider);
+
+// Online key rotation
+await engine.RotateEncryptionKeyAsync(newKeyProvider, new KeyRotationOptions { EmitAuditEvent = true });
+```
+
+In multi-file mode, `EncryptionCoordinator` derives a **unique 256-bit HKDF-SHA256 subkey per file** — stealing one file does not expose the others. The default `NullCryptoProvider` is a transparent no-op with **zero overhead** for code that does not opt in.
+
+### 🪵 Audit Trail & Performance Monitoring *(v5.0.0)*
+Formal per-operation callbacks with timing, caller identity, and optional OpenTelemetry integration.
+
+```csharp
+db.ConfigureAudit(new BLiteAuditOptions
+{
+    Sink                   = new MyAuditSink(),         // IBLiteAuditSink impl
+    EnableMetrics          = true,                      // populate db.AuditMetrics
+    SlowOperationThreshold = TimeSpan.FromMilliseconds(50),
+    EnableDiagnosticSource = true,                      // emit Activity spans (OTel)
+});
+
+// In-memory counters (~10–20 ns overhead, Interlocked)
+BLiteMetrics m = db.AuditMetrics!;
+Console.WriteLine($"Cache hit rate: {m.CacheHitRate:P1} | Avg query: {m.AvgQueryMs:F2} ms");
+
+// OpenTelemetry — register the source once
+services.AddOpenTelemetry().WithTracing(b => b.AddSource("BLite.Core"));
+```
+
+Implement `IBLiteAuditSink` with default no-op methods — override only the events you need (`OnInsert`, `OnQuery`, `OnCommit`, `OnSlowOperation`). Inject a custom `IAuditContextProvider` to attach caller identity to every event.
+
+### 🛡️ GDPR Compliance Primitives *(v5.0.0)*
+Annotate personal data at compile time; the Source Generator emits zero-reflection metadata.
+
+```csharp
+public class Customer
+{
+    public ObjectId Id { get; set; }
+
+    [PersonalData]                                         // Art. 4(1)
+    public string Email { get; set; } = "";
+
+    [PersonalData(Sensitivity = DataSensitivity.Special)] // Art. 9
+    public string? MedicalNotes { get; set; }
+
+    [PersonalData(IsTimestamp = true)]
+    public DateTime CreatedAt { get; set; }
+}
+
+// Art. 15/20 — subject export (JSON, CSV, or BSON)
+var report = await db.ExportSubjectDataAsync(new SubjectQuery
+{
+    FieldName  = "email",
+    FieldValue = BsonValue.FromString("alice@example.com"),
+    Format     = SubjectExportFormat.Json,
+});
+await report.WriteToFileAsync("alice-export.json");
+
+// Art. 30 — database inspection
+DatabaseInspectionReport inspect = db.InspectDatabase();
+// → IsEncrypted, IsAuditEnabled, per-collection PersonalDataFields, RetentionPolicy
+```
+
+CDC field masking (WP2): when `CapturePayload = true`, `[PersonalData]` fields are automatically masked before dispatch. Opt in to clear data with `RevealPersonalData = true`. Use `IncludeOnlyFields`/`ExcludeFields` for fine-grained control.
+
+`GdprMode.Strict` (Art. 25): throws at engine-open time if encryption is absent, warns if no audit sink or retention policy is configured.
+
+### ⏳ Generalized Retention Policy *(v5.0.0)*
+Retention policies — previously only for `TimeSeries` — now apply to **any typed collection**:
+
+```csharp
+modelBuilder.Entity<Order>()
+    .HasRetentionPolicy(
+        timestampSelector: o => o.PlacedAt,
+        maxAge:            TimeSpan.FromDays(7 * 365),
+        triggers:          RetentionTrigger.OnInsert | RetentionTrigger.Scheduled);
+
+modelBuilder.Entity<AuditLogEntry>()
+    .HasRetentionPolicy(timestampSelector: e => e.CreatedAt, maxDocumentCount: 10_000);
+```
+
+### 🗑️ Secure Erase & VACUUM *(v5.0.0)*
+Zero the storage slot on delete for GDPR Art. 17 (Right to Erasure):
+
+```csharp
+modelBuilder.Entity<Customer>().HasSecureErase(true);
+
+// Compact and reclaim free space
+await db.VacuumAsync();
+```
+
+### 🔄 Multi-Process WAL *(v5.0.0)*
+A `.wal-shm` sidecar enables **N-reader / 1-writer** access across OS processes (opt-in):
+
+```csharp
+var config = new PageFileConfig { EnableMultiProcessAccess = true };
+using var db = new AppDb("shared.db", config); // open from multiple processes
+```
+
+### �📡 Change Data Capture (CDC)
 Real-time event streaming for database changes with transactional consistency.
 
 - **Zero-Allocation**: Events are only captured when watchers exist; no overhead when disabled.
@@ -964,6 +1077,12 @@ We are actively building the core. Here is where we stand:
 - ✅ **Multi-File Storage Layout (v3.8.0)**: `PageFileConfig.Server(dbPath)` configures separate files for WAL, index data, and per-collection data. `BLiteMigration.ToMultiFile()` / `ToSingleFile()` migrate existing databases between layouts, preserving all documents, KV entries (including TTL), and index definitions.
 - ✅ **Non-Blocking Checkpoints (v3.8.0)**: checkpoint and metadata writes are deferred to avoid blocking the hot path. `PageFile` uses `Lazy<T>` for collection file initialization and `ReaderWriterLockSlim` to fix concurrent read/write races.
 - ✅ **Async-Only CRUD API (v4.0.0 — Breaking Change)**: Synchronous data methods (`Insert`, `Update`, `Delete`, `FindById`, `FindAll`, `Find`, and all bulk variants) have been **removed** from `DocumentCollection<TId, T>` and `DynamicCollection`. All data operations are now exclusively async — this eliminates accidental blocking calls on thread-pool threads, simplifies the internal code paths, and enforces correct async usage throughout the entire stack.
+- ✅ **Encryption at Rest (v5.0.0)**: Transparent AES-256-GCM page-level encryption. `CryptoOptions` (passphrase or master-key), `EncryptionCoordinator` for per-file HKDF-SHA256 subkeys in multi-file mode, offline migration helpers, and online key rotation. Zero overhead when disabled (`NullCryptoProvider`).
+- ✅ **Audit Trail (v5.0.0)**: `IBLiteAuditSink` callbacks, in-memory `BLiteMetrics` (lock-free Interlocked counters), and `BLiteDiagnostics.ActivitySource` for OpenTelemetry. `IAuditContextProvider` for caller identity injection. Zero overhead when not configured.
+- ✅ **GDPR Compliance Primitives (v5.0.0)**: `[PersonalData]` annotation, `DataSensitivity` levels, Subject Export (`ExportSubjectDataAsync` — Art. 15/20), Database Inspection (`InspectDatabase` — Art. 30), CDC Field Masking (WP2 — `RevealPersonalData`, `IncludeOnlyFields`, `ExcludeFields`), and `GdprMode.Strict` (Art. 25 privacy-by-default orchestration).
+- ✅ **Generalized Retention Policy (v5.0.0)**: `HasRetentionPolicy` now applies to any typed collection (not only `TimeSeries`). Supports `maxAge`, `maxDocumentCount`, and configurable `RetentionTrigger` (on-insert or scheduled).
+- ✅ **Secure Erase & VACUUM (v5.0.0)**: `HasSecureErase(true)` zeros the storage slot on delete for GDPR Art. 17. `VacuumAsync()` compacts the database and reclaims free space.
+- ✅ **Multi-Process WAL (v5.0.0)**: `.wal-shm` sidecar enables N-reader / 1-writer access across OS processes. Opt in via `PageFileConfig.EnableMultiProcessAccess = true`.
 
 ## 🔮 Future Vision
 
