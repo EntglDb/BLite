@@ -20,13 +20,13 @@ public partial class MainWindow : Window
 
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Apri database BLite",
+            Title = "Open BLite database",
             AllowMultiple = false,
-            // Nessun filtro: qualsiasi estensione è accettata
+            // Keep broad filters so users can open existing files with custom extensions.
             FileTypeFilter =
             [
                 new FilePickerFileType("Database BLite") { Patterns = ["*.db", "*.blite", "*.blt"] },
-                new FilePickerFileType("Tutti i file")   { Patterns = ["*.*"] },
+                new FilePickerFileType("All files")      { Patterns = ["*.*"] },
             ]
         });
 

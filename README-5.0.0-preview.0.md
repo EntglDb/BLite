@@ -528,7 +528,7 @@ This feature is **opt-in** — all existing single-process behaviour is preserve
 ```csharp
 var config = new PageFileConfig
 {
-    EnableMultiProcessAccess = true,
+    AllowMultiProcessAccess = true,
 };
 
 // Process A (writer)
@@ -539,7 +539,7 @@ using var db = new AppDb("shared.db", config);
 ```
 
 > [!IMPORTANT]
-> Multi-process WAL requires all cooperating processes to open the database with `EnableMultiProcessAccess = true`. A process that opens with `EnableMultiProcessAccess = false` will hold `FileShare.None` and block other processes.
+> Multi-process WAL requires all cooperating processes to open the database with `AllowMultiProcessAccess = true`. A process that opens with `AllowMultiProcessAccess = false` will hold `FileShare.None` and block other processes.
 
 ---
 
@@ -628,7 +628,7 @@ v5.0.0-preview.0 is **fully backwards-compatible** with v4.4.2 databases. No fil
 | Add audit trail | Call `ConfigureAudit(...)` after construction |
 | Add GDPR annotations | Annotate properties with `[PersonalData]` and rebuild |
 | Enable Strict mode | Add `HasGdprMode(GdprMode.Strict)` + configure encryption + audit |
-| Enable multi-process access | Set `PageFileConfig.EnableMultiProcessAccess = true` on all processes |
+| Enable multi-process access | Set `PageFileConfig.AllowMultiProcessAccess = true` on all processes |
 
 ---
 
@@ -706,7 +706,7 @@ v5.0.0-preview.0 is **fully backwards-compatible** with v4.4.2 databases. No fil
 ## Known limitations in this preview
 
 - `RotateEncryptionKeyAsync` is implemented but not yet stress-tested under concurrent write load. Use it during a maintenance window.
-- Multi-process WAL (`EnableMultiProcessAccess`) is not yet supported on WASM/Browser targets (tracked in [WASM_SUPPORT.md](WASM_SUPPORT.md)).
+- Multi-process WAL (`AllowMultiProcessAccess`) is not yet supported on WASM/Browser targets (tracked in [WASM_SUPPORT.md](WASM_SUPPORT.md)).
 - Argon2id KDF is reserved for a future release. PBKDF2-SHA256 (600 000 iterations) and HKDF-SHA256 are the only supported KDFs in this preview.
 - Source-generator GDPR metadata emission (`PersonalDataFields`) requires .NET SDK 9+ (Roslyn 4.x). Fallback reflection path is fully functional on all supported runtimes.
 
