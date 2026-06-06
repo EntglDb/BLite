@@ -302,7 +302,7 @@ await db.VacuumAsync();
 A `.wal-shm` sidecar enables **N-reader / 1-writer** access across OS processes (opt-in):
 
 ```csharp
-var config = new PageFileConfig { EnableMultiProcessAccess = true };
+var config = new PageFileConfig { AllowMultiProcessAccess = true };
 using var db = new AppDb("shared.db", config); // open from multiple processes
 ```
 
@@ -1082,7 +1082,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **GDPR Compliance Primitives (v5.0.0)**: `[PersonalData]` annotation, `DataSensitivity` levels, Subject Export (`ExportSubjectDataAsync` — Art. 15/20), Database Inspection (`InspectDatabase` — Art. 30), CDC Field Masking (WP2 — `RevealPersonalData`, `IncludeOnlyFields`, `ExcludeFields`), and `GdprMode.Strict` (Art. 25 privacy-by-default orchestration).
 - ✅ **Generalized Retention Policy (v5.0.0)**: `HasRetentionPolicy` now applies to any typed collection (not only `TimeSeries`). Supports `maxAge`, `maxDocumentCount`, and configurable `RetentionTrigger` (on-insert or scheduled).
 - ✅ **Secure Erase & VACUUM (v5.0.0)**: `HasSecureErase(true)` zeros the storage slot on delete for GDPR Art. 17. `VacuumAsync()` compacts the database and reclaims free space.
-- ✅ **Multi-Process WAL (v5.0.0)**: `.wal-shm` sidecar enables N-reader / 1-writer access across OS processes. Opt in via `PageFileConfig.EnableMultiProcessAccess = true`.
+- ✅ **Multi-Process WAL (v5.0.0)**: `.wal-shm` sidecar enables N-reader / 1-writer access across OS processes. Opt in via `PageFileConfig.AllowMultiProcessAccess = true`.
 
 ## 🔮 Future Vision
 
@@ -1126,5 +1126,4 @@ Special thanks to the community members who helped improve BLite:
 ## �📝 License
 
 Licensed under the MIT License. Use it freely in personal and commercial projects.
-
 

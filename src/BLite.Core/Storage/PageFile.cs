@@ -354,10 +354,14 @@ public sealed class PageFile : IPageStorage
 
             var fileExists = File.Exists(_filePath);
             
+            var isReadOnlyAccess = _config.Access == MemoryMappedFileAccess.Read;
+            var fileMode = isReadOnlyAccess ? FileMode.Open : FileMode.OpenOrCreate;
+            var fileAccess = isReadOnlyAccess ? FileAccess.Read : FileAccess.ReadWrite;
+
             _fileStream = new FileStream(
                 _filePath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
+                fileMode,
+                fileAccess,
                 _config.AllowMultiProcessAccess ? FileShare.ReadWrite : FileShare.None,
                 bufferSize: 4096,
 #if NET6_0_OR_GREATER

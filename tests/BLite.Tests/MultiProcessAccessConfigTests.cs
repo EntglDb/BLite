@@ -102,4 +102,51 @@ public class MultiProcessAccessConfigTests
             try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
         }
     }
+
+    [Fact]
+    public void StorageEngine_ReadOnlyReader_CanOpenAlongsideWriter_WhenMultiProcessEnabled()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"blite_mpread_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var dbPath = Path.Combine(dir, "shared.db");
+            var writerConfig = PageFileConfig.Default with { AllowMultiProcessAccess = true };
+            var readerConfig = writerConfig with { Access = System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read };
+
+            using var writer = new StorageEngine(dbPath, writerConfig);
+            using var reader = new StorageEngine(dbPath, readerConfig);
+
+            Assert.NotNull(writer.SharedMemory);
+            Assert.NotNull(reader.SharedMemory);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public void PageFile_ReadOnlyMode_DoesNotCreateMissingFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"blite_readonly_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var dbPath = Path.Combine(dir, "missing.db");
+            var config = PageFileConfig.Default with
+            {
+                Access = System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read,
+                AllowMultiProcessAccess = true
+            };
+
+            using var pageFile = new PageFile(dbPath, config);
+            Assert.Throws<FileNotFoundException>(() => pageFile.Open());
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
 }
