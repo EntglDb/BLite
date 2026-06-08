@@ -63,7 +63,7 @@
           <Grid ColumnDefinitions="*,Auto">
             <TextBox Grid.Column="0"
                      Text="{Binding DatabasePath}"
-                     Watermark="Percorso del file (qualsiasi estensione)…"
+                     Watermark="File path (any extension)…"
                      VerticalContentAlignment="Center"/>
             <Button Grid.Column="1"
                     Content="Browse…"
