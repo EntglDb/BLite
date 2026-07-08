@@ -26,7 +26,7 @@ namespace BLite.Core.Encryption;
 /// </remarks>
 public enum KdfAlgorithm : byte
 {
-    /// <summary>PBKDF2 with HMAC-SHA-256 (default, 600 000 iterations — OWASP 2023).</summary>
+    /// <summary>PBKDF2 with HMAC-SHA-256 (default, 600 000 iterations — OWASP recommended minimum).</summary>
     Pbkdf2Sha256 = 1
 
     // Reserved values:
@@ -81,7 +81,7 @@ public sealed class CryptoOptions
     /// </param>
     /// <param name="kdf">Key-derivation function (default: <see cref="KdfAlgorithm.Pbkdf2Sha256"/>).</param>
     /// <param name="iterations">
-    /// Number of KDF iterations (default: 600 000, aligned with OWASP 2023 guidance for PBKDF2-SHA256).
+    /// Number of KDF iterations (default: 600 000, aligned with current OWASP recommended minimum for PBKDF2-SHA256).
     /// Higher values increase resistance to brute-force attacks at the cost of open time.
     /// The iteration count is persisted in the file header, so existing databases continue to open
     /// with whatever value they were created with.
@@ -222,5 +222,76 @@ public sealed class CryptoOptions
             CryptographicOperations.ZeroMemory(_masterKey);
             _masterKey = null;
         }
+    }
+
+    /// <summary>
+    /// Generates a cryptographically random 32-byte salt suitable for use with
+    /// <see cref="DeriveKey(string, byte[])"/> or manual PBKDF2 key derivation via
+    /// <see cref="System.Security.Cryptography.Rfc2898DeriveBytes"/>.
+    /// </summary>
+    /// <returns>A new 32-byte array filled with cryptographically strong random bytes.</returns>
+    /// <remarks>
+    /// <para>
+    /// In the simple passphrase mode (<c>new CryptoOptions("passphrase")</c>), BLite
+    /// automatically generates a unique salt per file and persists it in the 64-byte file
+    /// header — you do <b>not</b> need to call this method for that workflow.
+    /// </para>
+    /// <para>
+    /// Use this method only when you need to manage the salt yourself, for example when you
+    /// want to derive the key externally and supply it via
+    /// <see cref="FromMasterKey(System.ReadOnlySpan{byte})"/>:
+    /// </para>
+    /// <code>
+    /// // One-time setup: generate and persist the salt
+    /// byte[] salt = CryptoOptions.GenerateSalt();
+    /// File.WriteAllBytes("secure.salt", salt);
+    ///
+    /// // Subsequent opens: read the salt and derive the key, then open the database
+    /// byte[] salt = File.ReadAllBytes("secure.salt");
+    /// byte[] key  = CryptoOptions.DeriveKey("my-passphrase", salt);
+    /// using var engine = new BLiteEngine("secure.blite", CryptoOptions.FromMasterKey(key));
+    /// </code>
+    /// </remarks>
+    public static byte[] GenerateSalt()
+    {
+        var salt = new byte[32];
+        RandomNumberGenerator.Fill(salt);
+        return salt;
+    }
+
+    /// <summary>
+    /// Derives a 32-byte AES-256 key from a passphrase and salt using PBKDF2-HMAC-SHA256
+    /// (600 000 iterations, aligned with current OWASP guidance for PBKDF2-SHA256).
+    /// </summary>
+    /// <param name="passphrase">The user-supplied secret. Must not be null or empty.</param>
+    /// <param name="salt">
+    /// The per-database salt. Must be at least 16 bytes; 32 bytes (from
+    /// <see cref="GenerateSalt"/>) is recommended.
+    /// </param>
+    /// <param name="iterations">
+    /// Number of PBKDF2 iterations (default: 600 000). Higher values increase resistance to
+    /// brute-force attacks at the cost of open time. Must match the value used when the database
+    /// was created; the iteration count is <b>not</b> stored when using
+    /// <see cref="FromMasterKey(System.ReadOnlySpan{byte})"/> (the salt file workflow), so
+    /// callers must track it themselves.
+    /// </param>
+    /// <returns>A 32-byte derived key.</returns>
+    /// <remarks>
+    /// This helper is intended for the advanced scenario where you manage the salt yourself and
+    /// pass the pre-derived key via <see cref="FromMasterKey(System.ReadOnlySpan{byte})"/>.
+    /// For the common case, pass the passphrase directly to
+    /// <c>new CryptoOptions("passphrase")</c> — BLite derives the key internally and
+    /// stores the salt in the encrypted file header automatically.
+    /// </remarks>
+    public static byte[] DeriveKey(string passphrase, byte[] salt, int iterations = 600_000)
+    {
+        if (string.IsNullOrEmpty(passphrase))
+            throw new ArgumentNullException(nameof(passphrase));
+        if (salt is null || salt.Length < 16)
+            throw new ArgumentException("Salt must be at least 16 bytes.", nameof(salt));
+        if (iterations < 1)
+            throw new ArgumentOutOfRangeException(nameof(iterations), "Iterations must be at least 1.");
+
+        return KeyDerivation.DeriveKeyPbkdf2(passphrase, salt, iterations);
     }
 }
