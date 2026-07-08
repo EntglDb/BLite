@@ -555,7 +555,7 @@ public class EncryptionTests : IDisposable
     // ── WAL encryption ───────────────────────────────────────────────────────
 
     [Fact]
-    public void WriteAheadLog_WithCrypto_RecordsAreEncryptedOnDisk()
+    public async Task WriteAheadLog_WithCrypto_RecordsAreEncryptedOnDisk()
     {
         var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
         _tempFiles.Add(walPath);
@@ -565,10 +565,10 @@ public class EncryptionTests : IDisposable
 
         using (var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto))
         {
-            wal.WriteBeginRecordAsync(1).GetAwaiter().GetResult();
-            wal.WriteDataRecordAsync(1, 42, new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }).GetAwaiter().GetResult();
-            wal.WriteCommitRecordAsync(1).GetAwaiter().GetResult();
-            wal.FlushAsync().GetAwaiter().GetResult();
+            await wal.WriteBeginRecordAsync(1);
+            await wal.WriteDataRecordAsync(1, 42, new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
+            await wal.WriteCommitRecordAsync(1);
+            await wal.FlushAsync();
         }
 
         // The WAL file must exist and contain the 64-byte file header.
@@ -584,7 +584,7 @@ public class EncryptionTests : IDisposable
     }
 
     [Fact]
-    public void WriteAheadLog_WithCrypto_ReadAll_RoundTrip()
+    public async Task WriteAheadLog_WithCrypto_ReadAll_RoundTrip()
     {
         var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
         _tempFiles.Add(walPath);
@@ -597,10 +597,10 @@ public class EncryptionTests : IDisposable
         // Write records
         using (var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto))
         {
-            wal.WriteBeginRecordAsync(7).GetAwaiter().GetResult();
-            wal.WriteDataRecordAsync(7, 99, afterImageBytes).GetAwaiter().GetResult();
-            wal.WriteCommitRecordAsync(7).GetAwaiter().GetResult();
-            wal.FlushAsync().GetAwaiter().GetResult();
+            await wal.WriteBeginRecordAsync(7);
+            await wal.WriteDataRecordAsync(7, 99, afterImageBytes);
+            await wal.WriteCommitRecordAsync(7);
+            await wal.FlushAsync();
         }
 
         // Read back using a fresh provider loaded from the same file header
@@ -620,7 +620,7 @@ public class EncryptionTests : IDisposable
     }
 
     [Fact]
-    public void WriteAheadLog_WithCrypto_TruncateAndReuse()
+    public async Task WriteAheadLog_WithCrypto_TruncateAndReuse()
     {
         var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
         _tempFiles.Add(walPath);
@@ -631,18 +631,18 @@ public class EncryptionTests : IDisposable
         using var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto);
 
         // First batch
-        wal.WriteBeginRecordAsync(1).GetAwaiter().GetResult();
-        wal.WriteCommitRecordAsync(1).GetAwaiter().GetResult();
-        wal.FlushAsync().GetAwaiter().GetResult();
+        await wal.WriteBeginRecordAsync(1);
+        await wal.WriteCommitRecordAsync(1);
+        await wal.FlushAsync();
 
         // Truncate
-        wal.TruncateAsync().GetAwaiter().GetResult();
+        await wal.TruncateAsync();
         Assert.Equal(0, wal.GetCurrentSize());
 
         // Second batch (new header should be written automatically)
-        wal.WriteBeginRecordAsync(2).GetAwaiter().GetResult();
-        wal.WriteCommitRecordAsync(2).GetAwaiter().GetResult();
-        wal.FlushAsync().GetAwaiter().GetResult();
+        await wal.WriteBeginRecordAsync(2);
+        await wal.WriteCommitRecordAsync(2);
+        await wal.FlushAsync();
 
         var records = wal.ReadAll();
         Assert.Equal(2, records.Count);
