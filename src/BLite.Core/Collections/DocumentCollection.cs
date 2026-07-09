@@ -144,9 +144,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Configures a generalized retention policy for this collection.
     /// The policy is persisted in collection metadata and survives engine restarts.
-    /// Called internally from <see cref="DocumentDbContext"/> when applying builder configuration.
+    /// Can be called directly on the collection or via the model builder in
+    /// <see cref="DocumentDbContext"/> configuration.
     /// </summary>
-    internal void SetRetentionPolicy(RetentionPolicy policy)
+    /// <param name="policy">The retention policy to apply. Must not be null.</param>
+    public void SetRetentionPolicy(RetentionPolicy policy)
     {
         if (policy == null) throw new ArgumentNullException(nameof(policy));
         var meta = _indexManager.GetMetadata();

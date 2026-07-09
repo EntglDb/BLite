@@ -195,17 +195,71 @@ modelBuilder.Entity<Order>()
 var order = collection.FindById(new OrderId("ORD-123"));
 ```
 
-### � Encryption at Rest *(v5.0.0)*
+### 🔒 Encryption at Rest *(v5.0.0)*
 Transparent **AES-256-GCM** page-level encryption. Pages are encrypted before writing to disk and decrypted after reading — the rest of the engine (LINQ, CDC, WAL, transactions) works unchanged.
 
-```csharp
-// Passphrase mode (PBKDF2-SHA256, 600 000 iterations)
-using var db = new AppDb("users.db", new CryptoOptions("my-secret-passphrase"));
+**Required namespace**: `using BLite.Core.Encryption;`
 
-// Master-key mode (HKDF-SHA256 — KMS / HSM friendly)
+#### Simple passphrase mode (recommended)
+Pass a passphrase string to `CryptoOptions`. BLite automatically generates a unique random salt per file, derives the AES-256 key via PBKDF2-SHA256 (600 000 iterations), and stores the salt in the 64-byte encrypted file header — no separate salt file needed.
+
+```csharp
+using BLite.Core;
+using BLite.Core.Encryption;
+
+// Create or open an encrypted single-file database
+var crypto = new CryptoOptions("my-secret-passphrase");
+using var engine = new BLiteEngine("secure.blite", crypto);
+var col = engine.GetOrCreateCollection("users");
+```
+
+#### Using DocumentDbContext with encryption
+```csharp
+using BLite.Core;
+using BLite.Core.Encryption;
+
+public partial class AppDbContext : DocumentDbContext
+{
+    public DocumentCollection<int, User> Users { get; set; } = null!;
+
+    // Encrypted single-file database
+    public AppDbContext(string path, CryptoOptions crypto)
+        : base(path, crypto)
+    { }
+}
+
+// Create or open the encrypted database
+var crypto = new CryptoOptions("my-secret-passphrase");
+await using var db = new AppDbContext("secure.blite", crypto);
+```
+
+#### Advanced: manage salt externally, derive key manually
+For scenarios where you need to control the salt lifecycle (e.g. storing it separately from the database file):
+
+```csharp
+using BLite.Core;
+using BLite.Core.Encryption;
+
+// One-time setup: generate a salt and persist it
+byte[] salt = CryptoOptions.GenerateSalt(); // returns byte[32]
+File.WriteAllBytes("secure.salt", salt);
+
+// Subsequent opens: read the salt, derive the key, open the database
+byte[] storedSalt = File.ReadAllBytes("secure.salt");
+byte[] key        = CryptoOptions.DeriveKey("my-passphrase", storedSalt); // PBKDF2-SHA256, 32 bytes
+using var engine = new BLiteEngine("secure.blite", CryptoOptions.FromMasterKey(key));
+```
+
+#### Master-key mode (KMS / HSM friendly)
+Supply a pre-existing 32-byte key (e.g. from Azure Key Vault or AWS KMS). BLite uses HKDF-SHA256 to derive a unique subkey per physical file in multi-file mode.
+
+```csharp
 byte[] masterKey = await myKeyVault.GetKeyAsync("blite-prod");
 using var db = new AppDb("users.db", CryptoOptions.FromMasterKey(masterKey));
+```
 
+#### Migration and key rotation
+```csharp
 // Offline migration (plaintext ↔ encrypted)
 await BLiteEngine.MigrateToEncryptedAsync("old.db", "new-encrypted.db", keyProvider);
 await BLiteEngine.MigrateToPlaintextAsync("old-encrypted.db", "new-plain.db", keyProvider);

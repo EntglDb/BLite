@@ -110,6 +110,82 @@ public class EncryptionTests : IDisposable
         Assert.Equal(KdfAlgorithm.Pbkdf2Sha256, opts.Kdf);
     }
 
+    [Fact]
+    public void CryptoOptions_GenerateSalt_Returns32Bytes()
+    {
+        var salt = CryptoOptions.GenerateSalt();
+        Assert.Equal(32, salt.Length);
+    }
+
+    [Fact]
+    public void CryptoOptions_GenerateSalt_ProducesUniqueValues()
+    {
+        var s1 = CryptoOptions.GenerateSalt();
+        var s2 = CryptoOptions.GenerateSalt();
+        Assert.NotEqual(s1, s2);
+    }
+
+    [Fact]
+    public void CryptoOptions_DeriveKey_Returns32Bytes()
+    {
+        var salt = CryptoOptions.GenerateSalt();
+        var key = CryptoOptions.DeriveKey("my-passphrase", salt);
+        Assert.Equal(32, key.Length);
+    }
+
+    [Fact]
+    public void CryptoOptions_DeriveKey_IsDeterministicWithSameSalt()
+    {
+        var salt = CryptoOptions.GenerateSalt();
+        var k1 = CryptoOptions.DeriveKey("my-passphrase", salt);
+        var k2 = CryptoOptions.DeriveKey("my-passphrase", salt);
+        Assert.Equal(k1, k2);
+    }
+
+    [Fact]
+    public void CryptoOptions_DeriveKey_DifferentSaltProducesDifferentKey()
+    {
+        var key1 = CryptoOptions.DeriveKey("my-passphrase", CryptoOptions.GenerateSalt());
+        var key2 = CryptoOptions.DeriveKey("my-passphrase", CryptoOptions.GenerateSalt());
+        Assert.NotEqual(key1, key2);
+    }
+
+    [Fact]
+    public void CryptoOptions_DeriveKey_ThrowsOnNullPassphrase()
+    {
+        var salt = CryptoOptions.GenerateSalt();
+        Assert.Throws<ArgumentNullException>(() => CryptoOptions.DeriveKey(null!, salt));
+    }
+
+    [Fact]
+    public void CryptoOptions_DeriveKey_ThrowsOnShortSalt()
+    {
+        Assert.Throws<ArgumentException>(() => CryptoOptions.DeriveKey("pass", new byte[8]));
+    }
+
+    [Fact]
+    public void CryptoOptions_DeriveKey_CanOpenEngineViaMasterKey()
+    {
+        var path = TempDb();
+        var salt = CryptoOptions.GenerateSalt();
+        var key  = CryptoOptions.DeriveKey("test-pass", salt, iterations: 1);
+
+        // Create the encrypted database with the derived key
+        using (var engine = new BLiteEngine(path, CryptoOptions.FromMasterKey(key)))
+        {
+            var col = engine.GetOrCreateCollection("items");
+            Assert.NotNull(col);
+        }
+
+        // Re-derive the key from the same passphrase + salt and reopen
+        var key2 = CryptoOptions.DeriveKey("test-pass", salt, iterations: 1);
+        using (var engine = new BLiteEngine(path, CryptoOptions.FromMasterKey(key2)))
+        {
+            var col = engine.GetOrCreateCollection("items");
+            Assert.NotNull(col);
+        }
+    }
+
     // ── KeyDerivation ────────────────────────────────────────────────────────
 
     [Fact]
@@ -479,7 +555,7 @@ public class EncryptionTests : IDisposable
     // ── WAL encryption ───────────────────────────────────────────────────────
 
     [Fact]
-    public void WriteAheadLog_WithCrypto_RecordsAreEncryptedOnDisk()
+    public async Task WriteAheadLog_WithCrypto_RecordsAreEncryptedOnDisk()
     {
         var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
         _tempFiles.Add(walPath);
@@ -489,10 +565,10 @@ public class EncryptionTests : IDisposable
 
         using (var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto))
         {
-            wal.WriteBeginRecordAsync(1).GetAwaiter().GetResult();
-            wal.WriteDataRecordAsync(1, 42, new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }).GetAwaiter().GetResult();
-            wal.WriteCommitRecordAsync(1).GetAwaiter().GetResult();
-            wal.FlushAsync().GetAwaiter().GetResult();
+            await wal.WriteBeginRecordAsync(1);
+            await wal.WriteDataRecordAsync(1, 42, new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
+            await wal.WriteCommitRecordAsync(1);
+            await wal.FlushAsync();
         }
 
         // The WAL file must exist and contain the 64-byte file header.
@@ -508,7 +584,7 @@ public class EncryptionTests : IDisposable
     }
 
     [Fact]
-    public void WriteAheadLog_WithCrypto_ReadAll_RoundTrip()
+    public async Task WriteAheadLog_WithCrypto_ReadAll_RoundTrip()
     {
         var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
         _tempFiles.Add(walPath);
@@ -521,10 +597,10 @@ public class EncryptionTests : IDisposable
         // Write records
         using (var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto))
         {
-            wal.WriteBeginRecordAsync(7).GetAwaiter().GetResult();
-            wal.WriteDataRecordAsync(7, 99, afterImageBytes).GetAwaiter().GetResult();
-            wal.WriteCommitRecordAsync(7).GetAwaiter().GetResult();
-            wal.FlushAsync().GetAwaiter().GetResult();
+            await wal.WriteBeginRecordAsync(7);
+            await wal.WriteDataRecordAsync(7, 99, afterImageBytes);
+            await wal.WriteCommitRecordAsync(7);
+            await wal.FlushAsync();
         }
 
         // Read back using a fresh provider loaded from the same file header
@@ -544,7 +620,7 @@ public class EncryptionTests : IDisposable
     }
 
     [Fact]
-    public void WriteAheadLog_WithCrypto_TruncateAndReuse()
+    public async Task WriteAheadLog_WithCrypto_TruncateAndReuse()
     {
         var walPath = Path.Combine(Path.GetTempPath(), $"wal_enc_{Guid.NewGuid()}.wal");
         _tempFiles.Add(walPath);
@@ -555,18 +631,18 @@ public class EncryptionTests : IDisposable
         using var wal = new BLite.Core.Transactions.WriteAheadLog(walPath, crypto);
 
         // First batch
-        wal.WriteBeginRecordAsync(1).GetAwaiter().GetResult();
-        wal.WriteCommitRecordAsync(1).GetAwaiter().GetResult();
-        wal.FlushAsync().GetAwaiter().GetResult();
+        await wal.WriteBeginRecordAsync(1);
+        await wal.WriteCommitRecordAsync(1);
+        await wal.FlushAsync();
 
         // Truncate
-        wal.TruncateAsync().GetAwaiter().GetResult();
+        await wal.TruncateAsync();
         Assert.Equal(0, wal.GetCurrentSize());
 
         // Second batch (new header should be written automatically)
-        wal.WriteBeginRecordAsync(2).GetAwaiter().GetResult();
-        wal.WriteCommitRecordAsync(2).GetAwaiter().GetResult();
-        wal.FlushAsync().GetAwaiter().GetResult();
+        await wal.WriteBeginRecordAsync(2);
+        await wal.WriteCommitRecordAsync(2);
+        await wal.FlushAsync();
 
         var records = wal.ReadAll();
         Assert.Equal(2, records.Count);
