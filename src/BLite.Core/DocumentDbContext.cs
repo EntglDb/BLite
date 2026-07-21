@@ -100,13 +100,13 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             DropOrphanCollections();
             RunGdprStrictValidation(kvOptions);
         }
-        catch
-        {
-            _storage.Dispose();
-            _cdc.Dispose();
-            _disposed = true;
-            throw;
-        }
+catch
+{
+    try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
+    try { _cdc.Dispose(); } catch { /* best-effort */ }
+    _disposed = true;
+    throw;
+}
     }
 
     /// <summary>
@@ -171,14 +171,14 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             DropOrphanCollections();
             RunGdprStrictValidation(kvOptions);
         }
-        catch
-        {
-            _storage.Dispose();
-            _cdc.Dispose();
-            _ownedCoordinator?.Dispose();
-            _disposed = true;
-            throw;
-        }
+catch
+{
+    try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
+    try { _cdc.Dispose(); } catch { /* best-effort */ }
+    try { _ownedCoordinator?.Dispose(); } catch { /* best-effort */ }
+    _disposed = true;
+    throw;
+}
     }
 
     /// <summary>

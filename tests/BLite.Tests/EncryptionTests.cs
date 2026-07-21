@@ -1609,10 +1609,11 @@ public class EncryptionTests : IDisposable
             using var ctx = new MultiFileTestDbContext(path, wrong);
         });
 
-        // 3. The main database file must not be locked after the failed constructor.
-        //    Before the fix this would throw IOException ("file is being used by another process").
-        Assert.True(File.Exists(path), "Database file should exist before attempting deletion.");
-        File.Delete(path);
-        Assert.False(File.Exists(path), "Database file must be deletable immediately after failed constructor.");
+// 3. The main database file must not be locked after the failed constructor.
+//    Before the fix this would throw IOException (exclusive open fails on Windows; advisory-lock fails on Unix).
+Assert.True(File.Exists(path), "Database file should exist before attempting deletion.");
+using (var _ = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+File.Delete(path);
+Assert.False(File.Exists(path), "Database file must be deletable immediately after failed constructor.");
     }
 }
