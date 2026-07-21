@@ -1611,6 +1611,7 @@ public class EncryptionTests : IDisposable
 
         // 3. The main database file must not be locked after the failed constructor.
         //    Before the fix this would throw IOException ("file is being used by another process").
+        Assert.True(File.Exists(path), "Database file should exist before attempting deletion.");
         File.Delete(path);
         Assert.False(File.Exists(path), "Database file must be deletable immediately after failed constructor.");
     }
