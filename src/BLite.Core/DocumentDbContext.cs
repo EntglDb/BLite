@@ -86,7 +86,6 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _databasePath = databasePath;
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
-        _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
@@ -100,13 +99,15 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             DropOrphanCollections();
             RunGdprStrictValidation(kvOptions);
         }
-catch
-{
-    try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
-    try { _cdc.Dispose(); } catch { /* best-effort */ }
-    _disposed = true;
-    throw;
-}
+        catch
+        {
+            try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
+            try { _cdc.Dispose(); } catch { /* best-effort */ }
+            _disposed = true;
+            throw;
+        }
+
+        _storage.RegisterCdc(_cdc);
     }
 
     /// <summary>
@@ -158,7 +159,6 @@ catch
 
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
-        _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
@@ -171,14 +171,16 @@ catch
             DropOrphanCollections();
             RunGdprStrictValidation(kvOptions);
         }
-catch
-{
-    try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
-    try { _cdc.Dispose(); } catch { /* best-effort */ }
-    try { _ownedCoordinator?.Dispose(); } catch { /* best-effort */ }
-    _disposed = true;
-    throw;
-}
+        catch
+        {
+            try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
+            try { _cdc.Dispose(); } catch { /* best-effort */ }
+            try { _ownedCoordinator?.Dispose(); } catch { /* best-effort */ }
+            _disposed = true;
+            throw;
+        }
+
+        _storage.RegisterCdc(_cdc);
     }
 
     /// <summary>
@@ -217,7 +219,6 @@ catch
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _cdc = new CDC.ChangeStreamDispatcher();
-        _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
@@ -237,6 +238,8 @@ catch
             _disposed = true;
             throw;
         }
+
+        _storage.RegisterCdc(_cdc);
     }
 
     /// <summary>

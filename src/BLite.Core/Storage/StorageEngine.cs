@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Threading.Channels;
+using BLite.Core.Encryption;
 using BLite.Core.Transactions;
 
 namespace BLite.Core.Storage;
@@ -117,105 +118,123 @@ public sealed partial class StorageEngine : IDisposable
     public StorageEngine(string databasePath, PageFileConfig config)
     {
         _config = config;
-
-        // Use WalPath if specified, otherwise derive from databasePath (default behavior unchanged)
-        var walPath = config.WalPath ?? Path.ChangeExtension(databasePath, ".wal");
-
-        // Ensure WAL parent directory exists
-        var walDirectory = Path.GetDirectoryName(walPath);
-        if (!string.IsNullOrWhiteSpace(walDirectory))
-            Directory.CreateDirectory(walDirectory);
-
-        // Initialize storage infrastructure
-        _pageFile = new PageFile(databasePath, config);
-
-        _pageFile.Open();
-        // NOTE: If CryptoProvider is a coordinator-managed provider, opening the main file
-        // primes the coordinator's database salt, making CreateSiblingProvider available
-        // for index, WAL, and per-collection files.
-
-        // Phase 3: open separate index file if configured
-        if (config.IndexFilePath != null)
+        ICryptoProvider? walCryptoProvider = null;
+        try
         {
-            var idxDirectory = Path.GetDirectoryName(config.IndexFilePath);
-            if (!string.IsNullOrWhiteSpace(idxDirectory))
-                Directory.CreateDirectory(idxDirectory);
+            // Use WalPath if specified, otherwise derive from databasePath (default behavior unchanged)
+            var walPath = config.WalPath ?? Path.ChangeExtension(databasePath, ".wal");
 
-            // Derive a dedicated index-file provider so that index and data pages
-            // encrypted with the same pageId never share a key.
-            var idxConfig = config.CryptoProvider != null
-                ? AsStandaloneConfig(config) with { CryptoProvider = config.CryptoProvider.CreateSiblingProvider(2, 0) }
-                : AsStandaloneConfig(config);
+            // Ensure WAL parent directory exists
+            var walDirectory = Path.GetDirectoryName(walPath);
+            if (!string.IsNullOrWhiteSpace(walDirectory))
+                Directory.CreateDirectory(walDirectory);
 
-            _indexFile = new PageFile(config.IndexFilePath, idxConfig);
-            _indexFile.Open();
+            // Initialize storage infrastructure
+            _pageFile = new PageFile(databasePath, config);
+
+            _pageFile.Open();
+            // NOTE: If CryptoProvider is a coordinator-managed provider, opening the main file
+            // primes the coordinator's database salt, making CreateSiblingProvider available
+            // for index, WAL, and per-collection files.
+
+            // Phase 3: open separate index file if configured
+            if (config.IndexFilePath != null)
+            {
+                var idxDirectory = Path.GetDirectoryName(config.IndexFilePath);
+                if (!string.IsNullOrWhiteSpace(idxDirectory))
+                    Directory.CreateDirectory(idxDirectory);
+
+                // Derive a dedicated index-file provider so that index and data pages
+                // encrypted with the same pageId never share a key.
+                var idxConfig = config.CryptoProvider != null
+                    ? AsStandaloneConfig(config) with { CryptoProvider = config.CryptoProvider.CreateSiblingProvider(2, 0) }
+                    : AsStandaloneConfig(config);
+
+                _indexFile = new PageFile(config.IndexFilePath, idxConfig);
+                _indexFile.Open();
+            }
+
+            // Phase 4: initialize collection-per-file structures if configured
+            if (config.CollectionDataDirectory != null)
+            {
+                Directory.CreateDirectory(config.CollectionDataDirectory);
+                _collectionFiles = new ConcurrentDictionary<string, Lazy<IPageStorage>>(StringComparer.OrdinalIgnoreCase);
+                _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                _collectionSlotToName = new Dictionary<int, string>();
+                _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
+                LoadCollectionSlots();
+            }
+
+            // When encryption is configured, derive a dedicated WAL provider from the main-file
+            // provider so that WAL records are always encrypted alongside the rest of the database.
+            walCryptoProvider = config.CryptoProvider?.CreateSiblingProvider(3, 0);
+
+            _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs, config.AllowMultiProcessAccess);
+            walCryptoProvider = null;
+            _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
+            _walIndex = new ConcurrentDictionary<uint, byte[]>();
+            _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
+            _nextTransactionId = 0; // Interlocked.Increment pre-increments, so first txnId == 1.
+
+            // ── Multi-process WAL coordination (opt-in) ─────────────────────────
+            // When AllowMultiProcessAccess is true, open the .wal-shm sidecar that
+            // coordinates cross-process writers / readers (see roadmap/v5/MULTI_PROCESS_WAL.md).
+            // The SHM file lives next to the WAL so both have the same lifetime.
+            if (config.AllowMultiProcessAccess)
+            {
+                var shmPath = walPath + "-shm";
+                _shm = Transactions.WalSharedMemory.Open(shmPath, config.PageSize);
+                _walOffsets = new ConcurrentDictionary<uint, long>();
+
+                // If a previous writer crashed without releasing the writer lock, the
+                // recorded PID will not be alive — clear it so this process (or another)
+                // can re-acquire the lock. The OS-level mutex / OFD lock has already been
+                // auto-released by the kernel; this only clears our PID stamp.
+                _shm.ForceClearStaleWriter();
+            }
+
+            // Admission gate: limits concurrent commit pressure on WAL/commit locks.
+            _writerGate = config.LockTimeout.MaxConcurrentWriters > 0
+                ? new SemaphoreSlim(config.LockTimeout.MaxConcurrentWriters, config.LockTimeout.MaxConcurrentWriters)
+                : null;
+
+            // Start the group commit writer.
+            _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = false
+            });
+            _writerTask = Task.Run(() => GroupCommitWriterAsync(_writerCts.Token));
+            
+            // RecoverAsync from WAL if exists (crash recovery or resume after close)
+            // This replays any committed transactions not yet checkpointed
+            if (_wal.GetCurrentSize() > 0)
+            {
+                RecoverAsync().GetAwaiter().GetResult();
+            }
+            
+            InitializeDictionary();
+            InitializeKv();
+            
+            // Create and start checkpoint manager
+            // _checkpointManager = new Transactions.CheckpointManager(this);
+            // _checkpointManager.StartAutoCheckpoint();
         }
-
-        // Phase 4: initialize collection-per-file structures if configured
-        if (config.CollectionDataDirectory != null)
+        catch
         {
-            Directory.CreateDirectory(config.CollectionDataDirectory);
-            _collectionFiles = new ConcurrentDictionary<string, Lazy<IPageStorage>>(StringComparer.OrdinalIgnoreCase);
-            _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            _collectionSlotToName = new Dictionary<int, string>();
-            _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
-            LoadCollectionSlots();
+            try { _writerCts.Cancel(); } catch { /* best-effort */ }
+            try { _writerTask?.Wait(TimeSpan.FromSeconds(5)); } catch { /* best-effort */ }
+            try { _wal?.Dispose(); } catch { /* best-effort */ }
+            try { _pageFile?.Dispose(); } catch { /* best-effort */ }
+            try { _indexFile?.Dispose(); } catch { /* best-effort */ }
+            try { _writerGate?.Dispose(); } catch { /* best-effort */ }
+            try { _shm?.Dispose(); } catch { /* best-effort */ }
+            if (walCryptoProvider is IDisposable disposableWalCrypto)
+                try { disposableWalCrypto.Dispose(); } catch { /* best-effort */ }
+            try { _writerCts.Dispose(); } catch { /* best-effort */ }
+            throw;
         }
-
-        // When encryption is configured, derive a dedicated WAL provider from the main-file
-        // provider so that WAL records are always encrypted alongside the rest of the database.
-        var walCryptoProvider = config.CryptoProvider?.CreateSiblingProvider(3, 0);
-
-        _wal = new WriteAheadLog(walPath, walCryptoProvider, config.LockTimeout.WriteTimeoutMs, config.AllowMultiProcessAccess);
-        _walCache = new ConcurrentDictionary<ulong, ConcurrentDictionary<uint, byte[]>>();
-        _walIndex = new ConcurrentDictionary<uint, byte[]>();
-        _activeTransactions = new ConcurrentDictionary<ulong, Transaction>();
-        _nextTransactionId = 0; // Interlocked.Increment pre-increments, so first txnId == 1.
-
-        // ── Multi-process WAL coordination (opt-in) ─────────────────────────
-        // When AllowMultiProcessAccess is true, open the .wal-shm sidecar that
-        // coordinates cross-process writers / readers (see roadmap/v5/MULTI_PROCESS_WAL.md).
-        // The SHM file lives next to the WAL so both have the same lifetime.
-        if (config.AllowMultiProcessAccess)
-        {
-            var shmPath = walPath + "-shm";
-            _shm = Transactions.WalSharedMemory.Open(shmPath, config.PageSize);
-            _walOffsets = new ConcurrentDictionary<uint, long>();
-
-            // If a previous writer crashed without releasing the writer lock, the
-            // recorded PID will not be alive — clear it so this process (or another)
-            // can re-acquire the lock. The OS-level mutex / OFD lock has already been
-            // auto-released by the kernel; this only clears our PID stamp.
-            _shm.ForceClearStaleWriter();
-        }
-
-        // Admission gate: limits concurrent commit pressure on WAL/commit locks.
-        _writerGate = config.LockTimeout.MaxConcurrentWriters > 0
-            ? new SemaphoreSlim(config.LockTimeout.MaxConcurrentWriters, config.LockTimeout.MaxConcurrentWriters)
-            : null;
-
-        // Start the group commit writer.
-        _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = false
-        });
-        _writerTask = Task.Run(() => GroupCommitWriterAsync(_writerCts.Token));
-        
-        // RecoverAsync from WAL if exists (crash recovery or resume after close)
-        // This replays any committed transactions not yet checkpointed
-        if (_wal.GetCurrentSize() > 0)
-        {
-            RecoverAsync().GetAwaiter().GetResult();
-        }
-        
-        InitializeDictionary();
-        InitializeKv();
-        
-        // Create and start checkpoint manager
-        // _checkpointManager = new Transactions.CheckpointManager(this);
-        // _checkpointManager.StartAutoCheckpoint();
     }
 
     /// <summary>
@@ -315,9 +334,9 @@ public sealed partial class StorageEngine : IDisposable
         }
 
         // 3. Close WAL and PageFile.
-        _wal?.Dispose();
-        _pageFile?.Dispose();
-        _indexFile?.Dispose();
+        try { _wal?.Dispose(); } catch { /* best-effort */ }
+        try { _pageFile?.Dispose(); } catch { /* best-effort */ }
+        try { _indexFile?.Dispose(); } catch { /* best-effort */ }
 
         // 4. Close per-collection PageFiles (Phase 4)
         if (_collectionFiles != null)
@@ -329,11 +348,11 @@ public sealed partial class StorageEngine : IDisposable
             _collectionFiles.Clear();
         }
 
-        _commitLock?.Dispose();
-        _metadataLock?.Dispose();
-        _writerGate?.Dispose();
-        _metrics?.Dispose();
-        _shm?.Dispose();
+        try { _commitLock?.Dispose(); } catch { /* best-effort */ }
+        try { _metadataLock?.Dispose(); } catch { /* best-effort */ }
+        try { _writerGate?.Dispose(); } catch { /* best-effort */ }
+        try { _metrics?.Dispose(); } catch { /* best-effort */ }
+        try { _shm?.Dispose(); } catch { /* best-effort */ }
     }
 
     internal void RegisterCdc(CDC.ChangeStreamDispatcher cdc)
