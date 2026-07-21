@@ -89,7 +89,6 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        _model = new Dictionary<Type, object>();
 
         try
         {
@@ -162,7 +161,6 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        _model = new Dictionary<Type, object>();
 
         try
         {
@@ -222,7 +220,6 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
-        _model = new Dictionary<Type, object>();
 
         try
         {
