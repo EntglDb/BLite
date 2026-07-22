@@ -86,17 +86,28 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
         _databasePath = databasePath;
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
-        _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
-        // Initialize model before collections
-        var modelBuilder = new ModelBuilder();
-        OnModelCreating(modelBuilder);
-        _model = modelBuilder.GetEntityBuilders();
-        InitializeCollections();
-        DropOrphanCollections();
-        RunGdprStrictValidation(kvOptions);
+        try
+        {
+            // Initialize model before collections
+            var modelBuilder = new ModelBuilder();
+            OnModelCreating(modelBuilder);
+            _model = modelBuilder.GetEntityBuilders();
+            InitializeCollections();
+            DropOrphanCollections();
+            RunGdprStrictValidation(kvOptions);
+        }
+        catch
+        {
+            try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
+            try { _cdc.Dispose(); } catch { /* best-effort */ }
+            _disposed = true;
+            throw;
+        }
+
+        _storage.RegisterCdc(_cdc);
     }
 
     /// <summary>
@@ -148,16 +159,28 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
 
         _storage = new StorageEngine(databasePath, config);
         _cdc = new CDC.ChangeStreamDispatcher();
-        _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
-        var modelBuilder = new ModelBuilder();
-        OnModelCreating(modelBuilder);
-        _model = modelBuilder.GetEntityBuilders();
-        InitializeCollections();
-        DropOrphanCollections();
-        RunGdprStrictValidation(kvOptions);
+        try
+        {
+            var modelBuilder = new ModelBuilder();
+            OnModelCreating(modelBuilder);
+            _model = modelBuilder.GetEntityBuilders();
+            InitializeCollections();
+            DropOrphanCollections();
+            RunGdprStrictValidation(kvOptions);
+        }
+        catch
+        {
+            try { _storage.Dispose(); } catch { /* best-effort; preserve original exception */ }
+            try { _cdc.Dispose(); } catch { /* best-effort */ }
+            try { _ownedCoordinator?.Dispose(); } catch { /* best-effort */ }
+            _disposed = true;
+            throw;
+        }
+
+        _storage.RegisterCdc(_cdc);
     }
 
     /// <summary>
@@ -196,16 +219,27 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _cdc = new CDC.ChangeStreamDispatcher();
-        _storage.RegisterCdc(_cdc);
         _freeSpaceIndexes = new FreeSpaceIndexProvider(_storage);
         _kvStore = new BLiteKvStore(_storage, kvOptions);
 
-        var modelBuilder = new ModelBuilder();
-        OnModelCreating(modelBuilder);
-        _model = modelBuilder.GetEntityBuilders();
-        InitializeCollections();
-        DropOrphanCollections();
-        RunGdprStrictValidation(kvOptions);
+        try
+        {
+            var modelBuilder = new ModelBuilder();
+            OnModelCreating(modelBuilder);
+            _model = modelBuilder.GetEntityBuilders();
+            InitializeCollections();
+            DropOrphanCollections();
+            RunGdprStrictValidation(kvOptions);
+        }
+        catch
+        {
+            // _storage is caller-owned; do not dispose it here.
+            _cdc.Dispose();
+            _disposed = true;
+            throw;
+        }
+
+        _storage.RegisterCdc(_cdc);
     }
 
     /// <summary>

@@ -1577,4 +1577,43 @@ public class EncryptionTests : IDisposable
             Assert.Equal("interop", e!.Payload);
         }
     }
+
+    // ── DocumentDbContext constructor failure / file-lock regression (issue #129) ─
+
+    /// <summary>
+    /// Regression test for issue #129:
+    /// If the <see cref="DocumentDbContext"/> constructor fails (e.g. wrong encryption
+    /// password causing a decryption error), all acquired file handles must be released
+    /// before the exception propagates to the caller.
+    /// After the constructor throws, the database file must be deletable in the same
+    /// process without GC.Collect() or process restart.
+    /// </summary>
+    [Fact]
+    public async Task DocumentDbContext_ConstructorFailure_WrongPassword_FileNotLocked()
+    {
+        var path = TempDb();
+        var correct = new CryptoOptions("correct-password", iterations: 1);
+        var wrong   = new CryptoOptions("wrong-password",   iterations: 1);
+
+        // 1. Create the encrypted database and persist at least one document so that
+        //    collection-metadata pages are written to the main file.
+        await using (var ctx = new MultiFileTestDbContext(path, correct))
+        {
+            await ctx.Entries.InsertAsync(new MultiFileEntry { Id = 1, Payload = "hello", Tag = "t" });
+            await ctx.CheckpointAsync(); // flush WAL into main file
+        }
+
+        // 2. Attempt to open with the wrong password — the constructor must throw.
+        Assert.ThrowsAny<Exception>(() =>
+        {
+            using var ctx = new MultiFileTestDbContext(path, wrong);
+        });
+
+// 3. The main database file must not be locked after the failed constructor.
+//    Before the fix this would throw IOException (exclusive open fails on Windows; advisory-lock fails on Unix).
+Assert.True(File.Exists(path), "Database file should exist before attempting deletion.");
+using (var _ = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+File.Delete(path);
+Assert.False(File.Exists(path), "Database file must be deletable immediately after failed constructor.");
+    }
 }
