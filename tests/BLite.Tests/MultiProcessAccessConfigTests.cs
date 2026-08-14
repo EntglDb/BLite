@@ -149,4 +149,56 @@ public class MultiProcessAccessConfigTests
             try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
         }
     }
+
+    [Fact]
+    public void StorageEngine_WithPartialConfig_AllowMultiProcessAccessOnly_DoesNotThrowDivideByZero()
+    {
+        // Regression test for https://github.com/EntglDb/BLite/issues/132.
+        // Constructing a PageFileConfig with only AllowMultiProcessAccess = true left
+        // PageSize and GrowthBlockSize at 0, causing "Attempted to divide by zero" inside
+        // PageFile.AlignToBlock() during StorageEngine construction.
+        var dir = Path.Combine(Path.GetTempPath(), $"blite_partial_cfg_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var dbPath = Path.Combine(dir, "partial.db");
+            var config = new PageFileConfig { AllowMultiProcessAccess = true };
+
+            using var engine = new StorageEngine(dbPath, config);
+
+            // The engine should be functional — normalized config must use Default values.
+            Assert.True(engine.PageSize > 0);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public void PageFileConfig_Normalize_FillsInDefaultsForZeroValues()
+    {
+        var partial = new PageFileConfig { AllowMultiProcessAccess = true };
+        var normalized = partial.Normalize();
+
+        Assert.Equal(PageFileConfig.Default.PageSize, normalized.PageSize);
+        Assert.Equal(PageFileConfig.Default.GrowthBlockSize, normalized.GrowthBlockSize);
+        Assert.True(normalized.AllowMultiProcessAccess); // original flag must be preserved
+    }
+
+    [Fact]
+    public void PageFileConfig_Normalize_DoesNotOverrideExplicitValues()
+    {
+        var custom = new PageFileConfig
+        {
+            PageSize        = 8192,
+            GrowthBlockSize = 512 * 1024,
+            AllowMultiProcessAccess = true
+        };
+        var normalized = custom.Normalize();
+
+        Assert.Equal(8192, normalized.PageSize);
+        Assert.Equal(512 * 1024, normalized.GrowthBlockSize);
+        Assert.True(normalized.AllowMultiProcessAccess);
+    }
 }

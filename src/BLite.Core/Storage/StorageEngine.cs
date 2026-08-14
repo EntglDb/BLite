@@ -117,6 +117,7 @@ public sealed partial class StorageEngine : IDisposable
 
     public StorageEngine(string databasePath, PageFileConfig config)
     {
+        config = config.Normalize();
         _config = config;
         ICryptoProvider? walCryptoProvider = null;
         try
