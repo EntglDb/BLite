@@ -132,6 +132,23 @@ public readonly struct PageFileConfig
     public bool AllowMultiProcessAccess { get; init; }
 
     /// <summary>
+    /// Returns a copy of this config where any zero-valued numeric fields are replaced
+    /// with the corresponding values from <see cref="Default"/>.
+    /// This ensures that a partially-constructed <see cref="PageFileConfig"/>
+    /// (e.g. <c>new PageFileConfig { AllowMultiProcessAccess = true }</c>) is always
+    /// valid before being handed to the storage engine.
+    /// </summary>
+    public PageFileConfig Normalize()
+    {
+        var defaults = Default;
+        return this with
+        {
+            PageSize        = PageSize        > 0 ? PageSize        : defaults.PageSize,
+            GrowthBlockSize = GrowthBlockSize > 0 ? GrowthBlockSize : defaults.GrowthBlockSize,
+        };
+    }
+
+    /// <summary>
     /// Small pages for embedded scenarios with many tiny documents
     /// </summary>
     public static PageFileConfig Small => new()
