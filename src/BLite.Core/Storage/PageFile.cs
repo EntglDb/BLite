@@ -311,14 +311,16 @@ public sealed class PageFile : IPageStorage
     // Byte offset from the start of the file to the first page (0 normally, 64 for AES-GCM).
     private readonly int _cryptoFileHeaderSize;
 
-    // _rwLock guards _mappedFile, _nextPageId, and _firstFreePageId.
-    // Read lock:  ReadPage(), WritePage() when no file growth is needed.
-    // Write lock: Open(), AllocatePage(), FreePage(), WritePage() when file grows,
-    //             Flush(), Dispose() — any operation that recreates _mappedFile or
-    //             modifies structural state.
+    // _rwLock guards _mappedFile, _nextPageId, _firstFreePageId, AND the page bytes
+    // themselves (a WritePage mutates the same mapped region a concurrent ReadPage
+    // copies from — without exclusion that's a torn read, not just a structural race).
+    // Read lock:  ReadPage() only.
+    // Write lock: Open(), AllocatePage(), FreePage(), WritePage() (always — see its
+    //             remarks), Flush(), Dispose() — any operation that recreates
+    //             _mappedFile, modifies structural state, or mutates page content.
     // ReaderWriterLockSlim allows many concurrent readers while serialising writers,
-    // eliminating the race where a concurrent resize (write lock) disposes _mappedFile
-    // while ReadPage() (read lock) is creating a view accessor from it.
+    // eliminating both the resize race (write lock disposes _mappedFile while a read
+    // lock is creating a view accessor from it) and torn reads of page content.
     private readonly ReaderWriterLockSlim _rwLock = new(LockRecursionPolicy.NoRecursion);
 
     // Derived from config — distinct read/write timeouts.
@@ -815,10 +817,13 @@ public sealed class PageFile : IPageStorage
 
     /// <summary>
     /// Writes a page at the specified ID from the provided span.
-    /// If the write fits within the current file size, a shared read lock is used
-    /// (allowing other concurrent reads and non-growing writes).
-    /// If the file must grow, an exclusive write lock is taken to safely dispose
-    /// and recreate the memory-mapped file before writing.
+    /// Always takes the exclusive write lock: even when the file is already large
+    /// enough (no mapping to grow/recreate), the page bytes themselves must not be
+    /// mutated while a concurrent ReadPage holds a shared read lock and is mid-copy
+    /// from the same memory-mapped region — that race produces a torn read (a mix of
+    /// pre- and post-write bytes), silently corrupting whatever the reader observes.
+    /// If the file must grow, the same exclusive lock also protects the dispose/recreate
+    /// of the memory-mapped file.
     /// </summary>
     public void WritePage(uint pageId, ReadOnlySpan<byte> source)
     {
@@ -831,18 +836,19 @@ public sealed class PageFile : IPageStorage
 
         var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
 
-        // Fast path: file is already large enough — share the mapping with readers.
+        // Fast path: file is already large enough — no mapping growth needed, but the
+        // write still needs exclusive access to the page bytes (see remarks above).
         if (offset + _physicalPageSize <= _fileStream!.Length)
         {
-            if (!_rwLock.TryEnterReadLock(ReadLockTimeoutMs))
-                throw new TimeoutException("Timed out acquiring PageFile read lock (WritePage).");
+            if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
+                throw new TimeoutException("Timed out acquiring PageFile write lock (WritePage).");
             try
             {
                 WritePageCore(pageId, source);
             }
             finally
             {
-                _rwLock.ExitReadLock();
+                _rwLock.ExitWriteLock();
             }
             return;
         }

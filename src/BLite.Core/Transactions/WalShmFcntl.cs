@@ -15,10 +15,14 @@ namespace BLite.Core.Transactions;
 /// that may resume on a different thread pool thread.</description></item>
 /// <item><description><b>Linux:</b> <c>fcntl(F_OFD_SETLK)</c> — open-file-description locks,
 /// owned by the file description rather than the process/thread, auto-released on close.</description></item>
-/// <item><description><b>macOS/iOS:</b> <c>fcntl(F_SETLK)</c> — traditional POSIX advisory
-/// locks (per-process at the kernel level). An in-process companion <c>SemaphoreSlim</c> keyed
-/// by the SHM path provides intra-process mutual exclusion because <c>F_SETLK</c> does not
-/// distinguish between handles within the same process.</description></item>
+/// <item><description><b>macOS/iOS:</b> <c>flock(LOCK_EX | LOCK_NB)</c> — BSD advisory locks,
+/// owned by the open file description (so it correctly excludes even two independent opens
+/// of the same path within one process) and auto-released on close.
+/// <c>fcntl(F_SETLK)</c> was tried first since it's the traditional POSIX mechanism used on
+/// Linux, but it reliably fails with <c>EINVAL</c> on file descriptors obtained from a .NET
+/// <see cref="FileStream"/> on macOS (reproduced independently of BLite with a bare
+/// P/Invoke + <see cref="FileStream"/> probe — a raw <c>libc</c> <c>open()</c>-backed
+/// descriptor is unaffected). <c>flock()</c> on the same descriptor works correctly.</description></item>
 /// </list>
 /// <para>
 /// All platforms also use the in-process <c>SemaphoreSlim</c> companion lock so that two
@@ -33,31 +37,31 @@ namespace BLite.Core.Transactions;
 /// </summary>
 internal static class WalShmFcntl
 {
-    // ── fcntl command numbers ────────────────────────────────────────────────
+    // ── fcntl command numbers (Linux) ────────────────────────────────────────
     // F_OFD_SETLK is a Linux-specific extension that creates "open file description"
     // locks — owned by the open file rather than the process — which is the modern
-    // equivalent of SQLite's WAL coordination on Unix. macOS/iOS do not implement
-    // F_OFD_*; we fall back to traditional POSIX advisory locks (F_SETLK) which are
-    // *per-process*, so two engines in the same process would not see each other's
-    // lock at the kernel level. We compensate for that with an in-process,
-    // per-SHM-path lock (s_localLocksByPath) acquired before the OS call — see
-    // TryAcquireWriteLock for details.
+    // equivalent of SQLite's WAL coordination on Unix.
     private const int F_OFD_SETLK_LINUX  = 37;
 
-    private const int F_SETLK_MACOS      = 8;
+    // ── flock() operation flags (macOS/iOS) ──────────────────────────────────
+    // See remarks on the class for why macOS uses flock() instead of fcntl(F_SETLK).
+    private const int LOCK_EX_MACOS = 0x02;
+    private const int LOCK_NB_MACOS = 0x04;
+    private const int LOCK_UN_MACOS = 0x08;
 
     // ── errno values (cross-platform) ────────────────────────────────────────
     // Linux & macOS agree on the values for the codes we care about: EAGAIN/EWOULDBLOCK
-    // and EACCES are the only "non-fatal, retry" returns from F_SETLK. Anything else
-    // (EBADF=9, EINVAL=22, EFAULT=14, EDEADLK=35/11, EOVERFLOW=…) is a real bug we
-    // surface as IOException rather than silently retrying until the timeout fires.
+    // and EACCES are the only "non-fatal, retry" returns from a contended lock attempt.
+    // Anything else (EBADF=9, EINVAL=22, EFAULT=14, EDEADLK=35/11, EOVERFLOW=…) is a
+    // real bug we surface as IOException rather than silently retrying until the
+    // timeout fires.
     private const int EACCES_VAL    = 13;
     private const int EAGAIN_LINUX  = 11;   // EAGAIN == EWOULDBLOCK on Linux
     private const int EAGAIN_MACOS  = 35;   // EAGAIN == EWOULDBLOCK on macOS/Darwin
 
-    // ── Lock types (l_type field of struct flock) ────────────────────────────
-    private const short F_WRLCK = 1;
-    private const short F_UNLCK = 2;
+    // ── Lock type (l_type field of struct flock, Linux only) ─────────────────
+    private const short F_WRLCK_LINUX = 1;
+    private const short F_UNLCK_LINUX = 2;
 
     private const short SEEK_SET = 0;
 
@@ -89,8 +93,6 @@ internal static class WalShmFcntl
 
     // ── Unix structs / imports ────────────────────────────────────────────────
 
-    // struct flock layout differs between Linux glibc and macOS libc — both are covered below.
-
     [StructLayout(LayoutKind.Sequential)]
     private struct flock_linux
     {
@@ -101,21 +103,11 @@ internal static class WalShmFcntl
         public int   l_pid;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct flock_macos
-    {
-        public long  l_start;
-        public long  l_len;
-        public int   l_pid;
-        public short l_type;
-        public short l_whence;
-    }
-
     [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
     private static extern int fcntl_linux(int fd, int cmd, ref flock_linux arg);
 
-    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-    private static extern int fcntl_macos(int fd, int cmd, ref flock_macos arg);
+    [DllImport("libc", EntryPoint = "flock", SetLastError = true)]
+    private static extern int flock_macos(int fd, int operation);
 
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     public static extern int Kill(int pid, int sig);
@@ -211,7 +203,7 @@ internal static class WalShmFcntl
             while (true)
             {
                 int errno;
-                if (TrySetLock(fd, F_WRLCK, out errno)) return true;
+                if (TrySetLock(fd, write: true, out errno)) return true;
                 if (!IsLockContentionErrno(errno))
                 {
                     // Real failure (EBADF, EINVAL, etc.) — release our in-process lock and
@@ -246,7 +238,7 @@ internal static class WalShmFcntl
                 int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
                 // Unlock failures here are best-effort; surfacing them would mask the
                 // primary error path (e.g. dispose during shutdown).
-                TrySetLock(fd, F_UNLCK, out _);
+                TrySetLock(fd, write: false, out _);
             }
         }
         finally
@@ -300,21 +292,19 @@ internal static class WalShmFcntl
             || errno == EAGAIN_MACOS;
     }
 
-    private static bool TrySetLock(int fd, short lockType, out int errno)
+    private static bool TrySetLock(int fd, bool write, out int errno)
     {
         // Use RuntimeInformation rather than OperatingSystem.* so this file compiles
         // for both net10.0 and netstandard2.1 target frameworks.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            var fl = new flock_macos
-            {
-                l_type = lockType,
-                l_whence = SEEK_SET,
-                l_start = WriterLockByteOffset,
-                l_len = 1,
-                l_pid = 0,
-            };
-            int rc = fcntl_macos(fd, F_SETLK_MACOS, ref fl);
+            // flock() locks the whole file rather than a byte range, but that's fine
+            // here: the byte-range machinery (WriterLockByteOffset, SEEK_SET) exists
+            // only to dodge fcntl's whole-file-vs-range distinction on Linux, and this
+            // SHM file has no other content that a whole-file lock would spuriously
+            // conflict with.
+            int operation = write ? (LOCK_EX_MACOS | LOCK_NB_MACOS) : LOCK_UN_MACOS;
+            int rc = flock_macos(fd, operation);
             errno = rc == 0 ? 0 : Marshal.GetLastWin32Error();
             return rc == 0;
         }
@@ -323,7 +313,7 @@ internal static class WalShmFcntl
             // Linux + Android — F_OFD_SETLK
             var fl = new flock_linux
             {
-                l_type = lockType,
+                l_type = write ? F_WRLCK_LINUX : F_UNLCK_LINUX,
                 l_whence = SEEK_SET,
                 l_start = WriterLockByteOffset,
                 l_len = 1,
