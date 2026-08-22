@@ -57,6 +57,10 @@ public partial class TestDbContext : DocumentDbContext
     
     // Temporal Types Test (DateTimeOffset, TimeSpan, DateOnly, TimeOnly)
     public DocumentCollection<ObjectId, TemporalEntity> TemporalEntities { get; set; } = null!;
+
+    // List<T> of nested objects with nullable value-type fields, combined with a ~17-field root
+    // (C-BSON v2 offset table territory).
+    public DocumentCollection<ObjectId, Schedule> Schedules { get; set; } = null!;
     
     // Enum Serialization Tests
     public DocumentCollection<ObjectId, EnumEntity> EnumEntities { get; set; } = null!;

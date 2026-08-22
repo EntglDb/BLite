@@ -948,4 +948,58 @@ namespace BLite.Shared
 
         public string Name { get; set; } = "";
     }
+
+    /// <summary>
+    /// Nested item with nullable temporal fields (DateTime?, TimeSpan?), placed inside a
+    /// List&lt;T&gt; on <see cref="Schedule"/>. None of the existing List&lt;T&gt;-of-nested-object
+    /// fixtures (ComplexUser.OtherAddresses, TreeNode.Children, ComplexDocument.Items) have nullable
+    /// value-type fields on the item type — this isolates that specific combination.
+    /// </summary>
+    public class ScheduleWindow
+    {
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
+        public TimeSpan? StartTime { get; set; }
+        public TimeSpan? EndTime { get; set; }
+        public int DayFlags { get; set; }
+    }
+
+    /// <summary>
+    /// Private-setter audit base with 7 private-setter properties, patched via [UnsafeAccessor]
+    /// by the generator - AuditableBase above only has 4 of these, which is why
+    /// EntityWithInheritedPrivateSetters didn't catch this.
+    /// </summary>
+    public abstract class ScheduleAuditableBase
+    {
+        public DateTime CreatedAt { get; private set; }
+        public string? CreatedBy { get; private set; }
+        public DateTime LastModifiedAt { get; private set; }
+        public string? LastModifiedBy { get; private set; }
+        public DateTime? DeletedAt { get; private set; }
+        public string? DeletedBy { get; private set; }
+        public bool IsDeleted { get; private set; }
+    }
+
+    /// <summary>
+    /// Root entity with a field count in the same range as production entities that use the
+    /// C-BSON v2 offset table (BeginDocumentWithOffsets), combined with a List&lt;T&gt; of nested
+    /// objects that carry nullable value-type fields (see <see cref="ScheduleWindow"/>) AND
+    /// inherited private-setter audit fields (see <see cref="ScheduleAuditableBase"/>) - a
+    /// cross-assembly tenant-scoped entity with an audit base, list-of-nested-objects, and a
+    /// C-BSON v2 offset table root.
+    /// </summary>
+    public class Schedule : ScheduleAuditableBase
+    {
+        [BsonId]
+        public ObjectId Id { get; set; }
+        public string Name { get; set; } = "";
+        public string? CountryCode { get; set; }
+        public int Currency { get; set; }
+        public bool IsGrossValue { get; set; }
+        public List<ScheduleWindow> Windows { get; set; } = new();
+        public List<string> Stores { get; set; } = new();
+        public List<string> Groups { get; set; } = new();
+        public string? TenantId { get; set; }
+        public int RowVersion { get; set; }
+    }
 }

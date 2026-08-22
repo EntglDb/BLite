@@ -443,7 +443,7 @@ public ref struct BsonSpanReader
                 // No data
                 break;
             default:
-                throw new NotSupportedException($"Skipping type {type} not supported");
+                throw new NotSupportedException($"Skipping type {type} not supported at position {_position}");
         }
     }
 
