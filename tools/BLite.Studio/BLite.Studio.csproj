@@ -6,7 +6,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- Overridden by the CI pipeline via -p:Version=x.y.z -->
-    <Version>5.0.6</Version>
+    <Version>5.0.7</Version>
     <!-- AssemblyVersion/FileVersion must be purely numeric; strip any pre-release suffix -->
     <AssemblyVersion>5.0.2.0</AssemblyVersion>
     <FileVersion>5.0.2.0</FileVersion>
