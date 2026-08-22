@@ -67,8 +67,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     public SchemaVersion? CurrentSchemaVersion { get; private set; }
 
-    // Concurrency control for write operations (B-Tree and Page modifications)
-    private readonly SemaphoreSlim _collectionLock = new(1, 1);
+    // Concurrency control for write operations (B-Tree and Page modifications).
+    // Obtained from the storage engine: single-file databases share one instance across all
+    // collections, because page placement depends on file-wide state. Never disposed here — the
+    // instance may be shared with other collections.
+    private readonly SemaphoreSlim _collectionLock;
     private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
 
     private readonly int _maxDocumentSizeForSinglePage;
@@ -625,6 +628,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         _transactionHolder = transactionHolder ?? throw new ArgumentNullException(nameof(transactionHolder));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _collectionName = collectionName ?? _mapper.CollectionName;
+        _collectionLock = _storage.CreateCollectionWriteLock();
 
         // Initialize secondary index manager first (loads metadata including Primary Root Page ID)
         _indexManager = new CollectionIndexManager<TId, T>(_storage, _mapper, _collectionName);

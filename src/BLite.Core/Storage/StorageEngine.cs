@@ -83,6 +83,15 @@ public sealed partial class StorageEngine : IDisposable
     // null when MaxConcurrentWriters == 0 (admission control disabled).
     private readonly SemaphoreSlim? _writerGate;
 
+    // Serialises data-page writes across every collection backed by this engine's file.
+    // A DocumentCollection locks its own writes, but page placement depends on state shared by
+    // the whole file: the free-space index (FreeSpaceIndexProvider hands out one instance in
+    // single-file mode) and the page allocator. FindPageWithSpace and InsertIntoPage are two
+    // separate calls, so without a file-wide lock two collections can be handed the same page,
+    // and since a page is written back as a whole buffer the loser's slots are dropped.
+    // Null in collection-per-file mode, where nothing is shared and per-collection locks suffice.
+    private readonly SemaphoreSlim? _dataWriteLock;
+
     // Group commit writer infrastructure.
     private readonly Channel<PendingCommit> _commitChannel;
     private readonly CancellationTokenSource _writerCts = new();
@@ -106,6 +115,15 @@ public sealed partial class StorageEngine : IDisposable
     /// </summary>
     internal LockTimeout LockTimeout => _config.LockTimeout;
     internal bool UsesSeparateCollectionFiles => _collectionFiles != null;
+
+    /// <summary>
+    /// Returns the semaphore a <see cref="Collections.DocumentCollection{TId,T}"/> must hold for
+    /// write operations. In single-file mode every collection of this engine gets the same
+    /// instance, because they share the free-space index and the page allocator
+    /// (see <see cref="_dataWriteLock"/>). In collection-per-file mode each collection gets its
+    /// own, preserving write concurrency between collections.
+    /// </summary>
+    internal SemaphoreSlim CreateCollectionWriteLock() => _dataWriteLock ?? new SemaphoreSlim(1, 1);
 
     /// <summary>
     /// Multi-process WAL coordination sidecar; <c>null</c> when
@@ -199,6 +217,8 @@ public sealed partial class StorageEngine : IDisposable
                 ? new SemaphoreSlim(config.LockTimeout.MaxConcurrentWriters, config.LockTimeout.MaxConcurrentWriters)
                 : null;
 
+            _dataWriteLock = _collectionFiles == null ? new SemaphoreSlim(1, 1) : null;
+
             // Start the group commit writer.
             _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
             {
@@ -266,6 +286,7 @@ public sealed partial class StorageEngine : IDisposable
         _nextTransactionId = 0;
 
         _writerGate = null; // No admission control needed for single-backend mode.
+        _dataWriteLock = new SemaphoreSlim(1, 1);
 
         _commitChannel = Channel.CreateBounded<PendingCommit>(new BoundedChannelOptions(4096)
         {
