@@ -88,6 +88,7 @@ public partial class TestDbContext : DocumentDbContext
 
     // Binary Property Tests
     public DocumentCollection<ObjectId, BinaryEntity> BinaryEntities { get; set; } = null!;
+    public DocumentCollection<ObjectId, ByteEntity> ByteEntities { get; set; } = null!;
 
     // Null Non-Nullable String Property Tests
     public DocumentCollection<ObjectId, EntityWithUnassignedString> UnassignedStringEntities { get; set; } = null!;
@@ -210,6 +211,7 @@ public partial class TestDbContext : DocumentDbContext
 
         // Binary Property Tests
         modelBuilder.Entity<BinaryEntity>().ToCollection("binary_entities");
+        modelBuilder.Entity<ByteEntity>().ToCollection("byte_entities");
 
         // Source Generator Edge Case Tests
         modelBuilder.Entity<EntityWithDictionary>().ToCollection("dictionary_entities");

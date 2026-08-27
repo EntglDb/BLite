@@ -225,6 +225,14 @@ namespace BLite.Shared
         public byte[]? OptionalData { get; set; }
     }
 
+    public class ByteEntity
+    {
+        public ObjectId Id { get; set; }
+        public string Label { get; set; } = "";
+        public byte Value { get; set; }
+        public byte? OptionalValue { get; set; }
+    }
+
     public record OrderId(string Value)
     {
         public OrderId() : this(string.Empty) { }
