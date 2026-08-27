@@ -20,7 +20,7 @@ public class BytePropertyTests : IDisposable
     {
         _db.Dispose();
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        var walPath = _dbPath.Replace(".db", ".wal");
+        var walPath = Path.ChangeExtension(_dbPath, ".wal");
         if (File.Exists(walPath)) File.Delete(walPath);
     }
 
@@ -41,6 +41,27 @@ public class BytePropertyTests : IDisposable
 
         Assert.NotNull(result);
         Assert.Equal((byte)8, result!.Value);
-        Assert.Equal((byte)12, result.OptionalValue);
+        Assert.NotNull(result.OptionalValue);
+        Assert.Equal((byte)12, result.OptionalValue!.Value);
+    }
+
+    [Fact]
+    public async Task ByteProperty_NullableNull_RoundTrips()
+    {
+        var entity = new ByteEntity
+        {
+            Label = "nullable-null",
+            Value = 4,
+            OptionalValue = null
+        };
+
+        var id = await _db.ByteEntities.InsertAsync(entity);
+        await _db.SaveChangesAsync();
+
+        var result = await _db.ByteEntities.FindByIdAsync(id);
+
+        Assert.NotNull(result);
+        Assert.Equal((byte)4, result!.Value);
+        Assert.Null(result.OptionalValue);
     }
 }
