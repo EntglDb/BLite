@@ -909,7 +909,10 @@ namespace BLite.SourceGenerators
                     }
                     else
                     {
-                    var cast = (prop.TypeName == "float" || prop.TypeName == "Single") ? "(float)" : "";
+                    var propType = prop.TypeName.TrimEnd('?').Trim();
+                    var cast = (propType == "float" || propType == "Single" || propType == "System.Single") ? "(float)"
+                        : (propType == "byte" || propType == "Byte" || propType == "System.Byte") ? "(byte)"
+                        : "";
                     
                     // Handle nullable types and reference types (string) - check for null in BSON stream
                     if (prop.IsNullable || prop.TypeName == "string" || prop.TypeName == "String")
@@ -1120,6 +1123,7 @@ namespace BLite.SourceGenerators
             var cleanType = typeName.TrimEnd('?').Trim();
 
             if (cleanType.EndsWith("Int32") || cleanType == "int") return "WriteInt32";
+            if (cleanType == "byte" || cleanType == "Byte" || cleanType == "System.Byte") return "WriteInt32";
             if (cleanType.EndsWith("Int64") || cleanType == "long") return "WriteInt64";
             if (cleanType.EndsWith("String") || cleanType == "string") return "WriteString";
             if (cleanType.EndsWith("Boolean") || cleanType == "bool") return "WriteBoolean";
@@ -1154,6 +1158,7 @@ namespace BLite.SourceGenerators
             var cleanType = typeName.TrimEnd('?').Trim();
 
             if (cleanType.EndsWith("Int32") || cleanType == "int") return "ReadInt32Coerced";
+            if (cleanType == "byte" || cleanType == "Byte" || cleanType == "System.Byte") return "ReadInt32Coerced";
             if (cleanType.EndsWith("Int64") || cleanType == "long") return "ReadInt64Coerced";
             if (cleanType.EndsWith("String") || cleanType == "string") return "ReadString";
             if (cleanType.EndsWith("Boolean") || cleanType == "bool") return "ReadBoolean";
@@ -1183,6 +1188,7 @@ namespace BLite.SourceGenerators
             
             // Common value types
             if (cleanType.EndsWith("Int32") || cleanType == "int") return true;
+            if (cleanType == "byte" || cleanType == "Byte" || cleanType == "System.Byte") return true;
             if (cleanType.EndsWith("Int64") || cleanType == "long") return true;
             if (cleanType.EndsWith("Boolean") || cleanType == "bool") return true;
             if (cleanType.EndsWith("Single") || cleanType == "float") return true;
