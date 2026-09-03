@@ -2853,7 +2853,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         {
             if (_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
             {
-                await UpdateAtLocationCore(id, entity, buffer, key, oldLocation, transaction, length);
+                if (!await UpdateAtLocationCore(id, entity, buffer, key, oldLocation, transaction, length))
+                    throw new InvalidOperationException(
+                        $"Upsert failed for id '{id}': the primary index resolved a location whose document could not be read (stale or corrupted index entry).");
                 return new UpsertResult<TId>(id, Inserted: false);
             }
             else
