@@ -423,7 +423,7 @@ public sealed class DynamicCollection : IDisposable
                 {
                     ticks = tsVal.Type switch
                     {
-                        BsonType.DateTime => tsVal.AsDateTime.Ticks,
+                        BsonType.DateTime or BsonType.DateTimeOffset => tsVal.AsDateTime.Ticks,
                         BsonType.Int64    => tsVal.AsInt64,
                         _                 => 0
                     };
@@ -2001,8 +2001,10 @@ public sealed class DynamicCollection : IDisposable
             BsonType.ObjectId => new IndexKey(value.AsObjectId),
             BsonType.Double   => new IndexKey(BitConverter.GetBytes(value.AsDouble)),
             // DateTime is stored as BitConverter.Int64BitsToDouble(unixMs); key on the raw long
-            // to get the same ordering used by ToIndexObject in BlqlFilter.
-            BsonType.DateTime => new IndexKey(value.AsDateTimeOffset.ToUnixTimeMilliseconds()),
+            // to get the same ordering used by ToIndexObject in BlqlFilter. Deliberately keyed by
+            // instant, not offset, for DateTimeOffset too - the offset must not perturb range-scan
+            // ordering, only how the value is displayed once read back.
+            BsonType.DateTime or BsonType.DateTimeOffset => new IndexKey(value.AsDateTimeOffset.ToUnixTimeMilliseconds()),
             _ => null // Can't index this type as BTree key
         };
     }

@@ -1178,7 +1178,12 @@ namespace BLite.SourceGenerators
         }
 
         private static bool IsCoercedReadMethod(string? readMethod)
-            => readMethod is "ReadInt32Coerced" or "ReadInt64Coerced" or "ReadDoubleCoerced";
+            // ReadDateTimeOffset(BsonType) isn't "coerced" in the numeric-widening sense of the others,
+            // but needs the wire type for the same reason: a DateTimeOffset property predating this type
+            // may still be stored under the legacy BsonType.DateTime tag (offset already lost at write
+            // time, not recoverable) and must decode with that tag's 8-byte layout instead of the new
+            // 10-byte one - see BsonType.DateTimeOffset.
+            => readMethod is "ReadInt32Coerced" or "ReadInt64Coerced" or "ReadDoubleCoerced" or "ReadDateTimeOffset";
 
         private static bool IsValueType(string typeName)
         {

@@ -25,6 +25,17 @@ public enum BsonType : byte
     Timestamp = 0x11,
     Int64 = 0x12,
     Decimal128 = 0x13,
+
+    /// <summary>
+    /// BLite extension, not part of the BSON spec (0x14 is unassigned there). Distinct from
+    /// <see cref="DateTime"/> because it carries a UTC-offset alongside the instant - see
+    /// <see cref="BsonValue.FromDateTimeOffset"/> / <c>BsonSpanWriter.WriteDateTimeOffset</c>.
+    /// A <see cref="DateTimeOffset"/> value written before this type existed is still tagged
+    /// <see cref="DateTime"/> on disk (offset already lost at write time, not recoverable) -
+    /// readers must keep handling that tag for <see cref="DateTimeOffset"/> fields too.
+    /// </summary>
+    DateTimeOffset = 0x14,
+
     MinKey = 0xFF,
     MaxKey = 0x7F
 }

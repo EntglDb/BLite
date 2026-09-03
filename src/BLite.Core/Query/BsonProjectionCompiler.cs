@@ -147,6 +147,9 @@ internal static class BsonProjectionCompiler
                             BsonType.ObjectId   => reader.ReadObjectId(),
                             BsonType.Boolean    => reader.ReadBoolean(),
                             BsonType.DateTime   => reader.ReadDateTime(),
+                            // Own case, not folded into DateTime above: the wire layouts differ (10
+                            // bytes vs 8), reading the wrong one desyncs every field read after it.
+                            BsonType.DateTimeOffset => (object?)reader.ReadDateTimeOffset(BsonType.DateTimeOffset),
                             BsonType.Int32      => reader.ReadInt32(),
                             BsonType.Int64      => reader.ReadInt64(),
                             BsonType.Decimal128 => reader.ReadDecimal128(),
@@ -178,6 +181,7 @@ internal static class BsonProjectionCompiler
                             case BsonType.ObjectId:  values[idx] = reader.ReadObjectId();  break;
                             case BsonType.Boolean:   values[idx] = reader.ReadBoolean();   break;
                             case BsonType.DateTime:  values[idx] = reader.ReadDateTime();  break;
+                            case BsonType.DateTimeOffset: values[idx] = reader.ReadDateTimeOffset(BsonType.DateTimeOffset); break;
                             case BsonType.Int32:     values[idx] = reader.ReadInt32();     break;
                             case BsonType.Int64:     values[idx] = reader.ReadInt64();     break;
                             case BsonType.Decimal128: values[idx] = reader.ReadDecimal128(); break;

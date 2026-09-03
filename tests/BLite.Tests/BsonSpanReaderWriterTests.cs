@@ -155,6 +155,113 @@ public class BsonSpanReaderWriterTests
     }
 
     [Fact]
+    public void WriteAndRead_DateTimeOffset_PreservesOffset()
+    {
+        Span<byte> buffer = stackalloc byte[256];
+        var writer = new BsonSpanWriter(buffer, _keyMap);
+
+        // A non-UTC offset (e.g. CEST, UTC+2): the instant this represents is 18:00 UTC, and the
+        // wall-clock value callers expect back is 20:00+02:00, not 18:00+00:00.
+        var original = new DateTimeOffset(2026, 6, 15, 20, 0, 0, TimeSpan.FromHours(2));
+
+        var sizePos = writer.BeginDocument();
+        writer.WriteDateTimeOffset("timestamp", original);
+        writer.EndDocument(sizePos);
+
+        var documentBytes = buffer[..writer.Position];
+        var reader = new BsonSpanReader(documentBytes, _keys);
+
+        reader.ReadDocumentSize();
+        var type = reader.ReadBsonType();
+        reader.ReadElementHeader();
+
+        // The wire tag is BsonType.DateTimeOffset - a value written by WriteDateTimeOffset never
+        // uses the plain BsonType.DateTime tag, so a reader can always tell whether the offset was
+        // actually preserved on write, without knowing the C# property type in advance.
+        Assert.Equal(BsonType.DateTimeOffset, type);
+
+        var readBack = reader.ReadDateTimeOffset(type);
+
+        // Both the instant and the original offset must survive the round-trip.
+        Assert.Equal(original.ToUniversalTime(), readBack.ToUniversalTime());
+        Assert.Equal(original.Offset, readBack.Offset);
+        Assert.Equal(original, readBack);
+    }
+
+    [Fact]
+    public void ReadDateTimeOffset_LegacyDateTimeTag_StillDecodesAsOffsetZero()
+    {
+        // Back-compat characterisation: a DateTimeOffset field written before BsonType.DateTimeOffset
+        // existed is on disk under the plain BsonType.DateTime tag (8 bytes, no offset - the offset
+        // was already lost forever at write time, not something a reader can recover). Reading that
+        // legacy tag through the new ReadDateTimeOffset(BsonType) overload must decode it exactly as
+        // it always has - Offset=0 - rather than misreading it as the new 10-byte layout.
+        Span<byte> buffer = stackalloc byte[256];
+        var writer = new BsonSpanWriter(buffer, _keyMap);
+
+        var legacyUtc = new DateTime(2026, 6, 15, 18, 0, 0, DateTimeKind.Utc);
+
+        var sizePos = writer.BeginDocument();
+        writer.WriteDateTime("timestamp", legacyUtc);
+        writer.EndDocument(sizePos);
+
+        var documentBytes = buffer[..writer.Position];
+        var reader = new BsonSpanReader(documentBytes, _keys);
+
+        reader.ReadDocumentSize();
+        var type = reader.ReadBsonType();
+        reader.ReadElementHeader();
+
+        Assert.Equal(BsonType.DateTime, type);
+
+        var readBack = reader.ReadDateTimeOffset(type);
+
+        Assert.Equal(legacyUtc, readBack.UtcDateTime);
+        Assert.Equal(TimeSpan.Zero, readBack.Offset);
+    }
+
+    [Fact]
+    public void BsonValue_ReadFrom_LegacyDateTimeTag_StaysTaggedDateTime()
+    {
+        // Regression for a review finding on the DateTimeOffset fix: BsonValue.ReadFrom must not
+        // reuse FromDateTimeOffset (now tagged BsonType.DateTimeOffset) to decode a wire-level plain
+        // BsonType.DateTime value - doing so would flip the in-memory type for every DateTime field
+        // and cause a later WriteTo to silently upgrade it to the new 10-byte layout on disk, even
+        // though nothing about an offset was actually recovered.
+        Span<byte> buffer = stackalloc byte[256];
+        var writer = new BsonSpanWriter(buffer, _keyMap);
+
+        var legacyUtc = new DateTime(2026, 6, 15, 18, 0, 0, DateTimeKind.Utc);
+
+        var sizePos = writer.BeginDocument();
+        writer.WriteDateTime("timestamp", legacyUtc);
+        writer.EndDocument(sizePos);
+
+        var documentBytes = buffer[..writer.Position];
+        var reader = new BsonSpanReader(documentBytes, _keys);
+
+        reader.ReadDocumentSize();
+        var type = reader.ReadBsonType();
+        reader.ReadElementHeader();
+
+        var value = BsonValue.ReadFrom(ref reader, type);
+
+        Assert.Equal(BsonType.DateTime, value.Type);
+        Assert.False(value.IsDateTimeOffset);
+
+        // Writing it back must reproduce the original 8-byte BsonType.DateTime wire format, not
+        // silently upgrade to the new 10-byte BsonType.DateTimeOffset layout.
+        Span<byte> rewriteBuffer = stackalloc byte[256];
+        var rewriter = new BsonSpanWriter(rewriteBuffer, _keyMap);
+        var rewriteSizePos = rewriter.BeginDocument();
+        value.WriteTo(ref rewriter, "timestamp");
+        rewriter.EndDocument(rewriteSizePos);
+
+        var rewrittenBytes = rewriteBuffer[..rewriter.Position];
+        Assert.True(documentBytes.SequenceEqual(rewrittenBytes));
+    }
+
+    [Fact]
     public void WriteAndRead_NumericTypes()
     {
         Span<byte> buffer = stackalloc byte[256];

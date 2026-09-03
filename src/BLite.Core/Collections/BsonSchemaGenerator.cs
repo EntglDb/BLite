@@ -115,7 +115,8 @@ public static class BsonSchemaGenerator
         if (type == typeof(bool)) return (BsonType.Boolean, null, null);
         if (type == typeof(double)) return (BsonType.Double, null, null);
         if (type == typeof(decimal)) return (BsonType.Decimal128, null, null);
-        if (type == typeof(DateTime) || type == typeof(DateTimeOffset)) return (BsonType.DateTime, null, null);
+        if (type == typeof(DateTime)) return (BsonType.DateTime, null, null);
+        if (type == typeof(DateTimeOffset)) return (BsonType.DateTimeOffset, null, null);
         if (type == typeof(Guid)) return (BsonType.Binary, null, null); // Guid is usually Binary subtype
         if (type == typeof(byte[])) return (BsonType.Binary, null, null);
 

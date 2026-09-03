@@ -209,6 +209,17 @@ public ref struct BsonSpanReader
         return value;
     }
 
+    /// <summary>Not a standalone BSON element type - used only for the offset-in-minutes trailer in <see cref="ReadDateTimeOffset(BsonType)"/>.</summary>
+    private short ReadInt16()
+    {
+        if (Remaining < 2)
+            throw new InvalidOperationException("Not enough bytes to read Int16");
+
+        var value = BinaryPrimitives.ReadInt16LittleEndian(_buffer.Slice(_position, 2));
+        _position += 2;
+        return value;
+    }
+
     public long ReadInt64()
     {
         if (Remaining < 8)
@@ -323,12 +334,36 @@ public ref struct BsonSpanReader
     }
 
     /// <summary>
-    /// Reads a BSON DateTime as DateTimeOffset (UTC milliseconds since Unix epoch)
+    /// Reads a legacy BSON DateTime field (8-byte UTC millisecond timestamp) as a DateTimeOffset.
+    /// There is no offset on the wire in this format, so the result always has Offset=0 - use
+    /// <see cref="ReadDateTimeOffset(BsonType)"/> when the wire type is known, so a value written
+    /// by <c>WriteDateTimeOffset</c> (tagged <see cref="BsonType.DateTimeOffset"/>) comes back with
+    /// its original offset instead.
     /// </summary>
     public DateTimeOffset ReadDateTimeOffset()
     {
         var milliseconds = ReadInt64();
         return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
+    }
+
+    /// <summary>
+    /// Reads a DateTimeOffset field, coercing a legacy <see cref="BsonType.DateTime"/> wire value
+    /// (8 bytes, no offset - always predates this type, see <see cref="BsonType.DateTimeOffset"/>)
+    /// the same way <see cref="ReadDateTimeOffset()"/> does, or decoding the full 10-byte
+    /// <see cref="BsonType.DateTimeOffset"/> format (UTC milliseconds + signed offset-in-minutes)
+    /// when the offset was actually preserved on write.
+    /// </summary>
+    public DateTimeOffset ReadDateTimeOffset(BsonType bsonType)
+    {
+        if (bsonType != BsonType.DateTimeOffset)
+        {
+            return ReadDateTimeOffset();
+        }
+
+        var milliseconds = ReadInt64();
+        var offsetMinutes = ReadInt16();
+        var instant = DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
+        return instant.ToOffset(TimeSpan.FromMinutes(offsetMinutes));
     }
 
     /// <summary>
@@ -432,6 +467,9 @@ public ref struct BsonSpanReader
             case BsonType.Int64:
             case BsonType.Timestamp:
                 _position += 8;
+                break;
+            case BsonType.DateTimeOffset:
+                _position += 10; // 8-byte UTC millisecond timestamp + 2-byte offset-in-minutes
                 break;
             case BsonType.Decimal128:
                 _position += 16;

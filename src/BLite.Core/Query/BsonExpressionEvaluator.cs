@@ -596,6 +596,7 @@ internal static class BsonExpressionEvaluator
                     BsonType.Boolean => reader.ReadBoolean(),
                     BsonType.ObjectId => reader.ReadObjectId(),
                     BsonType.DateTime => reader.ReadDateTime(),
+                    BsonType.DateTimeOffset => reader.ReadDateTimeOffset(BsonType.DateTimeOffset),
                     BsonType.Null    => null,
                     _                => null
                 };
@@ -652,6 +653,7 @@ internal static class BsonExpressionEvaluator
                     BsonType.Boolean => reader.ReadBoolean(),
                     BsonType.ObjectId => reader.ReadObjectId(),
                     BsonType.DateTime => reader.ReadDateTime(),
+                    BsonType.DateTimeOffset => reader.ReadDateTimeOffset(BsonType.DateTimeOffset),
                     BsonType.Null    => null,
                     _                => null
                 };
@@ -1087,9 +1089,14 @@ internal static class BsonExpressionEvaluator
                 };
             }
         }
-        else if (type == BsonType.DateTime)
+        else if (type == BsonType.DateTime || type == BsonType.DateTimeOffset)
         {
-            var val = reader.ReadDateTime();
+            // Both tags land here: the comparisons below normalise everything to UTC ticks, so the
+            // offset (only relevant to how a DateTimeOffset value is displayed, not compared) doesn't
+            // need special handling once decoded - only the read itself must pick the matching layout.
+            var val = type == BsonType.DateTimeOffset
+                ? reader.ReadDateTimeOffset(BsonType.DateTimeOffset).UtcDateTime
+                : reader.ReadDateTime();
             if (target is DateTime targetDt)
             {
                 // Normalise both sides to UTC ticks for a reliable comparison.
