@@ -255,12 +255,22 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+    /// <summary>
+    /// Writes a UTC instant plus its original offset (10 bytes: 8-byte UTC millisecond timestamp,
+    /// same layout as <see cref="WriteDateTime"/>, followed by a 2-byte signed offset in minutes).
+    /// Tagged <see cref="BsonType.DateTimeOffset"/>, not <see cref="BsonType.DateTime"/>, so
+    /// <see cref="BsonSpanReader.SkipValue"/> and typed readers know an extra 2 bytes follow and
+    /// can reconstruct the original wall-clock value instead of always normalising to UTC.
+    /// </summary>
     public void WriteDateTimeOffset(string name, DateTimeOffset value)
     {
-        WriteElementHeader(BsonType.DateTime, name);
+        WriteElementHeader(BsonType.DateTimeOffset, name);
         var milliseconds = value.ToUnixTimeMilliseconds();
         BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), milliseconds);
         _position += 8;
+        var offsetMinutes = (short)value.Offset.TotalMinutes;
+        BinaryPrimitives.WriteInt16LittleEndian(_buffer.Slice(_position, 2), offsetMinutes);
+        _position += 2;
     }
 
     public void WriteTimeSpan(string name, TimeSpan value)
@@ -448,12 +458,16 @@ public ref struct BsonSpanWriter
         _position += 8;
     }
 
+    /// <summary>Array counterpart of <see cref="WriteDateTimeOffset(string, DateTimeOffset)"/> - see its remarks.</summary>
     public void WriteArrayDateTimeOffset(int index, DateTimeOffset value)
     {
-        WriteArrayElementHeader(BsonType.DateTime, index);
+        WriteArrayElementHeader(BsonType.DateTimeOffset, index);
         var milliseconds = value.ToUnixTimeMilliseconds();
         BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position, 8), milliseconds);
         _position += 8;
+        var offsetMinutes = (short)value.Offset.TotalMinutes;
+        BinaryPrimitives.WriteInt16LittleEndian(_buffer.Slice(_position, 2), offsetMinutes);
+        _position += 2;
     }
 
     public void WriteArrayTimeSpan(int index, TimeSpan value)

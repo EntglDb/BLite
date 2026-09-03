@@ -408,7 +408,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 var value = BsonValue.ReadFrom(ref reader, seekType);
                 return value.Type switch
                 {
-                    BsonType.DateTime => value.AsDateTime.Ticks,
+                    BsonType.DateTime or BsonType.DateTimeOffset => value.AsDateTime.Ticks,
                     BsonType.Int64    => value.AsInt64,
                     _                 => 0
                 };
@@ -429,7 +429,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 var val = BsonValue.ReadFrom(ref reader, type);
                 return val.Type switch
                 {
-                    BsonType.DateTime => val.AsDateTime.Ticks,
+                    BsonType.DateTime or BsonType.DateTimeOffset => val.AsDateTime.Ticks,
                     BsonType.Int64    => val.AsInt64,
                     _                 => 0
                 };

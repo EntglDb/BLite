@@ -26,6 +26,14 @@ internal static class BsonValueComparer
         if (IsNumeric(a.Type) && IsNumeric(b.Type))
             return ToDouble(a).CompareTo(ToDouble(b));
 
+        // DateTime/DateTimeOffset: compare by instant across the two tags too, same as the numeric
+        // family above. A collection can hold both during the transition after upgrading BLite - a
+        // DateTimeOffset value written before this type existed stays tagged DateTime forever - so
+        // this must not fall through to TypeOrder below, which would sort DateTimeOffset-tagged rows
+        // as unrelated to DateTime-tagged ones instead of interleaving them by actual time.
+        if (IsDateLike(a.Type) && IsDateLike(b.Type))
+            return a.AsDateTimeOffset.CompareTo(b.AsDateTimeOffset);
+
         // Same type comparisons
         if (a.Type == b.Type)
         {
@@ -33,7 +41,7 @@ internal static class BsonValueComparer
             {
                 BsonType.String    => string.Compare(a.AsString, b.AsString, StringComparison.Ordinal),
                 BsonType.Boolean   => a.AsBoolean.CompareTo(b.AsBoolean),
-                BsonType.DateTime  => a.AsDateTimeOffset.CompareTo(b.AsDateTimeOffset),
+                BsonType.DateTime or BsonType.DateTimeOffset => a.AsDateTimeOffset.CompareTo(b.AsDateTimeOffset),
                 BsonType.ObjectId  => CompareObjectIds(a.AsObjectId, b.AsObjectId),
                 BsonType.Binary    => CompareBytes(a.AsBinary, b.AsBinary),
                 _                  => 0
@@ -46,6 +54,9 @@ internal static class BsonValueComparer
 
     private static bool IsNumeric(BsonType t) =>
         t is BsonType.Int32 or BsonType.Int64 or BsonType.Double or BsonType.Decimal128;
+
+    private static bool IsDateLike(BsonType t) =>
+        t is BsonType.DateTime or BsonType.DateTimeOffset;
 
     private static double ToDouble(BsonValue v) => v.Type switch
     {
@@ -67,6 +78,7 @@ internal static class BsonValueComparer
         BsonType.String    => 3,
         BsonType.ObjectId  => 4,
         BsonType.DateTime  => 5,
+        BsonType.DateTimeOffset => 5,
         BsonType.Binary    => 6,
         BsonType.Document  => 7,
         BsonType.Array     => 8,

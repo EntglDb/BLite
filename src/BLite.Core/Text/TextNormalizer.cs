@@ -110,6 +110,7 @@ public static class TextNormalizer
         BsonType.Array    => string.Join(" ", value.AsArray.Select(BsonValueToString)),
         BsonType.ObjectId => value.AsObjectId.ToString(),
         BsonType.DateTime => value.AsDateTime.ToString("O"),
+        BsonType.DateTimeOffset => value.AsDateTimeOffset.ToString("O"),
         _                 => string.Empty
     };
 }

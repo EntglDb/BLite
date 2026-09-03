@@ -43,7 +43,15 @@ public readonly struct BsonValue : IEquatable<BsonValue>
     public static BsonValue FromBoolean(bool value) => new(BsonType.Boolean, value ? 1 : 0);
     public static BsonValue FromObjectId(ObjectId value) => new(BsonType.ObjectId, refValue: value);
     public static BsonValue FromDateTime(DateTime value) => new(BsonType.DateTime, BitConverter.Int64BitsToDouble(new DateTimeOffset(value.ToUniversalTime()).ToUnixTimeMilliseconds()));
-    public static BsonValue FromDateTimeOffset(DateTimeOffset value) => new(BsonType.DateTime, BitConverter.Int64BitsToDouble(value.ToUnixTimeMilliseconds()));
+
+    /// <summary>
+    /// Tagged <see cref="BsonType.DateTimeOffset"/>, not <see cref="BsonType.DateTime"/>, so the
+    /// offset survives a round-trip through <see cref="WriteTo"/>/<see cref="ReadFrom"/> instead of
+    /// being silently normalised to UTC. The offset itself rides in <c>_refValue</c> (boxed
+    /// <see cref="short"/> minutes) since <c>_numericValue</c> already holds the packed instant.
+    /// </summary>
+    public static BsonValue FromDateTimeOffset(DateTimeOffset value) =>
+        new(BsonType.DateTimeOffset, BitConverter.Int64BitsToDouble(value.ToUnixTimeMilliseconds()), (short)value.Offset.TotalMinutes);
     public static BsonValue FromGuid(Guid value) => new(BsonType.String, refValue: value.ToString());
     public static BsonValue FromBinary(byte[] value) => new(BsonType.Binary, refValue: value ?? throw new ArgumentNullException(nameof(value)));
     public static BsonValue FromDocument(BsonDocument value) => new(BsonType.Document, refValue: value ?? throw new ArgumentNullException(nameof(value)));
@@ -110,13 +118,29 @@ public readonly struct BsonValue : IEquatable<BsonValue>
         ? oid
         : throw new InvalidOperationException($"BsonValue is {_type}, not ObjectId");
 
-    public DateTime AsDateTime => _type == BsonType.DateTime
-        ? DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue)).UtcDateTime
-        : throw new InvalidOperationException($"BsonValue is {_type}, not DateTime");
+    public DateTime AsDateTime => _type switch
+    {
+        BsonType.DateTime or BsonType.DateTimeOffset =>
+            DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue)).UtcDateTime,
+        _ => throw new InvalidOperationException($"BsonValue is {_type}, not DateTime")
+    };
 
-    public DateTimeOffset AsDateTimeOffset => _type == BsonType.DateTime
-        ? DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue))
-        : throw new InvalidOperationException($"BsonValue is {_type}, not DateTime");
+    /// <summary>
+    /// For <see cref="BsonType.DateTime"/> (a value written before offsets were tracked, or a plain
+    /// <see cref="DateTime"/> field) the offset is unknown and comes back as 0 (UTC). For
+    /// <see cref="BsonType.DateTimeOffset"/> the original offset (boxed in <c>_refValue</c>) is
+    /// restored via <see cref="DateTimeOffset.ToOffset"/>, which re-expresses the same instant -
+    /// it does not shift it.
+    /// </summary>
+    public DateTimeOffset AsDateTimeOffset => _type switch
+    {
+        BsonType.DateTimeOffset =>
+            DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue))
+                .ToOffset(TimeSpan.FromMinutes((short)_refValue!)),
+        BsonType.DateTime =>
+            DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue)),
+        _ => throw new InvalidOperationException($"BsonValue is {_type}, not DateTime")
+    };
 
     public byte[] AsBinary => _type == BsonType.Binary && _refValue is byte[] b
         ? b
@@ -149,6 +173,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
     public bool IsDouble => Type == BsonType.Double;
     public bool IsBoolean => Type == BsonType.Boolean;
     public bool IsDateTime => Type == BsonType.DateTime;
+    public bool IsDateTimeOffset => Type == BsonType.DateTimeOffset;
     public bool IsDecimal => Type == BsonType.Decimal128;
     public bool IsBinary => Type == BsonType.Binary;
     public bool IsObjectId => Type == BsonType.ObjectId;
@@ -195,6 +220,9 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             case BsonType.DateTime:
                 var dt = DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue)).UtcDateTime;
                 writer.WriteDateTime(fieldName, dt);
+                break;
+            case BsonType.DateTimeOffset:
+                writer.WriteDateTimeOffset(fieldName, AsDateTimeOffset);
                 break;
             case BsonType.Binary:
                 writer.WriteBinary(fieldName, (byte[])_refValue!);
@@ -256,6 +284,9 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             case BsonType.DateTime:
                 writer.WriteArrayDateTime(index, DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.DoubleToInt64Bits(_numericValue)).UtcDateTime);
                 break;
+            case BsonType.DateTimeOffset:
+                writer.WriteArrayDateTimeOffset(index, AsDateTimeOffset);
+                break;
             case BsonType.Null:
                 writer.WriteArrayNull(index);
                 break;
@@ -293,6 +324,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             BsonType.Boolean => FromBoolean(reader.ReadBoolean()),
             BsonType.ObjectId => FromObjectId(reader.ReadObjectId()),
             BsonType.DateTime => FromDateTimeOffset(reader.ReadDateTimeOffset()),
+            BsonType.DateTimeOffset => FromDateTimeOffset(reader.ReadDateTimeOffset(BsonType.DateTimeOffset)),
             BsonType.Null => Null,
             BsonType.Binary => FromBinary(reader.ReadBinary(out _).ToArray()),
             BsonType.Array => ReadArray(ref reader),
@@ -335,6 +367,11 @@ public readonly struct BsonValue : IEquatable<BsonValue>
         {
             BsonType.Int32 or BsonType.Int64 or BsonType.Double or BsonType.Boolean or BsonType.DateTime
                 => _numericValue == other._numericValue,
+            // Unlike DateTimeOffset.Equals (instant-only), the offset is treated as significant here:
+            // it's the whole reason this type exists, so two values landing on the same instant but
+            // written with a different offset are NOT the same BsonValue. Keeps this consistent with
+            // GetHashCode, which already combines both _numericValue and _refValue (the boxed offset).
+            BsonType.DateTimeOffset => _numericValue == other._numericValue && (short)_refValue! == (short)other._refValue!,
             BsonType.String => string.Equals((string?)_refValue, (string?)other._refValue, StringComparison.Ordinal),
             BsonType.ObjectId => Equals(_refValue, other._refValue),
             BsonType.Null => true,
@@ -361,6 +398,7 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             BsonType.Boolean => (_numericValue != 0).ToString(),
             BsonType.ObjectId => _refValue?.ToString() ?? "(null)",
             BsonType.DateTime => AsDateTime.ToString("O"),
+            BsonType.DateTimeOffset => AsDateTimeOffset.ToString("O"),
             BsonType.Null => "null",
             _ => $"({_type})"
         };

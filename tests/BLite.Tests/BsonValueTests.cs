@@ -202,7 +202,7 @@ public class BsonValueTests
     {
         var dto = new DateTimeOffset(2025, 6, 15, 8, 30, 0, TimeSpan.Zero);
         var v = BsonValue.FromDateTimeOffset(dto);
-        Assert.Equal(BsonType.DateTime, v.Type);
+        Assert.Equal(BsonType.DateTimeOffset, v.Type);
         Assert.Equal(dto, v.AsDateTimeOffset);
     }
 

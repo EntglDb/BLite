@@ -23,7 +23,7 @@ public sealed partial class StorageEngine
         long timestamp = 0;
         if (meta.TtlFieldName != null && document.TryGetValue(meta.TtlFieldName, out var val))
         {
-            if (val.Type == BsonType.DateTime)
+            if (val.Type == BsonType.DateTime || val.Type == BsonType.DateTimeOffset)
                 timestamp = val.AsDateTime.Ticks;
             else if (val.Type == BsonType.Int64)
                 timestamp = val.AsInt64;

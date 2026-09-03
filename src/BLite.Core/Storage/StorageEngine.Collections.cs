@@ -67,6 +67,7 @@ public class VectorSourceConfig
         BsonType.Array => string.Join(" ", value.AsArray.Select(ValueToString)),
         BsonType.ObjectId => value.AsObjectId.ToString(),
         BsonType.DateTime => value.AsDateTime.ToString("O"),
+        BsonType.DateTimeOffset => value.AsDateTimeOffset.ToString("O"),
         _ => null
     } ?? string.Empty;
 }
