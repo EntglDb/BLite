@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="5.1.0"></a>
+## [5.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v5.1.0) (2026-09-03)
+
+### Features
+
+* add UpsertAsync/UpsertBulkAsync ([#142](https://www.github.com/EntglDb/BLite/issues/142)) ([dd31ff2](https://www.github.com/EntglDb/BLite/commit/dd31ff2f7cd8b19afaf6d7299940fb2e38ba57e8))
+
 <a name="5.0.9"></a>
 ## [5.0.9](https://www.github.com/EntglDb/BLite/releases/tag/v5.0.9) (2026-08-27)
 
