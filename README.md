@@ -702,8 +702,13 @@ public partial class MyDbContext : DocumentDbContext
 using var db = new MyDbContext("mydb.db");
 
 // Operations are tracked automatically
-await db.Users.InsertAsync(new User { Name = "Alice" });
+var aliceId = await db.Users.InsertAsync(new User { Name = "Alice" });
 await db.Users.InsertAsync(new User { Name = "Bob" });
+
+// Upsert: inserts if the id is unset/absent, otherwise replaces the existing document.
+// Resolved with a single primary-index lookup — not a Find followed by Insert/Update.
+UpsertResult<ObjectId> result = await db.Users.UpsertAsync(new User { Id = aliceId, Name = "Alice Updated" });
+bool wasInserted = result.Inserted; // false: aliceId already existed, so this replaced it
 
 // Commit all changes at once
 await db.SaveChangesAsync();
@@ -811,6 +816,26 @@ await engine.UpdateAsync("orders", id, newDoc, ct);
 await engine.DeleteAsync("orders", id, ct);
 int u = await engine.UpdateBulkAsync("orders", [(id1, d1), (id2, d2)], ct);
 int d = await engine.DeleteBulkAsync("orders", [id1, id2], ct);
+```
+
+### Upsert
+
+Inserts the document if its `_id` is unset/absent or not present in the collection, otherwise
+replaces the existing document with that id. Unlike a naive "find, then insert-or-update"
+wrapper, this is resolved with a **single primary-index lookup per document** inside one
+transaction — no double lookups, no window for another writer to race the check.
+
+```csharp
+// New document (no _id, or an _id not yet in the collection) → inserted
+UpsertResult<BsonId> inserted = await orders.UpsertAsync(newDoc, ct);
+Console.WriteLine(inserted.Inserted); // true
+
+// Existing document → replaced in place, no "Duplicate key" exception
+UpsertResult<BsonId> replaced = await orders.UpsertAsync(existingDoc, ct);
+Console.WriteLine(replaced.Inserted); // false
+
+// Bulk (single transaction) — each document resolved independently, in order
+List<UpsertResult<BsonId>> results = await orders.UpsertBulkAsync([doc1, doc2, doc3], ct);
 ```
 
 ### Index Management

@@ -1016,36 +1016,8 @@ public sealed class DynamicCollection : IDisposable
             if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
                 return false;
 
-            var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
-            DeleteSlot(oldLocation, transaction);
+            await UpdateAtLocationCore(id, key, newDocument, oldLocation, transaction);
 
-            if (!newDocument.TryGetId(out _))
-                newDocument = PrependId(newDocument, id);
-
-            var docData = newDocument.RawData;
-            DocumentLocation newLocation = default;
-            if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
-            {
-                var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
-                if (pageId == 0) pageId = AllocateNewDataPage(transaction);
-                var slotIndex = InsertIntoPage(pageId, docData, transaction);
-                newLocation = new DocumentLocation(pageId, slotIndex);
-            }
-            else
-            {
-                throw new InvalidOperationException("Document too large for single page. Overflow not yet supported in DynamicCollection.");
-            }
-
-            _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
-            _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
-
-            foreach (var (_, idx) in _secondaryIndexes)
-            {
-                if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
-                IndexInsert(idx, newDocument, newLocation, transaction);
-            }
-
-            await NotifyCdcAsync(OperationType.Update, id, transaction, newDocument.RawData);
             if (autoCommit) await transaction.CommitAsync(ct);
             success = true;
             return true;
@@ -1067,6 +1039,218 @@ public sealed class DynamicCollection : IDisposable
                     CollectionName = _collectionName,
                     Success        = success,
                 });
+        }
+    }
+
+    /// <summary>
+    /// Replaces the document at an already-resolved primary-index location.
+    /// Callers that already hold <paramref name="oldLocation"/> from their own
+    /// <c>_primaryIndex.TryFind</c> (e.g. <see cref="UpsertCore"/>) use this to avoid a
+    /// second lookup for the same key.
+    /// </summary>
+    private async Task UpdateAtLocationCore(BsonId id, IndexKey key, BsonDocument newDocument, DocumentLocation oldLocation, ITransaction transaction)
+    {
+        var oldDoc = ReadDocumentAt(oldLocation, transaction.TransactionId);
+        DeleteSlot(oldLocation, transaction);
+
+        if (!newDocument.TryGetId(out _))
+            newDocument = PrependId(newDocument, id);
+
+        var docData = newDocument.RawData;
+        DocumentLocation newLocation;
+        if (docData.Length + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
+        {
+            var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
+            if (pageId == 0) pageId = AllocateNewDataPage(transaction);
+            var slotIndex = InsertIntoPage(pageId, docData, transaction);
+            newLocation = new DocumentLocation(pageId, slotIndex);
+        }
+        else
+        {
+            throw new InvalidOperationException("Document too large for single page. Overflow not yet supported in DynamicCollection.");
+        }
+
+        _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
+        _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+
+        foreach (var (_, idx) in _secondaryIndexes)
+        {
+            if (oldDoc != null) IndexDelete(idx, oldDoc, oldLocation, transaction);
+            IndexInsert(idx, newDocument, newLocation, transaction);
+        }
+
+        await NotifyCdcAsync(OperationType.Update, id, transaction, newDocument.RawData);
+    }
+
+    /// <summary>
+    /// Inserts <paramref name="document"/> if it has no <c>_id</c> or that id is not present
+    /// in the collection, otherwise replaces the existing document with the same id.
+    /// Resolved with a single primary-index lookup — not a separate Find followed by
+    /// Insert/Update.
+    /// </summary>
+    public ValueTask<UpsertResult<BsonId>> UpsertAsync(BsonDocument document, CancellationToken ct = default)
+        => UpsertAsync(document, null, ct);
+
+    /// <inheritdoc cref="UpsertAsync(BsonDocument, CancellationToken)"/>
+    public async ValueTask<UpsertResult<BsonId>> UpsertAsync(BsonDocument document, ITransaction? transaction, CancellationToken ct = default)
+    {
+        if (document == null) throw new ArgumentNullException(nameof(document));
+
+        var sw = _storage.MetricsDispatcher != null ? Metrics.ValueStopwatch.StartNew() : default;
+        var auditOpts = _storage.AuditOptions;
+        var auditVsw  = (auditOpts is not null && (auditOpts.Sink is not null || auditOpts.EnableMetrics))
+            ? Metrics.ValueStopwatch.StartNew()
+            : default;
+        bool success = false;
+        bool inserted = false;
+        bool autoCommit = transaction == null;
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Upsert).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            var result = await UpsertCore(document, transaction);
+            inserted = result.Inserted;
+            if (autoCommit)
+            {
+                await transaction.CommitAsync(ct);
+                if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                    await ApplyRetentionPolicyCoreAsync(ct);
+            }
+            else if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                     && transaction is Transaction concreteTx)
+            {
+                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+            }
+            success = true;
+            return result;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new Metrics.MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = inserted ? Metrics.MetricEventType.CollectionInsert : Metrics.MetricEventType.CollectionUpdate,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
+
+            // ── AUDIT: only when this call actually inserted, matching InsertAsync ──
+            if (auditVsw.IsActive && success && inserted)
+            {
+                var elapsed  = auditVsw.GetElapsed();
+                var userId   = (auditOpts!.ContextProvider ?? AmbientAuditContext.Instance).GetCurrentUserId();
+                var txId     = transaction?.TransactionId ?? 0UL;
+                var docBytes = document.RawData.Length;
+
+                var evt = new InsertAuditEvent(
+                    TransactionId:      txId,
+                    CollectionName:     _collectionName,
+                    DocumentSizeBytes:  docBytes,
+                    Elapsed:            elapsed,
+                    UserId:             userId);
+
+                auditOpts.Sink?.OnInsert(evt);
+                _storage.AuditMetrics?.RecordInsert(elapsed);
+
+                if (auditOpts.SlowOperationThreshold is { } threshold && elapsed > threshold)
+                {
+                    auditOpts.Sink?.OnSlowOperation(new SlowOperationEvent(
+                        SlowOperationType.Insert,
+                        CollectionName: _collectionName,
+                        Elapsed:        elapsed,
+                        Detail:         null));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Upserts multiple documents in a single transaction. Each document is resolved with
+    /// its own single primary-index lookup, in list order.
+    /// </summary>
+    public ValueTask<List<UpsertResult<BsonId>>> UpsertBulkAsync(IEnumerable<BsonDocument> documents, CancellationToken ct = default)
+        => UpsertBulkAsync(documents, null, ct);
+
+    /// <inheritdoc cref="UpsertBulkAsync(IEnumerable{BsonDocument}, CancellationToken)"/>
+    public async ValueTask<List<UpsertResult<BsonId>>> UpsertBulkAsync(IEnumerable<BsonDocument> documents, ITransaction? transaction, CancellationToken ct = default)
+    {
+        if (documents == null) throw new ArgumentNullException(nameof(documents));
+        bool autoCommit = transaction == null;
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (UpsertBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            var results = new List<UpsertResult<BsonId>>();
+            bool anyInserted = false;
+            foreach (var doc in documents)
+            {
+                ct.ThrowIfCancellationRequested();
+                var result = await UpsertCore(doc, transaction);
+                anyInserted |= result.Inserted;
+                results.Add(result);
+            }
+
+            if (autoCommit)
+            {
+                await transaction.CommitAsync(ct);
+                if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                    await ApplyRetentionPolicyCoreAsync(ct);
+            }
+            else if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                     && transaction is Transaction concreteTx)
+            {
+                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+            }
+            return results;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Resolves the document's <c>_id</c>, then commits it with a single primary-index
+    /// lookup: found → in-place/relocated replace via <see cref="UpdateAtLocationCore"/>;
+    /// not found or absent → insert via <see cref="InsertCore"/>.
+    /// </summary>
+    private async Task<UpsertResult<BsonId>> UpsertCore(BsonDocument document, ITransaction transaction)
+    {
+        if (!document.TryGetId(out var id) || id.IsEmpty)
+        {
+            var newId = await InsertCore(document, transaction);
+            return new UpsertResult<BsonId>(newId, Inserted: true);
+        }
+
+        var key = new IndexKey(id.ToBytes());
+        if (_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+        {
+            await UpdateAtLocationCore(id, key, document, oldLocation, transaction);
+            return new UpsertResult<BsonId>(id, Inserted: false);
+        }
+        else
+        {
+            var insertedId = await InsertCore(document, transaction);
+            return new UpsertResult<BsonId>(insertedId, Inserted: true);
         }
     }
 
