@@ -77,6 +77,17 @@ public interface IDocumentCollection<TId, T> where T : class
     ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
     ValueTask<int> UpdateBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
 
+    // ── Upsert ────────────────────────────────────────────────────────────────
+    // Inserts the document if its id is unset or absent from the collection, otherwise
+    // replaces the existing document. Resolves this with a single primary-index lookup
+    // per document — not a Find followed by a separate Insert/Update call.
+
+    ValueTask<UpsertResult<TId>> UpsertAsync(T entity, CancellationToken ct = default);
+    ValueTask<UpsertResult<TId>> UpsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default);
+
+    ValueTask<List<UpsertResult<TId>>> UpsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default);
+    ValueTask<List<UpsertResult<TId>>> UpsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default);
+
     // ── Delete ────────────────────────────────────────────────────────────────
 
     ValueTask<bool> DeleteAsync(TId id, CancellationToken ct = default);

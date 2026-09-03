@@ -2628,13 +2628,24 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
     private async Task<bool> UpdateDataCore(TId id, T entity, byte[] docData, ITransaction transaction, int docLength = -1)
     {
-        if (docLength >= 0 && docLength < docData.Length)
-            docData = docData[..docLength]; // trim to actual serialized size
         var key = _mapper.ToIndexKey(id);
-        var bytesWritten = docData.Length;
-
         if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
             return false;
+
+        return await UpdateAtLocationCore(id, entity, docData, key, oldLocation, transaction, docLength);
+    }
+
+    /// <summary>
+    /// Replaces the document at an already-resolved primary-index location.
+    /// Callers that already hold <paramref name="oldLocation"/> from their own
+    /// <c>_primaryIndex.TryFind</c> (e.g. <see cref="UpsertCore"/>) use this to avoid a
+    /// second lookup for the same key.
+    /// </summary>
+    private async Task<bool> UpdateAtLocationCore(TId id, T entity, byte[] docData, IndexKey key, DocumentLocation oldLocation, ITransaction transaction, int docLength = -1)
+    {
+        if (docLength >= 0 && docLength < docData.Length)
+            docData = docData[..docLength]; // trim to actual serialized size
+        var bytesWritten = docData.Length;
 
         // Retrieve old version for index updates
         var oldEntity = await FindByLocation(oldLocation, transaction);
@@ -2697,6 +2708,163 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         finally
         {
             ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+    }
+
+    /// <summary>
+    /// Inserts <paramref name="entity"/> if its id is unset or not present in the collection,
+    /// otherwise replaces the existing document with the same id. Resolved with a single
+    /// primary-index lookup per document — not a separate Find followed by Insert/Update.
+    /// </summary>
+    public ValueTask<UpsertResult<TId>> UpsertAsync(T entity, CancellationToken ct = default)
+        => UpsertAsync(entity, null, ct);
+
+    /// <inheritdoc cref="UpsertAsync(T, CancellationToken)"/>
+    public async ValueTask<UpsertResult<TId>> UpsertAsync(T entity, ITransaction? transaction, CancellationToken ct = default)
+    {
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
+        bool success = false;
+        bool inserted = false;
+        bool autoCommit = transaction == null;
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (Upsert).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            try
+            {
+                var result = await UpsertCore(entity, transaction);
+                inserted = result.Inserted;
+                if (autoCommit)
+                {
+                    await transaction.CommitAsync(ct);
+                    // ── OnInsert retention trigger — only fires when this call actually inserted ──
+                    if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                        await ApplyRetentionPolicyCoreAsync(ct);
+                }
+                else if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                         && transaction is Transaction concreteTx)
+                {
+                    concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                }
+                success = true;
+                return result;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+            if (sw.IsActive)
+                _storage.MetricsDispatcher?.Publish(new MetricEvent
+                {
+                    Timestamp      = sw.StartTimestamp,
+                    Type           = inserted ? MetricEventType.CollectionInsert : MetricEventType.CollectionUpdate,
+                    ElapsedMicros  = sw.GetElapsedMicros(),
+                    CollectionName = _collectionName,
+                    Success        = success,
+                });
+        }
+    }
+
+    /// <summary>
+    /// Upserts multiple documents in a single transaction. Each entity is resolved with its
+    /// own single primary-index lookup, in list order.
+    /// </summary>
+    public ValueTask<List<UpsertResult<TId>>> UpsertBulkAsync(IEnumerable<T> entities, CancellationToken ct = default)
+        => UpsertBulkAsync(entities, null, ct);
+
+    /// <inheritdoc cref="UpsertBulkAsync(IEnumerable{T}, CancellationToken)"/>
+    public async ValueTask<List<UpsertResult<TId>>> UpsertBulkAsync(IEnumerable<T> entities, ITransaction? transaction, CancellationToken ct = default)
+    {
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var entityList = entities.ToList();
+        var results = new List<UpsertResult<TId>>(entityList.Count);
+        bool autoCommit = transaction == null;
+
+        if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring collection lock (UpsertBulk).");
+
+        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            try
+            {
+                bool anyInserted = false;
+                foreach (var entity in entityList)
+                {
+                    var result = await UpsertCore(entity, transaction);
+                    anyInserted |= result.Inserted;
+                    results.Add(result);
+                }
+
+                if (autoCommit)
+                {
+                    await transaction.CommitAsync(ct);
+                    if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                        await ApplyRetentionPolicyCoreAsync(ct);
+                }
+                else if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                         && transaction is Transaction concreteTx)
+                {
+                    concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                }
+                return results;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Resolves the entity's id, then commits it with a single primary-index lookup:
+    /// found → in-place/relocated replace via <see cref="UpdateAtLocationCore"/>;
+    /// not found → insert via <see cref="InsertDataCore"/>. When the id is unset
+    /// (default), the lookup is skipped entirely since no existing document could match it.
+    /// </summary>
+    private async Task<UpsertResult<TId>> UpsertCore(T entity, ITransaction transaction)
+    {
+        var id = _mapper.GetId(entity);
+        if (EqualityComparer<TId>.Default.Equals(id, default!))
+        {
+            var newId = await InsertCore(entity, transaction);
+            return new UpsertResult<TId>(newId, Inserted: true);
+        }
+
+        var key = _mapper.ToIndexKey(id);
+        var length = SerializeWithRetry(entity, out var buffer);
+        try
+        {
+            if (_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+            {
+                await UpdateAtLocationCore(id, entity, buffer, key, oldLocation, transaction, length);
+                return new UpsertResult<TId>(id, Inserted: false);
+            }
+            else
+            {
+                await InsertDataCore(id, entity, buffer, transaction, length);
+                return new UpsertResult<TId>(id, Inserted: true);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
