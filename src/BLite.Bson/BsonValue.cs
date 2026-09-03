@@ -323,7 +323,12 @@ public readonly struct BsonValue : IEquatable<BsonValue>
             BsonType.String => FromString(reader.ReadString()),
             BsonType.Boolean => FromBoolean(reader.ReadBoolean()),
             BsonType.ObjectId => FromObjectId(reader.ReadObjectId()),
-            BsonType.DateTime => FromDateTimeOffset(reader.ReadDateTimeOffset()),
+            // Must stay tagged BsonType.DateTime, matching the wire tag just read - not
+            // FromDateTimeOffset, which now tags BsonType.DateTimeOffset. Using it here would flip
+            // the in-memory type for every plain DateTime field (and every legacy DateTimeOffset
+            // value still under the old tag), so a later WriteTo would silently re-emit it in the
+            // new 10-byte layout even though nothing about its offset was actually recovered.
+            BsonType.DateTime => FromDateTime(reader.ReadDateTime()),
             BsonType.DateTimeOffset => FromDateTimeOffset(reader.ReadDateTimeOffset(BsonType.DateTimeOffset)),
             BsonType.Null => Null,
             BsonType.Binary => FromBinary(reader.ReadBinary(out _).ToArray()),

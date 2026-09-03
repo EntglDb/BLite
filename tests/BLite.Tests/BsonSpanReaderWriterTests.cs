@@ -221,6 +221,47 @@ public class BsonSpanReaderWriterTests
     }
 
     [Fact]
+    public void BsonValue_ReadFrom_LegacyDateTimeTag_StaysTaggedDateTime()
+    {
+        // Regression for a review finding on the DateTimeOffset fix: BsonValue.ReadFrom must not
+        // reuse FromDateTimeOffset (now tagged BsonType.DateTimeOffset) to decode a wire-level plain
+        // BsonType.DateTime value - doing so would flip the in-memory type for every DateTime field
+        // and cause a later WriteTo to silently upgrade it to the new 10-byte layout on disk, even
+        // though nothing about an offset was actually recovered.
+        Span<byte> buffer = stackalloc byte[256];
+        var writer = new BsonSpanWriter(buffer, _keyMap);
+
+        var legacyUtc = new DateTime(2026, 6, 15, 18, 0, 0, DateTimeKind.Utc);
+
+        var sizePos = writer.BeginDocument();
+        writer.WriteDateTime("timestamp", legacyUtc);
+        writer.EndDocument(sizePos);
+
+        var documentBytes = buffer[..writer.Position];
+        var reader = new BsonSpanReader(documentBytes, _keys);
+
+        reader.ReadDocumentSize();
+        var type = reader.ReadBsonType();
+        reader.ReadElementHeader();
+
+        var value = BsonValue.ReadFrom(ref reader, type);
+
+        Assert.Equal(BsonType.DateTime, value.Type);
+        Assert.False(value.IsDateTimeOffset);
+
+        // Writing it back must reproduce the original 8-byte BsonType.DateTime wire format, not
+        // silently upgrade to the new 10-byte BsonType.DateTimeOffset layout.
+        Span<byte> rewriteBuffer = stackalloc byte[256];
+        var rewriter = new BsonSpanWriter(rewriteBuffer, _keyMap);
+        var rewriteSizePos = rewriter.BeginDocument();
+        value.WriteTo(ref rewriter, "timestamp");
+        rewriter.EndDocument(rewriteSizePos);
+
+        var rewrittenBytes = rewriteBuffer[..rewriter.Position];
+        Assert.True(documentBytes.SequenceEqual(rewrittenBytes));
+    }
+
+    [Fact]
     public void WriteAndRead_NumericTypes()
     {
         Span<byte> buffer = stackalloc byte[256];
