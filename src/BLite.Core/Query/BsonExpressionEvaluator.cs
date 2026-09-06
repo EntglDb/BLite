@@ -123,7 +123,8 @@ internal static class BsonExpressionEvaluator
         // ── Bare bool member: e => e.IsActive  →  IsActive == true ──────────────
         if (body is MemberExpression bareM &&
             bareM.Expression == parameter &&
-            bareM.Type == typeof(bool))
+            bareM.Type == typeof(bool) &&
+            IsPersistedMember(bareM.Member))
         {
             var bsonName = bareM.Member.Name.ToLowerInvariant();
             if (bsonName == "id") bsonName = "_id";
@@ -134,7 +135,8 @@ internal static class BsonExpressionEvaluator
         if (body is MemberExpression { Member.Name: "HasValue" } hasValueExpr &&
             hasValueExpr.Expression is MemberExpression innerHasValueMember &&
             innerHasValueMember.Expression == parameter &&
-            Nullable.GetUnderlyingType(innerHasValueMember.Type) != null)
+            Nullable.GetUnderlyingType(innerHasValueMember.Type) != null &&
+            IsPersistedMember(innerHasValueMember.Member))
         {
             var bsonName = innerHasValueMember.Member.Name.ToLowerInvariant();
             if (bsonName == "id") bsonName = "_id";
@@ -147,7 +149,8 @@ internal static class BsonExpressionEvaluator
             // Fast path: !e.BoolProp → BoolProp == false
             if (notExpr.Operand is MemberExpression notM &&
                 notM.Expression == parameter &&
-                notM.Type == typeof(bool))
+                notM.Type == typeof(bool) &&
+                IsPersistedMember(notM.Member))
             {
                 var bsonName = notM.Member.Name.ToLowerInvariant();
                 if (bsonName == "id") bsonName = "_id";
@@ -167,7 +170,8 @@ internal static class BsonExpressionEvaluator
             if (mc.Method.Name == "Equals" &&
                 mc.Arguments.Count == 1 &&
                 mc.Object is MemberExpression equalsOnMember &&
-                equalsOnMember.Expression == parameter)
+                equalsOnMember.Expression == parameter &&
+                IsPersistedMember(equalsOnMember.Member))
             {
                 var fieldName   = equalsOnMember.Member.Name;
                 var bsonName    = fieldName.ToLowerInvariant();
@@ -191,7 +195,8 @@ internal static class BsonExpressionEvaluator
                 strMember.Expression == parameter &&
                 strMember.Type == typeof(string) &&
                 mc.Arguments.Count == 1 &&
-                mc.Method.Name is "Contains" or "StartsWith" or "EndsWith")
+                mc.Method.Name is "Contains" or "StartsWith" or "EndsWith" &&
+                IsPersistedMember(strMember.Member))
             {
                 var bsonName = strMember.Member.Name.ToLowerInvariant();
                 if (bsonName == "id") bsonName = "_id";
@@ -210,7 +215,8 @@ internal static class BsonExpressionEvaluator
                 mc.Arguments.Count == 1 &&
                 mc.Arguments[0] is MemberExpression staticStrMember &&
                 staticStrMember.Expression == parameter &&
-                staticStrMember.Type == typeof(string))
+                staticStrMember.Type == typeof(string) &&
+                IsPersistedMember(staticStrMember.Member))
             {
                 var bsonName = staticStrMember.Member.Name.ToLowerInvariant();
                 if (bsonName == "id") bsonName = "_id";
@@ -227,7 +233,8 @@ internal static class BsonExpressionEvaluator
                 {
                     var argUnwrapped = UnwrapConvert(mc.Arguments[0]);
                     if (argUnwrapped is MemberExpression inMember &&
-                        inMember.Expression == parameter)
+                        inMember.Expression == parameter &&
+                        IsPersistedMember(inMember.Member))
                     {
                         var (ok, collection) = TryEvaluate(mc.Object);
                         if (ok && collection != null)
@@ -242,7 +249,8 @@ internal static class BsonExpressionEvaluator
                 {
                     var argUnwrapped = UnwrapConvert(mc.Arguments[1]);
                     if (argUnwrapped is MemberExpression enumInMember &&
-                        enumInMember.Expression == parameter)
+                        enumInMember.Expression == parameter &&
+                        IsPersistedMember(enumInMember.Member))
                     {
                         var (ok, collection) = TryEvaluateCollection(mc.Arguments[0]);
                         if (ok && collection != null)
@@ -288,7 +296,7 @@ internal static class BsonExpressionEvaluator
                 nodeType = Flip(nodeType);
             }
 
-            if (leftInner is MemberExpression member && member.Expression == parameter)
+            if (leftInner is MemberExpression member && member.Expression == parameter && IsPersistedMember(member.Member))
             {
                 var fieldName = member.Member.Name;
                 var bsonName  = fieldName.ToLowerInvariant();
@@ -340,6 +348,8 @@ internal static class BsonExpressionEvaluator
         // The instance on which CompareTo is called: unwrap Convert / Nullable.Value
         var instanceExpr = UnwrapNullableValue(UnwrapConvert(ctMc.Object!));
         if (instanceExpr is not MemberExpression ctMember || ctMember.Expression != parameter)
+            return null;
+        if (!IsPersistedMember(ctMember.Member))
             return null;
 
         var fieldName = ctMember.Member.Name;
@@ -689,6 +699,16 @@ internal static class BsonExpressionEvaluator
 
     private static bool IsDirectParameterAccess(Expression expr, ParameterExpression p)
         => expr is MemberExpression m && m.Expression == p;
+
+    /// <summary>
+    /// True for a field, or a property with a setter - the shapes BLite's document mapper actually
+    /// persists as a BSON field. A get-only property (<c>public bool IsOpen => State != Closed</c>) has
+    /// no backing BSON field at all, so pushing it down into <see cref="CreatePredicate"/> would scan
+    /// every document for a field name that can never exist and silently return <c>false</c> for
+    /// everyone - wrong, instead of falling back to a real in-memory evaluation of the getter.
+    /// </summary>
+    private static bool IsPersistedMember(MemberInfo member)
+        => member is not PropertyInfo { CanWrite: false };
 
     /// <summary>
     /// Unwraps a single <c>Convert</c> / <c>ConvertChecked</c> node if present.
