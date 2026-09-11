@@ -1,6 +1,7 @@
 using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Metadata;
+using Ardalis.SmartEnum;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -879,37 +880,27 @@ namespace BLite.Shared
         public string Name { get; set; } = "";
     }
 
-    public class DeviceWithSmartStatus
+    public class DeviceWithGender
     {
         public string Id { get; set; } = "";
-        public SmartStatus Status { get; set; } = SmartStatus.Active;
+        public Gender Gender { get; set; } = Gender.Male;
         public string Name { get; set; } = "";
     }
 
-    public sealed class SmartStatus
+    public class Gender : SmartEnum<Gender>
     {
-        public static readonly SmartStatus Active = new("Active", 1);
-        public static readonly SmartStatus Inactive = new("Inactive", 2);
+        public static readonly Gender Male = new("Male", 3);
+        public static readonly Gender Female = new("Female", 5);
 
-        public string Name { get; }
-        public int Value { get; }
-
-        private SmartStatus(string name, int value)
+        private Gender(string name, int value) : base(name, value)
         {
-            Name = name;
-            Value = value;
         }
-
-        public static SmartStatus FromName(string name) =>
-            string.Equals(name, Active.Name, StringComparison.Ordinal) ? Active :
-            string.Equals(name, Inactive.Name, StringComparison.Ordinal) ? Inactive :
-            throw new ArgumentOutOfRangeException(nameof(name), $"Unknown status '{name}'.");
     }
 
-    public class SmartStatusConverter : ValueConverter<SmartStatus, string>
+    public class GenderValueConverter : ValueConverter<Gender, string>
     {
-        public override string ConvertToProvider(SmartStatus model) => model.Name;
-        public override SmartStatus ConvertFromProvider(string provider) => SmartStatus.FromName(provider);
+        public override string ConvertToProvider(Gender model) => model.Name;
+        public override Gender ConvertFromProvider(string provider) => Gender.FromName(provider);
     }
 
     /// <summary>
