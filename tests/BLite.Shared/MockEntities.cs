@@ -879,6 +879,39 @@ namespace BLite.Shared
         public string Name { get; set; } = "";
     }
 
+    public class DeviceWithSmartStatus
+    {
+        public string Id { get; set; } = "";
+        public SmartStatus Status { get; set; } = SmartStatus.Active;
+        public string Name { get; set; } = "";
+    }
+
+    public sealed class SmartStatus
+    {
+        public static readonly SmartStatus Active = new("Active", 1);
+        public static readonly SmartStatus Inactive = new("Inactive", 2);
+
+        public string Name { get; }
+        public int Value { get; }
+
+        private SmartStatus(string name, int value)
+        {
+            Name = name;
+            Value = value;
+        }
+
+        public static SmartStatus FromName(string name) =>
+            string.Equals(name, Active.Name, StringComparison.Ordinal) ? Active :
+            string.Equals(name, Inactive.Name, StringComparison.Ordinal) ? Inactive :
+            throw new ArgumentOutOfRangeException(nameof(name), $"Unknown status '{name}'.");
+    }
+
+    public class SmartStatusConverter : ValueConverter<SmartStatus, string>
+    {
+        public override string ConvertToProvider(SmartStatus model) => model.Name;
+        public override SmartStatus ConvertFromProvider(string provider) => SmartStatus.FromName(provider);
+    }
+
     /// <summary>
     /// Demonstrates a ulong→long converter for storage in BSON (which has no native ulong type).
     /// Values are stored as their bit-equivalent long (two's complement), so the round-trip

@@ -85,6 +85,7 @@ public partial class TestDbContext : DocumentDbContext
 
     // Device – HasConversion on a non-ID property (ulong → long)
     public DocumentCollection<string, Device> Devices { get; set; } = null!;
+    public DocumentCollection<string, DeviceWithSmartStatus> DeviceWithSmartStatuses { get; set; } = null!;
 
     // Binary Property Tests
     public DocumentCollection<ObjectId, BinaryEntity> BinaryEntities { get; set; } = null!;
@@ -205,6 +206,11 @@ public partial class TestDbContext : DocumentDbContext
             .ToCollection("devices")
             .Property(x => x.SearchIndexId)
             .HasConversion<UlongToInt64Converter>();
+
+        modelBuilder.Entity<DeviceWithSmartStatus>()
+            .ToCollection("devices_with_smart_status")
+            .Property(x => x.Status)
+            .HasConversion<SmartStatusConverter>();
 
         // Benchmark entities
         modelBuilder.Entity<CustomerOrder>().ToCollection("customer_orders").HasKey(e => e.Id);
