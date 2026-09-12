@@ -1,6 +1,7 @@
 using BLite.Bson;
 using BLite.Core.Collections;
 using BLite.Core.Metadata;
+using Ardalis.SmartEnum;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -877,6 +878,29 @@ namespace BLite.Shared
         public string Id { get; set; } = "";
         public ulong SearchIndexId { get; set; }
         public string Name { get; set; } = "";
+    }
+
+    public class DeviceWithGender
+    {
+        public string Id { get; set; } = "";
+        public Gender Gender { get; set; } = Gender.Male;
+        public string Name { get; set; } = "";
+    }
+
+    public class Gender : SmartEnum<Gender>
+    {
+        public static readonly Gender Male = new("Male", 3);
+        public static readonly Gender Female = new("Female", 5);
+
+        private Gender(string name, int value) : base(name, value)
+        {
+        }
+    }
+
+    public class GenderValueConverter : ValueConverter<Gender, string>
+    {
+        public override string ConvertToProvider(Gender model) => model.Name;
+        public override Gender ConvertFromProvider(string provider) => Gender.FromName(provider);
     }
 
     /// <summary>

@@ -799,6 +799,28 @@ public class SourceGeneratorFeaturesTests : IDisposable
         Assert.Equal("After", loaded.Name);
     }
 
+    [Fact]
+    public async Task Device_NonIdSmartEnumProperty_HasConversion_TakesPrecedence_OverNestedMapping()
+    {
+        var device = new DeviceWithGender
+        {
+            Id = "dev-smart-1",
+            Name = "Smart Device",
+            Gender = Gender.Male,
+        };
+
+        var id = await _db.DeviceWithGenders.InsertAsync(device);
+        await _db.SaveChangesAsync();
+
+        var loaded = await _db.DeviceWithGenders.FindByIdAsync(id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Smart Device", loaded.Name);
+        Assert.Same(Gender.Male, loaded.Gender);
+        Assert.Equal("Male", loaded.Gender.Name);
+        Assert.Equal(3, loaded.Gender.Value);
+    }
+
     #endregion
 
     public void Dispose()

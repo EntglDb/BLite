@@ -391,6 +391,41 @@ namespace BLite.SourceGenerators
                     sb.AppendLine($"            }}");
                 }
             }
+            else if (prop.ConverterTypeName != null)
+            {
+                // Explicit HasConversion<T>() should take precedence over nested-object/primitive handling.
+                var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
+                var converterWriteMethod = GetPrimitiveWriteMethod(providerProp, allowKey: false);
+                if (converterWriteMethod != null)
+                {
+                    if (prop.IsNullable)
+                    {
+                        // For nullable properties, guard against null before calling ConvertToProvider.
+                        // For nullable value types (Nullable<T>) use .Value; unconstrained T? generics don't need it.
+                        var isValueTypeNullable = prop.TypeName.TrimEnd('?') != prop.TypeName && IsValueType(prop.TypeName);
+                        var valueAccess = isValueTypeNullable
+                            ? $"entity.{prop.Name}.Value"
+                            : $"entity.{prop.Name}";
+                        sb.AppendLine($"            if (entity.{prop.Name} != null)");
+                        sb.AppendLine($"            {{");
+                        sb.AppendLine($"                writer.{converterWriteMethod}(\"{fieldName}\", _converter_{prop.Name}.ConvertToProvider({valueAccess}));");
+                        sb.AppendLine($"            }}");
+                        sb.AppendLine($"            else");
+                        sb.AppendLine($"            {{");
+                        sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
+                        sb.AppendLine($"            }}");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"            writer.{converterWriteMethod}(\"{fieldName}\", _converter_{prop.Name}.ConvertToProvider(entity.{prop.Name}));");
+                    }
+                }
+                else
+                {
+                    sb.AppendLine($"#warning Property '{prop.Name}': converter '{prop.ConverterTypeName}' has an unsupported provider type '{prop.ProviderTypeName}'. It will be skipped during serialization.");
+                    sb.AppendLine($"            // Unsupported provider type: {prop.ProviderTypeName} for {prop.Name}");
+                }
+            }
             else if (prop.IsNestedObject)
             {
                 sb.AppendLine($"            if (entity.{prop.Name} != null)");
@@ -453,41 +488,6 @@ namespace BLite.SourceGenerators
                         else
                         {
                             sb.AppendLine($"            writer.{writeMethod}(\"{fieldName}\", entity.{prop.Name});");
-                        }
-                    }
-                    else if (prop.ConverterTypeName != null)
-                    {
-                        // Non-key property with a source-generator-detected converter.
-                        var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
-                        var converterWriteMethod = GetPrimitiveWriteMethod(providerProp, allowKey: false);
-                        if (converterWriteMethod != null)
-                        {
-                            if (prop.IsNullable)
-                            {
-                                // For nullable properties, guard against null before calling ConvertToProvider.
-                                // For nullable value types (Nullable<T>) use .Value; unconstrained T? generics don't need it.
-                                var isValueTypeNullable = prop.TypeName.TrimEnd('?') != prop.TypeName && IsValueType(prop.TypeName);
-                                var valueAccess = isValueTypeNullable
-                                    ? $"entity.{prop.Name}.Value"
-                                    : $"entity.{prop.Name}";
-                                sb.AppendLine($"            if (entity.{prop.Name} != null)");
-                                sb.AppendLine($"            {{");
-                                sb.AppendLine($"                writer.{converterWriteMethod}(\"{fieldName}\", _converter_{prop.Name}.ConvertToProvider({valueAccess}));");
-                                sb.AppendLine($"            }}");
-                                sb.AppendLine($"            else");
-                                sb.AppendLine($"            {{");
-                                sb.AppendLine($"                writer.WriteNull(\"{fieldName}\");");
-                                sb.AppendLine($"            }}");
-                            }
-                            else
-                            {
-                                sb.AppendLine($"            writer.{converterWriteMethod}(\"{fieldName}\", _converter_{prop.Name}.ConvertToProvider(entity.{prop.Name}));");
-                            }
-                        }
-                        else
-                        {
-                            sb.AppendLine($"#warning Property '{prop.Name}': converter '{prop.ConverterTypeName}' has an unsupported provider type '{prop.ProviderTypeName}'. It will be skipped during serialization.");
-                            sb.AppendLine($"            // Unsupported provider type: {prop.ProviderTypeName} for {prop.Name}");
                         }
                     }
                     else
@@ -849,6 +849,36 @@ namespace BLite.SourceGenerators
                  }
                  sb.AppendLine($"                        }}");
              }
+             else if (prop.ConverterTypeName != null)
+             {
+                 // Explicit HasConversion<T>() should take precedence over nested-object/primitive handling.
+                 var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
+                 var converterReadMethod = GetPrimitiveReadMethod(providerProp);
+                 if (converterReadMethod != null)
+                 {
+                     var converterReadArgs = IsCoercedReadMethod(converterReadMethod) ? $"({bsonTypeVar})" : "()";
+                     if (prop.IsNullable)
+                     {
+                         // Guard against BSON null so ConvertFromProvider is never called with a missing value.
+                         sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
+                         sb.AppendLine($"                        {{");
+                         sb.AppendLine($"                            {localVar} = null;");
+                         sb.AppendLine($"                        }}");
+                         sb.AppendLine($"                        else");
+                         sb.AppendLine($"                        {{");
+                         sb.AppendLine($"                            {localVar} = _converter_{prop.Name}.ConvertFromProvider(reader.{converterReadMethod}{converterReadArgs});");
+                         sb.AppendLine($"                        }}");
+                     }
+                     else
+                     {
+                         sb.AppendLine($"                        {localVar} = _converter_{prop.Name}.ConvertFromProvider(reader.{converterReadMethod}{converterReadArgs});");
+                     }
+                 }
+                 else
+                 {
+                     sb.AppendLine($"                        reader.SkipValue({bsonTypeVar});");
+                 }
+             }
              else if (prop.IsNestedObject)
              {
                  sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
@@ -933,36 +963,6 @@ namespace BLite.SourceGenerators
                         sb.AppendLine($"                        {localVar} = {cast}reader.{readMethod}{readArgs};");
                     }
                     }
-                 }
-                 else if (prop.ConverterTypeName != null)
-                 {
-                     // Non-key property with a source-generator-detected converter.
-                     var providerProp = new PropertyInfo { TypeName = prop.ProviderTypeName ?? "string" };
-                     var converterReadMethod = GetPrimitiveReadMethod(providerProp);
-                     if (converterReadMethod != null)
-                     {
-                         var converterReadArgs = IsCoercedReadMethod(converterReadMethod) ? $"({bsonTypeVar})" : "()";
-                         if (prop.IsNullable)
-                         {
-                             // Guard against BSON null so ConvertFromProvider is never called with a missing value.
-                             sb.AppendLine($"                        if ({bsonTypeVar} == global::BLite.Bson.BsonType.Null)");
-                             sb.AppendLine($"                        {{");
-                             sb.AppendLine($"                            {localVar} = null;");
-                             sb.AppendLine($"                        }}");
-                             sb.AppendLine($"                        else");
-                             sb.AppendLine($"                        {{");
-                             sb.AppendLine($"                            {localVar} = _converter_{prop.Name}.ConvertFromProvider(reader.{converterReadMethod}{converterReadArgs});");
-                             sb.AppendLine($"                        }}");
-                         }
-                         else
-                         {
-                             sb.AppendLine($"                        {localVar} = _converter_{prop.Name}.ConvertFromProvider(reader.{converterReadMethod}{converterReadArgs});");
-                         }
-                     }
-                     else
-                     {
-                         sb.AppendLine($"                        reader.SkipValue({bsonTypeVar});");
-                     }
                  }
                  else
                  {
