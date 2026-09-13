@@ -87,7 +87,7 @@ internal static class BsonExpressionEvaluator
                 var lp = TryCompileBody(andAlso.Left,  parameter, registry, keyMap);
                 var rp = TryCompileBody(andAlso.Right, parameter, registry, keyMap);
                 if (lp != null && rp != null) return reader => lp(reader) && rp(reader);
-                return lp ?? rp;
+                return null;
             }
 
             return null;
@@ -114,7 +114,7 @@ internal static class BsonExpressionEvaluator
                 var lp = TryCompileBody(orElse.Left,  parameter, registry, keyMap);
                 var rp = TryCompileBody(orElse.Right, parameter, registry, keyMap);
                 if (lp != null && rp != null) return reader => lp(reader) || rp(reader);
-                return lp ?? rp;
+                return null;
             }
 
             return null;
@@ -701,14 +701,53 @@ internal static class BsonExpressionEvaluator
         => expr is MemberExpression m && m.Expression == p;
 
     /// <summary>
-    /// True for a field, or a property with a setter - the shapes BLite's document mapper actually
-    /// persists as a BSON field. A get-only property (<c>public bool IsOpen => State != Closed</c>) has
-    /// no backing BSON field at all, so pushing it down into <see cref="CreatePredicate"/> would scan
-    /// every document for a field name that can never exist and silently return <c>false</c> for
-    /// everyone - wrong, instead of falling back to a real in-memory evaluation of the getter.
+    /// True when a member is expected to have a persisted BSON field:
+    /// fields, properties with setters, and getter-only properties with either
+    /// compiler-generated (<c>&lt;Name&gt;k__BackingField</c>) or conventional
+    /// (<c>_name</c>) backing fields.
     /// </summary>
     private static bool IsPersistedMember(MemberInfo member)
-        => member is not PropertyInfo { CanWrite: false };
+    {
+        if (member is FieldInfo)
+            return true;
+
+        if (member is not PropertyInfo property)
+            return false;
+
+        if (property.CanWrite)
+            return true;
+
+        var declaringType = property.DeclaringType;
+        if (declaringType is null)
+            return false;
+
+        var autoPropertyBackingField = $"<{property.Name}>k__BackingField";
+        if (HasFieldInHierarchy(declaringType, autoPropertyBackingField))
+            return true;
+
+        if (property.Name.Length == 0)
+            return false;
+
+        var conventionalBackingField = $"_{char.ToLowerInvariant(property.Name[0])}{property.Name[1..]}";
+        return HasFieldInHierarchy(declaringType, conventionalBackingField);
+    }
+
+    private static bool HasFieldInHierarchy(Type type, string fieldName)
+    {
+#pragma warning disable IL2070, IL2075
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            var field = current.GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+            if (field is not null)
+                return true;
+        }
+#pragma warning restore IL2070, IL2075
+
+        return false;
+    }
 
     /// <summary>
     /// Unwraps a single <c>Convert</c> / <c>ConvertChecked</c> node if present.
