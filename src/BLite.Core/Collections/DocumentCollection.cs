@@ -1298,35 +1298,42 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
         var txnId = 0UL;
-        var locationsByPage = await GetCollectionLocationsByPageAsync(txnId, ct).ConfigureAwait(false);
-        var allPageIds = locationsByPage.Keys.ToArray();
-        var pageCount = allPageIds.Length;
-
         if (degreeOfParallelism <= 0)
             degreeOfParallelism = Environment.ProcessorCount;
 
         var semaphore = new SemaphoreSlim(degreeOfParallelism);
         var tasks = new List<Task<List<T>>>();
         var keyMap = _storage.GetKeyReverseMap();
+        const int batchSize = 128;
 
-        for (int pageIdx = 0; pageIdx < pageCount; pageIdx++)
+        foreach (var batch in _primaryIndex
+            .Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
+            .Select(entry => entry.Location)
+            .Chunk(batchSize))
         {
             await semaphore.WaitAsync(ct);
-            var localPageId = allPageIds[pageIdx];
+            var localBatch = batch;
 
             var task = Task.Run(async () =>
             {
                 try
                 {
-                    var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
                     var results = new List<T>();
+                    var pageCache = new Dictionary<uint, byte[]>();
 
                     try
                     {
-                        await _storage.ReadPageAsync(localPageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct);
-
-                        foreach (var location in locationsByPage[localPageId])
+                        foreach (var location in localBatch)
                         {
+                            ct.ThrowIfCancellationRequested();
+
+                            if (!pageCache.TryGetValue(location.PageId, out var buffer))
+                            {
+                                buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                                await _storage.ReadPageAsync(location.PageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
+                                pageCache[location.PageId] = buffer;
+                            }
+
                             if (!TryReadInlineRawBytes(buffer, location.SlotIndex, out var inlineRawBytes))
                             {
                                 var rawBytes = ReadRawBytesAt(location, txnId, buffer);
@@ -1343,7 +1350,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     }
                     finally
                     {
-                        ArrayPool<byte>.Shared.Return(buffer);
+                        foreach (var buffer in pageCache.Values)
+                            ArrayPool<byte>.Shared.Return(buffer);
                     }
 
                     return results;
@@ -1355,15 +1363,27 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             }, ct);
 
             tasks.Add(task);
+
+            if (tasks.Count >= degreeOfParallelism)
+            {
+                var completedTask = await Task.WhenAny(tasks).ConfigureAwait(false);
+                tasks.Remove(completedTask);
+
+                var results = await completedTask.ConfigureAwait(false);
+                foreach (var doc in results)
+                {
+                    yield return doc;
+                }
+            }
         }
 
         // Yield results as tasks complete
         while (tasks.Count > 0)
         {
-            var completedTask = await Task.WhenAny(tasks);
+            var completedTask = await Task.WhenAny(tasks).ConfigureAwait(false);
             tasks.Remove(completedTask);
 
-            var results = await completedTask;
+            var results = await completedTask.ConfigureAwait(false);
             foreach (var doc in results)
             {
                 yield return doc;
