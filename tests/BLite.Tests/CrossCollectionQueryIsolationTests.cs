@@ -87,28 +87,29 @@ public class CrossCollectionQueryIsolationTests : IDisposable
     }
 
     [Fact]
-    public async Task Count_OnUnindexedSharedField_DoesNotCountCrossCollectionRows()
+    public async Task CountAsync_OnUnindexedNumericField_DoesNotCountCrossCollectionRows()
     {
-        await _db.IntEntities.InsertAsync(new IntEntity { Id = 1, Name = "Pranzo" });
-        await _db.People.InsertAsync(new Person { Id = 101, Name = "Pranzo", Age = 20 });
+        await _db.Users.InsertAsync(new User { Name = "Alpha", Age = 30 });
+        await _db.People.InsertAsync(new Person { Id = 101, Name = "Foreign", Age = 30 });
         await _db.SaveChangesAsync();
 
-        var count = _db.IntEntities.AsQueryable()
-            .Count(x => x.Name == "Pranzo");
+        var count = await _db.Users.AsQueryable()
+            .CountAsync(x => x.Age == 30);
 
         Assert.Equal(1, count);
     }
 
     [Fact]
-    public async Task Max_OnUnindexedSharedField_DoesNotReadCrossCollectionRows()
+    public async Task MaxAsync_FallbackScan_OnUnindexedNumericField_DoesNotReadCrossCollectionRows()
     {
         await _db.Users.InsertAsync(new User { Name = "Alpha", Age = 30 });
-        await _db.People.InsertAsync(new Person { Id = 101, Name = "Zulu", Age = 20 });
+        await _db.People.InsertAsync(new Person { Id = 101, Name = "Foreign", Age = 99 });
         await _db.SaveChangesAsync();
 
-        var maxName = _db.Users.AsQueryable().Max(x => x.Name);
+        var plan = IndexMinMax.Scan(BsonAggregator.Max("age"));
+        var maxAge = await _db.Users.AsQueryable().MaxAsync<int>(plan);
 
-        Assert.Equal("Alpha", maxName);
+        Assert.Equal(30, maxAge);
     }
 
     [Fact]

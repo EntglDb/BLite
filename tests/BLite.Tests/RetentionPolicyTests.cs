@@ -443,6 +443,34 @@ public class TypedRetentionPolicyTests : IDisposable
     }
 
     [Fact]
+    public async Task TypedCollection_MaxAge_ExemptsOverflowDocuments()
+    {
+        using var col = GetCollection();
+        col.SetRetentionPolicy(new RetentionPolicy
+        {
+            MaxAgeMs = (long)TimeSpan.FromHours(1).TotalMilliseconds,
+            TimestampField = "timestamp",
+            Triggers = RetentionTrigger.None
+        });
+
+        var old = DateTime.UtcNow.AddHours(-2);
+        var now = DateTime.UtcNow;
+        var overflowSensorId = new string('O', 20 * 1024);
+
+        await col.InsertAsync(new BLite.Shared.SensorReading { SensorId = overflowSensorId, Value = 1, Timestamp = old });
+        await col.InsertAsync(new BLite.Shared.SensorReading { SensorId = "old-inline", Value = 2, Timestamp = old });
+        await col.InsertAsync(new BLite.Shared.SensorReading { SensorId = "new-inline", Value = 3, Timestamp = now });
+
+        await col.ForceApplyRetentionPolicyAsync();
+
+        var results = await col.FindAllAsync().ToListAsync();
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.SensorId == overflowSensorId);
+        Assert.Contains(results, r => r.SensorId == "new-inline");
+        Assert.DoesNotContain(results, r => r.SensorId == "old-inline");
+    }
+
+    [Fact]
     public async Task TypedCollection_OnInsert_TriggersRetention()
     {
         using var col = GetCollection();

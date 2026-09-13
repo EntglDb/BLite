@@ -352,7 +352,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Reads the raw BSON bytes for a document at the given location without deserializing.
     /// Returns null if the slot is deleted or the page/location is invalid.
-    /// Overflow documents are reassembled into a single BSON payload when needed.
+    /// Overflow documents are reassembled only when <paramref name="includeOverflow"/> is true.
     /// </summary>
     private static bool TryReadInlineRawBytes(byte[] pageBuffer, ushort slotIndex, out ReadOnlySpan<byte> rawBytes)
     {
@@ -373,7 +373,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return true;
     }
 
-    private byte[]? ReadRawBytesAt(DocumentLocation location, ulong txnId, byte[]? preloadedPage = null)
+    private byte[]? ReadRawBytesAt(DocumentLocation location, ulong txnId, bool includeOverflow = false, byte[]? preloadedPage = null)
     {
         byte[]? ownedBuffer = null;
         var buffer = preloadedPage ?? (ownedBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize));
@@ -396,6 +396,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
             if ((slot.Flags & SlotFlags.Deleted) != 0) return null;
             if ((slot.Flags & SlotFlags.HasOverflow) == 0) return null;
+            if (!includeOverflow) return null;
 
             if (slot.Offset + slot.Length > buffer.Length || slot.Length < 8) return null;
 
@@ -442,28 +443,132 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task<Dictionary<uint, List<DocumentLocation>>> GetCollectionLocationsByPageAsync(
-        ulong txnId,
-        CancellationToken ct = default)
+    private bool MatchesIndexEntryKey(ReadOnlySpan<byte> bsonBytes, IndexKey expectedKey)
     {
-        var locationsByPage = new Dictionary<uint, List<DocumentLocation>>();
+        if (TryReadIndexKeyFromBson(bsonBytes, out var actualKey))
+            return actualKey.Equals(expectedKey);
 
-        await foreach (var entry in _primaryIndex
-            .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
-            .ConfigureAwait(false))
+        try
         {
-            ct.ThrowIfCancellationRequested();
+            var entity = _mapper.Deserialize(new BsonSpanReader(bsonBytes, _storage.GetKeyReverseMap()));
+            return _mapper.ToIndexKey(_mapper.GetId(entity)).Equals(expectedKey);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
-            if (!locationsByPage.TryGetValue(entry.Location.PageId, out var locations))
+    private bool TryReadIndexKeyFromBson(ReadOnlySpan<byte> bsonBytes, out IndexKey key)
+    {
+        key = default;
+        try
+        {
+            var reader = new BsonSpanReader(bsonBytes, _storage.GetKeyReverseMap());
+            reader.ReadDocumentSize();
+
+            if (_storage.GetKeyMap().TryGetValue("_id", out var idFieldId) &&
+                reader.TrySeekToField(idFieldId, out var seekType))
             {
-                locations = new List<DocumentLocation>();
-                locationsByPage[entry.Location.PageId] = locations;
+                return TryReadIndexKeyFromReader(ref reader, seekType, out key);
             }
 
-            locations.Add(entry.Location);
+            while (reader.Remaining > 1)
+            {
+                var type = reader.ReadBsonType();
+                if (type == BsonType.EndOfDocument) break;
+
+                var name = reader.ReadElementHeader();
+                if (name == "_id")
+                    return TryReadIndexKeyFromReader(ref reader, type, out key);
+
+                reader.SkipValue(type);
+            }
+        }
+        catch
+        {
+            return false;
         }
 
-        return locationsByPage;
+        return false;
+    }
+
+    private static bool TryReadIndexKeyFromReader(ref BsonSpanReader reader, BsonType type, out IndexKey key)
+    {
+        key = default;
+
+        if (typeof(TId) == typeof(ObjectId) && type == BsonType.ObjectId)
+        {
+            key = IndexKey.Create(reader.ReadObjectId());
+            return true;
+        }
+
+        if (typeof(TId) == typeof(int) && type == BsonType.Int32)
+        {
+            key = IndexKey.Create(reader.ReadInt32());
+            return true;
+        }
+
+        if (typeof(TId) == typeof(long) && type == BsonType.Int64)
+        {
+            key = IndexKey.Create(reader.ReadInt64());
+            return true;
+        }
+
+        if (type == BsonType.String)
+        {
+            var value = reader.ReadString();
+
+            if (typeof(TId) == typeof(string))
+            {
+                key = IndexKey.Create(value);
+                return true;
+            }
+
+            if (typeof(TId) == typeof(Guid) && Guid.TryParse(value, out var guid))
+            {
+                key = IndexKey.Create(guid);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async IAsyncEnumerable<(IndexEntry Entry, byte[] RawBytes)> EnumerateOwnedRawDocumentsAsync(
+        ulong txnId,
+        bool includeOverflow,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var pageCache = new Dictionary<uint, byte[]>();
+
+        try
+        {
+            await foreach (var entry in _primaryIndex
+                .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
+                .ConfigureAwait(false))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (!pageCache.TryGetValue(entry.Location.PageId, out var cachedBuffer))
+                {
+                    cachedBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+                    _storage.ReadPage(entry.Location.PageId, txnId, cachedBuffer);
+                    pageCache[entry.Location.PageId] = cachedBuffer;
+                }
+
+                var rawBytes = ReadRawBytesAt(entry.Location, txnId, includeOverflow, cachedBuffer);
+                if (rawBytes is null) continue;
+                if (!MatchesIndexEntryKey(rawBytes, entry.Key)) continue;
+
+                yield return (entry, rawBytes);
+            }
+        }
+        finally
+        {
+            foreach (var buf in pageCache.Values)
+                ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 
     /// <summary>
@@ -977,37 +1082,18 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
         var sw = _storage.MetricsDispatcher != null ? ValueStopwatch.StartNew() : default;
         var txnId = transaction?.TransactionId ?? 0UL;
-        var locationsByPage = await GetCollectionLocationsByPageAsync(txnId, ct).ConfigureAwait(false);
-        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         var keyMap = _storage.GetKeyReverseMap();
 
         try
         {
-            foreach (var (pageId, locations) in locationsByPage)
+            await foreach (var (_, rawBytes) in EnumerateOwnedRawDocumentsAsync(txnId, includeOverflow: true, ct).ConfigureAwait(false))
             {
-                ct.ThrowIfCancellationRequested();
-                await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
-
-                foreach (var location in locations)
-                {
-                    if (!TryReadInlineRawBytes(buffer, location.SlotIndex, out var inlineRawBytes))
-                    {
-                        var rawBytes = ReadRawBytesAt(location, txnId, buffer);
-                        if (rawBytes is null) continue;
-                        inlineRawBytes = rawBytes;
-                    }
-
-                    var reader = new BsonSpanReader(inlineRawBytes, keyMap);
-                    if (!predicate(reader)) continue;
-
-                    var doc = await FindByLocationAsync(location, txnId, buffer, ct).ConfigureAwait(false);
-                    if (doc != null) yield return doc;
-                }
+                if (!predicate(new BsonSpanReader(rawBytes, keyMap))) continue;
+                yield return _mapper.Deserialize(new BsonSpanReader(rawBytes, keyMap));
             }
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
             if (sw.IsActive)
                 _storage.MetricsDispatcher?.Publish(new MetricEvent
                 {
@@ -1163,36 +1249,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (projector == null) throw new ArgumentNullException(nameof(projector));
 
         var txnId = 0UL;
-        var locationsByPage = await GetCollectionLocationsByPageAsync(txnId, ct).ConfigureAwait(false);
-        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         var keyMap = _storage.GetKeyReverseMap();
 
-        try
+        await foreach (var (_, rawBytes) in EnumerateOwnedRawDocumentsAsync(txnId, includeOverflow: true, ct).ConfigureAwait(false))
         {
-            foreach (var (pageId, locations) in locationsByPage)
-            {
-                ct.ThrowIfCancellationRequested();
-                await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
-
-                foreach (var location in locations)
-                {
-                    if (!TryReadInlineRawBytes(buffer, location.SlotIndex, out var inlineRawBytes))
-                    {
-                        var rawBytes = ReadRawBytesAt(location, txnId, buffer);
-                        if (rawBytes is null) continue;
-                        inlineRawBytes = rawBytes;
-                    }
-
-                    var result = projector(new BsonSpanReader(inlineRawBytes, keyMap));
-                    if (result is null) continue;
-
-                    yield return result;
-                }
-            }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
+            var result = projector(new BsonSpanReader(rawBytes, keyMap));
+            if (result is not null) yield return result;
         }
     }
 
@@ -1212,41 +1274,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
         var txnId = 0UL;
-        var locationsByPage = await GetCollectionLocationsByPageAsync(txnId, ct).ConfigureAwait(false);
-        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
         int count = 0;
         var keyMap = _storage.GetKeyReverseMap();
 
-        try
+        await foreach (var (_, rawBytes) in EnumerateOwnedRawDocumentsAsync(txnId, includeOverflow: true, ct).ConfigureAwait(false))
         {
-            foreach (var (pageId, locations) in locationsByPage)
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                await _storage.ReadPageAsync(pageId, txnId, buffer.AsMemory(0, _storage.PageSize), ct).ConfigureAwait(false);
-
-                foreach (var location in locations)
-                {
-                    if (!TryReadInlineRawBytes(buffer, location.SlotIndex, out var inlineRawBytes))
-                    {
-                        var rawBytes = ReadRawBytesAt(location, txnId, buffer);
-                        if (rawBytes is null) continue;
-                        inlineRawBytes = rawBytes;
-                    }
-
-                    try
-                    {
-                        if (predicate(new BsonSpanReader(inlineRawBytes, keyMap))) count++;
-                    }
-                    catch
-                    {
-                        // Malformed BSON — skip silently.
-                    }
-                }
+                if (predicate(new BsonSpanReader(rawBytes, keyMap))) count++;
             }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
+            catch
+            {
+                // Malformed BSON — skip silently.
+            }
         }
 
         return count;
@@ -1305,14 +1345,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         var tasks = new List<Task<List<T>>>();
         var keyMap = _storage.GetKeyReverseMap();
         const int batchSize = 128;
+        var batch = new List<IndexEntry>(batchSize);
 
-        foreach (var batch in _primaryIndex
-            .Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId)
-            .Select(entry => entry.Location)
-            .Chunk(batchSize))
+        async Task QueueBatchAsync(List<IndexEntry> entries)
         {
-            await semaphore.WaitAsync(ct);
-            var localBatch = batch;
+            await semaphore.WaitAsync(ct).ConfigureAwait(false);
+            var localBatch = entries.ToArray();
 
             var task = Task.Run(async () =>
             {
@@ -1323,9 +1361,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
 
                     try
                     {
-                        foreach (var location in localBatch)
+                        foreach (var entry in localBatch)
                         {
                             ct.ThrowIfCancellationRequested();
+                            var location = entry.Location;
 
                             if (!pageCache.TryGetValue(location.PageId, out var buffer))
                             {
@@ -1334,18 +1373,13 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                                 pageCache[location.PageId] = buffer;
                             }
 
-                            if (!TryReadInlineRawBytes(buffer, location.SlotIndex, out var inlineRawBytes))
-                            {
-                                var rawBytes = ReadRawBytesAt(location, txnId, buffer);
-                                if (rawBytes is null) continue;
-                                inlineRawBytes = rawBytes;
-                            }
-
-                            if (!predicate(new BsonSpanReader(inlineRawBytes, keyMap)))
+                            var rawBytes = ReadRawBytesAt(location, txnId, includeOverflow: true, buffer);
+                            if (rawBytes is null) continue;
+                            if (!MatchesIndexEntryKey(rawBytes, entry.Key)) continue;
+                            if (!predicate(new BsonSpanReader(rawBytes, keyMap)))
                                 continue;
 
-                            var doc = await FindByLocationAsync(location, txnId, buffer, ct).ConfigureAwait(false);
-                            if (doc != null) results.Add(doc);
+                            results.Add(_mapper.Deserialize(new BsonSpanReader(rawBytes, keyMap)));
                         }
                     }
                     finally
@@ -1363,7 +1397,17 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             }, ct);
 
             tasks.Add(task);
+        }
 
+        await foreach (var entry in _primaryIndex
+            .RangeAsync(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, txnId, ct)
+            .ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            batch.Add(entry);
+            if (batch.Count < batchSize) continue;
+
+            await QueueBatchAsync(batch).ConfigureAwait(false);
             if (tasks.Count >= degreeOfParallelism)
             {
                 var completedTask = await Task.WhenAny(tasks).ConfigureAwait(false);
@@ -1375,7 +1419,12 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     yield return doc;
                 }
             }
+
+            batch = new List<IndexEntry>(batchSize);
         }
+
+        if (batch.Count > 0)
+            await QueueBatchAsync(batch).ConfigureAwait(false);
 
         // Yield results as tasks complete
         while (tasks.Count > 0)
