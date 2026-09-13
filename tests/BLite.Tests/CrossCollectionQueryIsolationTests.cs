@@ -1,3 +1,4 @@
+using BLite.Core.Query;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -67,6 +68,78 @@ public class CrossCollectionQueryIsolationTests : IDisposable
             .Count();
 
         Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public async Task Where_OnUnindexedSharedField_DoesNotReturnCrossCollectionRows()
+    {
+        await _db.IntEntities.InsertAsync(new IntEntity { Id = 1, Name = "Pranzo" });
+        await _db.People.InsertAsync(new Person { Id = 101, Name = "Pranzo", Age = 20 });
+        await _db.SaveChangesAsync();
+
+        var results = await _db.IntEntities.AsQueryable()
+            .Where(x => x.Name == "Pranzo")
+            .ToListAsync();
+
+        Assert.Single(results);
+        Assert.Equal(1, results[0].Id);
+        Assert.Equal("Pranzo", results[0].Name);
+    }
+
+    [Fact]
+    public async Task CountAsync_OnUnindexedNumericField_DoesNotCountCrossCollectionRows()
+    {
+        await _db.Users.InsertAsync(new User { Name = "Alpha", Age = 30 });
+        await _db.People.InsertAsync(new Person { Id = 101, Name = "Foreign", Age = 30 });
+        await _db.SaveChangesAsync();
+
+        var count = await _db.Users.AsQueryable()
+            .CountAsync(x => x.Age == 30);
+
+        Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public async Task MaxAsync_FallbackScan_OnUnindexedNumericField_DoesNotReadCrossCollectionRows()
+    {
+        await _db.Users.InsertAsync(new User { Name = "Alpha", Age = 30 });
+        await _db.People.InsertAsync(new Person { Id = 101, Name = "Foreign", Age = 99 });
+        await _db.SaveChangesAsync();
+
+        var plan = IndexMinMax.Scan(BsonAggregator.Max("age"));
+        var maxAge = await _db.Users.AsQueryable().MaxAsync<int>(plan);
+
+        Assert.Equal(30, maxAge);
+    }
+
+    [Fact]
+    public async Task ParallelScan_OnSharedPage_OnlyReturnsCurrentCollectionRows()
+    {
+        await _db.Users.InsertAsync(new User { Name = "Pranzo", Age = 30 });
+        await _db.People.InsertAsync(new Person { Id = 101, Name = "Pranzo", Age = 20 });
+        await _db.SaveChangesAsync();
+
+        var results = await _db.Users.ParallelScanAsync(reader =>
+        {
+            reader.ReadDocumentSize();
+            while (reader.Remaining > 0)
+            {
+                var type = reader.ReadBsonType();
+                if (type == 0) break;
+
+                var fieldName = reader.ReadElementHeader();
+                if (fieldName == "name")
+                    return reader.ReadString() == "Pranzo";
+
+                reader.SkipValue(type);
+            }
+
+            return false;
+        }, degreeOfParallelism: 2).ToListAsync();
+
+        Assert.Single(results);
+        Assert.Equal("Pranzo", results[0].Name);
+        Assert.Equal(30, results[0].Age);
     }
 
     public void Dispose()
