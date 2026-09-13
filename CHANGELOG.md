@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="5.1.1"></a>
+## [5.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v5.1.1) (2026-09-13)
+
+### Bug Fixes
+
+* **query:** fall back to full scan for computed properties in predicates ([#144](https://www.github.com/EntglDb/BLite/issues/144)) ([eaf9594](https://www.github.com/EntglDb/BLite/commit/eaf9594b6ef7a1c8eafaa28275c593119ec7ca31))
+
 <a name="5.1.0"></a>
 ## [5.1.0](https://www.github.com/EntglDb/BLite/releases/tag/v5.1.0) (2026-09-03)
 
