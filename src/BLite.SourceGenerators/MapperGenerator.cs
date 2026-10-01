@@ -126,7 +126,9 @@ public readonly struct BLiteDiagnostic
                 sb.AppendLine();
 
                 // Use safeName (Context + Filename) to avoid collisions
-                var mapperNamespace = $"{dbContext.Namespace}.{safeName}_Mappers";
+                var mapperNamespace = string.IsNullOrEmpty(dbContext.Namespace)
+                    ? $"{safeName}_Mappers"
+                    : $"{dbContext.Namespace}.{safeName}_Mappers";
                 sb.AppendLine($"namespace {mapperNamespace}");
                 sb.AppendLine($"{{");
 
@@ -169,8 +171,14 @@ public readonly struct BLiteDiagnostic
                 // Partial DbContext for InitializeCollections (Only for top-level partial classes)
                 if (!dbContext.IsNested && dbContext.IsPartial)
                 {
-                    sb.AppendLine($"namespace {dbContext.Namespace}");
-                    sb.AppendLine($"{{");
+                    // Global-namespace DbContexts (e.g. declared in a top-level Program.cs)
+                    // emit the partial class without a namespace wrapper.
+                    var wrapNamespace = !string.IsNullOrEmpty(dbContext.Namespace);
+                    if (wrapNamespace)
+                    {
+                        sb.AppendLine($"namespace {dbContext.Namespace}");
+                        sb.AppendLine($"{{");
+                    }
                     sb.AppendLine($"    public partial class {dbContext.ClassName}");
                     sb.AppendLine($"    {{");
                     sb.AppendLine($"        protected override void InitializeCollections()");
@@ -289,10 +297,16 @@ public readonly struct BLiteDiagnostic
                     }
 
                     sb.AppendLine($"    }}");
-                    sb.AppendLine($"}}");
+                    if (wrapNamespace)
+                    {
+                        sb.AppendLine($"}}");
+                    }
                 }
-                
-                spc.AddSource($"{dbContext.Namespace}.{safeName}.Mappers.g.cs", sb.ToString());
+
+                var hintName = string.IsNullOrEmpty(dbContext.Namespace)
+                    ? $"{safeName}.Mappers.g.cs"
+                    : $"{dbContext.Namespace}.{safeName}.Mappers.g.cs";
+                spc.AddSource(hintName, sb.ToString());
             });
 
             // ── Filter pipeline: emit exactly one {Entity}Filter per unique entity type ──
@@ -808,7 +822,7 @@ public readonly struct BLiteDiagnostic
             var info = new DbContextInfo
             {
                 ClassName = classSymbol.Name,
-                Namespace = classSymbol.ContainingNamespace.ToDisplayString(),
+                Namespace = SyntaxHelper.GetNamespaceOrEmpty(classSymbol),
                 FilePath = classDecl.SyntaxTree.FilePath,
                 IsNested = classSymbol.ContainingType != null,
                 IsPartial = classDecl.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)),

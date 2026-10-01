@@ -100,6 +100,18 @@ namespace BLite.SourceGenerators.Helpers
                 .Replace("global::", "");
         }
 
+        /// <summary>
+        /// Returns the containing namespace's display string, or an empty string when the
+        /// symbol lives in the global namespace. <see cref="INamespaceSymbol.ToDisplayString()"/>
+        /// returns the literal text "&lt;global namespace&gt;" for global types, which produces
+        /// invalid source and invalid generator hint names if used directly.
+        /// </summary>
+        public static string GetNamespaceOrEmpty(ISymbol symbol)
+        {
+            var ns = symbol.ContainingNamespace;
+            return ns is { IsGlobalNamespace: false } ? ns.ToDisplayString() : string.Empty;
+        }
+
         public static string GetTypeName(ITypeSymbol type)
         {
             if (type is INamedTypeSymbol namedType && 
