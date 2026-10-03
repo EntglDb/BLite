@@ -136,7 +136,7 @@ public class TransactionRootSplitTests : IDisposable
         {
             using (var txn = db.BeginTransaction())
             {
-                for (int i = 0; i < 300; i++) // more than one R-Tree page holds, so the root splits
+                for (int i = 0; i < 1000; i++) // more than one R-Tree leaf holds (429 at 16 KB pages), so the root splits
                     await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = $"G{i}", Location = (40.0 + i * 0.001, -74.0) }, txn);
                 await txn.RollbackAsync();
             }
@@ -158,13 +158,13 @@ public class TransactionRootSplitTests : IDisposable
         await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = "committed", Location = (40.0, -74.0) });
 
         using var txn = db.BeginTransaction();
-        for (int i = 0; i < 300; i++)
+        for (int i = 0; i < 1000; i++)
             await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = $"G{i}", Location = (40.0 + i * 0.001, -74.0) }, txn);
 
         Assert.Single(await NearAllAsync(db));
 
         await txn.CommitAsync();
-        Assert.Equal(301, (await NearAllAsync(db)).Count);
+        Assert.Equal(1001, (await NearAllAsync(db)).Count);
     }
 
     [Fact]
