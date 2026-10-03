@@ -397,4 +397,25 @@ public class BsonJsonConverterTests
         var json = BsonJsonConverter.ToJson(BsonValue.FromString("hi"));
         Assert.Equal("\"hi\"", json.Trim());
     }
+
+    // -- Regression: nested values larger than the builder's initial reservation (#149) --
+
+    [Fact]
+    public void FromJson_NestedObjectLargerThan1KB_DoesNotOverflowBuilderBuffer()
+    {
+        ushort id = 100;
+        var fields = Enumerable.Range(0, 80).Select(i => $"k{i}").ToList();
+        foreach (var key in fields.Append("streams"))
+        {
+            _keyMap[key] = id;
+            _reverseKeyMap[id++] = key;
+        }
+
+        var body = string.Join(",", fields.Select((k, i) => $"\"{k}\":\"value-number-{i}\""));
+        var doc = Parse("{\"streams\":[{" + body + "}]}");
+
+        Assert.NotNull(doc);
+        var streams = doc.GetValue("streams");
+        Assert.True(streams.IsArray);
+    }
 }
