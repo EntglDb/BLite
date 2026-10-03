@@ -209,7 +209,9 @@ public class TransactionRootSplitTests : IDisposable
 
         using var engine2 = new BLite.Core.BLiteEngine(_dbPath);
         var col2 = engine2.GetOrCreateCollection("indexed");
-        var results = col2.Query().Filter(BLite.Core.Query.Blql.BlqlFilter.Gte("x", 0)).ToList();
-        Assert.Equal(200, results.Count);
+        int count = 0;
+        await foreach (var _ in col2.QueryIndexAsync("idx_x", null, null))
+            count++;
+        Assert.Equal(200, count);
     }
 }
