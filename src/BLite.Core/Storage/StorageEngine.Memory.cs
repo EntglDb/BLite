@@ -186,10 +186,12 @@ public sealed partial class StorageEngine
     /// This does not compact the file — a VACUUM pass is required to reclaim physical disk space.
     /// Must be called BEFORE <see cref="DeleteCollectionMetadata"/> so that metadata is still available.
     /// </remarks>
-    public void FreeCollectionPages(string collectionName)
+    /// <returns>The page IDs that were freed, so callers can invalidate any cached view of them
+    /// (e.g. the shared free-space index).</returns>
+    public IReadOnlyCollection<uint> FreeCollectionPages(string collectionName)
     {
         var metadata = GetCollectionMetadata(collectionName);
-        if (metadata == null) return;
+        if (metadata == null) return Array.Empty<uint>();
 
         // Collect page IDs in a set first, then free them all — avoids modifying storage
         // while iterating over B-tree nodes (which also read from the same storage).
@@ -361,6 +363,8 @@ public sealed partial class StorageEngine
             FreePage(pageId);
             _walIndex.TryRemove(pageId, out _);
         }
+
+        return toFree;
     }
 
     /// <summary>
