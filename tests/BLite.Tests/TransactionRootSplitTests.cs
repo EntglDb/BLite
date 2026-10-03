@@ -191,4 +191,25 @@ public class TransactionRootSplitTests : IDisposable
         var reopened = await Task.Run(async () => await db2.VectorItems.VectorSearchAsync("idx_vector", [1.0f, 1.0f, 1.0f], 5).ToListAsync()).WaitAsync(Timeout);
         Assert.Single(reopened);
     }
+
+    [Fact]
+    public async Task Session_NewSecondaryIndex_RootSplitInTransaction_PersistsAcrossReopen()
+    {
+        using (var engine = new BLite.Core.BLiteEngine(_dbPath))
+        {
+            var col = engine.GetOrCreateCollection("indexed");
+            await col.CreateIndexAsync("x");
+
+            using var session = engine.OpenSession();
+            session.BeginTransaction();
+            for (int i = 0; i < 200; i++)
+                await session.InsertAsync("indexed", engine.CreateDocument(["x"], b => b.AddInt32("x", i)));
+            await session.CommitAsync();
+        }
+
+        using var engine2 = new BLite.Core.BLiteEngine(_dbPath);
+        var col2 = engine2.GetOrCreateCollection("indexed");
+        var results = col2.Query().Filter(BLite.Core.Query.Blql.BlqlFilter.Gte("x", 0)).ToList();
+        Assert.Equal(200, results.Count);
+    }
 }

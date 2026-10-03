@@ -131,7 +131,7 @@ public sealed class DynamicCollection : IDisposable
 
                 // BTreeIndex invokes this callback only once the transaction that split/collapsed the
                 // root has committed, so the new root is persisted here (never uncommitted root IDs).
-                Action<uint> makeRootCallback = _ => PersistIndexMetadata();
+                Action<uint> makeRootCallback = OnIndexRootChanged;
 
                 switch (idxMeta.Type)
                 {
@@ -1578,9 +1578,9 @@ public sealed class DynamicCollection : IDisposable
                 {
                     DynamicSecondaryIndex freshEntry = entry.Kind switch
                     {
-                        DynamicIndexKind.BTree    => new DynamicSecondaryIndex(new BTreeIndex(_storage, entry.Options), entry.FieldPath, entry.Options),
-                        DynamicIndexKind.Vector   => new DynamicSecondaryIndex(new VectorSearchIndex(_storage, entry.Options), entry.FieldPath, entry.Options),
-                        DynamicIndexKind.Spatial  => new DynamicSecondaryIndex(new RTreeIndex(_storage, entry.Options, 0), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.BTree    => new DynamicSecondaryIndex(new BTreeIndex(_storage, entry.Options, 0, OnIndexRootChanged), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.Vector   => new DynamicSecondaryIndex(new VectorSearchIndex(_storage, entry.Options, 0, OnIndexRootChanged), entry.FieldPath, entry.Options),
+                        DynamicIndexKind.Spatial  => new DynamicSecondaryIndex(new RTreeIndex(_storage, entry.Options, 0, OnIndexRootChanged), entry.FieldPath, entry.Options),
                         _                         => entry
                     };
                     rebuildEntries[name] = freshEntry;
@@ -1652,7 +1652,7 @@ public sealed class DynamicCollection : IDisposable
         RegisterNestedPathKeys(fieldPath);
 
         var opts = unique ? IndexOptions.CreateUnique(fieldPath) : IndexOptions.CreateBTree(fieldPath);
-        var btree = new BTreeIndex(_storage, opts);
+        var btree = new BTreeIndex(_storage, opts, 0, OnIndexRootChanged);
         var entry = new DynamicSecondaryIndex(btree, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
@@ -1684,7 +1684,7 @@ public sealed class DynamicCollection : IDisposable
         RegisterNestedPathKeys(fieldPath);
 
         var opts = IndexOptions.CreateVector(dimensions, metric, 16, 200, fieldPath);
-        var vector = new VectorSearchIndex(_storage, opts);
+        var vector = new VectorSearchIndex(_storage, opts, 0, OnIndexRootChanged);
         var entry = new DynamicSecondaryIndex(vector, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
@@ -1716,7 +1716,7 @@ public sealed class DynamicCollection : IDisposable
         RegisterNestedPathKeys(fieldPath);
 
         var opts = IndexOptions.CreateSpatial(fieldPath);
-        var spatial = new RTreeIndex(_storage, opts, 0);
+        var spatial = new RTreeIndex(_storage, opts, 0, OnIndexRootChanged);
         var entry = new DynamicSecondaryIndex(spatial, fieldPath, opts);
         _secondaryIndexes[name] = entry;
 
@@ -1801,6 +1801,12 @@ public sealed class DynamicCollection : IDisposable
                 kvp.Value.Options.Unique);
         }).ToList();
     }
+
+    /// <summary>
+    /// Root-changed callback shared by every secondary index (restored, newly created and rebuilt):
+    /// invoked by the index only after the transaction that changed the root has committed.
+    /// </summary>
+    private void OnIndexRootChanged(uint _) => PersistIndexMetadata();
 
     internal void PersistIndexMetadata()
     {
