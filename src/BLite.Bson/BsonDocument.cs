@@ -357,11 +357,24 @@ public sealed class BsonDocumentBuilder
     /// </summary>
     public BsonDocumentBuilder Add(string name, BsonValue value)
     {
-        EnsureCapacity(1024);
-        var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
-        value.WriteTo(ref writer, name);
-        _position += writer.Position;
-        return this;
+        // Nested objects/arrays can serialize to arbitrary size, so a fixed pad is not enough:
+        // start with a modest reservation and double the buffer until the value fits.
+        var additional = 1024;
+        while (true)
+        {
+            EnsureCapacity(additional);
+            try
+            {
+                var writer = new BsonSpanWriter(_buffer.AsSpan(_position..), _keyMap);
+                value.WriteTo(ref writer, name);
+                _position += writer.Position;
+                return this;
+            }
+            catch (ArgumentException) when (additional < int.MaxValue / 2 && _position + additional < Array.MaxLength / 2)
+            {
+                additional *= 2;
+            }
+        }
     }
 
     public BsonDocumentBuilder AddString(string name, string value)
