@@ -97,7 +97,23 @@ public class CollectionMetadata
 
 public class IndexMetadata
 {
+    /// <summary>
+    /// Key format written before <see cref="KeyFormat"/> existed: <c>decimal</c> values were keyed as
+    /// <c>(double)value</c>. Every other key type is encoded identically in both formats.
+    /// </summary>
+    public const byte LegacyKeyFormat = 0;
+
+    /// <summary>Current key format: <c>decimal</c> values use the exact, order-preserving encoding.</summary>
+    public const byte CurrentKeyFormat = 1;
+
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Version of the key encoding the index pages were written with. Indexes persisted by older
+    /// releases read back as <see cref="LegacyKeyFormat"/> and are rebuilt on open when the
+    /// difference matters for their key type (see <c>DocumentCollection.MigrateLegacyDecimalIndexes</c>).
+    /// </summary>
+    public byte KeyFormat { get; set; } = LegacyKeyFormat;
     public bool IsUnique { get; set; }
     public IndexType Type { get; set; }
     public string[] PropertyPaths { get; set; } = Array.Empty<string>();
@@ -136,99 +152,7 @@ public sealed partial class StorageEngine
                     if (!string.Equals(collName, name, StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    var metadata = new CollectionMetadata { Name = collName };
-                    metadata.PrimaryRootPageId = reader.ReadUInt32();
-                    metadata.SchemaRootPageId  = reader.ReadUInt32();
-
-                    var indexCount = reader.ReadInt32();
-                    for (int j = 0; j < indexCount; j++)
-                    {
-                        var idx = new IndexMetadata
-                        {
-                            Name       = reader.ReadString(),
-                            IsUnique   = reader.ReadBoolean(),
-                            Type       = (IndexType)reader.ReadByte(),
-                            RootPageId = reader.ReadUInt32()
-                        };
-
-                        var pathCount = reader.ReadInt32();
-                        idx.PropertyPaths = new string[pathCount];
-                        for (int k = 0; k < pathCount; k++)
-                            idx.PropertyPaths[k] = reader.ReadString();
-
-                        if (idx.Type == IndexType.Vector)
-                        {
-                            idx.Dimensions = reader.ReadInt32();
-                            idx.Metric     = (VectorMetric)reader.ReadByte();
-                        }
-
-                        metadata.Indexes.Add(idx);
-                    }
-
-                    // ── TimeSeries (backward-compatible) ────────
-                    if (reader.BaseStream.Position < reader.BaseStream.Length)
-                    {
-                        metadata.IsTimeSeries = reader.ReadBoolean();
-                        if (metadata.IsTimeSeries)
-                        {
-                            metadata.TimeSeriesHeadPageId = reader.ReadUInt32();
-                            metadata.RetentionPolicyMs = reader.ReadInt64();
-                            metadata.TtlFieldName = reader.ReadBoolean() ? reader.ReadString() : null;
-                            metadata.LastPruningTimestamp = reader.ReadInt64();
-                            metadata.InsertedSinceLastPruning = reader.ReadInt32();
-                        }
-                    }
-
-                    // ── VectorSource (backward-compatible) ────────
-                    if (reader.BaseStream.Position < reader.BaseStream.Length)
-                    {
-                        bool hasVectorSource = reader.ReadBoolean();
-                        if (hasVectorSource)
-                        {
-                            var config = new VectorSourceConfig
-                            {
-                                Separator = reader.ReadString()
-                            };
-
-                            int fieldCount = reader.ReadInt32();
-                            for (int j = 0; j < fieldCount; j++)
-                            {
-                                var field = new VectorSourceField
-                                {
-                                    Path = reader.ReadString(),
-                                    Prefix = reader.ReadBoolean() ? reader.ReadString() : null,
-                                    Suffix = reader.ReadBoolean() ? reader.ReadString() : null
-                                };
-                                config.Fields.Add(field);
-                            }
-
-                            metadata.VectorSource = config;
-                        }
-                    }
-
-                    // ── Sequence (backward-compatible) ────────
-                    if (reader.BaseStream.Position < reader.BaseStream.Length)
-                        metadata.SequenceValue = reader.ReadInt64();
-
-                    // ── GeneralRetentionPolicy (backward-compatible) ────────
-                    if (reader.BaseStream.Position < reader.BaseStream.Length)
-                    {
-                        bool hasRetentionPolicy = reader.ReadBoolean();
-                        if (hasRetentionPolicy)
-                        {
-                            metadata.GeneralRetentionPolicy = new RetentionPolicy
-                            {
-                                MaxAgeMs           = reader.ReadInt64(),
-                                MaxDocumentCount   = reader.ReadInt64(),
-                                MaxSizeBytes       = reader.ReadInt64(),
-                                ScheduledIntervalMs = reader.ReadInt64(),
-                                TimestampField     = reader.ReadBoolean() ? reader.ReadString() : null,
-                                Triggers           = (RetentionTrigger)reader.ReadInt32(),
-                            };
-                        }
-                    }
-
-                    return metadata;
+                    return ReadCollectionMetadata(collName, reader);
                 }
                 catch
                 {
@@ -240,6 +164,119 @@ public sealed partial class StorageEngine
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Deserialises one collection record after its name. The only parser of this record: every
+    /// section after the index list is optional and read only while bytes remain, so records written
+    /// by older releases load with defaults for the sections they lack.
+    /// </summary>
+    private static CollectionMetadata ReadCollectionMetadata(string name, BinaryReader reader)
+    {
+        var metadata = new CollectionMetadata { Name = name };
+        metadata.PrimaryRootPageId = reader.ReadUInt32();
+        metadata.SchemaRootPageId  = reader.ReadUInt32();
+
+        var indexCount = reader.ReadInt32();
+        for (int j = 0; j < indexCount; j++)
+        {
+            var idx = new IndexMetadata
+            {
+                Name       = reader.ReadString(),
+                IsUnique   = reader.ReadBoolean(),
+                Type       = (IndexType)reader.ReadByte(),
+                RootPageId = reader.ReadUInt32()
+            };
+
+            var pathCount = reader.ReadInt32();
+            idx.PropertyPaths = new string[pathCount];
+            for (int k = 0; k < pathCount; k++)
+                idx.PropertyPaths[k] = reader.ReadString();
+
+            if (idx.Type == IndexType.Vector)
+            {
+                idx.Dimensions = reader.ReadInt32();
+                idx.Metric     = (VectorMetric)reader.ReadByte();
+            }
+
+            metadata.Indexes.Add(idx);
+        }
+
+        // ── TimeSeries (backward-compatible) ────────
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            metadata.IsTimeSeries = reader.ReadBoolean();
+            if (metadata.IsTimeSeries)
+            {
+                metadata.TimeSeriesHeadPageId = reader.ReadUInt32();
+                metadata.RetentionPolicyMs = reader.ReadInt64();
+                metadata.TtlFieldName = reader.ReadBoolean() ? reader.ReadString() : null;
+                metadata.LastPruningTimestamp = reader.ReadInt64();
+                metadata.InsertedSinceLastPruning = reader.ReadInt32();
+            }
+        }
+
+        // ── VectorSource (backward-compatible) ────────
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            bool hasVectorSource = reader.ReadBoolean();
+            if (hasVectorSource)
+            {
+                var config = new VectorSourceConfig
+                {
+                    Separator = reader.ReadString()
+                };
+
+                int fieldCount = reader.ReadInt32();
+                for (int j = 0; j < fieldCount; j++)
+                {
+                    var field = new VectorSourceField
+                    {
+                        Path = reader.ReadString(),
+                        Prefix = reader.ReadBoolean() ? reader.ReadString() : null,
+                        Suffix = reader.ReadBoolean() ? reader.ReadString() : null
+                    };
+                    config.Fields.Add(field);
+                }
+
+                metadata.VectorSource = config;
+            }
+        }
+
+        // ── Sequence (backward-compatible) ────────
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+            metadata.SequenceValue = reader.ReadInt64();
+
+        // ── GeneralRetentionPolicy (backward-compatible) ────────
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            bool hasRetentionPolicy = reader.ReadBoolean();
+            if (hasRetentionPolicy)
+            {
+                metadata.GeneralRetentionPolicy = new RetentionPolicy
+                {
+                    MaxAgeMs           = reader.ReadInt64(),
+                    MaxDocumentCount   = reader.ReadInt64(),
+                    MaxSizeBytes       = reader.ReadInt64(),
+                    ScheduledIntervalMs = reader.ReadInt64(),
+                    TimestampField     = reader.ReadBoolean() ? reader.ReadString() : null,
+                    Triggers           = (RetentionTrigger)reader.ReadInt32(),
+                };
+            }
+        }
+
+        // ── Index key formats (backward-compatible; absent = LegacyKeyFormat) ────────
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            int formatCount = reader.ReadInt32();
+            for (int j = 0; j < formatCount; j++)
+            {
+                byte format = reader.ReadByte();
+                if (j < metadata.Indexes.Count)
+                    metadata.Indexes[j].KeyFormat = format;
+            }
+        }
+        return metadata;
     }
 
     public void SaveCollectionMetadata(CollectionMetadata metadata)
@@ -320,6 +357,11 @@ public sealed partial class StorageEngine
                 writer.Write(rp.TimestampField);
             writer.Write((int)rp.Triggers);
         }
+
+        // ── Index key formats (one byte per index, same order as above) ─────────
+        writer.Write(metadata.Indexes.Count);
+        foreach (var idx in metadata.Indexes)
+            writer.Write(idx.KeyFormat);
 
         var newData = stream.ToArray();
 
@@ -542,63 +584,7 @@ public sealed partial class StorageEngine
                     using var reader = new BinaryReader(ms);
 
                     var collName = reader.ReadString();
-                    var metadata = new CollectionMetadata { Name = collName };
-                    metadata.PrimaryRootPageId = reader.ReadUInt32();
-                    metadata.SchemaRootPageId  = reader.ReadUInt32();
-
-                    var indexCount = reader.ReadInt32();
-                    for (int j = 0; j < indexCount; j++)
-                    {
-                        var idx = new IndexMetadata
-                        {
-                            Name       = reader.ReadString(),
-                            IsUnique   = reader.ReadBoolean(),
-                            Type       = (IndexType)reader.ReadByte(),
-                            RootPageId = reader.ReadUInt32()
-                        };
-
-                        var pathCount = reader.ReadInt32();
-                        idx.PropertyPaths = new string[pathCount];
-                        for (int k = 0; k < pathCount; k++)
-                            idx.PropertyPaths[k] = reader.ReadString();
-
-                        if (idx.Type == IndexType.Vector)
-                        {
-                            idx.Dimensions = reader.ReadInt32();
-                            idx.Metric     = (VectorMetric)reader.ReadByte();
-                        }
-
-                        metadata.Indexes.Add(idx);
-                    }
-
-                    // ── VectorSource (backward-compatible) ──────────────────────
-                    if (reader.BaseStream.Position < reader.BaseStream.Length)
-                    {
-                        bool hasVectorSource = reader.ReadBoolean();
-                        if (hasVectorSource)
-                        {
-                            var config = new VectorSourceConfig
-                            {
-                                Separator = reader.ReadString()
-                            };
-
-                            int fieldCount = reader.ReadInt32();
-                            for (int j = 0; j < fieldCount; j++)
-                            {
-                                var field = new VectorSourceField
-                                {
-                                    Path = reader.ReadString(),
-                                    Prefix = reader.ReadBoolean() ? reader.ReadString() : null,
-                                    Suffix = reader.ReadBoolean() ? reader.ReadString() : null
-                                };
-                                config.Fields.Add(field);
-                            }
-
-                            metadata.VectorSource = config;
-                        }
-                    }
-
-                    result.Add(metadata);
+                    result.Add(ReadCollectionMetadata(collName, reader));
                 }
                 catch
                 {
