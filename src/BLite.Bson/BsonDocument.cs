@@ -355,6 +355,9 @@ public sealed class BsonDocumentBuilder
     /// <summary>
     /// Adds a BsonValue field (any supported BSON type).
     /// </summary>
+    // Array.MaxLength is unavailable on netstandard2.1; this is its documented value.
+    private const int MaxArrayLength = 0x7FFFFFC7;
+
     public BsonDocumentBuilder Add(string name, BsonValue value)
     {
         // Nested objects/arrays can serialize to arbitrary size, so a fixed pad is not enough:
@@ -370,7 +373,7 @@ public sealed class BsonDocumentBuilder
                 _position += writer.Position;
                 return this;
             }
-            catch (ArgumentException) when (additional < int.MaxValue / 2 && _position + additional < Array.MaxLength / 2)
+            catch (Exception ex) when ((ex is ArgumentException || ex is IndexOutOfRangeException) && additional < MaxArrayLength / 2 && _position + additional < MaxArrayLength / 2)
             {
                 additional *= 2;
             }
