@@ -1,5 +1,4 @@
 using BLite.Core.Storage;
-using BLite.Core.Transactions;
 
 namespace BLite.Core.Indexing;
 
@@ -52,28 +51,19 @@ internal sealed class TransactionalState<T>
     /// <param name="onRolledBack">Optional hook run when the owning transaction rolls back.</param>
     public void Set(T value, ulong transactionId, Action? onRolledBack = null)
     {
-        if (transactionId == 0
-            || !_storage.TryGetActiveTransaction(transactionId, out var txn)
-            || txn.State != TransactionState.Active)
+        if (transactionId != 0)
         {
             lock (_lock)
-                _committed = value;
-            _onCommitted?.Invoke(value);
-            return;
+            {
+                if (_ownerTxnId == transactionId)
+                {
+                    _pending = value; // already the owner: hooks are registered
+                    return;
+                }
+            }
         }
 
-        bool register;
-        lock (_lock)
-        {
-            register = _ownerTxnId != transactionId;
-            _ownerTxnId = transactionId;
-            _pending = value;
-        }
-
-        if (!register)
-            return;
-
-        txn.OnCommit += () =>
+        Action commitHook = () =>
         {
             T published;
             lock (_lock)
@@ -86,7 +76,7 @@ internal sealed class TransactionalState<T>
             }
             _onCommitted?.Invoke(published);
         };
-        txn.OnRollback += () =>
+        Action rollbackHook = () =>
         {
             lock (_lock)
             {
@@ -96,5 +86,20 @@ internal sealed class TransactionalState<T>
             }
             onRolledBack?.Invoke();
         };
+
+        // Without an active transaction (id 0, or already finished) the value is committed immediately.
+        if (!_storage.TryRegisterTransactionHooks(transactionId, commitHook, rollbackHook))
+        {
+            lock (_lock)
+                _committed = value;
+            _onCommitted?.Invoke(value);
+            return;
+        }
+
+        lock (_lock)
+        {
+            _ownerTxnId = transactionId;
+            _pending = value;
+        }
     }
 }
