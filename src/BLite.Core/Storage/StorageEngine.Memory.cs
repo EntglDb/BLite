@@ -186,15 +186,18 @@ public sealed partial class StorageEngine
     /// This does not compact the file — a VACUUM pass is required to reclaim physical disk space.
     /// Must be called BEFORE <see cref="DeleteCollectionMetadata"/> so that metadata is still available.
     /// </remarks>
-    /// <returns>The page IDs that were freed, so callers can invalidate any cached view of them
-    /// (e.g. the shared free-space index).</returns>
     public void FreeCollectionPages(string collectionName) => FreeCollectionPagesCore(collectionName);
 
     /// <summary>
     /// Same as <see cref="FreeCollectionPages"/>, but returns the freed page IDs.
     /// Kept separate so the public <c>void</c> signature stays binary-compatible.
     /// </summary>
-    internal IReadOnlyCollection<uint> FreeCollectionPagesCore(string collectionName)
+    /// <param name="beforeFree">Invoked with the collected page IDs before any page is returned
+    /// to the free list, so callers can invalidate cached views of them (e.g. the shared
+    /// free-space index) without a window in which a freed page is still advertised.</param>
+    /// <returns>The page IDs that were freed.</returns>
+    internal IReadOnlyCollection<uint> FreeCollectionPagesCore(string collectionName,
+        Action<IReadOnlyCollection<uint>>? beforeFree = null)
     {
         var metadata = GetCollectionMetadata(collectionName);
         if (metadata == null) return Array.Empty<uint>();
@@ -361,6 +364,8 @@ public sealed partial class StorageEngine
                 ArrayPool<byte>.Shared.Return(schemaBuf);
             }
         }
+
+        beforeFree?.Invoke(toFree);
 
         // Free all collected pages and remove stale WAL-index entries so that
         // a re-allocated page is not served stale data from the WAL index.

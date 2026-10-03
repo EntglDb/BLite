@@ -102,7 +102,8 @@ public class TruncateDropCollectionTests : IDisposable
     [Fact]
     public async Task Engine_DropCollection_InvalidatesSharedFreeSpaceIndex_OtherCollectionCanInsert()
     {
-        using var engine = BLiteEngine.CreateInMemory();
+        // File-backed so freed pages get a Free header on disk, exactly like production.
+        using var engine = new BLiteEngine(_dbPath);
         var a = engine.GetOrCreateCollection("col_a");
         var b = engine.GetOrCreateCollection("col_b");
 
@@ -123,7 +124,21 @@ public class TruncateDropCollectionTests : IDisposable
             await b.InsertAsync(doc);
         }
 
+        // A third collection reuses the freed pages; B's data must stay intact.
+        var c = engine.GetOrCreateCollection("col_c");
+        for (int i = 0; i < 20; i++)
+        {
+            var doc = c.CreateDocument(["_id", "payload"],
+                x => x.AddString("payload", new string('z', 200)));
+            await c.InsertAsync(doc);
+        }
+
         Assert.Equal(20, (int)await b.CountAsync());
+        Assert.Equal(20, (int)await c.CountAsync());
+
+        int seen = 0;
+        await foreach (var _ in b.FindAllAsync()) seen++;
+        Assert.Equal(20, seen);
     }
 
     [Fact]

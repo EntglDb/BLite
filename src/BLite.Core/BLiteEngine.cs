@@ -315,8 +315,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         {
             collection.Dispose();
             // Free pages before deleting metadata (FreeCollectionPages reads the metadata).
-            var freedPages = _storage.FreeCollectionPagesCore(name);    // no-op in multi-file mode
-            _freeSpaceIndexes.InvalidatePages(freedPages);
+            _storage.FreeCollectionPagesCore(name, _freeSpaceIndexes.InvalidatePages);    // no-op in multi-file mode
             _storage.DeleteCollectionMetadata(name);
             _storage.DropCollectionFile(name);     // no-op in single-file mode
             return true;
