@@ -46,7 +46,10 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         {
             var indexName = idxMeta.Name;
             var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type, idxMeta.Dimensions, idxMeta.Metric);
-            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId);
+            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId)
+            {
+                KeyFormat = idxMeta.KeyFormat
+            };
             _indexes[indexName] = index;
             rootAllocated |= index.RootPageId != idxMeta.RootPageId;
         }
@@ -69,7 +72,8 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 PropertyPaths = info.PropertyPaths,
                 Dimensions = index.Definition.Dimensions,
                 Metric = index.Definition.Metric,
-                RootPageId = index.RootPageId
+                RootPageId = index.RootPageId,
+                KeyFormat = index.KeyFormat
             });
         }
     }
@@ -281,6 +285,48 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             }
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Replaces an index with an empty one of the same definition, freeing the old tree's pages.
+    /// The new index keeps the old <see cref="CollectionSecondaryIndex{TId,T}.KeyFormat"/>: the
+    /// caller repopulates it and then records the new format with <see cref="SetKeyFormat"/>, so an
+    /// interrupted rebuild is simply redone on the next open.
+    /// </summary>
+    internal CollectionSecondaryIndex<TId, T> RecreateIndex(string name)
+    {
+        lock (_lock)
+        {
+            if (!_indexes.TryGetValue(name, out var old))
+                throw new InvalidOperationException($"Index '{name}' does not exist");
+
+            var fresh = new CollectionSecondaryIndex<TId, T>(old.Definition, _storage, _mapper)
+            {
+                KeyFormat = old.KeyFormat
+            };
+            _indexes[name] = fresh;
+            _cachedIndexInfo = null; // invalidate cache
+
+            // Persist the new root before freeing the old tree: a crash in between leaks the old
+            // pages, whereas the reverse order would let the next open free them a second time.
+            SaveMetadata();
+            old.FreeAllPages(_storage);
+            old.Dispose();
+            return fresh;
+        }
+    }
+
+    /// <summary>Records the key format an index's pages are written with and persists it.</summary>
+    internal void SetKeyFormat(string name, byte keyFormat)
+    {
+        lock (_lock)
+        {
+            if (!_indexes.TryGetValue(name, out var index))
+                throw new InvalidOperationException($"Index '{name}' does not exist");
+
+            index.KeyFormat = keyFormat;
+            SaveMetadata();
         }
     }
 

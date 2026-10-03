@@ -97,7 +97,23 @@ public class CollectionMetadata
 
 public class IndexMetadata
 {
+    /// <summary>
+    /// Key format written before <see cref="KeyFormat"/> existed: <c>decimal</c> values were keyed as
+    /// <c>(double)value</c>. Every other key type is encoded identically in both formats.
+    /// </summary>
+    public const byte LegacyKeyFormat = 0;
+
+    /// <summary>Current key format: <c>decimal</c> values use the exact, order-preserving encoding.</summary>
+    public const byte CurrentKeyFormat = 1;
+
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Version of the key encoding the index pages were written with. Indexes persisted by older
+    /// releases read back as <see cref="LegacyKeyFormat"/> and are rebuilt on open when the
+    /// difference matters for their key type (see <c>DocumentCollection.MigrateLegacyDecimalIndexes</c>).
+    /// </summary>
+    public byte KeyFormat { get; set; } = LegacyKeyFormat;
     public bool IsUnique { get; set; }
     public IndexType Type { get; set; }
     public string[] PropertyPaths { get; set; } = Array.Empty<string>();
@@ -228,6 +244,18 @@ public sealed partial class StorageEngine
                         }
                     }
 
+                    // ── Index key formats (backward-compatible; absent = LegacyKeyFormat) ────────
+                    if (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        int formatCount = reader.ReadInt32();
+                        for (int j = 0; j < formatCount; j++)
+                        {
+                            byte format = reader.ReadByte();
+                            if (j < metadata.Indexes.Count)
+                                metadata.Indexes[j].KeyFormat = format;
+                        }
+                    }
+
                     return metadata;
                 }
                 catch
@@ -320,6 +348,11 @@ public sealed partial class StorageEngine
                 writer.Write(rp.TimestampField);
             writer.Write((int)rp.Triggers);
         }
+
+        // ── Index key formats (one byte per index, same order as above) ─────────
+        writer.Write(metadata.Indexes.Count);
+        foreach (var idx in metadata.Indexes)
+            writer.Write(idx.KeyFormat);
 
         var newData = stream.ToArray();
 

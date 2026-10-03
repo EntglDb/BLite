@@ -837,10 +837,6 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             _ttlFieldName = tsMeta.TtlFieldName;
         }
 
-        // Restore generalized retention policy and set up the scheduled timer if needed.
-        if (tsMeta.GeneralRetentionPolicy != null)
-            ApplyRetentionPolicyConfig(tsMeta.GeneralRetentionPolicy);
-
         // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
         // Use persisted root page ID if available
         var indexOptions = IndexOptions.CreateUnique("_id");
@@ -858,6 +854,44 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         // Rebuild the free-space index from existing page headers so that a cold-start
         // DocumentCollection can reuse partially-filled pages instead of always allocating new ones.
         RebuildFreeSpaceIndex();
+
+        MigrateLegacyDecimalIndexes();
+
+        // Restore generalized retention policy and set up the scheduled timer if needed. Done last so
+        // no scheduled pruning can run while an index is being rebuilt above.
+        if (tsMeta.GeneralRetentionPolicy != null)
+            ApplyRetentionPolicyConfig(tsMeta.GeneralRetentionPolicy);
+    }
+
+    /// <summary>
+    /// Decimal properties used to be indexed as <c>(double)value</c>. An index whose persisted
+    /// <see cref="IndexMetadata.KeyFormat"/> predates the exact decimal encoding is replaced by an
+    /// empty tree, repopulated from the documents and then marked with the current format, the first
+    /// time the collection is opened. The format is recorded only after the rebuild committed, so a
+    /// crash in between just repeats the migration on the next open. No-op for every other index.
+    /// </summary>
+    private void MigrateLegacyDecimalIndexes()
+    {
+        foreach (var index in _indexManager.GetAllIndexes())
+        {
+            if (!index.NeedsKeyFormatMigration) continue;
+
+            var name = index.Name;
+            try
+            {
+                var fresh = _indexManager.RecreateIndex(name);
+                // Run on the thread pool so a captured SynchronizationContext cannot deadlock the wait.
+                // A document that cannot be loaded fails the migration rather than silently leaving
+                // the rebuilt index incomplete.
+                Task.Run(() => RebuildIndexAsync(fresh, skipUnreadableDocuments: false)).GetAwaiter().GetResult();
+                _indexManager.SetKeyFormat(name, IndexMetadata.CurrentKeyFormat);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to rebuild index '{name}' of collection '{_collectionName}' with the exact decimal key format; the migration is retried on the next open.", ex);
+            }
+        }
     }
 
 
@@ -1450,6 +1484,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return new BTreeQueryable<T>(new BTreeQueryProvider<TId, T>(this, ConverterRegistry));
     }
 
+    /// <summary>Secondary index manager of this collection (test and migration hooks).</summary>
+    internal CollectionIndexManager<TId, T> IndexManager => _indexManager;
+
     /// <summary>
     /// Gets a specific secondary index by name for advanced querying.
     /// Returns null if the index doesn't exist.
@@ -1557,7 +1594,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
     }
 
-    private async Task RebuildIndexAsync(CollectionSecondaryIndex<TId, T> index, CancellationToken ct = default)
+    private async Task RebuildIndexAsync(CollectionSecondaryIndex<TId, T> index, CancellationToken ct = default, bool skipUnreadableDocuments = true)
     {
         var transaction = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
@@ -1574,7 +1611,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                         index.Insert(document, entry.Location, transaction);
                     }
                 }
-                catch
+                catch when (skipUnreadableDocuments)
                 {
                     // Skip documents that fail to load or index
                     // Production: should log errors

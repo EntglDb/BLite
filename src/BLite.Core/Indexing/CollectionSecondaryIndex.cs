@@ -30,10 +30,11 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     static CollectionSecondaryIndex()
     {
         // Fill the pre-allocated boundary buffers with 0xFF.
-        var buf255 = new byte[255]; Array.Fill(buf255, (byte)0xFF);
-        var buf16  = new byte[16];  Array.Fill(buf16,  (byte)0xFF);
-        s_maxBoundaryKey   = new IndexKey(buf255);
-        s_maxIdBoundaryKey = new IndexKey(buf16);
+        var buf255 = new byte[256]; Array.Fill(buf255, (byte)0xFF);
+        var buf16  = new byte[20];  Array.Fill(buf16,  (byte)0xFF);
+        // Raw (un-prefixed) so it sorts above keys of every prefix, including DecimalKeyPrefix (0x03).
+        s_maxBoundaryKey   = IndexKey.FromOwnedArray(buf255);
+        s_maxIdBoundaryKey = IndexKey.FromOwnedArray(buf16); // raw: above ids of every key prefix
     }
 
     private readonly CollectionIndexDefinition<T> _definition;
@@ -456,6 +457,19 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// </summary>
     private IndexKey ConvertToIndexKey(object value)
     {
+        // A decimal-keyed index only holds decimal keys: bounds given as int/long/double/float
+        // (e.g. from a converted predicate) must be encoded the same way to be comparable.
+        if (IsDecimalKeyed)
+        {
+            switch (value)
+            {
+                case int i: return new IndexKey((decimal)i);
+                case long l: return new IndexKey((decimal)l);
+                case double dd: return new IndexKey(ToDecimalClamped(dd));
+                case float f: return new IndexKey(ToDecimalClamped(f));
+            }
+        }
+
         return value switch
         {
             // Pre-encoded IndexKey (passed from generated filter code via IndexPlanBuilder/IndexQueryPlan)
@@ -468,7 +482,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
             long longVal => new IndexKey(longVal),
             double doubleVal => new IndexKey(doubleVal),
             float floatVal => new IndexKey((double)floatVal),
-            decimal decimalVal => new IndexKey((double)decimalVal),
+            decimal decimalVal => new IndexKey(decimalVal),
             DateTime dateTime => new IndexKey(new DateTimeOffset(dateTime.ToUniversalTime()).ToUnixTimeMilliseconds()),
             DateTimeOffset dto => new IndexKey(dto.ToUnixTimeMilliseconds()),
             byte[] byteArray => new IndexKey(byteArray),
@@ -485,6 +499,49 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
             _ => new IndexKey(value.ToString() ?? string.Empty)
         };
     }
+
+    // ── Decimal-keyed indexes ─────────────────────────────────────────────────
+    // A decimal property is keyed with the exact IndexKey(decimal) encoding (DecimalKeyPrefix).
+    // Bounds of another numeric type must be converted before encoding, and indexes written by
+    // releases that keyed decimals as (double)value are rebuilt on open (NeedsKeyFormatMigration).
+
+    private bool? _isDecimalKeyed;
+
+    private bool IsDecimalKeyed => _isDecimalKeyed ??= ComputeIsDecimalKeyed();
+
+    private bool ComputeIsDecimalKeyed()
+    {
+        if (_definition.PropertyPaths.Length != 1) return false;
+        // Only the boxing conversion to object is looked through: an explicit cast in the selector
+        // (e.g. (double)p.Price) changes the key type on purpose and is encoded as that type.
+        var body = _definition.KeySelectorExpression.Body;
+        while (body is System.Linq.Expressions.UnaryExpression { NodeType: System.Linq.Expressions.ExpressionType.Convert } u
+               && u.Type == typeof(object))
+            body = u.Operand;
+        return (Nullable.GetUnderlyingType(body.Type) ?? body.Type) == typeof(decimal);
+    }
+
+    private static decimal ToDecimalClamped(double d)
+    {
+        if (double.IsNaN(d)) return decimal.MinValue;
+        if (d >= (double)decimal.MaxValue) return decimal.MaxValue;
+        if (d <= (double)decimal.MinValue) return decimal.MinValue;
+        return (decimal)d;
+    }
+
+    /// <summary>
+    /// Key format this index's pages were written with (see <see cref="IndexMetadata.KeyFormat"/>).
+    /// New indexes start at <see cref="IndexMetadata.CurrentKeyFormat"/>; indexes loaded from
+    /// metadata carry the persisted value until they are migrated.
+    /// </summary>
+    internal byte KeyFormat { get; set; } = IndexMetadata.CurrentKeyFormat;
+
+    /// <summary>
+    /// True when this B-tree index keys a <c>decimal</c> property and its pages still use the legacy
+    /// format, i.e. hold <c>(double)value</c> keys that the exact decimal encoding cannot match.
+    /// </summary>
+    internal bool NeedsKeyFormatMigration =>
+        _btreeIndex != null && KeyFormat < IndexMetadata.CurrentKeyFormat && IsDecimalKeyed;
 
     // ── ICollectionIndex metadata pass-throughs ─────────────────────────────
 

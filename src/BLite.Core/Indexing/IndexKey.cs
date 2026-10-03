@@ -19,6 +19,14 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
     // without the prefix.
     private const byte KeyPrefix = 0x02;
 
+    // Prefix of decimal keys. Distinct from KeyPrefix so that an index whose keys were written by an
+    // older version (decimal stored as double under KeyPrefix) can be told apart from a current one.
+    // 0x03 sorts after every KeyPrefix key, so range scans must use an upper bound above both prefixes.
+    internal const byte DecimalKeyPrefix = 0x03;
+
+    // Prefix + class byte + exponent byte + 15 bytes (30 BCD nibbles, a decimal has at most 29 digits).
+    private const int DecimalKeyLength = 18;
+
     // Pre-allocated static sentinels — single allocation at type-init time.
     // These use the raw (no-prefix) FromOwnedArray factory so the sentinel byte values
     // are preserved exactly as-is and not mistaken for real user keys.
@@ -88,6 +96,21 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         ulong u = bits < 0 ? ~(ulong)bits : (ulong)bits | 0x8000_0000_0000_0000UL;
         _data = [KeyPrefix, (byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
                  (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
+        _hashCode = ComputeHashCode(_data);
+    }
+
+    /// <summary>
+    /// Order-preserving, fixed-length encoding of a <see cref="decimal"/> (exact, no double round-trip).
+    /// Layout after <c>DecimalKeyPrefix</c>: <c>[class][exponent][15 bytes of packed BCD digits]</c> where
+    /// value = 0.D1D2…Dn × 10^exponent and trailing zeros are stripped, so <c>5</c> and <c>5.00</c> yield the
+    /// same key. Negative values store every byte after the prefix inverted so that byte order == numeric order.
+    /// </summary>
+    public IndexKey(decimal value)
+    {
+        var data = new byte[DecimalKeyLength];
+        data[0] = DecimalKeyPrefix;
+        EncodeDecimal(value, data);
+        _data = data;
         _hashCode = ComputeHashCode(_data);
     }
 
@@ -199,6 +222,7 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         if (typeof(T) == typeof(int)) return new IndexKey((int)(object)value);
         if (typeof(T) == typeof(long)) return new IndexKey((long)(object)value);
         if (typeof(T) == typeof(double)) return new IndexKey((double)(object)value);
+        if (typeof(T) == typeof(decimal)) return new IndexKey((decimal)(object)value);
         if (typeof(T) == typeof(string)) return new IndexKey((string)(object)value);
         if (typeof(T) == typeof(Guid)) return new IndexKey((Guid)(object)value);
         if (typeof(T) == typeof(byte[])) return new IndexKey((byte[])(object)value);
@@ -236,10 +260,92 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
                 : (long)~u;
             return (T)(object)BitConverter.Int64BitsToDouble(bits);
         }
+        if (typeof(T) == typeof(decimal)) return (T)(object)DecodeDecimal(d);
         if (typeof(T) == typeof(string)) return (T)(object)System.Text.Encoding.UTF8.GetString(d);
         if (typeof(T) == typeof(Guid)) return (T)(object)new Guid(d.ToArray());
         if (typeof(T) == typeof(byte[])) return (T)(object)d.ToArray();
 
         throw new NotSupportedException($"Type {typeof(T).Name} cannot be extracted from IndexKey. Provide a custom mapping.");
+    }
+
+    private static void EncodeDecimal(decimal value, byte[] data)
+    {
+        var bits = decimal.GetBits(value);
+        uint lo = (uint)bits[0], mid = (uint)bits[1], hi = (uint)bits[2];
+        bool negative = bits[3] < 0;
+        int scale = (bits[3] >> 16) & 0xFF;
+
+        if ((lo | mid | hi) == 0)
+        {
+            data[1] = 0x01; // zero (every zero, whatever its scale or sign, maps to the same key)
+            return;
+        }
+
+        // Decimal digits, least significant first, by repeated division of the 96-bit mantissa by 10.
+        Span<byte> digits = stackalloc byte[29];
+        int count = 0;
+        while ((lo | mid | hi) != 0)
+        {
+            ulong cur = hi;
+            hi = (uint)(cur / 10);
+            cur = ((cur % 10) << 32) | mid;
+            mid = (uint)(cur / 10);
+            cur = ((cur % 10) << 32) | lo;
+            lo = (uint)(cur / 10);
+            digits[count++] = (byte)(cur % 10);
+        }
+
+        int start = 0; // skip trailing zeros (least significant side) so 5 and 5.00 get the same key
+        while (digits[start] == 0) start++;
+
+        int exponent = count - scale; // value = 0.D1…Dn × 10^exponent, in [-27, 29]
+        for (int i = 0; i < count - start; i++)
+        {
+            byte digit = digits[count - 1 - i];
+            int pos = 3 + (i >> 1);
+            data[pos] |= (i & 1) == 0 ? (byte)(digit << 4) : digit;
+        }
+
+        data[1] = negative ? (byte)0x00 : (byte)0x02;
+        data[2] = (byte)(exponent + 64);
+        if (negative)
+            for (int i = 2; i < data.Length; i++)
+                data[i] = (byte)~data[i];
+    }
+
+    private static decimal DecodeDecimal(ReadOnlySpan<byte> d)
+    {
+        // d = [class][exponent][15 BCD bytes] (the KeyPrefix/DecimalKeyPrefix byte is already skipped)
+        if (d[0] == 0x01) return 0m;
+        bool negative = d[0] == 0x00;
+        int exponent = (negative ? (byte)~d[1] : d[1]) - 64;
+
+        int n = 0;
+        for (int i = 0; i < 30; i++)
+        {
+            byte b = negative ? (byte)~d[2 + (i >> 1)] : d[2 + (i >> 1)];
+            if (((i & 1) == 0 ? b >> 4 : b & 0x0F) != 0) n = i + 1;
+        }
+
+        decimal mantissa = 0m;
+        for (int i = 0; i < n; i++)
+        {
+            byte b = negative ? (byte)~d[2 + (i >> 1)] : d[2 + (i >> 1)];
+            mantissa = mantissa * 10 + ((i & 1) == 0 ? b >> 4 : b & 0x0F);
+        }
+
+        int newScale = n - exponent;
+        decimal result;
+        if (newScale >= 0)
+        {
+            var mb = decimal.GetBits(mantissa);
+            result = new decimal(mb[0], mb[1], mb[2], false, (byte)newScale);
+        }
+        else
+        {
+            result = mantissa;
+            for (int i = 0; i < -newScale; i++) result *= 10;
+        }
+        return negative ? -result : result;
     }
 }

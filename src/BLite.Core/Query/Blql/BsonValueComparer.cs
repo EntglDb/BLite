@@ -8,7 +8,8 @@ namespace BLite.Core.Query.Blql;
 /// following BSON comparison semantics used by BLQL predicates.
 /// 
 /// Order across types (ascending): Null &lt; Boolean &lt; (Int32 | Int64 | Double | Decimal) &lt; String &lt; ObjectId &lt; DateTime
-/// Within the same numerical family, values are compared numerically.
+/// Within the same numerical family, values are compared numerically: exactly (as <c>decimal</c>) when
+/// neither side is a Double, through <c>double</c> otherwise.
 /// </summary>
 internal static class BsonValueComparer
 {
@@ -22,9 +23,17 @@ internal static class BsonValueComparer
         if (a.IsNull) return -1;
         if (b.IsNull) return 1;
 
-        // Numeric family: Int32, Int64, Double, Decimal128 — promote to double for mixed comparisons
+        // Numeric family: Int32, Int64, Double, Decimal128 — promote to double for mixed comparisons,
+        // except when one side is Decimal128 and the other is an exact type (Decimal128/Int32/Int64):
+        // those compare as decimal, because a double only keeps ~15-17 significant digits.
         if (IsNumeric(a.Type) && IsNumeric(b.Type))
+        {
+            if ((a.Type == BsonType.Decimal128 || b.Type == BsonType.Decimal128)
+                && IsExact(a.Type) && IsExact(b.Type))
+                return ToDecimal(a).CompareTo(ToDecimal(b));
+
             return ToDouble(a).CompareTo(ToDouble(b));
+        }
 
         // DateTime/DateTimeOffset: compare by instant across the two tags too, same as the numeric
         // family above. A collection can hold both during the transition after upgrading BLite - a
@@ -54,6 +63,17 @@ internal static class BsonValueComparer
 
     private static bool IsNumeric(BsonType t) =>
         t is BsonType.Int32 or BsonType.Int64 or BsonType.Double or BsonType.Decimal128;
+
+    private static bool IsExact(BsonType t) =>
+        t is BsonType.Int32 or BsonType.Int64 or BsonType.Decimal128;
+
+    private static decimal ToDecimal(BsonValue v) => v.Type switch
+    {
+        BsonType.Int32      => v.AsInt32,
+        BsonType.Int64      => v.AsInt64,
+        BsonType.Decimal128 => v.AsDecimal,
+        _ => 0m
+    };
 
     private static bool IsDateLike(BsonType t) =>
         t is BsonType.DateTime or BsonType.DateTimeOffset;
