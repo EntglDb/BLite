@@ -188,7 +188,13 @@ public sealed partial class StorageEngine
     /// </remarks>
     /// <returns>The page IDs that were freed, so callers can invalidate any cached view of them
     /// (e.g. the shared free-space index).</returns>
-    public IReadOnlyCollection<uint> FreeCollectionPages(string collectionName)
+    public void FreeCollectionPages(string collectionName) => FreeCollectionPagesCore(collectionName);
+
+    /// <summary>
+    /// Same as <see cref="FreeCollectionPages"/>, but returns the freed page IDs.
+    /// Kept separate so the public <c>void</c> signature stays binary-compatible.
+    /// </summary>
+    internal IReadOnlyCollection<uint> FreeCollectionPagesCore(string collectionName)
     {
         var metadata = GetCollectionMetadata(collectionName);
         if (metadata == null) return Array.Empty<uint>();

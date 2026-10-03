@@ -349,7 +349,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             if (registeredNames.Contains(metadata.Name)) continue;
 
             // Orphan — free its pages, delete its metadata, and remove any per-collection file.
-            var freedPages = _storage.FreeCollectionPages(metadata.Name);
+            var freedPages = _storage.FreeCollectionPagesCore(metadata.Name);
             _freeSpaceIndexes.InvalidatePages(freedPages);
             _storage.DeleteCollectionMetadata(metadata.Name);
             _storage.DropCollectionFile(metadata.Name);

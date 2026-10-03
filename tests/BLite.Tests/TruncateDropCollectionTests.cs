@@ -100,6 +100,33 @@ public class TruncateDropCollectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Engine_DropCollection_InvalidatesSharedFreeSpaceIndex_OtherCollectionCanInsert()
+    {
+        using var engine = BLiteEngine.CreateInMemory();
+        var a = engine.GetOrCreateCollection("col_a");
+        var b = engine.GetOrCreateCollection("col_b");
+
+        for (int i = 0; i < 20; i++)
+        {
+            var doc = a.CreateDocument(["_id", "payload"],
+                x => x.AddString("payload", new string('x', 200)));
+            await a.InsertAsync(doc);
+        }
+
+        engine.DropCollection("col_a");
+
+        // B shares the free-space index; it must not be handed pages freed by A.
+        for (int i = 0; i < 20; i++)
+        {
+            var doc = b.CreateDocument(["_id", "payload"],
+                x => x.AddString("payload", new string('y', 200)));
+            await b.InsertAsync(doc);
+        }
+
+        Assert.Equal(20, (int)await b.CountAsync());
+    }
+
+    [Fact]
     public async Task Engine_DropCollection_SingleFile_PagesReclaimedForReuse()
     {
         // Use an in-memory engine so there is no file-I/O during the background
