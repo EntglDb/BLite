@@ -228,10 +228,14 @@ public class BTreeDeletionTests : IDisposable
             index.Insert(IndexKey.Create(v), new DocumentLocation((uint)v, 0), txnId);
         _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
+        // Deletes run in a second transaction that is committed before inspecting
+        // the tree, since CollectAllPages reads the committed view of the pages.
+        var deleteTxnId = _storage.BeginTransaction().TransactionId;
         // Borrow first (brings both leaves to min)
-        index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), txnId);
+        index.Delete(IndexKey.Create(1), new DocumentLocation(1, 0), deleteTxnId);
         // Merge + root collapse
-        index.Delete(IndexKey.Create(2), new DocumentLocation(2, 0), txnId);
+        index.Delete(IndexKey.Create(2), new DocumentLocation(2, 0), deleteTxnId);
+        _storage.CommitTransactionAsync(deleteTxnId).GetAwaiter().GetResult();
 
         // The root page id is fixed: the tree should now occupy exactly that one page.
         Assert.Equal(rootBefore, index.RootPageId);
@@ -240,7 +244,7 @@ public class BTreeDeletionTests : IDisposable
         Assert.Equal(rootBefore, pages[0]);
 
         // Sanity: full scan still works
-        var keys = AllKeys(index, txnId);
+        var keys = AllKeys(index, deleteTxnId);
         Assert.Equal(count - 2, keys.Count);
     }
 
