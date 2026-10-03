@@ -959,7 +959,11 @@ public sealed class BTreeIndex
             System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
         }
 
-        _storage.FreePage(soleChildId); // immediate, like the sibling freed by MergeWithSibling
+        // The sole child is intentionally left orphaned rather than freed: FreePage acts on disk
+        // immediately, while the copy of this page written by MergeNodes still sits in the
+        // transaction cache and the committed root still points at it until commit. Freeing it
+        // here would let a reallocation be overwritten by the stale image on commit and would
+        // leave the committed tree pointing at a free page if the transaction rolls back.
     }
 
     /// <summary>Rewrites the page and node headers of a node image so it lives at <paramref name="newPageId"/>.</summary>

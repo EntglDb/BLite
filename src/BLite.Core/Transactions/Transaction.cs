@@ -146,7 +146,7 @@ public sealed class Transaction : ITransaction
         {
             _state = TransactionState.Aborted;
 
-            // Always revert in-memory per-transaction state (e.g. a pending B-tree root change),
+            // Always revert in-memory per-transaction state (e.g. buffered documents),
             // even when the WAL abort record could not be written.
             InvokeOnRollbackHandlersSafely();
         }

@@ -170,11 +170,24 @@ public sealed class DynamicCollection : IDisposable
 
         // Persist root pages that were newly allocated by the index constructors (a fresh primary
         // index, or a secondary index persisted before its root was allocated eagerly).
-        if (metadata.PrimaryRootPageId != _primaryIndex.RootPageId
-            || metadata.Indexes.Any(m => _secondaryIndexes.TryGetValue(m.Name, out var idx) && idx.RootPageId != m.RootPageId))
+        var rootsChanged = false;
+        if (metadata.PrimaryRootPageId != _primaryIndex.RootPageId)
         {
-            PersistIndexMetadata();
+            metadata.PrimaryRootPageId = _primaryIndex.RootPageId;
+            rootsChanged = true;
         }
+        foreach (var idxMeta in metadata.Indexes)
+        {
+            if (_secondaryIndexes.TryGetValue(idxMeta.Name, out var idx) && idx.RootPageId != idxMeta.RootPageId)
+            {
+                idxMeta.RootPageId = idx.RootPageId;
+                rootsChanged = true;
+            }
+        }
+        // Only the root ids are patched in place so index entries this constructor does not
+        // restore (unknown types, no property paths) are preserved as stored.
+        if (rootsChanged)
+            _storage.SaveCollectionMetadata(metadata);
 
         // Rebuild the free-space index from existing page headers on cold start.
         RebuildFreeSpaceIndex();
