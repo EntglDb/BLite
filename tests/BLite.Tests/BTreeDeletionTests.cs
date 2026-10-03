@@ -213,14 +213,14 @@ public class BTreeDeletionTests : IDisposable
     // ── Root collapse ────────────────────────────────────────────────────────
     //
     // After the merge above the tree should collapse from 3 pages (root internal + 2 leaves)
-    // to 1 page (single leaf that becomes the new root).
+    // to 1 page (the merged leaf is copied back into the root page, whose id never changes).
 
     [Fact]
     public void Delete_MergeLeaves_CollapseRoot_SinglePageRemains()
     {
-        var rootChanges = new List<uint>();
         var opts = IndexOptions.CreateBTree("field");
-        var index = new BTreeIndex(_storage, opts, onRootChanged: newRoot => rootChanges.Add(newRoot));
+        var index = new BTreeIndex(_storage, opts);
+        var rootBefore = index.RootPageId;
 
         var txnId = _storage.BeginTransaction().TransactionId;
         int count = BTreeIndex.MaxEntriesPerNode + 1;
@@ -233,12 +233,11 @@ public class BTreeDeletionTests : IDisposable
         // Merge + root collapse
         index.Delete(IndexKey.Create(2), new DocumentLocation(2, 0), txnId);
 
-        // After root collapse, onRootChanged must have fired at least once during deletes
-        Assert.NotEmpty(rootChanges);
-
-        // The tree should now occupy exactly 1 page (the merged leaf = new root)
+        // The root page id is fixed: the tree should now occupy exactly that one page.
+        Assert.Equal(rootBefore, index.RootPageId);
         var pages = index.CollectAllPages();
         Assert.Single(pages);
+        Assert.Equal(rootBefore, pages[0]);
 
         // Sanity: full scan still works
         var keys = AllKeys(index, txnId);

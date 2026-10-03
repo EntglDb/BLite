@@ -25,7 +25,7 @@ public sealed class VectorSearchIndex
 
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
-    private readonly TransactionalState<uint> _root;
+    private readonly uint _rootPageId;
     // Thread-safe random source compatible with netstandard2.1.
     // Random.Shared was introduced in .NET 6; use ThreadLocal<Random> as a
     // back-compat equivalent that is equally thread-safe and unbiased.
@@ -36,36 +36,33 @@ public sealed class VectorSearchIndex
     private static Random _random => _randomLocal.Value!;
 #endif
 
-    // Cached HNSW entry point (highest-level node in the graph). Like the root page it may point to
-    // pages that only exist in an uncommitted transaction, so it is tracked per transaction.
-    private readonly TransactionalState<(uint PageId, int NodeIndex, int MaxLevel)> _entry;
-
-    public VectorSearchIndex(StorageEngine storage, IndexOptions options, uint rootPageId = 0, Action<uint>? onRootChanged = null)
+    /// <param name="rootPageId">
+    /// The root page persisted in the collection metadata, or 0 to allocate a new empty index.
+    /// The root page is allocated eagerly and its id never changes: the HNSW entry point lives in
+    /// the root page header and is read through the transaction's page view, so an entry point
+    /// (or first node) written by an uncommitted transaction is visible only to that transaction.
+    /// </param>
+    public VectorSearchIndex(StorageEngine storage, IndexOptions options, uint rootPageId = 0)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
-        _root = new TransactionalState<uint>(_storage, rootPageId, onRootChanged);
 
-        (uint PageId, int NodeIndex, int MaxLevel) entry = default;
-        if (rootPageId != 0)
+        if (rootPageId == 0)
         {
-            // Restore entry point from root page header
+            rootPageId = _storage.AllocateIndexPage();
             var buffer = RentPageBuffer();
             try
             {
-                _storage.ReadPage(rootPageId, null, buffer);
-                entry = VectorPage.GetEntryPoint(buffer);
+                VectorPage.Initialize(buffer, rootPageId, _options.Dimensions, _options.M);
+                _storage.WritePageImmediate(rootPageId, buffer);
             }
             finally { ReturnPageBuffer(buffer); }
         }
-        _entry = new TransactionalState<(uint PageId, int NodeIndex, int MaxLevel)>(_storage, entry);
+        _rootPageId = rootPageId;
     }
 
-    /// <summary>
-    /// The last committed root page. A root created by a transaction that has not committed yet
-    /// is not reflected here (and is only reported through the root-changed callback on commit).
-    /// </summary>
-    public uint RootPageId => _root.Committed;
+    /// <summary>The root page of this index. It is fixed for the lifetime of the index.</summary>
+    public uint RootPageId => _rootPageId;
 
     public void Insert(float[] vector, DocumentLocation docLocation, ITransaction? transaction = null)
     {
@@ -75,38 +72,27 @@ public sealed class VectorSearchIndex
         // 1. Determine level for new node
         int targetLevel = GetRandomLevel();
 
-        // 2. If index is empty, create first page and first node
+        // 2. If the index is empty (as seen by this transaction), write the first node into the
+        //    root page; it becomes the initial entry point.
         var txnId = transaction?.TransactionId ?? 0;
-        var rootPageId = _root.For(txnId);
-        if (rootPageId == 0)
+        if (!TryGetEntryPoint(txnId, out var entryPoint))
         {
-            rootPageId = CreateNewPage(transaction);
             var pageBuffer = RentPageBuffer();
             try
             {
-                _storage.ReadPage(rootPageId, transaction?.TransactionId, pageBuffer);
+                _storage.ReadPage(_rootPageId, txnId, pageBuffer);
                 VectorPage.WriteNode(pageBuffer, 0, docLocation, targetLevel, vector, _options.Dimensions);
                 VectorPage.IncrementNodeCount(pageBuffer);
                 // Persist entry point: first node is always the initial entry point
-                VectorPage.SetEntryPoint(pageBuffer, rootPageId, 0, targetLevel);
-
-                if (transaction != null)
-                    _storage.WritePage(rootPageId, transaction.TransactionId, pageBuffer);
-                else
-                    _storage.WritePageImmediate(rootPageId, pageBuffer);
-
-                // The new root and entry point only exist in this transaction's page cache until it
-                // commits: publish them (and notify the owner) on commit, discard on rollback.
-                _entry.Set((rootPageId, 0, targetLevel), txnId);
-                _root.Set(rootPageId, txnId);
+                VectorPage.SetEntryPoint(pageBuffer, _rootPageId, 0, targetLevel);
+                WritePage(_rootPageId, transaction, pageBuffer);
             }
             finally { ReturnPageBuffer(pageBuffer); }
             return;
         }
 
         // HNSW Core logic (Malkov & Yashunin 2018, Algorithm 1)
-        // 3. Find current entry point
-        var entryPoint = GetEntryPoint(txnId);
+        // 3. Start from the current entry point
         var currentPoint = entryPoint;
 
         // 4. Greedy search through layers above targetLevel (ef=1)
@@ -300,7 +286,7 @@ public sealed class VectorSearchIndex
         var buffer = RentPageBuffer();
         try
         {
-            uint pageId = _root.For(transaction?.TransactionId ?? 0);
+            uint pageId = _rootPageId;
             uint prevPageId = 0;
 
             while (true)
@@ -361,20 +347,14 @@ public sealed class VectorSearchIndex
 
     private void UpdateEntryPoint(NodeReference newEntry, ITransaction? transaction)
     {
-        var txnId = transaction?.TransactionId ?? 0;
-        _entry.Set((newEntry.PageId, newEntry.NodeIndex, newEntry.MaxLevel), txnId);
-
-        // Persist entry point into root page header so it survives restart
-        var rootPageId = _root.For(txnId);
+        // The entry point lives in the root page header: it survives restarts and, read through
+        // the transaction's page view, it is only visible to the transaction that wrote it until commit.
         var buffer = RentPageBuffer();
         try
         {
-            _storage.ReadPage(rootPageId, transaction?.TransactionId, buffer);
+            _storage.ReadPage(_rootPageId, transaction?.TransactionId, buffer);
             VectorPage.SetEntryPoint(buffer, newEntry.PageId, newEntry.NodeIndex, newEntry.MaxLevel);
-            if (transaction != null)
-                _storage.WritePage(rootPageId, transaction.TransactionId, buffer);
-            else
-                _storage.WritePageImmediate(rootPageId, buffer);
+            WritePage(_rootPageId, transaction, buffer);
         }
         finally { ReturnPageBuffer(buffer); }
     }
@@ -448,13 +428,30 @@ public sealed class VectorSearchIndex
         return list;
     }
 
-    private NodeReference GetEntryPoint(ulong transactionId)
+    /// <summary>
+    /// Reads the HNSW entry point from the root page as seen by <paramref name="transactionId"/>.
+    /// Returns false when the index holds no node yet.
+    /// </summary>
+    private bool TryGetEntryPoint(ulong transactionId, out NodeReference entryPoint)
     {
-        var entry = _entry.For(transactionId);
-        if (entry.PageId != 0)
-            return new NodeReference { PageId = entry.PageId, NodeIndex = entry.NodeIndex, MaxLevel = entry.MaxLevel };
-        // Fallback for an index opened before entry-point tracking was available
-        return new NodeReference { PageId = _root.For(transactionId), NodeIndex = 0, MaxLevel = 0 };
+        var buffer = RentPageBuffer();
+        try
+        {
+            _storage.ReadPage(_rootPageId, transactionId, buffer);
+            if (VectorPage.GetNodeCount(buffer) == 0)
+            {
+                entryPoint = default;
+                return false;
+            }
+
+            var (pageId, nodeIndex, maxLevel) = VectorPage.GetEntryPoint(buffer);
+            entryPoint = pageId != 0
+                ? new NodeReference { PageId = pageId, NodeIndex = nodeIndex, MaxLevel = maxLevel }
+                // Fallback for an index written before entry-point tracking was available
+                : new NodeReference { PageId = _rootPageId, NodeIndex = 0, MaxLevel = 0 };
+            return true;
+        }
+        finally { ReturnPageBuffer(buffer); }
     }
 
     private float[] LoadVector(NodeReference node, ITransaction? transaction)
@@ -472,10 +469,7 @@ public sealed class VectorSearchIndex
 
     public IEnumerable<VectorSearchResult> Search(float[] query, int k, int efSearch = 100, ITransaction? transaction = null)
     {
-        var txnId = transaction?.TransactionId ?? 0;
-        if (_root.For(txnId) == 0) yield break;
-
-        var entryPoint = GetEntryPoint(txnId);
+        if (!TryGetEntryPoint(transaction?.TransactionId ?? 0, out var entryPoint)) yield break;
         var currentPoint = entryPoint;
 
         // 1. Greedy search through higher layers to find entry point for level 0
@@ -574,15 +568,13 @@ public sealed class VectorSearchIndex
     /// </summary>
     public IReadOnlyList<uint> CollectAllPages()
     {
-        var rootPageId = _root.Committed;
-        if (rootPageId == 0) return Array.Empty<uint>();
         // Multi-page vector graphs store all pages starting from _rootPageId;
         // follow NextPageId chain to collect the full set.
         var pages = new List<uint>();
         var buffer = RentPageBuffer();
         try
         {
-            var current = rootPageId;
+            var current = _rootPageId;
             while (current != 0)
             {
                 pages.Add(current);

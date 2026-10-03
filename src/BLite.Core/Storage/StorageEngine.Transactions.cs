@@ -91,60 +91,11 @@ public sealed partial class StorageEngine
         return transaction;
     }
 
-    private sealed class TransactionHooks
-    {
-        public readonly List<Action> OnCommit = new();
-        public readonly List<Action> OnRollback = new();
-    }
-
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, TransactionHooks> _transactionHooks = new();
-
     /// <summary>
-    /// Registers callbacks that run when the transaction commits or rolls back through any storage
-    /// commit/rollback path (also the plain <c>ulong</c> overloads, which bypass
-    /// <see cref="Transaction.OnCommit"/>). Returns false when the transaction is not active, in
-    /// which case nothing is registered and the caller must treat its change as immediately committed.
+    /// Forgets a transaction once it has committed or rolled back through the <c>ulong</c>
+    /// overloads, which callers use directly without going through the <see cref="Transaction"/> ones.
     /// </summary>
-    internal bool TryRegisterTransactionHooks(ulong transactionId, Action onCommit, Action onRollback)
-    {
-        if (transactionId == 0 || !_activeTransactions.ContainsKey(transactionId))
-            return false;
-
-        var hooks = _transactionHooks.GetOrAdd(transactionId, _ => new TransactionHooks());
-        lock (hooks)
-        {
-            hooks.OnCommit.Add(onCommit);
-            hooks.OnRollback.Add(onRollback);
-        }
-
-        // The transaction may have finished between the check and the registration.
-        if (!_activeTransactions.ContainsKey(transactionId))
-        {
-            _transactionHooks.TryRemove(transactionId, out _);
-            return false;
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// Marks the transaction as finished and runs its registered hooks (best effort, at most once).
-    /// </summary>
-    private void CompleteTransaction(ulong transactionId, bool committed)
-    {
-        _activeTransactions.TryRemove(transactionId, out _);
-        if (!_transactionHooks.TryRemove(transactionId, out var hooks))
-            return;
-
-        Action[] toRun;
-        lock (hooks)
-            toRun = (committed ? hooks.OnCommit : hooks.OnRollback).ToArray();
-
-        foreach (var hook in toRun)
-        {
-            try { hook(); }
-            catch { /* post-commit/rollback bookkeeping must not make the operation appear to fail */ }
-        }
-    }
+    private void CompleteTransaction(ulong transactionId) => _activeTransactions.TryRemove(transactionId, out _);
 
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
@@ -285,9 +236,8 @@ public sealed partial class StorageEngine
         }
 
         Completed:
-        // Run commit hooks outside the commit lock (they may persist metadata).
         if (completed)
-            CompleteTransaction(transactionId, committed: true);
+            CompleteTransaction(transactionId);
 
         // Fire checkpoint on a separate task so the caller isn't blocked.
         if (needsCheckpoint)
@@ -340,7 +290,7 @@ public sealed partial class StorageEngine
             await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
             await pending.Completion.Task.ConfigureAwait(false);
             success = true;
-            CompleteTransaction(transactionId, committed: true);
+            CompleteTransaction(transactionId);
         }
         finally
         {
@@ -435,7 +385,7 @@ public sealed partial class StorageEngine
             _commitLock.Release();
         }
 
-        CompleteTransaction(transactionId, committed: true);
+        CompleteTransaction(transactionId);
 
         if (needsCheckpoint)
         {
@@ -456,8 +406,7 @@ public sealed partial class StorageEngine
         }
         finally
         {
-            // Discard per-transaction in-memory state even if the abort record could not be written.
-            CompleteTransaction(transactionId, committed: false);
+            CompleteTransaction(transactionId);
         }
         _metrics?.Publish(new Metrics.MetricEvent
         {

@@ -6,7 +6,7 @@ namespace BLite.Tests;
 /// <summary>
 /// Additional tests for <see cref="BTreeIndex"/> targeting mutation survivors not yet
 /// covered by the existing BTree tests: unique-constraint edge cases,
-/// LessThanOrEqual, Between exclusive bounds, and onRootChanged callback.
+/// LessThanOrEqual, Between exclusive bounds, and the fixed root page id.
 /// </summary>
 public class BTreeIndexAdditionalTests : IDisposable
 {
@@ -27,10 +27,10 @@ public class BTreeIndexAdditionalTests : IDisposable
         if (File.Exists(wal)) File.Delete(wal);
     }
 
-    private (BTreeIndex index, ulong txnId) CreateBTreeIndex(Action<uint>? onRootChanged = null)
+    private (BTreeIndex index, ulong txnId) CreateBTreeIndex()
     {
         var opts = IndexOptions.CreateBTree("field");
-        var index = new BTreeIndex(_storage, opts, onRootChanged: onRootChanged);
+        var index = new BTreeIndex(_storage, opts);
         var txnId = _storage.BeginTransaction().TransactionId;
         return (index, txnId);
     }
@@ -179,39 +179,26 @@ public class BTreeIndexAdditionalTests : IDisposable
         Assert.Equal(IndexKey.Create(30), result[1].Key);
     }
 
-    // ─── onRootChanged callback ───────────────────────────────────────────────
+    // ─── Fixed root page id ───────────────────────────────────────────────────
 
     [Fact]
-    public void OnRootChanged_Callback_IsInvokedWhenRootSplits()
+    public void RootPageId_IsUnchangedByRootSplit()
     {
-        uint? capturedNewRoot = null;
-        var (index, txnId) = CreateBTreeIndex(onRootChanged: newRoot => capturedNewRoot = newRoot);
+        var (index, txnId) = CreateBTreeIndex();
+        var rootBefore = index.RootPageId;
 
         // Insert enough entries to force a root split
-        for (int i = 1; i <= BTreeIndex.MaxEntriesPerNode + 1; i++)
+        int count = BTreeIndex.MaxEntriesPerNode + 1;
+        for (int i = 1; i <= count; i++)
             index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
 
         _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
 
-        // Callback must have been invoked at least once
-        Assert.NotNull(capturedNewRoot);
-        // New root must differ from initial allocation (page 0 is invalid for an index)
-        Assert.True(capturedNewRoot.Value > 0);
-    }
-
-    [Fact]
-    public void OnRootChanged_Callback_IsNotInvokedWithoutSplit()
-    {
-        var callbackInvoked = false;
-        var (index, txnId) = CreateBTreeIndex(onRootChanged: _ => callbackInvoked = true);
-
-        // Insert far fewer than MaxEntriesPerNode — no split should occur
-        for (int i = 1; i <= 10; i++)
-            index.Insert(IndexKey.Create(i), new DocumentLocation((uint)i, 0), txnId);
-
-        _storage.CommitTransactionAsync(txnId).GetAwaiter().GetResult();
-
-        Assert.False(callbackInvoked);
+        // The root page is rewritten in place: same id, now an internal node over three pages.
+        Assert.Equal(rootBefore, index.RootPageId);
+        Assert.Equal(3, index.CollectAllPages().Count);
+        for (int i = 1; i <= count; i++)
+            Assert.True(index.TryFind(IndexKey.Create(i), out _), $"Key {i} not found after root split");
     }
 
     // ─── RootPageId property ──────────────────────────────────────────────────
