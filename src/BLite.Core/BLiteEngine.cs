@@ -43,6 +43,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// Exposes the underlying storage engine to session instances created by this engine.
     /// </summary>
     internal StorageEngine Storage => _storage;
+    internal FreeSpaceIndexProvider FreeSpaceIndexes => _freeSpaceIndexes;
 
     /// <summary>
     /// The absolute path of the main database file, or <see langword="null"/> for in-memory engines.

@@ -194,7 +194,9 @@ public sealed partial class StorageEngine
     /// </summary>
     /// <param name="beforeFree">Invoked with the collected page IDs before any page is returned
     /// to the free list, so callers can invalidate cached views of them (e.g. the shared
-    /// free-space index) without a window in which a freed page is still advertised.</param>
+    /// free-space index) before they can be re-allocated. This does not lock against concurrent
+    /// inserts into other collections, so a page may still be advertised between the slot count
+    /// and this callback; drops are expected to run without concurrent writers.</param>
     /// <returns>The page IDs that were freed.</returns>
     internal IReadOnlyCollection<uint> FreeCollectionPagesCore(string collectionName,
         Action<IReadOnlyCollection<uint>>? beforeFree = null)

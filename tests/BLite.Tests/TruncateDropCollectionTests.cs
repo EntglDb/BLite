@@ -114,7 +114,22 @@ public class TruncateDropCollectionTests : IDisposable
             await a.InsertAsync(doc);
         }
 
+        // DynamicCollection falls back gracefully when the shared index points at a stale
+        // page, so assert on the shared index directly: after the drop none of A's former
+        // data pages may be advertised as having free space.
+        var fsi = engine.FreeSpaceIndexes.GetIndex();
+        var advertised = engine.Storage.GetCollectionPageIds("col_a")
+            .Where(pid => fsi.TryGetFreeBytes(pid, out var free) && free > 0)
+            .ToList();
+        Assert.NotEmpty(advertised);
+
         engine.DropCollection("col_a");
+
+        foreach (var pid in advertised)
+        {
+            Assert.True(fsi.TryGetFreeBytes(pid, out var freeAfter));
+            Assert.Equal(0, freeAfter);
+        }
 
         // B shares the free-space index; it must not be handed pages freed by A.
         for (int i = 0; i < 20; i++)
