@@ -100,6 +100,63 @@ public class TruncateDropCollectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Engine_DropCollection_InvalidatesSharedFreeSpaceIndex_OtherCollectionCanInsert()
+    {
+        // File-backed so freed pages get a Free header on disk, exactly like production.
+        using var engine = new BLiteEngine(_dbPath);
+        var a = engine.GetOrCreateCollection("col_a");
+        var b = engine.GetOrCreateCollection("col_b");
+
+        for (int i = 0; i < 20; i++)
+        {
+            var doc = a.CreateDocument(["_id", "payload"],
+                x => x.AddString("payload", new string('x', 200)));
+            await a.InsertAsync(doc);
+        }
+
+        // DynamicCollection falls back gracefully when the shared index points at a stale
+        // page, so assert on the shared index directly: after the drop none of A's former
+        // data pages may be advertised as having free space.
+        var fsi = engine.FreeSpaceIndexes.GetIndex();
+        var advertised = engine.Storage.GetCollectionPageIds("col_a")
+            .Where(pid => fsi.TryGetFreeBytes(pid, out var free) && free > 0)
+            .ToList();
+        Assert.NotEmpty(advertised);
+
+        engine.DropCollection("col_a");
+
+        foreach (var pid in advertised)
+        {
+            Assert.True(fsi.TryGetFreeBytes(pid, out var freeAfter));
+            Assert.Equal(0, freeAfter);
+        }
+
+        // B shares the free-space index; it must not be handed pages freed by A.
+        for (int i = 0; i < 20; i++)
+        {
+            var doc = b.CreateDocument(["_id", "payload"],
+                x => x.AddString("payload", new string('y', 200)));
+            await b.InsertAsync(doc);
+        }
+
+        // A third collection reuses the freed pages; B's data must stay intact.
+        var c = engine.GetOrCreateCollection("col_c");
+        for (int i = 0; i < 20; i++)
+        {
+            var doc = c.CreateDocument(["_id", "payload"],
+                x => x.AddString("payload", new string('z', 200)));
+            await c.InsertAsync(doc);
+        }
+
+        Assert.Equal(20, (int)await b.CountAsync());
+        Assert.Equal(20, (int)await c.CountAsync());
+
+        int seen = 0;
+        await foreach (var _ in b.FindAllAsync()) seen++;
+        Assert.Equal(20, seen);
+    }
+
+    [Fact]
     public async Task Engine_DropCollection_SingleFile_PagesReclaimedForReuse()
     {
         // Use an in-memory engine so there is no file-I/O during the background

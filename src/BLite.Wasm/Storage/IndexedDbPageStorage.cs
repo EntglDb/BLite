@@ -203,6 +203,12 @@ public sealed class IndexedDbPageStorage : IPageStorage
         if (pageId == 0)
             throw new InvalidOperationException("Cannot free the header page (page 0).");
 
+        // Stamp a Free header so a later free-space-index rebuild does not mistake the
+        // page for a Data page (PageFile.FreePage does the same on disk).
+        var freeHeader = new byte[_pageSize];
+        new PageHeader { PageId = pageId, PageType = PageType.Free }.WriteTo(freeHeader);
+        WritePage(pageId, freeHeader);
+
         _freeList.Push(pageId);
     }
 

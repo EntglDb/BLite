@@ -186,10 +186,23 @@ public sealed partial class StorageEngine
     /// This does not compact the file — a VACUUM pass is required to reclaim physical disk space.
     /// Must be called BEFORE <see cref="DeleteCollectionMetadata"/> so that metadata is still available.
     /// </remarks>
-    public void FreeCollectionPages(string collectionName)
+    public void FreeCollectionPages(string collectionName) => FreeCollectionPagesCore(collectionName);
+
+    /// <summary>
+    /// Same as <see cref="FreeCollectionPages"/>, but returns the freed page IDs.
+    /// Kept separate so the public <c>void</c> signature stays binary-compatible.
+    /// </summary>
+    /// <param name="beforeFree">Invoked with the collected page IDs before any page is returned
+    /// to the free list, so callers can invalidate cached views of them (e.g. the shared
+    /// free-space index) before they can be re-allocated. This does not lock against concurrent
+    /// inserts into other collections, so a page may still be advertised between the slot count
+    /// and this callback; drops are expected to run without concurrent writers.</param>
+    /// <returns>The page IDs that were freed.</returns>
+    internal IReadOnlyCollection<uint> FreeCollectionPagesCore(string collectionName,
+        Action<IReadOnlyCollection<uint>>? beforeFree = null)
     {
         var metadata = GetCollectionMetadata(collectionName);
-        if (metadata == null) return;
+        if (metadata == null) return Array.Empty<uint>();
 
         // Collect page IDs in a set first, then free them all — avoids modifying storage
         // while iterating over B-tree nodes (which also read from the same storage).
@@ -354,6 +367,8 @@ public sealed partial class StorageEngine
             }
         }
 
+        beforeFree?.Invoke(toFree);
+
         // Free all collected pages and remove stale WAL-index entries so that
         // a re-allocated page is not served stale data from the WAL index.
         foreach (var pageId in toFree)
@@ -361,6 +376,8 @@ public sealed partial class StorageEngine
             FreePage(pageId);
             _walIndex.TryRemove(pageId, out _);
         }
+
+        return toFree;
     }
 
     /// <summary>

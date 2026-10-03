@@ -43,6 +43,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
     /// Exposes the underlying storage engine to session instances created by this engine.
     /// </summary>
     internal StorageEngine Storage => _storage;
+    internal FreeSpaceIndexProvider FreeSpaceIndexes => _freeSpaceIndexes;
 
     /// <summary>
     /// The absolute path of the main database file, or <see langword="null"/> for in-memory engines.
@@ -315,7 +316,7 @@ public sealed class BLiteEngine : IDisposable, ITransactionHolder
         {
             collection.Dispose();
             // Free pages before deleting metadata (FreeCollectionPages reads the metadata).
-            _storage.FreeCollectionPages(name);    // no-op in multi-file mode
+            _storage.FreeCollectionPagesCore(name, _freeSpaceIndexes.InvalidatePages);    // no-op in multi-file mode
             _storage.DeleteCollectionMetadata(name);
             _storage.DropCollectionFile(name);     // no-op in single-file mode
             return true;
