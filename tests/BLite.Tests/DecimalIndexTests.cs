@@ -131,6 +131,21 @@ public class DecimalIndexTests : IDisposable
         Assert.NotNull(index.Seek(100.0));
     }
 
+    [Fact]
+    public async Task FloatBound_IsConvertedDirectly_NotThroughDouble()
+    {
+        // (decimal)(double)1.1f is 1.10000002384186m and would miss the stored 1.1m.
+        using var db = new TestDbContext(_dbPath);
+        await db.Products.InsertAsync(new Product { Id = 1, Title = "a", Price = 1.1m });
+        await db.Products.InsertAsync(new Product { Id = 2, Title = "b", Price = 1.2m });
+
+        var index = PriceIndex(db);
+
+        Assert.NotNull(index.Seek(1.1f));
+        Assert.Single(index.Range(1.1f, 1.1f));
+        Assert.Equal(2, index.CountRange(1.1f, 1.2f, startInclusive: true, endInclusive: true));
+    }
+
     // ── Legacy index migration ───────────────────────────────────────────────
 
     [Fact]
@@ -197,6 +212,12 @@ public class DecimalIndexTests : IDisposable
             Assert.Equal(IndexMetadata.CurrentKeyFormat, PriceIndex(db).KeyFormat);
             Assert.Equal(Values.Length, AllKeys(PriceIndex(db)).Count);
         }
+
+        // Both metadata readers share one parser, so the catalog listing sees the format too.
+        using var storage = new StorageEngine(_dbPath, PageFileConfig.Default);
+        var products = storage.GetAllCollectionsMetadata().Single(m => m.Name == "products_collection");
+        var priceIndex = products.Indexes.Single(i => i.PropertyPaths.Single() == nameof(Product.Price));
+        Assert.Equal(IndexMetadata.CurrentKeyFormat, priceIndex.KeyFormat);
     }
 
     private static List<IndexKey> AllKeys(CollectionSecondaryIndex<int, Product> index)

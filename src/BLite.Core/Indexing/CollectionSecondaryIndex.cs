@@ -529,6 +529,16 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         return (decimal)d;
     }
 
+    // Converted directly: going through double first would turn 1.1f into 1.10000002384186m
+    // and miss a stored 1.1m.
+    private static decimal ToDecimalClamped(float f)
+    {
+        if (float.IsNaN(f)) return decimal.MinValue;
+        if (f >= (float)decimal.MaxValue) return decimal.MaxValue;
+        if (f <= (float)decimal.MinValue) return decimal.MinValue;
+        return (decimal)f;
+    }
+
     /// <summary>
     /// Key format this index's pages were written with (see <see cref="IndexMetadata.KeyFormat"/>).
     /// New indexes start at <see cref="IndexMetadata.CurrentKeyFormat"/>; indexes loaded from
