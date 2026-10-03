@@ -91,6 +91,10 @@ public sealed partial class StorageEngine
         return transaction;
     }
 
+    /// <summary>Looks up a currently active transaction by id.</summary>
+    internal bool TryGetActiveTransaction(ulong transactionId, out Transaction transaction)
+        => _activeTransactions.TryGetValue(transactionId, out transaction!);
+
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
         if (!_activeTransactions.ContainsKey(transaction.TransactionId))

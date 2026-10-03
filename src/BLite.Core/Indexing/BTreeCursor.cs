@@ -42,7 +42,7 @@ internal sealed class BTreeCursor : IBTreeCursor
     public bool MoveToFirst()
     {
         // Find left-most leaf
-        var pageId = _index.RootPageId;
+        var pageId = _index.RootPageIdFor(_transactionId);
         while (true)
         {
             LoadPage(pageId);
@@ -60,7 +60,7 @@ internal sealed class BTreeCursor : IBTreeCursor
     public bool MoveToLast()
     {
         // Find right-most leaf
-        var pageId = _index.RootPageId;
+        var pageId = _index.RootPageIdFor(_transactionId);
         while (true)
         {
             LoadPage(pageId);

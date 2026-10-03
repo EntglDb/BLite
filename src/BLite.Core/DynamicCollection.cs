@@ -129,11 +129,9 @@ public sealed class DynamicCollection : IDisposable
                 var fieldPath = idxMeta.PropertyPaths[0];
                 var indexName = idxMeta.Name; // capture for closure
 
-                // Root page ID tracking is deferred to PersistIndexMetadata() at commit time.
-                // BTreeIndex already updates its internal _rootPageId before invoking this callback,
-                // so no action is needed here. Writing to disk during Insert was both unnecessary
-                // contention and a crash-safety bug (uncommitted root IDs on disk).
-                Action<uint> makeRootCallback = _ => { };
+                // BTreeIndex invokes this callback only once the transaction that split/collapsed the
+                // root has committed, so the new root is persisted here (never uncommitted root IDs).
+                Action<uint> makeRootCallback = _ => PersistIndexMetadata();
 
                 switch (idxMeta.Type)
                 {
@@ -170,10 +168,10 @@ public sealed class DynamicCollection : IDisposable
         }
 
         var indexOptions = IndexOptions.CreateUnique("_id");
-        // Root page ID tracking is deferred to PersistIndexMetadata() at commit time.
-        // BTreeIndex already updates its internal _rootPageId before invoking this callback.
+        // BTreeIndex invokes this callback only after the transaction that changed the root has
+        // committed, so the committed root can be persisted right away.
         _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId,
-            onRootChanged: _ => { });
+            onRootChanged: _ => PersistIndexMetadata());
 
         // Persist root page if newly allocated
         if (metadata.PrimaryRootPageId != _primaryIndex.RootPageId)

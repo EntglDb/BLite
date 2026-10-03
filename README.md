@@ -721,8 +721,9 @@ var results = await db.Users.AsQueryable()
 // 5. Or use explicit transactions for fine-grained control
 using (var txn = db.BeginTransaction())
 {
-    await db.Users.InsertAsync(new User { Name = "Charlie" });
-    await txn.CommitAsync(); // Explicit async commit
+    // Pass the transaction to every collection call, otherwise the call auto-commits on its own
+    await db.Users.InsertAsync(new User { Name = "Charlie" }, txn);
+    await txn.CommitAsync(); // Explicit async commit (or await txn.RollbackAsync() to discard)
 }
 ```
 
