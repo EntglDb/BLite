@@ -60,8 +60,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         CollectionIndexDefinition<T> definition,
         StorageEngine storage,
         IDocumentMapper<TId, T> mapper,
-        uint rootPageId = 0,
-        Action<uint>? onRootChanged = null)
+        uint rootPageId = 0)
     {
         _definition = definition ?? throw new ArgumentNullException(nameof(definition));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
@@ -70,7 +69,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         
         if (indexOptions.Type == IndexType.Vector)
         {
-            _vectorIndex = new VectorSearchIndex(storage, indexOptions, rootPageId, onRootChanged);
+            _vectorIndex = new VectorSearchIndex(storage, indexOptions, rootPageId);
             _btreeIndex = null;
             _spatialIndex = null;
         }
@@ -82,7 +81,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         }
         else
         {
-            _btreeIndex = new BTreeIndex(storage, indexOptions, rootPageId, onRootChanged);
+            _btreeIndex = new BTreeIndex(storage, indexOptions, rootPageId);
             _vectorIndex = null;
             _spatialIndex = null;
         }

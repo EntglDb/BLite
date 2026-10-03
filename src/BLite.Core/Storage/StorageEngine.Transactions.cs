@@ -91,6 +91,12 @@ public sealed partial class StorageEngine
         return transaction;
     }
 
+    /// <summary>
+    /// Forgets a transaction once it has committed or rolled back through the <c>ulong</c>
+    /// overloads, which callers use directly without going through the <see cref="Transaction"/> ones.
+    /// </summary>
+    private void CompleteTransaction(ulong transactionId) => _activeTransactions.TryRemove(transactionId, out _);
+
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
         if (!_activeTransactions.ContainsKey(transaction.TransactionId))
@@ -185,6 +191,7 @@ public sealed partial class StorageEngine
         // already acquired the gate. This method is also called from the group commit writer
         // which should not be gated.
         bool needsCheckpoint = false;
+        bool completed = false;
 
         if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
             throw new TimeoutException("Timed out acquiring commit lock (CommitTransaction).");
@@ -196,7 +203,8 @@ public sealed partial class StorageEngine
                 // No writes for this transaction, just write commit record
                 await _wal.WriteCommitRecordAsync(transactionId);
                 await _wal.FlushAsync();
-                return;
+                completed = true;
+                goto Completed;
             }
 
             // 1. Write all changes to WAL (from cache, not writeSet!)
@@ -220,11 +228,16 @@ public sealed partial class StorageEngine
 
             // Check if checkpoint is needed, but defer it until after releasing the lock
             needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
+            completed = true;
         }
         finally
         {
             _commitLock.Release();
         }
+
+        Completed:
+        if (completed)
+            CompleteTransaction(transactionId);
 
         // Fire checkpoint on a separate task so the caller isn't blocked.
         if (needsCheckpoint)
@@ -277,6 +290,7 @@ public sealed partial class StorageEngine
             await _commitChannel.Writer.WriteAsync(pending, ct).ConfigureAwait(false);
             await pending.Completion.Task.ConfigureAwait(false);
             success = true;
+            CompleteTransaction(transactionId);
         }
         finally
         {
@@ -371,6 +385,8 @@ public sealed partial class StorageEngine
             _commitLock.Release();
         }
 
+        CompleteTransaction(transactionId);
+
         if (needsCheckpoint)
         {
             _ = Task.Run(() => CheckpointAsync());
@@ -384,7 +400,14 @@ public sealed partial class StorageEngine
     public async Task RollbackTransactionAsync(ulong transactionId)
     {
         _walCache.TryRemove(transactionId, out _);
-        await _wal.WriteAbortRecordAsync(transactionId);
+        try
+        {
+            await _wal.WriteAbortRecordAsync(transactionId);
+        }
+        finally
+        {
+            CompleteTransaction(transactionId);
+        }
         _metrics?.Publish(new Metrics.MetricEvent
         {
             Timestamp = Stopwatch.GetTimestamp(),

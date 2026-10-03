@@ -38,15 +38,21 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         // Load existing metadata via storage
         _metadata = _storage.GetCollectionMetadata(_collectionName) ?? new CollectionMetadata { Name = _collectionName };
         
-        // Initialize indexes from metadata
+        // Initialize indexes from metadata. Root page ids are fixed for the lifetime of an index
+        // (a root split rewrites the root page in place), so they only need persisting when the
+        // constructor allocated one (an index persisted before its root was allocated eagerly).
+        bool rootAllocated = false;
         foreach (var idxMeta in _metadata.Indexes)
         {
-            var indexName = idxMeta.Name; // capture for closure
+            var indexName = idxMeta.Name;
             var definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type, idxMeta.Dimensions, idxMeta.Metric);
-            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId,
-                onRootChanged: _ => { lock (_lock) { SaveMetadata(); } });
+            var index = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId);
             _indexes[indexName] = index;
+            rootAllocated |= index.RootPageId != idxMeta.RootPageId;
         }
+
+        if (rootAllocated)
+            SaveMetadata();
     }
 
     private void UpdateMetadata()
@@ -88,8 +94,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 throw new InvalidOperationException($"Index '{definition.Name}' already exists");
 
             // Create secondary index
-            var secondaryIndex = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper,
-                onRootChanged: _ => { lock (_lock) { SaveMetadata(); } });
+            var secondaryIndex = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper);
             _indexes[definition.Name] = secondaryIndex;
             _cachedIndexInfo = null; // invalidate cache
             

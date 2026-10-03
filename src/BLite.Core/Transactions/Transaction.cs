@@ -138,10 +138,18 @@ public sealed class Transaction : ITransaction
             throw new InvalidOperationException("Cannot rollback committed transaction");
 
         _pendingChanges.Clear();
-        await _storage.RollbackTransactionAsync(_transactionId);
-        _state = TransactionState.Aborted;
-        
-        InvokeOnRollbackHandlersSafely();
+        try
+        {
+            await _storage.RollbackTransactionAsync(_transactionId);
+        }
+        finally
+        {
+            _state = TransactionState.Aborted;
+
+            // Always revert in-memory per-transaction state (e.g. buffered documents),
+            // even when the WAL abort record could not be written.
+            InvokeOnRollbackHandlersSafely();
+        }
     }
 
     private void InvokeOnRollbackHandlersSafely()

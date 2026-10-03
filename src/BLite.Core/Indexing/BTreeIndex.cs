@@ -16,24 +16,25 @@ public sealed class BTreeIndex
 {
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
-    private uint _rootPageId;
-    private readonly Action<uint>? _onRootChanged;
+    private readonly uint _rootPageId;
     internal const int MaxEntriesPerNode = 64;
 
+    /// <param name="rootPageId">
+    /// The root page persisted in the collection metadata, or 0 to allocate a new empty index.
+    /// The root page id never changes afterwards: a root split or collapse rewrites the root
+    /// page in place (see <see cref="CreateNewRoot"/>), so uncommitted root changes stay in the
+    /// owning transaction's page cache like any other page write and the persisted id stays valid.
+    /// </param>
     public BTreeIndex(StorageEngine storage,
                       IndexOptions options, 
-                      uint rootPageId = 0,
-                      Action<uint>? onRootChanged = null)
+                      uint rootPageId = 0)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
-        _rootPageId = rootPageId;
-        _onRootChanged = onRootChanged;
-
-        if (_rootPageId == 0)
+        if (rootPageId == 0)
         {
             // Allocate new root page (cannot use page 0 which is file header)
-            _rootPageId = _storage.AllocateIndexPage();
+            rootPageId = _storage.AllocateIndexPage();
 
             // Initialize as empty leaf
             var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -45,7 +46,7 @@ public sealed class BTreeIndex
                 // Write headers
                 var pageHeader = new PageHeader
                 {
-                    PageId = _rootPageId,
+                    PageId = rootPageId,
                     PageType = PageType.Index,
                     FreeBytes = (ushort)(_storage.PageSize - 32),
                     NextPageId = 0,
@@ -62,22 +63,19 @@ public sealed class BTreeIndex
                 };
                 nodeHeader.WriteTo(pageBuffer.AsSpan(32));
 
-                _storage.WritePageImmediate(_rootPageId, pageBuffer);
+                _storage.WritePageImmediate(rootPageId, pageBuffer);
             }
             finally
             {
                 System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
             }
         }
+
+        _rootPageId = rootPageId;
     }
 
+    /// <summary>The root page of this index. It is fixed for the lifetime of the index.</summary>
     public uint RootPageId => _rootPageId;
-
-    /// <summary>
-    /// Invokes the optional callback to notify the owner that the root page has changed
-    /// and must be re-persisted in collection metadata.
-    /// </summary>
-    private void NotifyRootChanged() => _onRootChanged?.Invoke(_rootPageId);
 
     /// <summary>
     /// Reads a page using StorageEngine for transaction isolation.
@@ -910,13 +908,75 @@ public sealed class BTreeIndex
         }
     }
 
+    /// <summary>
+    /// Grows the tree by one level after the root was split, keeping the root page id fixed:
+    /// the root's current content (the left half of the split) moves to a freshly allocated
+    /// page and the root page is rewritten in place as an internal node pointing at both halves.
+    /// </summary>
     private void CreateNewRoot(uint leftChildId, IndexKey key, uint rightChildId, ulong transactionId)
     {
-        var newRootId = CreateNode(isLeaf: false, transactionId);
+        if (leftChildId != _rootPageId)
+            throw new InvalidOperationException("CreateNewRoot must be called with the root page as left child.");
+
+        var leftCopyId = _storage.AllocateIndexPage();
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            ReadPage(_rootPageId, transactionId, pageBuffer);
+            var page = pageBuffer.AsSpan(0, _storage.PageSize);
+            var nodeHeader = RelocateNode(page, leftCopyId);
+            WritePage(leftCopyId, transactionId, page);
+
+            // The old root was a leaf: its right sibling (the other half) points back at it.
+            if (nodeHeader.IsLeaf && nodeHeader.NextLeafPageId != 0)
+                UpdatePrevPointer(nodeHeader.NextLeafPageId, leftCopyId, transactionId);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+
         var entries = new List<InternalEntry> { new InternalEntry(key, rightChildId) };
-        WriteInternalNode(newRootId, leftChildId, entries, transactionId);
-        _rootPageId = newRootId;
-        NotifyRootChanged(); // Caller must re-persist the new root page ID in collection metadata
+        WriteInternalNode(_rootPageId, leftCopyId, entries, transactionId);
+    }
+
+    /// <summary>
+    /// Shrinks the tree by one level when the root is left with a single child, keeping the
+    /// root page id fixed: the child's content is copied into the root page and the child freed.
+    /// </summary>
+    private void CollapseRootInto(uint soleChildId, ulong transactionId)
+    {
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            ReadPage(soleChildId, transactionId, pageBuffer);
+            var page = pageBuffer.AsSpan(0, _storage.PageSize);
+            RelocateNode(page, _rootPageId);
+            WritePage(_rootPageId, transactionId, page);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
+
+        // The sole child is intentionally left orphaned rather than freed: FreePage acts on disk
+        // immediately, while the copy of this page written by MergeNodes still sits in the
+        // transaction cache and the committed root still points at it until commit. Freeing it
+        // here would let a reallocation be overwritten by the stale image on commit and would
+        // leave the committed tree pointing at a free page if the transaction rolls back.
+    }
+
+    /// <summary>Rewrites the page and node headers of a node image so it lives at <paramref name="newPageId"/>.</summary>
+    private static BTreeNodeHeader RelocateNode(Span<byte> page, uint newPageId)
+    {
+        var pageHeader = PageHeader.ReadFrom(page);
+        pageHeader.PageId = newPageId;
+        pageHeader.WriteTo(page);
+
+        var nodeHeader = BTreeNodeHeader.ReadFrom(page.Slice(32));
+        nodeHeader.PageId = newPageId;
+        nodeHeader.WriteTo(page.Slice(32, 20));
+        return nodeHeader;
     }
 
     private uint CreateNode(bool isLeaf, ulong transactionId)
@@ -1611,9 +1671,8 @@ public sealed class BTreeIndex
         }
         else if (parentId == _rootPageId && parentEntries.Count == 0)
         {
-            // Root collapse: P0 is the sole remaining child and becomes the new root.
-            _rootPageId = p0;
-            NotifyRootChanged(); // Caller must re-persist the new root page ID in collection metadata
+            // Root collapse: P0 is the sole remaining child; its content moves into the root page.
+            CollapseRootInto(p0, transactionId);
         }
     }
 
@@ -1912,8 +1971,9 @@ public sealed class BTreeIndex
     public IReadOnlyList<uint> CollectAllPages()
     {
         var result = new List<uint>();
-        if (_rootPageId != 0)
-            CollectPagesRecursive(_rootPageId, result);
+        var root = RootPageId;
+        if (root != 0)
+            CollectPagesRecursive(root, result);
         return result;
     }
 

@@ -129,12 +129,6 @@ public sealed class DynamicCollection : IDisposable
                 var fieldPath = idxMeta.PropertyPaths[0];
                 var indexName = idxMeta.Name; // capture for closure
 
-                // Root page ID tracking is deferred to PersistIndexMetadata() at commit time.
-                // BTreeIndex already updates its internal _rootPageId before invoking this callback,
-                // so no action is needed here. Writing to disk during Insert was both unnecessary
-                // contention and a crash-safety bug (uncommitted root IDs on disk).
-                Action<uint> makeRootCallback = _ => { };
-
                 switch (idxMeta.Type)
                 {
                     case IndexType.BTree:
@@ -142,7 +136,7 @@ public sealed class DynamicCollection : IDisposable
                         var opts = idxMeta.IsUnique
                             ? IndexOptions.CreateUnique(idxMeta.PropertyPaths)
                             : IndexOptions.CreateBTree(idxMeta.PropertyPaths);
-                        var btree = new BTreeIndex(_storage, opts, idxMeta.RootPageId, makeRootCallback);
+                        var btree = new BTreeIndex(_storage, opts, idxMeta.RootPageId);
                         _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(btree, fieldPath, opts);
                         break;
                     }
@@ -170,17 +164,30 @@ public sealed class DynamicCollection : IDisposable
         }
 
         var indexOptions = IndexOptions.CreateUnique("_id");
-        // Root page ID tracking is deferred to PersistIndexMetadata() at commit time.
-        // BTreeIndex already updates its internal _rootPageId before invoking this callback.
-        _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId,
-            onRootChanged: _ => { });
+        // Root page ids are fixed for the lifetime of an index: a root split rewrites the root page
+        // in place, so the ids persisted here never go stale and nothing needs saving on splits.
+        _primaryIndex = new BTreeIndex(_storage, indexOptions, primaryRootPageId);
 
-        // Persist root page if newly allocated
+        // Persist root pages that were newly allocated by the index constructors (a fresh primary
+        // index, or a secondary index persisted before its root was allocated eagerly).
+        var rootsChanged = false;
         if (metadata.PrimaryRootPageId != _primaryIndex.RootPageId)
         {
             metadata.PrimaryRootPageId = _primaryIndex.RootPageId;
-            _storage.SaveCollectionMetadata(metadata);
+            rootsChanged = true;
         }
+        foreach (var idxMeta in metadata.Indexes)
+        {
+            if (_secondaryIndexes.TryGetValue(idxMeta.Name, out var idx) && idx.RootPageId != idxMeta.RootPageId)
+            {
+                idxMeta.RootPageId = idx.RootPageId;
+                rootsChanged = true;
+            }
+        }
+        // Only the root ids are patched in place so index entries this constructor does not
+        // restore (unknown types, no property paths) are preserved as stored.
+        if (rootsChanged)
+            _storage.SaveCollectionMetadata(metadata);
 
         // Rebuild the free-space index from existing page headers on cold start.
         RebuildFreeSpaceIndex();

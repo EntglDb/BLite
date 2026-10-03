@@ -844,8 +844,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         // Create primary index on _id (stores ObjectId → DocumentLocation mapping)
         // Use persisted root page ID if available
         var indexOptions = IndexOptions.CreateUnique("_id");
-        _primaryIndex = new BTreeIndex(_storage, indexOptions, _indexManager.PrimaryRootPageId,
-            onRootChanged: newRoot => _indexManager.SetPrimaryRootPageId(newRoot));
+        _primaryIndex = new BTreeIndex(_storage, indexOptions, _indexManager.PrimaryRootPageId);
 
         // If a new root page was allocated, persist it
         if (_indexManager.PrimaryRootPageId != _primaryIndex.RootPageId)

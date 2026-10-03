@@ -14,41 +14,43 @@ internal class RTreeIndex : IDisposable
 {
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
-    private uint _rootPageId;
+    private readonly uint _rootPageId;
     private readonly object _lock = new();
     private readonly int _pageSize;
 
+    /// <param name="rootPageId">
+    /// The root page persisted in the collection metadata, or 0 to allocate a new empty index.
+    /// The root page id never changes afterwards: a root split rewrites the root page in place,
+    /// so uncommitted root changes stay in the owning transaction's page cache like any other
+    /// page write and the persisted id stays valid.
+    /// </param>
     public RTreeIndex(StorageEngine storage, IndexOptions options, uint rootPageId)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
-        _rootPageId = rootPageId;
         _pageSize = _storage.PageSize;
 
-        if (_rootPageId == 0)
-        {
-            InitializeNewIndex();
-        }
+        _rootPageId = rootPageId == 0 ? InitializeNewIndex() : rootPageId;
     }
 
+    /// <summary>The root page of this index. It is fixed for the lifetime of the index.</summary>
     public uint RootPageId => _rootPageId;
 
-    private void InitializeNewIndex()
+    private uint InitializeNewIndex()
     {
         var buffer = RentPageBuffer();
         try
         {
-            _rootPageId = _storage.AllocateIndexPage();
-            SpatialPage.Initialize(buffer, _rootPageId, true, 0);
-            _storage.WritePageImmediate(_rootPageId, buffer);
+            var rootPageId = _storage.AllocateIndexPage();
+            SpatialPage.Initialize(buffer, rootPageId, true, 0);
+            _storage.WritePageImmediate(rootPageId, buffer);
+            return rootPageId;
         }
         finally { ReturnPageBuffer(buffer); }
     }
 
     public IEnumerable<DocumentLocation> Search(GeoBox area, ITransaction? transaction = null)
     {
-        if (_rootPageId == 0) yield break;
-
         var stack = new Stack<uint>();
         stack.Push(_rootPageId);
 
@@ -244,12 +246,17 @@ internal class RTreeIndex : IDisposable
             entries.Remove(seed1);
             entries.Remove(seed2);
 
-            // Initialize two nodes
+            // Initialize two nodes. When the root splits, the root page id must stay the same
+            // (it is persisted in the collection metadata), so both halves go to fresh pages and
+            // the root page is rewritten in place below as their parent.
+            bool isRoot = pageId == _rootPageId;
+            uint leftPageId = isRoot ? _storage.AllocateIndexPage() : pageId;
             uint newPageId = _storage.AllocateIndexPage();
-            SpatialPage.Initialize(buffer, pageId, isLeaf, level);
+            uint halvesParentId = isRoot ? _rootPageId : parentId;
+            SpatialPage.Initialize(buffer, leftPageId, isLeaf, level);
             SpatialPage.Initialize(newBuffer, newPageId, isLeaf, level);
-            SpatialPage.SetParentPageId(buffer, parentId);
-            SpatialPage.SetParentPageId(newBuffer, parentId);
+            SpatialPage.SetParentPageId(buffer, halvesParentId);
+            SpatialPage.SetParentPageId(newBuffer, halvesParentId);
 
             SpatialPage.WriteEntry(buffer, 0, seed1.Mbr, seed1.Pointer);
             SpatialPage.SetEntryCount(buffer, 1);
@@ -289,35 +296,37 @@ internal class RTreeIndex : IDisposable
             // Write pages
             if (transaction != null)
             {
-                _storage.WritePage(pageId, transaction.TransactionId, buffer);
+                _storage.WritePage(leftPageId, transaction.TransactionId, buffer);
                 _storage.WritePage(newPageId, transaction.TransactionId, newBuffer);
             }
             else
             {
-                _storage.WritePageImmediate(pageId, buffer);
+                _storage.WritePageImmediate(leftPageId, buffer);
                 _storage.WritePageImmediate(newPageId, newBuffer);
             }
 
-            // Propagate split upwards
-            if (pageId == _rootPageId)
+            // Children redistributed between the two halves must point at their new parent
+            // (UpdateMBRUpwards follows parent pointers).
+            if (!isLeaf)
             {
-                // New Root
-                uint newRootId = _storage.AllocateIndexPage();
-                SpatialPage.Initialize(buffer, newRootId, false, (byte)(level + 1));
-                SpatialPage.WriteEntry(buffer, 0, mbr1, new DocumentLocation(pageId, 0));
+                if (isRoot)
+                    UpdateChildrenParentPointers(buffer, leftPageId, transaction);
+                UpdateChildrenParentPointers(newBuffer, newPageId, transaction);
+            }
+
+            // Propagate split upwards
+            if (isRoot)
+            {
+                // Rewrite the root page in place as the parent of the two halves.
+                SpatialPage.Initialize(buffer, _rootPageId, false, (byte)(level + 1));
+                SpatialPage.WriteEntry(buffer, 0, mbr1, new DocumentLocation(leftPageId, 0));
                 SpatialPage.WriteEntry(buffer, 1, mbr2, new DocumentLocation(newPageId, 0));
                 SpatialPage.SetEntryCount(buffer, 2);
-                
-                if (transaction != null)
-                    _storage.WritePage(newRootId, transaction.TransactionId, buffer);
-                else
-                    _storage.WritePageImmediate(newRootId, buffer);
 
-                _rootPageId = newRootId;
-                
-                // UpdateAsync parent pointers
-                UpdateParentPointer(pageId, newRootId, transaction);
-                UpdateParentPointer(newPageId, newRootId, transaction);
+                if (transaction != null)
+                    _storage.WritePage(_rootPageId, transaction.TransactionId, buffer);
+                else
+                    _storage.WritePageImmediate(_rootPageId, buffer);
             }
             else
             {
@@ -330,6 +339,16 @@ internal class RTreeIndex : IDisposable
         { 
             ReturnPageBuffer(buffer); 
             ReturnPageBuffer(newBuffer);
+        }
+    }
+
+    private void UpdateChildrenParentPointers(ReadOnlySpan<byte> node, uint parentId, ITransaction? transaction)
+    {
+        ushort count = SpatialPage.GetEntryCount(node);
+        for (int i = 0; i < count; i++)
+        {
+            SpatialPage.ReadEntry(node, i, out _, out var child);
+            UpdateParentPointer(child.PageId, parentId, transaction);
         }
     }
 
