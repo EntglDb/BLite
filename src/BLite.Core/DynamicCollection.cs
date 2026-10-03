@@ -147,14 +147,14 @@ public sealed class DynamicCollection : IDisposable
                     case IndexType.Vector:
                     {
                         var opts = IndexOptions.CreateVector(idxMeta.Dimensions, idxMeta.Metric, 16, 200, idxMeta.PropertyPaths);
-                        var vector = new VectorSearchIndex(_storage, opts, idxMeta.RootPageId);
+                        var vector = new VectorSearchIndex(_storage, opts, idxMeta.RootPageId, makeRootCallback);
                         _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(vector, fieldPath, opts);
                         break;
                     }
                     case IndexType.Spatial:
                     {
                         var opts = IndexOptions.CreateSpatial(idxMeta.PropertyPaths);
-                        var spatial = new RTreeIndex(_storage, opts, idxMeta.RootPageId);
+                        var spatial = new RTreeIndex(_storage, opts, idxMeta.RootPageId, makeRootCallback);
                         _secondaryIndexes[idxMeta.Name] = new DynamicSecondaryIndex(spatial, fieldPath, opts);
                         break;
                     }

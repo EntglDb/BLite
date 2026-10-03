@@ -117,4 +117,78 @@ public class TransactionRootSplitTests : IDisposable
             count++;
         Assert.Equal(200, count);
     }
+
+    // ── Spatial (R-Tree) and vector (HNSW) indexes: same publish-before-commit problem ──
+
+    private static async Task<List<GeoEntity>> NearAllAsync(TestDbContext db)
+        => await Task.Run(async () =>
+        {
+            var found = new List<GeoEntity>();
+            await foreach (var g in db.GeoItems.NearAsync("idx_spatial", (40.0, -74.0), radiusKm: 5000))
+                found.Add(g);
+            return found;
+        }).WaitAsync(Timeout);
+
+    [Fact]
+    public async Task Spatial_RootSplit_RolledBack_LeavesIndexUsable()
+    {
+        using (var db = new TestDbContext(_dbPath))
+        {
+            using (var txn = db.BeginTransaction())
+            {
+                for (int i = 0; i < 300; i++) // more than one R-Tree page holds, so the root splits
+                    await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = $"G{i}", Location = (40.0 + i * 0.001, -74.0) }, txn);
+                await txn.RollbackAsync();
+            }
+
+            Assert.Empty(await NearAllAsync(db));
+
+            await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = "after", Location = (40.0, -74.0) });
+            Assert.Single(await NearAllAsync(db));
+        }
+
+        using var db2 = new TestDbContext(_dbPath);
+        Assert.Single(await NearAllAsync(db2));
+    }
+
+    [Fact]
+    public async Task Spatial_ReadOutsideTransaction_WhileRootSplitIsUncommitted_SeesOnlyCommittedData()
+    {
+        using var db = new TestDbContext(_dbPath);
+        await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = "committed", Location = (40.0, -74.0) });
+
+        using var txn = db.BeginTransaction();
+        for (int i = 0; i < 300; i++)
+            await db.GeoItems.InsertAsync(new GeoEntity { Id = ObjectId.NewObjectId(), Name = $"G{i}", Location = (40.0 + i * 0.001, -74.0) }, txn);
+
+        Assert.Single(await NearAllAsync(db));
+
+        await txn.CommitAsync();
+        Assert.Equal(301, (await NearAllAsync(db)).Count);
+    }
+
+    [Fact]
+    public async Task Vector_FirstInsert_RolledBack_LeavesIndexUsable()
+    {
+        using (var db = new TestDbContext(_dbPath))
+        {
+            using (var txn = db.BeginTransaction())
+            {
+                for (int i = 0; i < 10; i++)
+                    await db.VectorItems.InsertAsync(new VectorEntity { Title = $"V{i}", Embedding = [i, 1.0f, 0.0f] }, txn);
+                await txn.RollbackAsync();
+            }
+
+            var none = await Task.Run(async () => await db.VectorItems.VectorSearchAsync("idx_vector", [1.0f, 1.0f, 1.0f], 5).ToListAsync()).WaitAsync(Timeout);
+            Assert.Empty(none);
+
+            await db.VectorItems.InsertAsync(new VectorEntity { Title = "after", Embedding = [1.0f, 0.0f, 0.0f] });
+            var found = await Task.Run(async () => await db.VectorItems.VectorSearchAsync("idx_vector", [1.0f, 1.0f, 1.0f], 5).ToListAsync()).WaitAsync(Timeout);
+            Assert.Single(found);
+        }
+
+        using var db2 = new TestDbContext(_dbPath);
+        var reopened = await Task.Run(async () => await db2.VectorItems.VectorSearchAsync("idx_vector", [1.0f, 1.0f, 1.0f], 5).ToListAsync()).WaitAsync(Timeout);
+        Assert.Single(reopened);
+    }
 }

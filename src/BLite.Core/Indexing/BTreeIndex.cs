@@ -16,8 +16,7 @@ public sealed class BTreeIndex
 {
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
-    private uint _rootPageId;
-    private readonly Action<uint>? _onRootChanged;
+    private readonly TransactionalState<uint> _root;
     internal const int MaxEntriesPerNode = 64;
 
     public BTreeIndex(StorageEngine storage,
@@ -27,13 +26,10 @@ public sealed class BTreeIndex
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
-        _rootPageId = rootPageId;
-        _onRootChanged = onRootChanged;
-
-        if (_rootPageId == 0)
+        if (rootPageId == 0)
         {
             // Allocate new root page (cannot use page 0 which is file header)
-            _rootPageId = _storage.AllocateIndexPage();
+            rootPageId = _storage.AllocateIndexPage();
 
             // Initialize as empty leaf
             var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -45,7 +41,7 @@ public sealed class BTreeIndex
                 // Write headers
                 var pageHeader = new PageHeader
                 {
-                    PageId = _rootPageId,
+                    PageId = rootPageId,
                     PageType = PageType.Index,
                     FreeBytes = (ushort)(_storage.PageSize - 32),
                     NextPageId = 0,
@@ -62,115 +58,34 @@ public sealed class BTreeIndex
                 };
                 nodeHeader.WriteTo(pageBuffer.AsSpan(32));
 
-                _storage.WritePageImmediate(_rootPageId, pageBuffer);
+                _storage.WritePageImmediate(rootPageId, pageBuffer);
             }
             finally
             {
                 System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
             }
         }
+
+        _root = new TransactionalState<uint>(_storage, rootPageId, onRootChanged);
     }
 
     /// <summary>
     /// The last committed root page (what gets persisted in the collection metadata). A root
     /// change that its transaction has not committed yet is not reflected here.
     /// </summary>
-    public uint RootPageId => RootFor(0);
+    public uint RootPageId => _root.Committed;
 
-    // Uncommitted root change (a root split or collapse): the new root page only exists in the
-    // owning transaction's private page cache, so it must not be visible to other readers nor be
-    // persisted in the collection metadata until that transaction commits.
-    private readonly object _rootLock = new();
-    private ulong _rootOwnerTxnId;
-    private uint _committedRootPageId;
+    /// <summary>The root page that <paramref name="transactionId"/> must traverse (its own pending root, else the committed one).</summary>
+    internal uint RootPageIdFor(ulong transactionId) => _root.For(transactionId);
 
-    /// <summary>
-    /// Returns the root page that <paramref name="transactionId"/> must traverse: the owner of a
-    /// pending root change sees its own new root, everybody else the last committed one.
-    /// </summary>
-    private uint RootFor(ulong transactionId)
-    {
-        lock (_rootLock)
-            return _rootOwnerTxnId != 0 && _rootOwnerTxnId != transactionId ? _committedRootPageId : _rootPageId;
-    }
+    private uint RootFor(ulong transactionId) => _root.For(transactionId);
 
     /// <summary>
     /// Changes the root page on behalf of <paramref name="transactionId"/>. The change is made
-    /// visible to other readers and persisted in the collection metadata only on commit, and
-    /// reverted on rollback.
+    /// visible to other readers and persisted in the collection metadata (via the root-changed
+    /// callback) only on commit, and discarded on rollback.
     /// </summary>
-    private void SetRoot(uint newRootId, ulong transactionId)
-    {
-        if (transactionId == 0 || !_storage.TryGetActiveTransaction(transactionId, out var txn)
-            || txn.State != TransactionState.Active)
-        {
-            uint root;
-            lock (_rootLock)
-            {
-                _rootPageId = newRootId;
-                if (_rootOwnerTxnId != 0)
-                    _committedRootPageId = newRootId; // keep the pending owner's rollback target current
-                root = newRootId;
-            }
-            _onRootChanged?.Invoke(root);
-            return;
-        }
-
-        bool register;
-        lock (_rootLock)
-        {
-            register = _rootOwnerTxnId != transactionId;
-            if (register)
-            {
-                // NOTE: only one transaction at a time can own a pending root change. Index pages are
-                // not locked, so a second transaction splitting the root concurrently supersedes the
-                // first one (pre-existing limitation: concurrent root splits are not supported).
-                if (_rootOwnerTxnId == 0)
-                    _committedRootPageId = _rootPageId;
-                _rootOwnerTxnId = transactionId;
-            }
-            _rootPageId = newRootId;
-        }
-
-        if (!register)
-            return;
-
-        txn.OnCommit += () =>
-        {
-            uint root = 0;
-            bool notify;
-            lock (_rootLock)
-            {
-                notify = _rootOwnerTxnId == transactionId;
-                if (notify)
-                {
-                    _rootOwnerTxnId = 0;
-                    root = _rootPageId; // captured under the lock: a later owner's private root must not be persisted
-                }
-            }
-            if (notify)
-                _onRootChanged?.Invoke(root);
-        };
-        txn.OnRollback += () =>
-        {
-            lock (_rootLock)
-            {
-                if (_rootOwnerTxnId != transactionId)
-                    return;
-                _rootPageId = _committedRootPageId;
-                _rootOwnerTxnId = 0;
-            }
-        };
-    }
-
-    /// <summary>
-    /// Invokes the optional callback to notify the owner that the root page has changed
-    /// and must be re-persisted in collection metadata.
-    /// </summary>
-    private void NotifyRootChanged() => _onRootChanged?.Invoke(_rootPageId);
-
-    /// <summary>The root page that <paramref name="transactionId"/> must traverse (its own pending root, else the committed one).</summary>
-    internal uint RootPageIdFor(ulong transactionId) => RootFor(transactionId);
+    private void SetRoot(uint newRootId, ulong transactionId) => _root.Set(newRootId, transactionId);
 
     /// <summary>
     /// Reads a page using StorageEngine for transaction isolation.

@@ -76,7 +76,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
         }
         else if (indexOptions.Type == IndexType.Spatial)
         {
-            _spatialIndex = new RTreeIndex(storage, indexOptions, rootPageId);
+            _spatialIndex = new RTreeIndex(storage, indexOptions, rootPageId, onRootChanged);
             _btreeIndex = null;
             _vectorIndex = null;
         }

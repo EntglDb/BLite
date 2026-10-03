@@ -14,43 +14,48 @@ internal class RTreeIndex : IDisposable
 {
     private readonly StorageEngine _storage;
     private readonly IndexOptions _options;
-    private uint _rootPageId;
+    private readonly TransactionalState<uint> _root;
     private readonly object _lock = new();
     private readonly int _pageSize;
 
-    public RTreeIndex(StorageEngine storage, IndexOptions options, uint rootPageId)
+    public RTreeIndex(StorageEngine storage, IndexOptions options, uint rootPageId, Action<uint>? onRootChanged = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _options = options;
-        _rootPageId = rootPageId;
         _pageSize = _storage.PageSize;
 
-        if (_rootPageId == 0)
-        {
-            InitializeNewIndex();
-        }
+        if (rootPageId == 0)
+            rootPageId = InitializeNewIndex();
+
+        _root = new TransactionalState<uint>(_storage, rootPageId, onRootChanged);
     }
 
-    public uint RootPageId => _rootPageId;
+    /// <summary>
+    /// The last committed root page. A root split that its transaction has not committed yet is
+    /// not reflected here (and is only reported through the root-changed callback on commit).
+    /// </summary>
+    public uint RootPageId => _root.Committed;
 
-    private void InitializeNewIndex()
+    private uint InitializeNewIndex()
     {
         var buffer = RentPageBuffer();
         try
         {
-            _rootPageId = _storage.AllocateIndexPage();
-            SpatialPage.Initialize(buffer, _rootPageId, true, 0);
-            _storage.WritePageImmediate(_rootPageId, buffer);
+            var rootPageId = _storage.AllocateIndexPage();
+            SpatialPage.Initialize(buffer, rootPageId, true, 0);
+            _storage.WritePageImmediate(rootPageId, buffer);
+            return rootPageId;
         }
         finally { ReturnPageBuffer(buffer); }
     }
 
     public IEnumerable<DocumentLocation> Search(GeoBox area, ITransaction? transaction = null)
     {
-        if (_rootPageId == 0) yield break;
+        var rootPageId = _root.For(transaction?.TransactionId ?? 0);
+        if (rootPageId == 0) yield break;
 
         var stack = new Stack<uint>();
-        stack.Push(_rootPageId);
+        stack.Push(rootPageId);
 
         var buffer = RentPageBuffer();
         try
@@ -88,7 +93,7 @@ internal class RTreeIndex : IDisposable
     {
         lock (_lock)
         {
-            var leafPageId = ChooseLeaf(_rootPageId, mbr, transaction);
+            var leafPageId = ChooseLeaf(_root.For(transaction?.TransactionId ?? 0), mbr, transaction);
             InsertIntoNode(leafPageId, mbr, loc, transaction);
         }
     }
@@ -175,7 +180,8 @@ internal class RTreeIndex : IDisposable
         try
         {
             uint currentId = pageId;
-            while (currentId != _rootPageId)
+            var rootPageId = _root.For(transaction?.TransactionId ?? 0);
+            while (currentId != rootPageId)
             {
                 _storage.ReadPage(currentId, transaction?.TransactionId, buffer);
                 var currentMbr = SpatialPage.CalculateMBR(buffer);
@@ -299,7 +305,7 @@ internal class RTreeIndex : IDisposable
             }
 
             // Propagate split upwards
-            if (pageId == _rootPageId)
+            if (pageId == _root.For(transaction?.TransactionId ?? 0))
             {
                 // New Root
                 uint newRootId = _storage.AllocateIndexPage();
@@ -313,7 +319,7 @@ internal class RTreeIndex : IDisposable
                 else
                     _storage.WritePageImmediate(newRootId, buffer);
 
-                _rootPageId = newRootId;
+                _root.Set(newRootId, transaction?.TransactionId ?? 0); // published on commit, discarded on rollback
                 
                 // UpdateAsync parent pointers
                 UpdateParentPointer(pageId, newRootId, transaction);
