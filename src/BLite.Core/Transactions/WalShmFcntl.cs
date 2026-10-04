@@ -52,7 +52,7 @@ internal static class WalShmFcntl
     private const int LOCK_EX_MACOS = 0x02;
     private const int LOCK_NB_MACOS = 0x04;
     private const int LOCK_UN_MACOS = 0x08;
-    private const int O_RDWR_MACOS  = 0x0002;
+    private const int O_RDONLY_MACOS = 0x0000; // flock() needs no write access
     private const int O_CLOEXEC_MACOS = 0x01000000;
 
     // Lock descriptor held while the macOS writer lock is taken, keyed by SHM path.
@@ -223,7 +223,18 @@ internal static class WalShmFcntl
             while (true)
             {
                 int errno;
-                if (TrySetLock(shmFile, fd, write: true, out errno)) return true;
+                bool locked;
+                try
+                {
+                    locked = TrySetLock(shmFile, fd, write: true, out errno);
+                }
+                catch
+                {
+                    // E.g. the lock file cannot be created: never leave the in-process lock held.
+                    localLock.Release();
+                    throw;
+                }
+                if (locked) return true;
                 if (!IsLockContentionErrno(errno))
                 {
                     // Real failure (EBADF, EINVAL, etc.) — release our in-process lock and
@@ -335,11 +346,22 @@ internal static class WalShmFcntl
             if (!File.Exists(lockPath))
             {
                 // Create through FileStream (raw open() would need the variadic mode argument).
-                using var created = new FileStream(lockPath, FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite, FileShare.ReadWrite);
+                // Another process may be creating/locking the file at the same moment, in which
+                // case .NET's own flock(LOCK_SH) fails with an IOException: treat it as
+                // contention and retry.
+                try
+                {
+                    using var created = new FileStream(lockPath, FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite, FileShare.ReadWrite);
+                }
+                catch (IOException)
+                {
+                    errno = EAGAIN_MACOS;
+                    return false;
+                }
             }
 
-            int lfd = open_macos(lockPath, O_RDWR_MACOS | O_CLOEXEC_MACOS);
+            int lfd = open_macos(lockPath, O_RDONLY_MACOS | O_CLOEXEC_MACOS);
             if (lfd < 0)
             {
                 errno = Marshal.GetLastWin32Error();
