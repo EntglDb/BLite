@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="5.2.0"></a>
+## [5.2.0](https://www.github.com/EntglDb/BLite/releases/tag/v5.2.0) (2026-10-04)
+
+### Bug Fixes
+
+* **bson:** grow BsonDocumentBuilder buffer for nested values > 1 KB ([#154](https://www.github.com/EntglDb/BLite/issues/154)) ([7b00930](https://www.github.com/EntglDb/BLite/commit/7b0093079bf92815f8bf9be06d32b85c89e0a909))
+* **ci:** use versionize --release-as in Bump Version workflow ([#158](https://www.github.com/EntglDb/BLite/issues/158)) ([aea9316](https://www.github.com/EntglDb/BLite/commit/aea931679a16cd444e70619cbcb0dea86dab02b7))
+* **core:** invalidate shared free-space index when orphan collections are dropped ([#155](https://www.github.com/EntglDb/BLite/issues/155)) ([beec378](https://www.github.com/EntglDb/BLite/commit/beec3782c5ff1a7d425bf59006ae9df4acc9e04a))
+* **index:** exact order-preserving decimal keys for secondary indexes ([#150](https://www.github.com/EntglDb/BLite/issues/150)) ([#157](https://www.github.com/EntglDb/BLite/issues/157)) ([3a51517](https://www.github.com/EntglDb/BLite/commit/3a5151796e06cc165a77a9eb877a9c6b5f5b05ad))
+* **index:** fixed root page for B-tree, R-Tree and vector indexes ([#151](https://www.github.com/EntglDb/BLite/issues/151)) ([#156](https://www.github.com/EntglDb/BLite/issues/156)) ([e187bd6](https://www.github.com/EntglDb/BLite/commit/e187bd67ffa88297f12d0bf841b0cb92cc01f2ba))
+
 <a name="5.1.1"></a>
 ## [5.1.1](https://www.github.com/EntglDb/BLite/releases/tag/v5.1.1) (2026-09-13)
 
