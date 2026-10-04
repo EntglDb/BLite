@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="5.2.1"></a>
+## [5.2.1](https://www.github.com/EntglDb/BLite/releases/tag/v5.2.1) (2026-10-04)
+
+### Bug Fixes
+
+* **storage:** prevent reader starvation under back-to-back WritePage calls ([#159](https://www.github.com/EntglDb/BLite/issues/159)) ([6b93354](https://www.github.com/EntglDb/BLite/commit/6b9335471f7f594f48bfe33ed4c21ea8a305dbbe))
+
 <a name="5.2.0"></a>
 ## [5.2.0](https://www.github.com/EntglDb/BLite/releases/tag/v5.2.0) (2026-10-04)
 
