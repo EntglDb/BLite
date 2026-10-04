@@ -68,7 +68,7 @@ jobs:
         run: |
           EXTRA_FLAGS=""
           if [[ "${{ inputs.increment }}" != "auto" ]]; then
-            EXTRA_FLAGS="--${{ inputs.increment }}"
+            EXTRA_FLAGS="--release-as ${{ inputs.increment }}"
           fi
 
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
