@@ -15,14 +15,18 @@ namespace BLite.Core.Transactions;
 /// that may resume on a different thread pool thread.</description></item>
 /// <item><description><b>Linux:</b> <c>fcntl(F_OFD_SETLK)</c> — open-file-description locks,
 /// owned by the file description rather than the process/thread, auto-released on close.</description></item>
-/// <item><description><b>macOS/iOS:</b> <c>flock(LOCK_EX | LOCK_NB)</c> — BSD advisory locks,
-/// owned by the open file description (so it correctly excludes even two independent opens
-/// of the same path within one process) and auto-released on close.
-/// <c>fcntl(F_SETLK)</c> was tried first since it's the traditional POSIX mechanism used on
-/// Linux, but it reliably fails with <c>EINVAL</c> on file descriptors obtained from a .NET
-/// <see cref="FileStream"/> on macOS (reproduced independently of BLite with a bare
-/// P/Invoke + <see cref="FileStream"/> probe — a raw <c>libc</c> <c>open()</c>-backed
-/// descriptor is unaffected). <c>flock()</c> on the same descriptor works correctly.</description></item>
+/// <item><description><b>macOS/iOS:</b> <c>flock(LOCK_EX | LOCK_NB)</c> on a <em>dedicated
+/// lock file</em> (<c>&lt;shm&gt;.lock</c>) opened with a raw <c>open()</c> descriptor for
+/// the duration of the lock. The lock lives on its own open file description, so it is
+/// released by closing that descriptor (or by process exit) and excludes other processes and
+/// other instances in the same process. It must not be taken on the <see cref="FileStream"/>
+/// of the SHM file itself: .NET's Unix <see cref="FileStream"/> already holds a shared
+/// <c>flock(LOCK_SH)</c> on every file it opens with <see cref="FileShare.ReadWrite"/>, so
+/// two processes could never upgrade to <c>LOCK_EX</c> (both writers time out) and an
+/// exclusive lock would make other <c>FileStream</c> opens of the file fail. Other options
+/// are ruled out too: <see cref="FileStream.Lock(long, long)"/> throws
+/// <see cref="PlatformNotSupportedException"/> on macOS, and a direct <c>fcntl</c> P/Invoke
+/// is unreliable there (variadic ABI on arm64, different <c>struct flock</c> layout).</description></item>
 /// </list>
 /// <para>
 /// All platforms also use the in-process <c>SemaphoreSlim</c> companion lock so that two
@@ -44,10 +48,17 @@ internal static class WalShmFcntl
     private const int F_OFD_SETLK_LINUX  = 37;
 
     // ── flock() operation flags (macOS/iOS) ──────────────────────────────────
-    // See remarks on the class for why macOS uses flock() instead of fcntl(F_SETLK).
+    // See remarks on the class for why macOS flocks a dedicated lock file.
     private const int LOCK_EX_MACOS = 0x02;
     private const int LOCK_NB_MACOS = 0x04;
     private const int LOCK_UN_MACOS = 0x08;
+    private const int O_RDONLY_MACOS = 0x0000; // flock() needs no write access
+    private const int O_CLOEXEC_MACOS = 0x01000000;
+
+    // Lock descriptor held while the macOS writer lock is taken, keyed by SHM path.
+    // At most one entry per path: the in-process semaphore serialises holders.
+    private static readonly ConcurrentDictionary<string, int> s_macLockFds
+        = new(StringComparer.Ordinal);
 
     // ── errno values (cross-platform) ────────────────────────────────────────
     // Linux & macOS agree on the values for the codes we care about: EAGAIN/EWOULDBLOCK
@@ -109,6 +120,15 @@ internal static class WalShmFcntl
     [DllImport("libc", EntryPoint = "flock", SetLastError = true)]
     private static extern int flock_macos(int fd, int operation);
 
+    // open(path, flags) — the optional mode argument is only read with O_CREAT, which we
+    // never pass (the lock file is created beforehand through FileStream), so declaring the
+    // variadic function with two arguments is safe.
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int open_macos([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static extern int close_macos(int fd);
+
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     public static extern int Kill(int pid, int sig);
 
@@ -152,7 +172,7 @@ internal static class WalShmFcntl
     /// Returns <c>true</c> on success, <c>false</c> on timeout.
     /// <para>
     /// On Windows: uses <c>LockFileEx</c> (thread-agnostic, auto-released on process
-    /// death). On Linux: <c>fcntl(F_OFD_SETLK)</c>. On macOS: <c>fcntl(F_SETLK)</c>.
+    /// death). On Linux: <c>fcntl(F_OFD_SETLK)</c>. On macOS: <c>flock</c> on a dedicated lock file.
     /// All platforms additionally hold an in-process <c>SemaphoreSlim</c> to handle
     /// same-process multi-instance exclusion.
     /// </para>
@@ -203,14 +223,25 @@ internal static class WalShmFcntl
             while (true)
             {
                 int errno;
-                if (TrySetLock(fd, write: true, out errno)) return true;
+                bool locked;
+                try
+                {
+                    locked = TrySetLock(shmFile, fd, write: true, out errno);
+                }
+                catch
+                {
+                    // E.g. the lock file cannot be created: never leave the in-process lock held.
+                    localLock.Release();
+                    throw;
+                }
+                if (locked) return true;
                 if (!IsLockContentionErrno(errno))
                 {
                     // Real failure (EBADF, EINVAL, etc.) — release our in-process lock and
                     // surface the error rather than silently spinning until the timeout.
                     localLock.Release();
                     throw new IOException(
-                        $"fcntl(F_SETLK, F_WRLCK) failed with errno={errno} on '{shmFile.Name}'.");
+                        $"Acquiring the writer lock failed with errno={errno} on '{shmFile.Name}'.");
                 }
                 if (DateTime.UtcNow >= deadline)
                 {
@@ -238,7 +269,7 @@ internal static class WalShmFcntl
                 int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
                 // Unlock failures here are best-effort; surfacing them would mask the
                 // primary error path (e.g. dispose during shutdown).
-                TrySetLock(fd, write: false, out _);
+                TrySetLock(shmFile, fd, write: false, out _);
             }
         }
         finally
@@ -292,21 +323,59 @@ internal static class WalShmFcntl
             || errno == EAGAIN_MACOS;
     }
 
-    private static bool TrySetLock(int fd, bool write, out int errno)
+    private static bool TrySetLock(FileStream shmFile, int fd, bool write, out int errno)
     {
         // Use RuntimeInformation rather than OperatingSystem.* so this file compiles
         // for both net10.0 and netstandard2.1 target frameworks.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            // flock() locks the whole file rather than a byte range, but that's fine
-            // here: the byte-range machinery (WriterLockByteOffset, SEEK_SET) exists
-            // only to dodge fcntl's whole-file-vs-range distinction on Linux, and this
-            // SHM file has no other content that a whole-file lock would spuriously
-            // conflict with.
-            int operation = write ? (LOCK_EX_MACOS | LOCK_NB_MACOS) : LOCK_UN_MACOS;
-            int rc = flock_macos(fd, operation);
-            errno = rc == 0 ? 0 : Marshal.GetLastWin32Error();
-            return rc == 0;
+            var key = System.IO.Path.GetFullPath(shmFile.Name);
+            if (!write)
+            {
+                if (s_macLockFds.TryRemove(key, out var heldFd))
+                {
+                    // Closing the descriptor drops the flock; LOCK_UN first is belt and braces.
+                    flock_macos(heldFd, LOCK_UN_MACOS);
+                    close_macos(heldFd);
+                }
+                errno = 0;
+                return true;
+            }
+
+            var lockPath = key + ".lock";
+            if (!File.Exists(lockPath))
+            {
+                // Create through FileStream (raw open() would need the variadic mode argument).
+                // Another process may be creating/locking the file at the same moment, in which
+                // case .NET's own flock(LOCK_SH) fails with an IOException: treat it as
+                // contention and retry.
+                try
+                {
+                    using var created = new FileStream(lockPath, FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite, FileShare.ReadWrite);
+                }
+                catch (IOException)
+                {
+                    errno = EAGAIN_MACOS;
+                    return false;
+                }
+            }
+
+            int lfd = open_macos(lockPath, O_RDONLY_MACOS | O_CLOEXEC_MACOS);
+            if (lfd < 0)
+            {
+                errno = Marshal.GetLastWin32Error();
+                return false;
+            }
+            if (flock_macos(lfd, LOCK_EX_MACOS | LOCK_NB_MACOS) != 0)
+            {
+                errno = Marshal.GetLastWin32Error();
+                close_macos(lfd);
+                return false;
+            }
+            s_macLockFds[key] = lfd;
+            errno = 0;
+            return true;
         }
         else
         {
