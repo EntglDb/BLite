@@ -15,14 +15,12 @@ namespace BLite.Core.Transactions;
 /// that may resume on a different thread pool thread.</description></item>
 /// <item><description><b>Linux:</b> <c>fcntl(F_OFD_SETLK)</c> — open-file-description locks,
 /// owned by the file description rather than the process/thread, auto-released on close.</description></item>
-/// <item><description><b>macOS/iOS:</b> <c>flock(LOCK_EX | LOCK_NB)</c> — BSD advisory locks,
-/// owned by the open file description (so it correctly excludes even two independent opens
-/// of the same path within one process) and auto-released on close.
-/// <c>fcntl(F_SETLK)</c> was tried first since it's the traditional POSIX mechanism used on
-/// Linux, but it reliably fails with <c>EINVAL</c> on file descriptors obtained from a .NET
-/// <see cref="FileStream"/> on macOS (reproduced independently of BLite with a bare
-/// P/Invoke + <see cref="FileStream"/> probe — a raw <c>libc</c> <c>open()</c>-backed
-/// descriptor is unaffected). <c>flock()</c> on the same descriptor works correctly.</description></item>
+/// <item><description><b>macOS/iOS:</b> <c>flock(LOCK_EX | LOCK_NB)</c> on a dedicated
+/// <c>&lt;shm&gt;.lock</c> file opened with a raw <c>open()</c> while the lock is held. BSD
+/// advisory locks are owned by the open file description (so two independent opens of the
+/// same path within one process exclude each other) and are auto-released on close. The
+/// lock is not taken on the <c>.wal-shm</c> <see cref="FileStream"/> itself because .NET
+/// already holds a shared <c>flock</c> on it, which would prevent upgrading to exclusive.</description></item>
 /// </list>
 /// <para>
 /// All platforms also use the in-process <c>SemaphoreSlim</c> companion lock so that two
@@ -48,6 +46,11 @@ internal static class WalShmFcntl
     private const int LOCK_EX_MACOS = 0x02;
     private const int LOCK_NB_MACOS = 0x04;
     private const int LOCK_UN_MACOS = 0x08;
+    private const int O_RDWR_MACOS = 0x0002;
+    private const int O_CLOEXEC_MACOS = 0x01000000;
+
+    // Held flock fds on the dedicated lock file, keyed by absolute SHM path.
+    private static readonly ConcurrentDictionary<string, int> s_macLockFds = new(StringComparer.Ordinal);
 
     // ── errno values (cross-platform) ────────────────────────────────────────
     // Linux & macOS agree on the values for the codes we care about: EAGAIN/EWOULDBLOCK
@@ -108,6 +111,12 @@ internal static class WalShmFcntl
 
     [DllImport("libc", EntryPoint = "flock", SetLastError = true)]
     private static extern int flock_macos(int fd, int operation);
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int open_macos([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static extern int close_macos(int fd);
 
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     public static extern int Kill(int pid, int sig);
@@ -203,14 +212,14 @@ internal static class WalShmFcntl
             while (true)
             {
                 int errno;
-                if (TrySetLock(fd, write: true, out errno)) return true;
+                if (TrySetLock(shmFile, fd, write: true, out errno)) return true;
                 if (!IsLockContentionErrno(errno))
                 {
                     // Real failure (EBADF, EINVAL, etc.) — release our in-process lock and
                     // surface the error rather than silently spinning until the timeout.
                     localLock.Release();
                     throw new IOException(
-                        $"fcntl(F_SETLK, F_WRLCK) failed with errno={errno} on '{shmFile.Name}'.");
+                        $"Acquiring the writer lock failed with errno={errno} on '{shmFile.Name}'.");
                 }
                 if (DateTime.UtcNow >= deadline)
                 {
@@ -238,7 +247,7 @@ internal static class WalShmFcntl
                 int fd = shmFile.SafeFileHandle.DangerousGetHandle().ToInt32();
                 // Unlock failures here are best-effort; surfacing them would mask the
                 // primary error path (e.g. dispose during shutdown).
-                TrySetLock(fd, write: false, out _);
+                TrySetLock(shmFile, fd, write: false, out _);
             }
         }
         finally
@@ -292,21 +301,50 @@ internal static class WalShmFcntl
             || errno == EAGAIN_MACOS;
     }
 
-    private static bool TrySetLock(int fd, bool write, out int errno)
+    private static bool TrySetLock(FileStream shmFile, int fd, bool write, out int errno)
     {
         // Use RuntimeInformation rather than OperatingSystem.* so this file compiles
         // for both net10.0 and netstandard2.1 target frameworks.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            // flock() locks the whole file rather than a byte range, but that's fine
-            // here: the byte-range machinery (WriterLockByteOffset, SEEK_SET) exists
-            // only to dodge fcntl's whole-file-vs-range distinction on Linux, and this
-            // SHM file has no other content that a whole-file lock would spuriously
-            // conflict with.
-            int operation = write ? (LOCK_EX_MACOS | LOCK_NB_MACOS) : LOCK_UN_MACOS;
-            int rc = flock_macos(fd, operation);
-            errno = rc == 0 ? 0 : Marshal.GetLastWin32Error();
-            return rc == 0;
+            // flock() is taken on a dedicated "<shm>.lock" file, opened with a raw open()
+            // only while the lock is held. It is NOT taken on the .wal-shm FileStream: .NET
+            // already holds a shared flock there, so two processes could never upgrade to
+            // an exclusive lock. flock locks belong to the open file description, so every
+            // raw open() excludes other opens in this process as well as other processes.
+            string key = Path.GetFullPath(shmFile.Name);
+            if (!write)
+            {
+                if (s_macLockFds.TryRemove(key, out int heldFd))
+                {
+                    flock_macos(heldFd, LOCK_UN_MACOS);
+                    close_macos(heldFd);
+                }
+                errno = 0;
+                return true;
+            }
+
+            string lockPath = key + ".lock";
+            if (!File.Exists(lockPath))
+            {
+                using var c = new FileStream(lockPath, FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite, FileShare.ReadWrite);
+            }
+            int lfd = open_macos(lockPath, O_RDWR_MACOS | O_CLOEXEC_MACOS);
+            if (lfd < 0)
+            {
+                errno = Marshal.GetLastWin32Error();
+                return false;
+            }
+            if (flock_macos(lfd, LOCK_EX_MACOS | LOCK_NB_MACOS) != 0)
+            {
+                errno = Marshal.GetLastWin32Error();
+                close_macos(lfd);
+                return false;
+            }
+            s_macLockFds[key] = lfd;
+            errno = 0;
+            return true;
         }
         else
         {
