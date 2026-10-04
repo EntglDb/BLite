@@ -68,7 +68,17 @@ jobs:
         run: |
           EXTRA_FLAGS=""
           if [[ "${{ inputs.increment }}" != "auto" ]]; then
-            EXTRA_FLAGS="--release-as ${{ inputs.increment }}"
+            # versionize --release-as vuole una versione semantica esplicita, non patch/minor/major:
+            # la calcola dall'ultimo tag vX.Y.Z (ignorando eventuali suffissi pre-release)
+            LAST=$(git describe --tags --abbrev=0 --match 'v[0-9]*')
+            IFS=. read -r MAJOR MINOR PATCH <<< "$(echo "${LAST#v}" | sed 's/-.*//')"
+            case "${{ inputs.increment }}" in
+              major) NEXT="$((MAJOR + 1)).0.0" ;;
+              minor) NEXT="$MAJOR.$((MINOR + 1)).0" ;;
+              patch) NEXT="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+            esac
+            echo "Ultimo tag: $LAST -> versione richiesta: $NEXT"
+            EXTRA_FLAGS="--release-as $NEXT"
           fi
 
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
