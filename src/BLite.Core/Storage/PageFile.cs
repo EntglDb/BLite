@@ -691,6 +691,28 @@ public sealed class PageFile : IPageStorage
         }
     }
 
+    // ── Writer fairness ────────────────────────────────────────────────────
+    // ReaderWriterLockSlim is not fair: ExitWriteLock only *signals* waiting readers,
+    // and a writer that immediately re-enters (checkpoint / bulk write loops calling
+    // WritePage back-to-back) re-acquires the lock before the woken readers are
+    // scheduled. On machines with few cores the readers lose that race every time and
+    // starve until their ReadTimeoutMs expires (TimeoutException in ReadPage).
+    // Before taking the write lock we therefore let readers that are already queued
+    // drain into the lock: WaitingReadCount drops to 0 once they have woken up and
+    // either entered or re-queued. The wait is bounded so a writer is never delayed
+    // by more than a few milliseconds, and costs one field read when nobody waits.
+    private const int ReaderYieldMaxSpins = 64;
+
+    private void YieldToWaitingReaders()
+    {
+        if (_rwLock.WaitingReadCount == 0)
+            return;
+
+        var spinner = new SpinWait();
+        for (var i = 0; i < ReaderYieldMaxSpins && _rwLock.WaitingReadCount > 0; i++)
+            spinner.SpinOnce();
+    }
+
     // ── Grow-file helper ───────────────────────────────────────────────────
     // Must be called under _rwLock write lock. Extends the file and recreates
     // _mappedFile when the requested offset does not fit in the current mapping.
@@ -840,6 +862,7 @@ public sealed class PageFile : IPageStorage
         // write still needs exclusive access to the page bytes (see remarks above).
         if (offset + _physicalPageSize <= _fileStream!.Length)
         {
+            YieldToWaitingReaders();
             if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
                 throw new TimeoutException("Timed out acquiring PageFile write lock (WritePage).");
             try
@@ -855,6 +878,7 @@ public sealed class PageFile : IPageStorage
 
         // Slow path: the file must grow.  Exclusively lock so that no reader
         // can hold a reference to the old _mappedFile while we dispose it.
+        YieldToWaitingReaders();
         if (!_rwLock.TryEnterWriteLock(WriteLockTimeoutMs))
             throw new TimeoutException("Timed out acquiring PageFile write lock (WritePage-grow).");
         try
