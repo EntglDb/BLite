@@ -14,7 +14,7 @@ namespace BLite.SourceGenerators
             var entityInfo = new EntityInfo
             {
                 Name = entityType.Name,
-                Namespace = entityType.ContainingNamespace.ToDisplayString(),
+                Namespace = SyntaxHelper.GetNamespaceOrEmpty(entityType),
                 FullTypeName = SyntaxHelper.GetFullName(entityType),
                 CollectionName = entityType.Name.ToLowerInvariant() + BLiteConventions.DefaultCollectionNameSuffix
             };
@@ -342,7 +342,7 @@ namespace BLite.SourceGenerators
                  var nestedInfo = new NestedTypeInfo
                  {
                      Name = simpleName,
-                     Namespace = nestedTypeSymbol.ContainingNamespace.ToDisplayString(),
+                     Namespace = SyntaxHelper.GetNamespaceOrEmpty(nestedTypeSymbol),
                      FullTypeName = fullTypeName,
                      Depth = currentDepth
                  };

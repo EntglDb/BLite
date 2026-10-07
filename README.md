@@ -680,6 +680,11 @@ dotnet add package BLite
 ### 2. Basic Usage
 
 ```csharp
+using BLite.Bson;              // ObjectId
+using BLite.Core;              // DocumentDbContext
+using BLite.Core.Collections;  // DocumentCollection<TId, T>, UpsertResult<T>
+using BLite.Core.Query;        // async LINQ extensions (ToListAsync, ...)
+
 // 1. Define your Entities
 public class User 
 { 
