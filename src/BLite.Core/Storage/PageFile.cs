@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Buffers;
 using System.IO.MemoryMappedFiles;
 using BLite.Core.Encryption;
@@ -595,10 +596,21 @@ public sealed class PageFile : IPageStorage
             throw new ObjectDisposedException(nameof(PageFile));
     }
 
+    // A page id past the end of the mapping would turn the memcpy below into an
+    // AccessViolationException, which tears the whole process down with no way to
+    // catch it. Surfacing it as a regular exception keeps the fault in the caller.
+    private long CheckedPageOffset(uint pageId)
+    {
+        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
+        if (offset + _physicalPageSize > _fileStream!.Length)
+            throw new InvalidDataException(
+                $"Page {pageId} is outside the page file (file holds {_nextPageId} pages): the file is corrupt.");
+        return offset;
+    }
+
     private unsafe void ReadPageCore(uint pageId, Span<byte> destination)
     {
-        // Physical byte offset of this page within the file.
-        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
+        var offset = CheckedPageOffset(pageId);
         byte* basePtr = null;
         _readAccessor!.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
         try
@@ -660,7 +672,7 @@ public sealed class PageFile : IPageStorage
 
     private void WritePageCore(uint pageId, ReadOnlySpan<byte> source)
     {
-        var offset = _cryptoFileHeaderSize + (long)pageId * _physicalPageSize;
+        var offset = CheckedPageOffset(pageId);
 
         if (_cryptoProvider != null)
         {
@@ -867,6 +879,12 @@ public sealed class PageFile : IPageStorage
                 throw new TimeoutException("Timed out acquiring PageFile write lock (WritePage).");
             try
             {
+                if (pageId == 0)
+                {
+                    WriteHeaderPageCore(source);
+                    return;
+                }
+
                 WritePageCore(pageId, source);
             }
             finally
@@ -912,19 +930,33 @@ public sealed class PageFile : IPageStorage
             if (_firstFreePageId != 0)
             {
                 var recycledPageId = _firstFreePageId;
-                
-                // Read the recycled page to update the free list head
-                var buffer = new byte[_config.PageSize];
-                ReadPageCore(recycledPageId, buffer);
-                var header = PageHeader.ReadFrom(buffer);
-                
-                // The new head is what the recycled page pointed to
-                _firstFreePageId = header.NextPageId;
-                
-                // UpdateAsync file header (Page 0) to point to new head
-                UpdateFileHeaderFreePtrCore(_firstFreePageId);
-                
-                return recycledPageId;
+
+                // A head that points outside the file, or at a page that is not marked free,
+                // means the free list is corrupt. Handing such a page out would overwrite live
+                // data (or read past the mapping). Dropping the list only leaks the free pages
+                // until the next compaction, so that is the safe choice.
+                if (recycledPageId >= _nextPageId)
+                {
+                    DropCorruptFreeListCore(recycledPageId);
+                }
+                else
+                {
+                    var buffer = new byte[_config.PageSize];
+                    ReadPageCore(recycledPageId, buffer);
+                    var header = PageHeader.ReadFrom(buffer);
+
+                    if (header.PageType != PageType.Free)
+                    {
+                        DropCorruptFreeListCore(recycledPageId);
+                    }
+                    else
+                    {
+                        // The new head is what the recycled page pointed to
+                        _firstFreePageId = header.NextPageId;
+                        UpdateFileHeaderFreePtrCore(_firstFreePageId);
+                        return recycledPageId;
+                    }
+                }
             }
 
             // 2. No free pages, append new one
@@ -983,6 +1015,35 @@ public sealed class PageFile : IPageStorage
         }
     }
     
+    /// <summary>
+    /// How many times a corrupt free-list head was found and the list discarded.
+    /// </summary>
+    public int CorruptFreeListsDropped { get; private set; }
+
+    // The free-list head lives in page 0 and only this class moves it, under the write
+    // lock. Callers that rewrite page 0 (dictionary/KV roots, WAL recovery) start from a
+    // copy read earlier, so the pointer in their copy may be stale: writing it back as-is
+    // would resurrect pages that have since been handed out. Keep ours.
+    // Called only while _rwLock write lock is held.
+    private void WriteHeaderPageCore(ReadOnlySpan<byte> source)
+    {
+        var buffer = new byte[_config.PageSize];
+        source[.._config.PageSize].CopyTo(buffer);
+        var header = PageHeader.ReadFrom(buffer);
+        header.NextPageId = _firstFreePageId;
+        header.WriteTo(buffer);
+        WritePageCore(0, buffer);
+    }
+
+    // Called only while _rwLock write lock is held.
+    private void DropCorruptFreeListCore(uint badHead)
+    {
+        CorruptFreeListsDropped++;
+        _firstFreePageId = 0;
+        UpdateFileHeaderFreePtrCore(0);
+        Trace.TraceWarning($"BLite: free list head {badHead} of '{_filePath}' is corrupt, free list discarded.");
+    }
+
     // Called only while _rwLock write lock is held.
     private void UpdateFileHeaderFreePtrCore(uint newHead)
     {
