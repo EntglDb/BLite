@@ -36,6 +36,7 @@ namespace BLite.SourceGenerators
             // Analyze properties of the root entity
             var symbolCache = new Dictionary<string, INamedTypeSymbol>();
             AnalyzeProperties(entityType, entityInfo.Properties, symbolCache);
+            RemoveDuplicateFieldNames(entityInfo.Name, entityInfo.Properties, isRoot: true, diagnostics);
 
             // Check if entity needs reflection-based deserialization
             // Include properties with private setters, init-only setters, or DDD backing field pattern
@@ -353,6 +354,7 @@ namespace BLite.SourceGenerators
 
                  // Analyze properties of this nested type (pass symbolCache for further generics)
                  AnalyzeProperties(nestedTypeSymbol, nestedInfo.Properties, symbolCache);
+                 RemoveDuplicateFieldNames(nestedInfo.Name, nestedInfo.Properties, isRoot: false, diagnostics);
                  
                  // Constructor selection for nested type
                  var nestedHasRequired = nestedInfo.Properties.Any(p => p.HasCSharpRequiredKeyword);
@@ -453,5 +455,36 @@ namespace BLite.SourceGenerators
 
         /// <summary>An empty rename (<c>[Column("")]</c>) names no field: the next attribute or the property name applies.</summary>
         private static string? NonEmpty(string? name) => string.IsNullOrEmpty(name) ? null : name;
+
+        /// <summary>
+        /// Reports two members stored under the same field (<c>Name</c> next to
+        /// <c>[JsonPropertyName("name")] DisplayName</c>, compared lower-cased since field names are)
+        /// as error BLITE001, and leaves the later one out of the mapper. Both would write the same
+        /// key and only one could be read back; the generated <c>Deserialize</c> would not even
+        /// compile, with a duplicate <c>case</c> label that does not say which members clash (#184).
+        /// The key of a root entity is stored as <c>_id</c> and is not compared.
+        /// </summary>
+        private static void RemoveDuplicateFieldNames(string typeName, List<PropertyInfo> properties, bool isRoot, List<BLiteDiagnostic>? diagnostics)
+        {
+            var owners = new Dictionary<string, string>();
+            for (int i = 0; i < properties.Count; i++)
+            {
+                var property = properties[i];
+                if (isRoot && property.IsKey) continue;
+
+                if (owners.TryGetValue(property.BsonFieldName, out var owner))
+                {
+                    diagnostics?.Add(new BLiteDiagnostic(
+                        "BLITE001",
+                        $"BLite: '{typeName}.{property.Name}' and '{typeName}.{owner}' are both stored in the field " +
+                        $"'{property.BsonFieldName}' (field names are lower-cased). Rename one of them with " +
+                        "[BsonProperty], [JsonPropertyName] or [Column], or mark it [NotMapped].",
+                        isError: true));
+                    properties.RemoveAt(i--);
+                    continue;
+                }
+                owners[property.BsonFieldName] = property.Name;
+            }
+        }
     }
 }
