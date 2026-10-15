@@ -54,7 +54,12 @@ internal sealed class BTreeCursor : IBTreeCursor
             pageId = BitConverter.ToUInt32(_pageBuffer.AsSpan(dataOffset, 4));
         }
 
-        return PositionAtStart();
+        if (PositionAtStart()) return true;
+
+        // The leaf is empty (left unmerged, #217): MoveNext skips to the next one with entries.
+        _isValid = true;
+        _currentEntryIndex = -1;
+        return MoveNext();
     }
 
     public bool MoveToLast()
@@ -89,22 +94,29 @@ internal sealed class BTreeCursor : IBTreeCursor
             pageId = lastPointer;
         }
 
-        return PositionAtEnd();
+        if (PositionAtEnd()) return true;
+
+        // The leaf is empty (left unmerged, #217): MovePrev skips to the previous one with entries.
+        _isValid = true;
+        _currentEntryIndex = 0;
+        return MovePrev();
     }
 
     public bool Seek(IndexKey key)
     {
-        // Use Index to find leaf
-        var leafPageId = _index.FindLeafNode(key, _transactionId);
+        // Use Index to find leaf: the leftmost one that can hold the key, so that no copy of a
+        // duplicated key sits in an earlier leaf (#213).
+        var leafPageId = _index.FindLeafNode(key, _transactionId, leftmost: true);
         LoadPage(leafPageId);
         ParseEntries();
 
         // Binary search in entries
         var idx = _currentEntries.BinarySearch(new IndexEntry(key, default(DocumentLocation)));
-        
+
         if (idx >= 0)
         {
-            // Found exact match
+            // Found exact match; with duplicates, position on the first copy.
+            while (idx > 0 && _currentEntries[idx - 1].Key.Equals(key)) idx--;
             _currentEntryIndex = idx;
             _isValid = true;
             return true;
@@ -121,16 +133,18 @@ internal sealed class BTreeCursor : IBTreeCursor
             }
             else
             {
-                // Key is larger than max in this page, move to next page
-                if (_currentHeader.NextLeafPageId != 0)
+                // Key is larger than max in this page, move to the next page that has entries
+                // (a leaf can be left empty when it could not be merged, #217).
+                while (_currentHeader.NextLeafPageId != 0)
                 {
                     LoadPage(_currentHeader.NextLeafPageId);
                     ParseEntries();
                     _currentEntryIndex = 0;
                     if (_currentEntries.Count > 0)
                     {
+                        // The key can start the next leaf when it equals the separator.
                         _isValid = true;
-                        return false;
+                        return _currentEntries[0].Key.Equals(key);
                     }
                 }
                 
@@ -151,11 +165,11 @@ internal sealed class BTreeCursor : IBTreeCursor
             return true;
         }
 
-        // Move to next page
-        if (_currentHeader.NextLeafPageId != 0)
+        // Move to the next page that has entries
+        while (_currentHeader.NextLeafPageId != 0)
         {
             LoadPage(_currentHeader.NextLeafPageId);
-            return PositionAtStart();
+            if (PositionAtStart()) return true;
         }
 
         _isValid = false;
@@ -172,11 +186,11 @@ internal sealed class BTreeCursor : IBTreeCursor
             return true;
         }
 
-        // Move to prev page
-        if (_currentHeader.PrevLeafPageId != 0)
+        // Move to the previous page that has entries
+        while (_currentHeader.PrevLeafPageId != 0)
         {
             LoadPage(_currentHeader.PrevLeafPageId);
-            return PositionAtEnd();
+            if (PositionAtEnd()) return true;
         }
 
         _isValid = false;

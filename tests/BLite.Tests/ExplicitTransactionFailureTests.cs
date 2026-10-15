@@ -195,8 +195,10 @@ public class ExplicitTransactionFailureTests : IDisposable
         await db.PeopleV2.InsertAsync(new PersonV2 { Name = "committed", Age = 1 });
 
         using var tx = await db.BeginTransactionAsync();
-        var ex = await InsertUntilBTreeNodeOverflows(i =>
-            db.PeopleV2.InsertAsync(new PersonV2 { Name = LongKey(i), Age = i }, tx).AsTask());
+        CorruptIndexRootInTransaction(db.Storage, db.PeopleV2.CollectionName, "idx_name", tx);
+        var ex = await Record.ExceptionAsync(() =>
+            db.PeopleV2.InsertAsync(new PersonV2 { Name = "failing", Age = 2 }, tx).AsTask());
+        Assert.NotNull(ex);
 
         // The failing insert had already written its data page and the primary index.
         Assert.IsNotType<BLiteValidationException>(ex);
@@ -392,8 +394,9 @@ public class ExplicitTransactionFailureTests : IDisposable
         await col.InsertAsync(Doc(col, 0, "committed"));
 
         var tx = await engine.BeginTransactionAsync();
-        var ex = await InsertUntilBTreeNodeOverflows(i =>
-            col.InsertAsync(Doc(col, i, LongKey(i)), tx).AsTask());
+        CorruptIndexRootInTransaction(engine.Storage, col.Name, "idx_name", tx);
+        var ex = await Record.ExceptionAsync(() => col.InsertAsync(Doc(col, 1, "failing"), tx).AsTask());
+        Assert.NotNull(ex);
 
         Assert.IsNotType<BLiteValidationException>(ex);
         Assert.Equal(TransactionState.Aborted, tx.State);
@@ -409,21 +412,21 @@ public class ExplicitTransactionFailureTests : IDisposable
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// B-Tree nodes split by entry count, not by size, so a run of long keys overflows a leaf
-    /// page while the key is being inserted, after the document's data page and primary index
-    /// entry were written: a real failure in the middle of a write.
+    /// Makes the next insert into the B-Tree index <paramref name="indexName"/> fail while the key
+    /// is being inserted, after the document's data page and primary index entry were written:
+    /// a real failure in the middle of a write. (These tests used to rely on long keys
+    /// overflowing a node page, which #217 fixed.) The index root, a leaf holding one key, is
+    /// rewritten inside <paramref name="tx"/> with a key length that runs past the end of the
+    /// page, so the rollback discards the damage along with the failed write.
     /// </summary>
-    private static async Task<Exception> InsertUntilBTreeNodeOverflows(Func<int, Task> insert)
+    private static void CorruptIndexRootInTransaction(StorageEngine storage, string collection, string indexName, ITransaction tx)
     {
-        for (int i = 1; i <= 200; i++)
-        {
-            try { await insert(i); }
-            catch (Exception ex) { return ex; }
-        }
-        throw new Xunit.Sdk.XunitException("Expected a B-Tree node to overflow.");
+        var rootPageId = storage.GetCollectionMetadata(collection)!.Indexes.Single(i => i.Name == indexName).RootPageId;
+        var page = new byte[storage.PageSize];
+        storage.ReadPage(rootPageId, tx.TransactionId, page);
+        BitConverter.TryWriteBytes(page.AsSpan(32 + 20, 4), int.MaxValue / 2); // first key's length
+        storage.WritePage(rootPageId, tx.TransactionId, page);
     }
-
-    private static string LongKey(int i) => i.ToString("D5") + new string('k', 1000);
 
     private static async Task AssertTypedVectorItemsConsistent(TestDbContext db, int expectedCount)
     {
