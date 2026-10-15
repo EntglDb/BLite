@@ -174,9 +174,16 @@ public sealed partial class StorageEngine
     /// version or a newer one: the process that truncated the WAL had checkpointed it. Its own
     /// commits are no exception, since a commit replays the WAL (and so notices a truncation)
     /// before appending.
+    /// <para>
+    /// An encrypted WAL also forgets its key: the new WAL starts with a header of its own, which
+    /// the next read or write loads (or writes, if the WAL is still empty), so every process
+    /// encrypts and decrypts the new WAL with the same key (#203). Called under <c>_commitLock</c>,
+    /// so no record of this engine is being written meanwhile.
+    /// </para>
     /// </summary>
     private void DiscardSharedWalState(long generation)
     {
+        (_wal as Transactions.WriteAheadLog)?.ResetCryptoHeader();
         lock (_replayLock)
         {
             _walIndex.Clear();

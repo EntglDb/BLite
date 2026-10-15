@@ -257,19 +257,8 @@ public sealed partial class StorageEngine
             if (_walIndex.IsEmpty)
             {
                 await _wal.TruncateAsync(ct);
-                // Reset the SHM WAL index and end offset so other processes
-                // know the WAL has been cleared (Phase 4 / Phase 6).
                 if (_shm != null)
-                {
-                    _shm.RebuildIndex(System.Array.Empty<(uint, long)>());
-                    _shm.WriteWalEndOffset(0);
-                    _shm.WriteCheckpointedOffset(0);
-                    Volatile.Write(ref _lastKnownWalEndOffset, 0);
-
-                    // Last, so a process that sees the new generation also sees the reset end. It
-                    // then discards what it replayed from the old WAL, which is now all on disk.
-                    DiscardSharedWalState(_shm.IncrementWalGeneration());
-                }
+                    PublishSharedWalTruncation();
                 OnWalTruncated();
             }
         }
@@ -379,8 +368,21 @@ public sealed partial class StorageEngine
     {
         if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
             throw new TimeoutException("Timed out acquiring commit lock (Recovery).");
+        bool shmHeld = false;
         try
         {
+            // Multi-process: other processes may be using the shared WAL (#200). Under the SHM
+            // writer lock none of them is appending, so every record in the file is complete and
+            // the replay below writes the newest committed image of each page; the truncation is
+            // then published like a checkpoint's (PublishSharedWalTruncation), so they drop what
+            // they hold from the old WAL and replay the new one from its start.
+            if (_shm != null)
+            {
+                shmHeld = _shm.TryAcquireWriterLock(_config.LockTimeout.WriteTimeoutMs);
+                if (!shmHeld)
+                    throw new TimeoutException("Timed out acquiring the shared WAL writer lock (Recovery).");
+            }
+
             // 1. Read WAL and identify committed transactions
             var records = _wal.ReadAll();
             var committedTxns = new HashSet<ulong>();
@@ -430,12 +432,35 @@ public sealed partial class StorageEngine
             
             // 5. Truncate WAL (all changes now in PageFile)
             await _wal.TruncateAsync(ct);
+            if (_shm != null)
+                PublishSharedWalTruncation();
             OnWalTruncated();
         }
         finally
         {
+            if (shmHeld) { try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ } }
             _commitLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Multi-process: tells the other processes that this one has truncated the shared WAL after
+    /// writing every committed record to the page files. Resets the SHM page index and WAL end
+    /// offset, then moves to a new WAL generation and drops this engine's state of the old one.
+    /// Without it, the others keep an end offset past the end of the new WAL and replay nothing
+    /// until the WAL grows past it (#200). The caller holds <c>_commitLock</c> and the SHM writer
+    /// lock, so nothing is appended between the truncation and the new generation.
+    /// </summary>
+    private void PublishSharedWalTruncation()
+    {
+        _shm!.RebuildIndex(System.Array.Empty<(uint, long)>());
+        _shm.WriteWalEndOffset(0);
+        _shm.WriteCheckpointedOffset(0);
+        Volatile.Write(ref _lastKnownWalEndOffset, 0);
+
+        // Last, so a process that sees the new generation also sees the reset end. It then
+        // discards what it replayed from the old WAL, which is now all on disk.
+        DiscardSharedWalState(_shm.IncrementWalGeneration());
     }
 
     private List<BackupCopyOperation> BuildBackupPlan(string destinationDbPath, bool includeIndexes)

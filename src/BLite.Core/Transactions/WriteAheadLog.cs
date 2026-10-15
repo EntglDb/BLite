@@ -71,8 +71,16 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
     // True when the crypto file header has been written to (or read from) the current
     // WAL file. Reset to false by TruncateAsync so the header is re-written on the
-    // next record write (after truncation the file is empty and needs a fresh header).
-    private bool _cryptoInitialized;
+    // next record write (after truncation the file is empty and needs a fresh header),
+    // and by ResetCryptoHeader when another process has truncated the shared WAL.
+    private volatile bool _cryptoInitialized;
+
+    // Serialises loading or creating the crypto header: the key changes with it.
+    private readonly object _cryptoHeaderLock = new();
+
+    // Incremented under _cryptoHeaderLock whenever the WAL is truncated or its key forgotten:
+    // header bytes a reader read before that belong to an older WAL and must not be loaded.
+    private long _cryptoHeaderEpoch;
 
     /// <summary>
     /// Opens or creates a WAL file at <paramref name="walPath"/>.
@@ -119,36 +127,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
         // If the WAL file already exists with content and encryption is enabled,
         // read the file header to derive the encryption key before any I/O.
-        // Guard against legacy plaintext or corrupt WAL files by checking the BLCE
-        // magic before passing the header to the crypto provider (which would throw
-        // on a magic mismatch).  If the magic is absent we leave _cryptoInitialized
-        // false so the header will be re-written on the next record write.
-        if (_crypto != null && _walStream.Length >= _crypto.FileHeaderSize)
-        {
-            var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
-            try
-            {
-                _walStream.Position = 0;
-                var read = _walStream.Read(header, 0, _crypto.FileHeaderSize);
-                if (read == _crypto.FileHeaderSize)
-                {
-                    // Only load an encrypted header when the BLCE magic is present.
-                    // This allows legacy plaintext or corrupt WAL files to be opened
-                    // without throwing; the stale/plaintext content is discarded on
-                    // the next TruncateAsync / EnsureCryptoHeader call.
-                    var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0, 4));
-                    if (magic == 0x424C4345u) // "BLCE"
-                    {
-                        _crypto.LoadFromFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
-                        _cryptoInitialized = true;
-                    }
-                }
-            }
-            finally
-            {
-                System.Buffers.ArrayPool<byte>.Shared.Return(header);
-            }
-        }
+        if (_crypto != null)
+            TryLoadCryptoHeader(holdsLock: true);
 
         // Position the stream at the end so subsequent writes append correctly.
         if (_walStream.Length > 0)
@@ -166,29 +146,55 @@ public sealed class WriteAheadLog : IWriteAheadLog
     // ── Crypto helpers ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Writes the 64-byte crypto file header to the WAL if it has not been written yet.
-    /// Always writes the header at offset 0 (truncating any existing stale content first)
-    /// so the WAL file is in a consistent state for the new encryption epoch.
-    /// Must be called while holding <see cref="_lock"/>.
+    /// Loads the crypto file header already at the start of the WAL, if there is one, and
+    /// derives the key from it. Guards against legacy plaintext or corrupt WAL files by
+    /// checking the BLCE magic before passing the header to the crypto provider (which would
+    /// throw on a magic mismatch); without it, <see cref="_cryptoInitialized"/> stays false.
+    /// <paramref name="holdsLock"/>: the caller holds <see cref="_lock"/> (or is the
+    /// constructor), so the header is read through the stream. Otherwise it is read at its
+    /// offset before taking <see cref="_cryptoHeaderLock"/>: on runtimes without
+    /// <c>RandomAccess</c> that read takes <see cref="_lock"/>, which a writer holds while it
+    /// takes <see cref="_cryptoHeaderLock"/>. Bytes read while this process was writing the
+    /// header are never loaded: the writer sets <see cref="_cryptoInitialized"/> before it
+    /// releases <see cref="_cryptoHeaderLock"/>. Neither are bytes read before a truncation or a
+    /// <see cref="ResetCryptoHeader"/>: they may be the old WAL's header (<see cref="_cryptoHeaderEpoch"/>).
     /// </summary>
-    private void EnsureCryptoHeader()
+    private bool TryLoadCryptoHeader(bool holdsLock)
     {
-        if (_crypto == null || _cryptoInitialized) return;
+        if (_cryptoInitialized) return true;
 
-        // Always start the new encrypted WAL at the beginning of the file.
-        // If the file has stale content (e.g., leftover plaintext from before encryption
-        // was enabled, or from a previous epoch after truncation), discard it so the
-        // header is never appended in the middle of the file.
-        if (_walStream!.Length != 0)
-            _walStream.SetLength(0);
-        _walStream.Position = 0;
-
-        var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
+        var size = _crypto!.FileHeaderSize;
+        var header = System.Buffers.ArrayPool<byte>.Shared.Rent(size);
         try
         {
-            _crypto.GetFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
-            _walStream.Write(header.AsSpan(0, _crypto.FileHeaderSize));
-            _cryptoInitialized = true;
+            int read = 0;
+            long epoch = Interlocked.Read(ref _cryptoHeaderEpoch);
+            if (!holdsLock)
+                read = ReadAtOffset(0, header.AsSpan(0, size));
+
+            lock (_cryptoHeaderLock)
+            {
+                if (_cryptoInitialized) return true;
+                if (_cryptoHeaderEpoch != epoch) return false;
+
+                if (holdsLock)
+                {
+                    if (_walStream!.Length < size) return false;
+                    var saved = _walStream.Position;
+                    _walStream.Position = 0;
+                    read = _walStream.Read(header, 0, size);
+                    _walStream.Position = saved;
+                }
+
+                if (read < size) return false;
+                var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0, 4));
+                if (magic != 0x424C4345u) // "BLCE"
+                    return false;
+
+                _crypto.LoadFromFileHeader(header.AsSpan(0, size));
+                _cryptoInitialized = true;
+                return true;
+            }
         }
         finally
         {
@@ -197,29 +203,65 @@ public sealed class WriteAheadLog : IWriteAheadLog
     }
 
     /// <summary>
-    /// Async version of <see cref="EnsureCryptoHeader"/>.
-    /// Always writes the header at offset 0 (truncating any existing stale content first).
+    /// For readers: <c>true</c> when the key of the current WAL is known, loading the header
+    /// first if another process has written it since this one last looked (multi-process mode,
+    /// #203). <c>false</c> when the WAL has no header yet: there is nothing to decrypt.
     /// </summary>
-    private async ValueTask EnsureCryptoHeaderAsync(CancellationToken ct)
+    private bool EnsureCryptoHeaderLoaded() => _cryptoInitialized || TryLoadCryptoHeader(holdsLock: false);
+
+    /// <summary>
+    /// Forgets the key of the shared WAL after another process truncated it: the next read or
+    /// write loads the header the new WAL starts with, or writes one if it is still empty.
+    /// The caller must make sure no record of this process is being written meanwhile
+    /// (the storage engine calls it under its commit lock).
+    /// </summary>
+    internal void ResetCryptoHeader()
+    {
+        if (_crypto == null) return;
+        lock (_cryptoHeaderLock)
+        {
+            _cryptoInitialized = false;
+            Interlocked.Increment(ref _cryptoHeaderEpoch);
+        }
+    }
+
+    /// <summary>
+    /// Makes sure the WAL starts with a crypto file header before a record is written.
+    /// A header already in the file is loaded, never replaced: in multi-process mode it may be
+    /// another process's, and its records are encrypted with that key (#203). Otherwise a new
+    /// header is written at offset 0, discarding stale content (leftover plaintext from before
+    /// encryption was enabled, or a torn header) so it is never appended mid-file. The header
+    /// is written synchronously under <see cref="_cryptoHeaderLock"/>, so a reader of this
+    /// process never loads it half-written and changes the key under the writer.
+    /// Must be called while holding <see cref="_lock"/>.
+    /// </summary>
+    private void EnsureCryptoHeader()
     {
         if (_crypto == null || _cryptoInitialized) return;
+        if (TryLoadCryptoHeader(holdsLock: true)) return;
 
-        // Always start the new encrypted WAL at the beginning of the file.
-        if (_walStream!.Length != 0)
-            _walStream.SetLength(0);
-        _walStream.Position = 0;
-
-        var header = System.Buffers.ArrayPool<byte>.Shared.Rent(_crypto.FileHeaderSize);
-        try
+        lock (_cryptoHeaderLock)
         {
-            _crypto.GetFileHeader(header.AsSpan(0, _crypto.FileHeaderSize));
-            await _walStream.WriteAsync(new ReadOnlyMemory<byte>(header, 0, _crypto.FileHeaderSize), ct);
+            if (_walStream!.Length != 0)
+                _walStream.SetLength(0);
+            _walStream.Position = 0;
+
+            var header = new byte[_crypto.FileHeaderSize];
+            _crypto.GetFileHeader(header);
+            _walStream.Write(header, 0, header.Length);
             _cryptoInitialized = true;
         }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(header);
-        }
+    }
+
+    /// <summary>
+    /// Async path of <see cref="EnsureCryptoHeader"/>: the 64-byte header is written
+    /// synchronously, once per WAL generation.
+    /// </summary>
+    private ValueTask EnsureCryptoHeaderAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        EnsureCryptoHeader();
+        return default;
     }
 
     /// <summary>
@@ -580,10 +622,10 @@ public sealed class WriteAheadLog : IWriteAheadLog
 
         if (_crypto != null)
         {
-            // If the WAL was opened before the crypto header was written (e.g. the
-            // WAL file was empty at open time) we cannot decrypt — return null so
-            // the caller falls through to the page-file read.
-            if (!_cryptoInitialized) return null;
+            // No header yet (the WAL is empty): nothing to decrypt — return null so the
+            // caller falls through to the page-file read. A header another process wrote
+            // after this one opened the WAL is loaded first (#203).
+            if (!EnsureCryptoHeaderLoaded()) return null;
             return ReadPageAtEncrypted(recordOffset, expectedPageId);
         }
 
@@ -638,9 +680,11 @@ public sealed class WriteAheadLog : IWriteAheadLog
             {
                 _crypto.Decrypt(0, cipherBuf.AsSpan(0, ciphertextSize), plainBuf.AsSpan(0, plaintextSize));
             }
-            catch (System.Security.Cryptography.CryptographicException)
+            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ObjectDisposedException)
             {
-                return null; // stale or corrupted envelope
+                // Stale or corrupted envelope, or the key was replaced meanwhile (a new WAL
+                // generation, see ResetCryptoHeader).
+                return null;
             }
 
             if (plainBuf[0] != (byte)WalRecordType.Write) return null;
@@ -754,7 +798,16 @@ public sealed class WriteAheadLog : IWriteAheadLog
         var txnWrites = new Dictionary<ulong, List<(long walOffset, uint pageId, byte[] data)>>();
         var committed  = new HashSet<ulong>();
 
-        if (_crypto != null && _cryptoInitialized)
+        // An encrypted WAL without a header holds no record that can be read: the published
+        // range cannot be replayed, and parsing it as plaintext would misread it.
+        if (_crypto != null && !EnsureCryptoHeaderLoaded())
+        {
+            complete = false;
+            stoppedAt = fromOffset;
+            return new List<(uint, byte[], long)>();
+        }
+
+        if (_crypto != null)
         {
             // Encrypted WAL records start after the per-file crypto header (64 bytes).
             // When fromOffset falls inside the header region (e.g. first replay with
@@ -784,7 +837,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
                     {
                         _crypto.Decrypt(0, cipherBuf.AsSpan(0, ciphertextSize), plainBuf.AsSpan(0, plaintextSize));
                     }
-                    catch (System.Security.Cryptography.CryptographicException) { break; }
+                    catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ObjectDisposedException) { break; }
 
                     long recOffset = pos; // WAL offset of the envelope start
                     var rec = ParsePlaintextRecord(plainBuf.AsSpan(0, plaintextSize));
@@ -948,7 +1001,11 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 _walStream.Position = 0;
                 await _walStream.FlushAsync(ct);
                 // Reset so the crypto file header is re-written on the next record write.
-                _cryptoInitialized = false;
+                lock (_cryptoHeaderLock)
+                {
+                    _cryptoInitialized = false;
+                    Interlocked.Increment(ref _cryptoHeaderEpoch);
+                }
             }
         }
         finally
@@ -972,7 +1029,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
             if (_walStream == null || _walStream.Length == 0)
                 return records;
 
-            if (_crypto != null && _cryptoInitialized)
+            if (_crypto != null && TryLoadCryptoHeader(holdsLock: true))
             {
                 // ── Encrypted path ────────────────────────────────────────────────────
                 // Skip the 64-byte file header and read encrypted record envelopes.
@@ -1006,7 +1063,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
                         {
                             _crypto.Decrypt(0, cipherBuf.AsSpan(0, ciphertextSize), plainBuf.AsSpan(0, plaintextSize));
                         }
-                        catch (CryptographicException)
+                        catch (Exception ex) when (ex is CryptographicException or ObjectDisposedException)
                         {
                             // Authentication tag mismatch — corrupted or truncated record; stop.
                             break;
