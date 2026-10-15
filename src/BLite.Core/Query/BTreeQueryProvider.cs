@@ -261,15 +261,16 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         // ── Several query sources ─────────────────────────────────────────────
         // A query that reads a queryable outside its main chain (q.Where(...).Concat(q), a
         // self-join, a subquery inside a lambda) cannot be served by one filtered or paged
-        // fetch: the model mixes the clauses of the different uses, and EnumerableRewriter
-        // replaces every use of the root with the same source. Replay the whole query over
-        // the whole collection.
+        // fetch: EnumerableRewriter replaces every use of the root with the same source. Replay
+        // the whole query over the whole collection. Another sequence passed to an operator
+        // (a Join inner, a Concat argument) is run as a query of its own first, so that its
+        // clauses get the same planning as any query, VectorSearch included (#186).
         if (HasSecondaryQuery(expression))
         {
             var all = new List<T>();
             await foreach (var item in _collection.FetchAsync(null, int.MaxValue, cancellationToken))
                 all.Add(item);
-            return ExecuteViaEnumerableRewriter<TResult>(expression, all);
+            return ExecuteViaEnumerableRewriter<TResult>(QueryOtherSequences(expression), all);
         }
 
         // 2. Data fetching.
@@ -339,7 +340,7 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         // can evaluate. Every other VectorSearch in the expression is still evaluated and throws.
         // The same holds for a terminal predicate folded into the WHERE (First(p) after OrderBy).
         if (whereAlreadyApplied)
-            expression = DropAppliedWheres(DropFoldedTerminalPredicate(expression, model.FoldedTerminal)).Expression;
+            expression = DropAppliedWheres(DropFoldedTerminalPredicate(expression, model.FoldedTerminal));
 
         if (model.HasComplexOperators)
             return ExecuteViaEnumerableRewriter<TResult>(expression, sourceData);
@@ -529,6 +530,49 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         return false;
     }
 
+    /// <summary>
+    /// Replaces each other sequence passed to an operator of the main chain (the <c>inner</c> of a
+    /// <c>Join</c>, the second source of <c>Concat</c>, <c>Zip</c>, ...) that is a chain of
+    /// <c>Queryable</c> calls with a queryable its own provider creates for it. The replay then
+    /// enumerates that queryable, which runs it as a separate query, instead of rewriting its
+    /// operators to <c>Enumerable</c> ones: its <c>Where</c> uses the indexes of its collection,
+    /// and a <c>VectorSearch</c> in it, which only the index can answer, does not throw (#186).
+    /// Lambdas are left alone: a subquery inside one may use the lambda's parameters.
+    /// </summary>
+    private static Expression QueryOtherSequences(Expression expression)
+    {
+        if (expression is not MethodCallExpression call
+            || call.Method.DeclaringType != typeof(Queryable)
+            || call.Arguments.Count == 0)
+            return expression;
+
+        var arguments = new Expression[call.Arguments.Count];
+        arguments[0] = QueryOtherSequences(call.Arguments[0]);
+        var parameters = call.Method.GetParameters();
+        for (int i = 1; i < arguments.Length; i++)
+        {
+            var argument = call.Arguments[i];
+            arguments[i] = argument is MethodCallExpression { Method.DeclaringType: var declaring } sequence
+                           && declaring == typeof(Queryable)
+                           && typeof(IQueryable).IsAssignableFrom(sequence.Type)
+                           && FindChainRoot(sequence) is { } root
+                ? Expression.Constant(root.Provider.CreateQuery(sequence), parameters[i].ParameterType)
+                : argument;
+        }
+
+        return arguments.SequenceEqual(call.Arguments) ? call : call.Update(call.Object, arguments);
+    }
+
+    /// <summary>The queryable at the bottom of a chain of <c>Queryable</c> calls, or null.</summary>
+    private static IQueryable? FindChainRoot(Expression expression)
+    {
+        while (expression is MethodCallExpression call
+               && call.Method.DeclaringType == typeof(Queryable)
+               && call.Arguments.Count > 0)
+            expression = call.Arguments[0];
+        return (expression as ConstantExpression)?.Value as IQueryable;
+    }
+
     private sealed class SecondaryQueryFinder : ExpressionVisitor
     {
         public bool Found { get; private set; }
@@ -603,36 +647,30 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
     // ─── Expression-tree helpers ──────────────────────────────────────────────
 
     /// <summary>
-    /// Removes the <c>Queryable.Where(x =&gt; ...)</c> calls on the root chain whose input is the
-    /// fetched documents or a subset of them (only filtering, ordering and paging operators lie
-    /// between the root and the Where). <see cref="BTreeExpressionVisitor"/> folds each of these
-    /// into <see cref="QueryModel.WhereClause"/>, which FetchAsync applied, so every element
-    /// reaching them already satisfies their predicate and dropping them leaves the result unchanged.
+    /// Removes the <c>Queryable.Where(x =&gt; ...)</c> calls that <see cref="BTreeExpressionVisitor"/>
+    /// folded into <see cref="QueryModel.WhereClause"/>: those on the root chain with only plain
+    /// Where calls and orderings below them (<see cref="BTreeExpressionVisitor.CanFoldPredicate"/>).
+    /// FetchAsync applied them, so every element reaching them already satisfies their predicate
+    /// and dropping them leaves the result unchanged. Any other Where (after Take, SkipWhile,
+    /// GroupBy, ...) was not folded and stays in the replay (#186).
     /// </summary>
-    /// <returns>
-    /// The rewritten expression, and whether its elements are still a subset of the fetched documents.
-    /// </returns>
-    private static (Expression Expression, bool IsFetchedSubset) DropAppliedWheres(Expression expression)
+    private static Expression DropAppliedWheres(Expression expression)
     {
-        if (expression is ConstantExpression { Value: IQueryable })
-            return (expression, true);
-
         if (expression is not MethodCallExpression call
             || call.Method.DeclaringType != typeof(Queryable)
             || call.Arguments.Count == 0)
-            return (expression, false);
+            return expression;
 
-        var (source, isFetchedSubset) = DropAppliedWheres(call.Arguments[0]);
+        var source = DropAppliedWheres(call.Arguments[0]);
 
-        if (isFetchedSubset
-            && call.Method.Name == nameof(Queryable.Where)
-            && call.Arguments[1] is UnaryExpression { Operand: LambdaExpression { Parameters.Count: 1 } })
-            return (source, true);
+        if (call.Method.Name == nameof(Queryable.Where)
+            && call.Arguments[1] is UnaryExpression { NodeType: ExpressionType.Quote, Operand: LambdaExpression predicate }
+            && BTreeExpressionVisitor.CanFoldPredicate(call.Arguments[0], predicate))
+            return source;
 
-        var rewritten = source == call.Arguments[0]
+        return source == call.Arguments[0]
             ? call
             : call.Update(call.Object, [source, .. call.Arguments.Skip(1)]);
-        return (rewritten, isFetchedSubset && s_subsetPreservingOperators.Contains(call.Method.Name));
     }
 
     /// <summary>
@@ -662,17 +700,6 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
 
     /// <summary>Generic definitions of the parameterless Queryable terminals, by name.</summary>
     private static readonly ConcurrentDictionary<string, MethodInfo> s_parameterlessTerminals = new();
-
-    /// <summary>Queryable operators whose output elements are a subset of their source's.</summary>
-    private static readonly HashSet<string> s_subsetPreservingOperators =
-    [
-        nameof(Queryable.Where),
-        nameof(Queryable.OrderBy), nameof(Queryable.OrderByDescending),
-        nameof(Queryable.ThenBy), nameof(Queryable.ThenByDescending),
-        nameof(Queryable.Skip), nameof(Queryable.Take),
-        nameof(Queryable.SkipWhile), nameof(Queryable.TakeWhile),
-        nameof(Queryable.Distinct), nameof(Queryable.Reverse),
-    ];
 
     /// <summary>
     /// Fallback for queries containing operators the direct pipeline cannot handle

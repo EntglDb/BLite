@@ -55,21 +55,38 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
                     return node;
                 default:
                     // GroupBy, Join, etc. — operators the direct pipeline cannot model.
+                    // Only the source (Arguments[0]) belongs to the chain this model describes.
+                    // The other arguments are lambdas or other sequences (a Join inner, a Concat
+                    // argument): a Where, OrderBy or Take found in them describes that sequence,
+                    // not the root collection, so they are not visited (#186).
                     _model.HasComplexOperators = true;
-                    break;
+                    if (node.Arguments.Count > 0)
+                        Visit(node.Arguments[0]);
+                    return node;
             }
         }
         
         return base.VisitMethodCall(node);
     }
 
+    /// <summary>
+    /// Folds <c>Where(p)</c> into the WHERE clause the provider fetches with, but only where
+    /// <see cref="CanFoldPredicate"/> allows it: on the root chain, with nothing but plain
+    /// <c>Where</c> calls and orderings below it, and with a predicate over the entities. Anywhere
+    /// else, such as after <c>GroupBy</c>, <c>Take</c>, <c>SkipWhile</c> or <c>Select</c>, or with
+    /// the indexed overload <c>Where((x, i) =&gt; ...)</c>, filtering the fetch would change the
+    /// result or cannot be done at all, so the call is left to the in-memory replay (#186).
+    /// </summary>
     private void VisitWhere(MethodCallExpression node)
     {
         // Recursively visit source first (to preserve order or chained calls)
         Visit(node.Arguments[0]);
 
-        var predicate = (UnaryExpression)node.Arguments[1];
-        AddPredicate((LambdaExpression)predicate.Operand);
+        if (node.Arguments[1] is UnaryExpression { NodeType: ExpressionType.Quote, Operand: LambdaExpression predicate }
+            && CanFoldPredicate(node.Arguments[0], predicate))
+            AddPredicate(predicate);
+        else
+            _model.HasComplexOperators = true;
     }
 
     private void AddPredicate(LambdaExpression lambda)
@@ -223,8 +240,9 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
     /// <c>OfType</c>, <c>Select</c> or the order-dependent <c>Take</c>, <c>Skip</c>,
     /// <c>SkipWhile</c> and <c>TakeWhile</c>, either changes what the predicate is applied to or
     /// gives a different result when the predicate runs first.
+    /// The provider relies on the same rule to know which <c>Where</c> calls the fetch applied.
     /// </summary>
-    private static bool CanFoldPredicate(Expression source, LambdaExpression predicate)
+    internal static bool CanFoldPredicate(Expression source, LambdaExpression predicate)
     {
         var current = source;
         while (current is MethodCallExpression call)
