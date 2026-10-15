@@ -715,7 +715,8 @@ internal static class IndexOptimizer
             }
             
             // Handle Convert (e.g. enum property compared to int constant)
-            if (left is UnaryExpression unary && unary.Operand is MemberExpression member2 && right is ConstantExpression constant2)
+            if (left is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary
+                && unary.Operand is MemberExpression member2 && right is ConstantExpression constant2)
             {
                 var propertyPath = ExtractMemberPath(member2, parameter);
                 if (propertyPath != null)
@@ -726,6 +727,8 @@ internal static class IndexOptimizer
                     var val2 = constant2.Value;
                     if (propType.IsEnum && val2 != null && !val2.GetType().IsEnum)
                         val2 = Enum.ToObject(propType, val2);
+                    if (!HasConverter(propertyPath, registry) && !TryConvertBound(propType, unary.Type, ref val2, ref nodeType))
+                        return (null, null, ExpressionType.Default);
                     return (propertyPath, val2, nodeType);
                 }
             }
@@ -748,7 +751,8 @@ internal static class IndexOptimizer
             }
 
             // Handle Convert on left with closure on right
-            if (left is UnaryExpression unaryLeft && unaryLeft.Operand is MemberExpression memberLeft2)
+            if (left is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unaryLeft
+                && unaryLeft.Operand is MemberExpression memberLeft2)
             {
                 var propertyPath = ExtractMemberPath(memberLeft2, parameter);
                 if (propertyPath != null)
@@ -760,6 +764,8 @@ internal static class IndexOptimizer
                         var propType = unaryLeft.Operand.Type;
                         if (propType.IsEnum && val != null && !val.GetType().IsEnum)
                             val = Enum.ToObject(propType, val);
+                        if (!HasConverter(propertyPath, registry) && !TryConvertBound(propType, unaryLeft.Type, ref val, ref nodeType))
+                            return (null, null, ExpressionType.Default);
                         val = TryApplyConverter(propertyPath, val, registry);
                         if (IsIndexableValue(val) || (val != null && val.GetType().IsEnum))
                             return (propertyPath, val, nodeType);
@@ -927,6 +933,130 @@ internal static class IndexOptimizer
         // Use top-level property name (first segment) for registry lookup
         var topProp = propertyPath.Contains('.') ? propertyPath[..propertyPath.IndexOf('.')] : propertyPath;
         return registry.TryConvert(topProp, value, out var pv) ? pv : value;
+    }
+
+    private static bool HasConverter(string propertyPath, ValueConverterRegistry? registry)
+    {
+        if (registry == null) return false;
+        var topProp = propertyPath.Contains('.') ? propertyPath[..propertyPath.IndexOf('.')] : propertyPath;
+        return registry.HasConverter(topProp);
+    }
+
+    /// <summary>
+    /// Expresses the bound of <c>(<paramref name="comparisonType"/>)property op value</c> in the
+    /// property's own type, adjusting <paramref name="op"/> where needed (#222). Index keys carry no
+    /// type tag and compare bytewise, so a bound of another type (<c>r.Count &lt; 9.5</c>,
+    /// <c>r.Count &gt;= 5L</c> on an <c>int</c> index) would be encoded in another key layout and
+    /// bound the wrong range.
+    /// <list type="bullet">
+    ///   <item>An <c>int</c>/<c>long</c> property gets the integer bound that selects the same values:
+    ///         <c>Count &lt; 9.5</c> becomes <c>Count &lt;= 9</c>, <c>Count &gt;= 2.5</c> becomes
+    ///         <c>Count &gt;= 3</c>. A bound beyond the property's range (or NaN) makes the comparison
+    ///         always true, written <c>Count &gt;= int.MinValue</c> (which still leaves out nulls, as
+    ///         the lifted comparison does), or always false, written <c>Count &gt; int.MaxValue</c>.</item>
+    ///   <item>Bounds whose keys are already laid out like the property's are kept: <c>float</c> and
+    ///         <c>double</c> (a float key is encoded as a double), <c>DateTime</c> and
+    ///         <c>DateTimeOffset</c> (both as Unix milliseconds), and numeric bounds on a
+    ///         <c>decimal</c> property, which the decimal-keyed index converts itself.</item>
+    /// </list>
+    /// Returns <c>false</c> when the bound has no exact equivalent in the property's type: a
+    /// narrowing cast (<c>(int)r.Total == 5</c> also matches other values of <c>Total</c>), a
+    /// floating-point bound beyond the range where the property converts exactly (2^53 for
+    /// <c>long</c> to <c>double</c>, 2^24 to <c>float</c>), a NaN bound on a floating-point or
+    /// <c>decimal</c> property, or a pair of types not listed above.
+    /// The caller then plans no index for the comparison, and the query evaluates it per document.
+    /// </summary>
+    private static bool TryConvertBound(Type propertyType, Type comparisonType, ref object? value, ref ExpressionType op)
+    {
+        var target = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+        if (value == null || value is DBNull || value.GetType() == target)
+            return true;
+        if (op is not (ExpressionType.Equal or ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
+            or ExpressionType.LessThan or ExpressionType.LessThanOrEqual))
+            return true; // not planned on an index anyway
+
+        if (target.IsEnum)
+        {
+            // A nullable enum is compared through its underlying type: key it as the enum, like Insert.
+            if (value is not (int or long or short or byte or sbyte or ushort or uint)) return false;
+            value = Enum.ToObject(target, value);
+            return true;
+        }
+
+        if (target != typeof(int) && target != typeof(long))
+        {
+            // NaN has no place in key order: no comparison with it is true.
+            if (value is double dn && double.IsNaN(dn) || value is float fn && float.IsNaN(fn))
+                return false;
+            if (target == typeof(double) || target == typeof(float))
+                return value is double or float;
+            if (target == typeof(decimal))
+                return value is int or long or double or float;
+            if (target == typeof(DateTime) || target == typeof(DateTimeOffset))
+                return value is DateTime or DateTimeOffset;
+            return false;
+        }
+
+        // Only a widening conversion of the property keeps a comparison equivalent to one bound on it;
+        // beyond `exactLimit` distinct property values convert to the same number.
+        var cmp = Nullable.GetUnderlyingType(comparisonType) ?? comparisonType;
+        double exactLimit;
+        if ((cmp == typeof(long) && target == typeof(int)) || cmp == typeof(decimal)) exactLimit = double.PositiveInfinity;
+        else if (cmp == typeof(double)) exactLimit = target == typeof(int) ? double.PositiveInfinity : 9007199254740992d;
+        else if (cmp == typeof(float)) exactLimit = 16777216d;
+        else return false;
+
+        long min = target == typeof(int) ? int.MinValue : long.MinValue;
+        long max = target == typeof(int) ? int.MaxValue : long.MaxValue;
+        long floor = 0, ceiling = 0;
+        bool below = false, above = false, never = false;
+        switch (value)
+        {
+            case int i:
+                floor = ceiling = i;
+                break;
+            case long l:
+                if (l < min) below = true;
+                else if (l > max) above = true;
+                else floor = ceiling = l;
+                break;
+            case decimal m:
+                if (m < min) below = true;
+                else if (m > max) above = true;
+                else { floor = (long)decimal.Floor(m); ceiling = (long)decimal.Ceiling(m); }
+                break;
+            case double or float:
+                var d = Convert.ToDouble(value);
+                if (double.IsNaN(d)) { never = true; break; }
+                if (!double.IsPositiveInfinity(exactLimit) && !(Math.Abs(d) < exactLimit)) return false;
+                if (d < min) below = true;
+                else if (d > max) above = true;
+                else { floor = (long)Math.Floor(d); ceiling = (long)Math.Ceiling(d); }
+                break;
+            default:
+                return false;
+        }
+
+        if (below || above || never)
+        {
+            bool always = !never && (op is ExpressionType.LessThan or ExpressionType.LessThanOrEqual ? above
+                : op is ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual && below);
+            (floor, op) = always ? (min, ExpressionType.GreaterThanOrEqual) : (max, ExpressionType.GreaterThan);
+        }
+        else
+        {
+            bool integral = floor == ceiling;
+            switch (op)
+            {
+                case ExpressionType.GreaterThanOrEqual: floor = ceiling; break;
+                case ExpressionType.GreaterThan: if (!integral) { floor = ceiling; op = ExpressionType.GreaterThanOrEqual; } break;
+                case ExpressionType.LessThan: if (!integral) op = ExpressionType.LessThanOrEqual; break;
+                case ExpressionType.Equal: if (!integral) { floor = max; op = ExpressionType.GreaterThan; } break;
+            }
+        }
+
+        value = target == typeof(int) ? (object)(int)floor : floor;
+        return true;
     }
 
     private static readonly HashSet<Type> _knownBsonPrimitives =

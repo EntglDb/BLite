@@ -51,12 +51,12 @@ public static class BsonSchemaGenerator
                 if (prop.GetIndexParameters().Length > 0) continue; // Skip indexers
                 if (!prop.CanRead) continue;
 
-                AddField(schema, prop.Name, prop.PropertyType);
+                AddField(schema, prop, prop.PropertyType);
             }
 
             foreach (var field in fields)
             {
-                AddField(schema, field.Name, field.FieldType);
+                AddField(schema, field, field.FieldType);
             }
 
             return schema;
@@ -69,14 +69,17 @@ public static class BsonSchemaGenerator
     }
 
     [RequiresUnreferencedCode("Schema generation uses reflection to discover properties and fields.")]
-    private static void AddField(BsonSchema schema, string name, Type type)
+    private static void AddField(BsonSchema schema, MemberInfo member, Type type)
     {
-        var lowerName = name.ToLowerInvariant();
+        // The field the mapper writes, which [BsonProperty], [JsonPropertyName] or [Column] may
+        // rename: the key dictionary is filled from these names, so a conventional name here would
+        // leave the renamed field unregistered and make every insert fail (#184).
+        var fieldName = BsonFieldNames.Of(member);
         var (bsonType, nestedSchema, itemType) = GetBsonType(type);
 
         var field = new BsonField
         {
-            Name = lowerName,
+            Name = fieldName,
             Type = bsonType,
             IsNullable = IsNullable(type),
             NestedSchema = nestedSchema,
@@ -85,11 +88,12 @@ public static class BsonSchemaGenerator
 
         schema.Fields.Add(field);
 
-        // Whenever a property is named "Id", register BOTH "id" and "_id".
-        // Root-entity mappers write it as "_id"; nested-type mappers write it as "id".
+        // Whenever a property is named "Id", register BOTH its field name and "_id".
+        // Root-entity mappers write it as "_id"; nested-type mappers write it under its
+        // field name ("id" unless renamed).
         // Having both in the schema ensures the BSON key dictionary always contains
         // both names, avoiding "key not found" errors regardless of context.
-        if (lowerName == "id")
+        if (member.Name.Equals("id", StringComparison.OrdinalIgnoreCase))
         {
             schema.Fields.Add(new BsonField
             {
