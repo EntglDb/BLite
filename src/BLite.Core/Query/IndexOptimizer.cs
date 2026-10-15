@@ -182,23 +182,26 @@ internal static class IndexOptimizer
 
             if (left != null && right != null && left.IndexName == right.IndexName
                 && !left.IsSpatialSearch && !right.IsSpatialSearch
-                && !left.IsFullTextSearch && !right.IsFullTextSearch)
+                && !left.IsFullTextSearch && !right.IsFullTextSearch
+                && left.InValues == null && right.InValues == null
+                && TryTighterBound(left.MinValue, left.StartInclusive, right.MinValue, right.StartInclusive, lower: true,
+                                   out var minValue, out var startInclusive)
+                && TryTighterBound(left.MaxValue, left.EndInclusive, right.MaxValue, right.EndInclusive, lower: false,
+                                   out var maxValue, out var endInclusive))
             {
-                // Both sides are covered by the same index — combine into a single range.
+                // Both sides are covered by the same index — combine into a single range, keeping
+                // the tighter bound where both sides bound the same end (#223).
                 // Propagate the stricter completeness: if either branch required a post-filter
                 // (StrictBoundary), the merged range still needs one.
-                // The inclusivity of each bound comes from whichever side owns that bound.
                 var mergedCompleteness = (left.FilterCompleteness == FilterCompleteness.Exact &&
                                           right.FilterCompleteness == FilterCompleteness.Exact)
                     ? FilterCompleteness.Exact
                     : FilterCompleteness.StrictBoundary;
-                bool startInclusive = left.MinValue != null ? left.StartInclusive : right.StartInclusive;
-                bool endInclusive   = left.MaxValue != null ? left.EndInclusive   : right.EndInclusive;
                 return new OptimizationResult
                 {
                     IndexName = left.IndexName,
-                    MinValue = left.MinValue ?? right.MinValue,
-                    MaxValue = left.MaxValue ?? right.MaxValue,
+                    MinValue = minValue,
+                    MaxValue = maxValue,
                     IsRange = true,
                     FilterCompleteness = mergedCompleteness,
                     StartInclusive = startInclusive,
@@ -515,6 +518,77 @@ internal static class IndexOptimizer
 
         values = Array.Empty<object?>();
         return false;
+    }
+
+    /// <summary>
+    /// Picks the tighter of two bounds on the same end of a range (the larger lower bound, the
+    /// smaller upper bound; on equal values, the exclusive one). A missing bound (<c>null</c>)
+    /// yields the other one. Returns <c>false</c> when the two values cannot be ordered the way
+    /// the index orders them; the caller must then keep one side and post-filter the rest.
+    /// </summary>
+    private static bool TryTighterBound(object? a, bool aInclusive, object? b, bool bInclusive, bool lower,
+        out object? value, out bool inclusive)
+    {
+        if (a == null) { value = b; inclusive = bInclusive; return true; }
+        if (b == null) { value = a; inclusive = aInclusive; return true; }
+
+        value = null;
+        inclusive = true;
+        if (!TryEncodeBound(a, b, out var aKey) || !TryEncodeBound(b, a, out var bKey))
+            return false;
+
+        var cmp = aKey.CompareTo(bKey);
+        if (cmp == 0)
+        {
+            value = a;
+            inclusive = aInclusive && bInclusive;
+        }
+        else if ((cmp > 0) == lower)
+        {
+            value = a;
+            inclusive = aInclusive;
+        }
+        else
+        {
+            value = b;
+            inclusive = bInclusive;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Encodes a range bound the way <see cref="CollectionSecondaryIndex"/> encodes it, so two bounds
+    /// compare in index order. Only for a bound of the same type as <paramref name="other"/>, or a
+    /// string next to a pre-encoded string key (a <c>StartsWith</c> upper bound): bounds of different
+    /// types may be encoded differently by the index (#222), and sentinels such as <see cref="DBNull"/>
+    /// or <c>bool</c> are not range keys.
+    /// </summary>
+    private static bool TryEncodeBound(object value, object other, out IndexKey key)
+    {
+        key = default;
+        var sameType = value.GetType() == other.GetType();
+        var stringAndKey = (value is string && other is IndexKey) || (value is IndexKey && other is string);
+        if (!sameType && !stringAndKey)
+            return false;
+
+        switch (value)
+        {
+            case IndexKey ik: key = ik; return true;
+            case string s: key = new IndexKey(s); return true;
+            case int i: key = new IndexKey(i); return true;
+            case long l: key = new IndexKey(l); return true;
+            case double d: key = new IndexKey(d); return true;
+            case float f: key = new IndexKey((double)f); return true;
+            case decimal m: key = new IndexKey(m); return true;
+            case ObjectId oid: key = new IndexKey(oid); return true;
+            case DateTime dt: key = new IndexKey(new DateTimeOffset(dt.ToUniversalTime()).ToUnixTimeMilliseconds()); return true;
+            case DateTimeOffset dto: key = new IndexKey(dto.ToUnixTimeMilliseconds()); return true;
+            case byte[] bytes: key = new IndexKey(bytes); return true;
+            case Guid g: key = new IndexKey(g.ToByteArray()); return true;
+            default:
+                if (value.GetType().IsEnum) { key = new IndexKey(Convert.ToInt64(value)); return true; }
+                return false;
+        }
     }
 
     /// <summary>
