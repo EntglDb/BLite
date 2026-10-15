@@ -682,9 +682,11 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
     /// <c>Enumerable.*</c> equivalents before compiling and executing.
     /// </summary>
     /// <remarks>
-    /// The compiled <c>Func&lt;IEnumerable&lt;T&gt;, TResult&gt;</c> is cached per expression shape
-    /// (keyed by <c>TResult.FullName + expression.ToString()</c>), so the expensive
-    /// <see cref="Expression.Compile"/> call is paid only once per unique query shape.
+    /// The compiled <c>Func&lt;IEnumerable&lt;T&gt;, object?[], TResult&gt;</c> is cached per expression
+    /// shape, so the expensive <see cref="Expression.Compile"/> call is paid only once per unique
+    /// query shape. Every constant except the root (captured variables, inner sequences, literals)
+    /// is lifted into the <c>object?[]</c> argument and passed in on each call: a constant compiled
+    /// into the delegate would be reused by later calls with other values (#207).
     /// </remarks>
     [RequiresDynamicCode("BLite LINQ queries use Expression.Compile() and MakeGenericMethod which require dynamic code generation.")]
     private TResult ExecuteViaEnumerableRewriter<TResult>(Expression expression, IEnumerable<T> sourceData)
@@ -695,23 +697,62 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         if (root == null)
             throw new InvalidOperationException("Could not find root IQueryable in expression.");
 
-        var cacheKey = typeof(TResult).FullName + "\x00" + expression.ToString();
+        var argsParam = Expression.Parameter(typeof(object[]), "_args");
+        var lifter = new ConstantLifter(root, argsParam);
+        var shape = lifter.Visit(expression);
+
+        // ToString() prints types by their short name only, so the lifted constants' full type
+        // names are part of the key: two closure classes named <>c__DisplayClass0_0 in different
+        // methods must not share a delegate.
+        var cacheKey = typeof(TResult).FullName + "\x00" + shape.ToString() + "\x00"
+            + string.Join("\x01", lifter.Types.Select(t => t.AssemblyQualifiedName));
 
         var cachedDelegate = s_enumRewriterCache.GetOrAdd(cacheKey, _ =>
         {
             var sourceParam = Expression.Parameter(typeof(IEnumerable<T>), "_src");
             var rewriter = new EnumerableRewriter(root, sourceParam);
-            var rewritten = rewriter.Visit(expression);
+            var rewritten = rewriter.Visit(shape);
             if (rewritten.Type != typeof(TResult))
                 rewritten = Expression.Convert(rewritten, typeof(TResult));
-            return Expression.Lambda<Func<IEnumerable<T>, TResult>>(rewritten, sourceParam).Compile();
+            return Expression.Lambda<Func<IEnumerable<T>, object?[], TResult>>(rewritten, sourceParam, argsParam).Compile();
         });
 
-        return ((Func<IEnumerable<T>, TResult>)cachedDelegate)(sourceData);
+        return ((Func<IEnumerable<T>, object?[], TResult>)cachedDelegate)(sourceData, lifter.Values.ToArray());
     }
 
     /// <summary>Cache of compiled EnumerableRewriter delegates keyed by expression shape.</summary>
     private static readonly ConcurrentDictionary<string, Delegate> s_enumRewriterCache = new();
+
+    /// <summary>
+    /// Replaces every constant except the root queryable with <c>(Type)_args[i]</c>, collecting
+    /// the values and their types in order.
+    /// </summary>
+    private sealed class ConstantLifter : ExpressionVisitor
+    {
+        private readonly IQueryable _root;
+        private readonly ParameterExpression _args;
+
+        public ConstantLifter(IQueryable root, ParameterExpression args)
+        {
+            _root = root;
+            _args = args;
+        }
+
+        public List<object?> Values { get; } = new();
+        public List<Type> Types { get; } = new();
+
+        protected override Expression VisitConstant(ConstantExpression node)
+        {
+            if (ReferenceEquals(node.Value, _root))
+                return node;
+
+            var index = Values.Count;
+            Values.Add(node.Value);
+            Types.Add(node.Type);
+            return Expression.Convert(
+                Expression.ArrayIndex(_args, Expression.Constant(index)), node.Type);
+        }
+    }
 
     private sealed class RootFinder : ExpressionVisitor
     {
