@@ -251,4 +251,25 @@ public class UnchangedIndexKeyUpdateTests : IDisposable
             db.PeopleV2.InsertAsync(new PersonV2 { Name = "new-" + new string('N', 8300), Age = 3 }).AsTask());
         Assert.Equal(2, (await db.PeopleV2.FindByIdAsync(legacy.Id))!.Age);
     }
+
+    [Fact]
+    public async Task Typed_LegacyOversizedIndexedValue_FollowsItsDocumentWhenItMoves()
+    {
+        using var db = new TestDbContext(_dbPath);
+        var indexName = db.TestDocuments.GetIndexes().Single(i => i.PropertyPaths.SequenceEqual(["Category"])).Name;
+        var categoryIndex = TypedBTree(db.TestDocuments, indexName);
+
+        categoryIndex.MaxKeySizeOverride = LegacyMaxKeySize(categoryIndex);
+        var legacy = new TestDocument { Category = LegacyLongValue, Amount = 1, Name = "small" };
+        await db.TestDocuments.InsertAsync(legacy);
+        categoryIndex.MaxKeySizeOverride = null;
+
+        // Growing the document moves it: the entry of its unchanged, oversized key is re-pointed.
+        legacy.Name = new string('g', 3000);
+        await db.TestDocuments.UpdateAsync(legacy);
+
+        var found = Assert.Single(await db.TestDocuments.AsQueryable().Where(d => d.Category == LegacyLongValue).ToListAsync());
+        Assert.Equal(3000, found.Name.Length);
+        Assert.Equal(1, await db.TestDocuments.AsQueryable().CountAsync(d => d.Category == LegacyLongValue));
+    }
 }
