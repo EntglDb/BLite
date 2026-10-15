@@ -211,8 +211,8 @@ public class LinqAggregateTests : IDisposable
     [Fact]
     public async Task FilterBoundOfAnotherType_IsNotUsedAsAKeyRange()
     {
-        // The optimizer keeps the constant's type, so these bounds are a double and a long against
-        // the int Count index; encoded as keys they would bound the wrong range.
+        // These bounds are a double and a long against the int Count index; encoded as keys of
+        // their own type they would bound the wrong range (#222).
         using var db = new AggregateDbContext(_dbPath);
         for (int i = 0; i < 20; i++)
             await db.Readings.InsertAsync(new Reading { Id = new ObjectId(i + 1, 0), Count = i, Total = i });

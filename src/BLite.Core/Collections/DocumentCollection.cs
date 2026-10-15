@@ -3775,10 +3775,10 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     && plan.MinValue is null or TValue
                     && plan.MaxValue is null or TValue)
                 {
-                    // The optimizer keeps the constant's own type (r.Count < 9.5 gives a double
-                    // bound), and keys carry no type tag, so a bound of another type would be
-                    // compared bytewise against the int/long keys. Such filters take the path below,
-                    // which post-filters the documents the index returns.
+                    // Keys carry no type tag, so a bound of another type would be compared bytewise
+                    // against the int/long keys. The optimizer expresses bounds in the property's
+                    // type (r.Count < 9.5 gives Count <= 9, #222); any other bound takes the path
+                    // below, which post-filters the documents the index returns.
                     fromKeys = AggregateIndexKeys<TValue>(op, nullable, index, plan.MinValue, plan.MaxValue, plan.StartInclusive, plan.EndInclusive);
                 }
                 if (fromKeys.Handled)
