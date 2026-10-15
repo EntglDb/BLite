@@ -1267,16 +1267,28 @@ public sealed class DynamicCollection : IDisposable
         // Everything that can reject the document is checked before any page is written.
         ValidateWrite(id, key, newDocument, oldDoc, isInsert: false, transaction);
 
-        DeleteSlot(oldLocation, transaction);
-
+        // A document that is not larger than before stays in its slot, so the entries of keys
+        // that did not change stay valid and are left alone (see IndexUpdate).
         var docData = newDocument.RawData;
-        var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
-        if (pageId == 0) pageId = AllocateNewDataPage(transaction);
-        var slotIndex = InsertIntoPage(pageId, docData, transaction);
-        var newLocation = new DocumentLocation(pageId, slotIndex);
+        DocumentLocation newLocation;
+        if (TryUpdateInPlace(oldLocation, docData, transaction))
+        {
+            newLocation = oldLocation;
+        }
+        else
+        {
+            DeleteSlot(oldLocation, transaction);
 
-        _primaryIndex.Delete(key, oldLocation, transaction.TransactionId);
-        _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+            var pageId = FindPageWithSpace(docData.Length + SlotEntry.Size, transaction.TransactionId);
+            if (pageId == 0) pageId = AllocateNewDataPage(transaction);
+            var slotIndex = InsertIntoPage(pageId, docData, transaction);
+            newLocation = new DocumentLocation(pageId, slotIndex);
+
+            // The id is unchanged: re-point its entry rather than inserting it again, which
+            // also lets an id stored before MaxKeySize was lowered (#217) follow its document.
+            if (!_primaryIndex.Relocate(key, oldLocation, newLocation, transaction.TransactionId))
+                _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+        }
 
         foreach (var (_, idx) in _secondaryIndexes)
             IndexUpdate(idx, oldDoc, newDocument, oldLocation, newLocation, transaction);
@@ -2127,7 +2139,9 @@ public sealed class DynamicCollection : IDisposable
             throw new BLiteValidationException(
                 $"Document size {size} exceeds maximum single page size. Overflow not yet supported in DynamicCollection.");
 
-        if (key.Data.Length > _primaryIndex.MaxKeySize)
+        // An update keeps the id it was found by, so only a new id is checked: one stored before
+        // MaxKeySize was lowered (#217) must not make its document impossible to update.
+        if (isInsert && key.Data.Length > _primaryIndex.MaxKeySize)
             throw new BLiteValidationException(
                 $"Id of {key.Data.Length} bytes is too large for the primary index of collection '{_collectionName}' (maximum {_primaryIndex.MaxKeySize} bytes).");
 
@@ -2145,19 +2159,20 @@ public sealed class DynamicCollection : IDisposable
                 {
                     if (BsonValueToIndexKey(val) is not { } indexKey) break;
 
+                    // On update an unchanged key keeps its entry (IndexUpdate leaves it in place
+                    // or re-points it), so it is neither size-checked again (a key stored before
+                    // MaxKeySize was lowered, #217, stays updatable) nor checked for uniqueness
+                    // (documents that already share a value can still be updated).
+                    if (oldDocument != null
+                        && TryGetBTreeKey(oldDocument, idx, out var oldKey)
+                        && oldKey.Data.SequenceEqual(indexKey.Data))
+                        break;
+
                     if (indexKey.Data.Length > idx.BTree!.MaxKeySize)
                         throw new BLiteValidationException(
                             $"Key of {indexKey.Data.Length} bytes is too large for index '{name}' (maximum {idx.BTree.MaxKeySize} bytes).");
 
                     if (!idx.Options.Unique) break;
-
-                    // On update an unchanged key keeps its entry (IndexUpdate deletes it first),
-                    // so documents that already share a value can still be updated.
-                    if (oldDocument != null
-                        && TryGetNestedValue(oldDocument, idx.FieldPath, out var oldVal)
-                        && BsonValueToIndexKey(oldVal) is { } oldKey
-                        && oldKey.Data.SequenceEqual(indexKey.Data))
-                        break;
 
                     if (idx.BTree.TryFind(indexKey, out _, transaction.TransactionId))
                         throw new BLiteValidationException($"Duplicate key violation for unique index '{name}'");
@@ -2248,8 +2263,67 @@ public sealed class DynamicCollection : IDisposable
             && idx.Vector!.Relocate(oldVector, oldLocation, newLocation, transaction))
             return;
 
+        // An unchanged B-Tree key keeps its entry: left alone when the document stayed in its
+        // slot, re-pointed when it moved. Deleting and inserting it again would cost a search
+        // through every copy of a duplicated key (keys here carry no document id), and would
+        // fail for a key stored before MaxKeySize was lowered (#217).
+        if (oldDocument != null && idx.Kind == DynamicIndexKind.BTree
+            && TryGetBTreeKey(oldDocument, idx, out var oldKey)
+            && TryGetBTreeKey(newDocument, idx, out var newKey)
+            && oldKey.Data.SequenceEqual(newKey.Data))
+        {
+            bool moved = oldLocation.PageId != newLocation.PageId || oldLocation.SlotIndex != newLocation.SlotIndex;
+            if (!moved || idx.BTree!.Relocate(oldKey, oldLocation, newLocation, transaction.TransactionId))
+                return;
+        }
+
         if (oldDocument != null) IndexDelete(idx, oldDocument, oldLocation, transaction);
         IndexInsert(idx, newDocument, newLocation, transaction);
+    }
+
+    /// <summary>The key <paramref name="document"/> has in the B-Tree index <paramref name="idx"/>, if any.</summary>
+    private bool TryGetBTreeKey(BsonDocument document, DynamicSecondaryIndex idx, out IndexKey key)
+    {
+        key = default;
+        if (!TryGetNestedValue(document, idx.FieldPath, out var val) || BsonValueToIndexKey(val) is not { } k)
+            return false;
+        key = k;
+        return true;
+    }
+
+    /// <summary>
+    /// Overwrites the document at <paramref name="location"/> with <paramref name="data"/> when
+    /// it fits in the slot it already has, so the document keeps its location. Returns
+    /// <c>false</c>, writing nothing, when it does not fit or the slot is not a live data slot.
+    /// </summary>
+    private bool TryUpdateInPlace(DocumentLocation location, ReadOnlyMemory<byte> data, ITransaction transaction)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            _storage.ReadPage(location.PageId, transaction.TransactionId, buffer);
+            var header = SlottedPageHeader.ReadFrom(buffer);
+            if (header.PageType != PageType.Data || location.SlotIndex >= header.SlotCount)
+                return false;
+
+            var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
+            var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+            if (slot.Flags != SlotFlags.None || data.Length > slot.Length)
+                return false;
+
+            data.Span.CopyTo(buffer.AsSpan(slot.Offset, data.Length));
+            // Erase the bytes the shorter document no longer uses, as DeleteSlot does.
+            buffer.AsSpan(slot.Offset + data.Length, slot.Length - data.Length).Clear();
+            slot.Length = (ushort)data.Length;
+            slot.WriteTo(buffer.AsSpan(slotOffset));
+
+            _storage.WritePage(location.PageId, transaction.TransactionId, buffer.AsSpan(0, _storage.PageSize));
+            return true;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     #endregion

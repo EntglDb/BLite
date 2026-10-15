@@ -3035,7 +3035,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         // Unique indexes only where the key changed, so documents that already share a value
         // can still be updated.
         _indexManager.EnsureUniqueInAll(entity, oldEntity, transaction);
-        _indexManager.ValidateKeysInAll(entity);
+        _indexManager.ValidateKeysInAll(entity, oldEntity);
 
         // Read old page
         var pageBuffer = ArrayPool<byte>.Shared.Rent(_storage.PageSize);
@@ -3066,7 +3066,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             {
                 // Delete old + insert new. Secondary indexes are moved below, so an entry whose
                 // key did not change is re-pointed rather than deleted and inserted again.
-                await DeleteCore(id, transaction, notifyCdc: false, deleteFromIndexes: false);
+                // The primary entry is kept and re-pointed below: the id is unchanged, and one
+                // stored before MaxKeySize was lowered (#217) could not be inserted again.
+                await DeleteCore(id, transaction, notifyCdc: false, deleteFromIndexes: false, deleteFromPrimary: false);
 
                 DocumentLocation newLocation;
                 if (bytesWritten + SlotEntry.Size <= _maxDocumentSizeForSinglePage)
@@ -3082,7 +3084,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                     newLocation = new DocumentLocation(newPageId, newSlotIndex);
                 }
 
-                _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
+                if (!_primaryIndex.Relocate(key, oldLocation, newLocation, transaction.TransactionId))
+                    _primaryIndex.Insert(key, newLocation, transaction.TransactionId);
                 _indexManager.UpdateInAll(oldEntity, entity, oldLocation, newLocation, transaction);
 
                 // Notify CDC
@@ -3377,7 +3380,7 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return deleteCount;
     }
 
-    private async Task<bool> DeleteCore(TId id, ITransaction transaction, bool notifyCdc = true, bool deleteFromIndexes = true)
+    private async Task<bool> DeleteCore(TId id, ITransaction transaction, bool notifyCdc = true, bool deleteFromIndexes = true, bool deleteFromPrimary = true)
     {
         var key = _mapper.ToIndexKey(id);
         if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
@@ -3434,7 +3437,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
             _fsi.Update(location.PageId, compactedHeader.AvailableFreeSpace);
 
             // Remove from primary index
-            _primaryIndex.Delete(key, location, transaction.TransactionId);
+            if (deleteFromPrimary)
+                _primaryIndex.Delete(key, location, transaction.TransactionId);
 
             // Notify CDC
             if (notifyCdc) 

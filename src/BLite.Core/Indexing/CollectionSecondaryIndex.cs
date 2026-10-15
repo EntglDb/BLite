@@ -154,7 +154,13 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
                 return;
 
             // Same key, new location: re-point the entry. An unchanged vector keeps its HNSW
-            // node instead of leaving a deleted node behind.
+            // node instead of leaving a deleted node behind; an unchanged B-Tree key is rewritten
+            // in place, so a key stored before MaxKeySize was lowered (#217) is not inserted again.
+            if (_btreeIndex != null
+                && _btreeIndex.Relocate(CreateCompositeKey(ConvertToIndexKey(oldKey), _mapper.ToIndexKey(_mapper.GetId(oldDocument))),
+                                        oldLocation, newLocation, transaction?.TransactionId))
+                return;
+
             if (_vectorIndex == null || !TryRelocateVectors(oldKey, oldLocation, newLocation, transaction))
             {
                 DeleteKey(oldKey, oldDocument, oldLocation, transaction);
@@ -642,10 +648,20 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// B-Tree key larger than a node page. Called before any page is written, so a rejected write
     /// leaves nothing behind instead of failing halfway through the indexes.
     /// </summary>
-    internal void ValidateKey(T document)
+    /// <param name="oldDocument">
+    /// The stored version on update. A key equal to the stored one keeps its entry (see
+    /// <see cref="Update"/>), so it is not checked again: a key stored before
+    /// <see cref="BTreeIndex.MaxKeySize"/> was lowered (#217) must not block every update.
+    /// </param>
+    internal void ValidateKey(T document, T? oldDocument = default)
     {
         if (!_definition.TryGetKey(document, out var keyValue) || keyValue == null)
             return; // null keys are not indexed
+
+        if (oldDocument != null
+            && _definition.TryGetKey(oldDocument, out var oldKeyValue)
+            && KeysEqual(oldKeyValue, keyValue))
+            return;
 
         if (_vectorIndex != null)
         {

@@ -86,7 +86,13 @@ public sealed class BTreeIndex
     /// The collections reject a larger key before writing anything, and <see cref="Insert"/>
     /// rejects it too.
     /// </summary>
-    internal int MaxKeySize => InternalEntrySpace / 2 - 4 - 4;
+    internal int MaxKeySize => MaxKeySizeOverride ?? InternalEntrySpace / 2 - 4 - 4;
+
+    /// <summary>
+    /// Test hook: raises <see cref="MaxKeySize"/> on this instance so tests can write keys up to
+    /// the limit of older versions (PageSize - 64), standing in for an index those versions wrote.
+    /// </summary>
+    internal int? MaxKeySizeOverride { get; set; }
 
     /// <summary>Where the entries of a node start: page header (32) + node header (20).</summary>
     private const int NodeDataStart = 32 + 20;
@@ -1462,6 +1468,42 @@ public sealed class BTreeIndex
         var keyLength = BitConverter.ToInt32(buffer.AsSpan(offset, 4));
         var keyData = buffer.AsSpan(offset + 4, keyLength);
         return IndexKey.FromOwnedArray(keyData.ToArray());
+    }
+
+    /// <summary>
+    /// Re-points the entry (<paramref name="key"/>, <paramref name="oldLocation"/>) at
+    /// <paramref name="newLocation"/>, for a document that moved while its key stayed the same.
+    /// The location is rewritten in place: the leaf keeps its size and the tree its shape, so
+    /// nothing splits or merges, and a key stored before <see cref="MaxKeySize"/> was lowered
+    /// (#217) can still follow its document. Returns <c>false</c>, writing nothing, when the
+    /// entry is not in the index.
+    /// </summary>
+    internal bool Relocate(IndexKey key, DocumentLocation oldLocation, DocumentLocation newLocation, ulong? transactionId = null)
+    {
+        var txnId = transactionId ?? 0;
+        var pageBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(_storage.PageSize);
+        try
+        {
+            var leafPageId = FindLeafHoldingEntry(_rootPageId, key, oldLocation, new List<uint>(), txnId, pageBuffer);
+            if (leafPageId == 0)
+                return false;
+
+            var header = BTreeNodeHeader.ReadFrom(pageBuffer.AsSpan(32));
+            Span<int> offsets = stackalloc int[header.EntryCount + 1];
+            BuildLeafOffsets(pageBuffer, offsets);
+            int idx = FindEntryInLeaf(pageBuffer, offsets, key, oldLocation);
+            if (idx == -1)
+                return false;
+
+            int keyLen = BitConverter.ToInt32(pageBuffer.AsSpan(offsets[idx], 4));
+            newLocation.WriteTo(pageBuffer.AsSpan(offsets[idx] + 4 + keyLen, DocumentLocation.SerializedSize));
+            WritePage(leafPageId, txnId, pageBuffer.AsSpan(0, _storage.PageSize));
+            return true;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
+        }
     }
 
     /// <summary>

@@ -581,7 +581,8 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     /// be written to one of the indexes (vector dimension mismatch, key too large).
     /// Call before any page is written, together with <see cref="EnsureUniqueInAll"/>.
     /// </summary>
-    public void ValidateKeysInAll(T document)
+    /// <param name="oldDocument">The stored version on update: keys equal to its keys are not checked again.</param>
+    public void ValidateKeysInAll(T document, T? oldDocument = default)
     {
         if (document == null)
             throw new ArgumentNullException(nameof(document));
@@ -590,7 +591,7 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         {
             foreach (var index in _indexes.Values)
             {
-                index.ValidateKey(document);
+                index.ValidateKey(document, oldDocument);
             }
         }
     }
