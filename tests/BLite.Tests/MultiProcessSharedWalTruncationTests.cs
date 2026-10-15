@@ -168,6 +168,87 @@ public sealed class MultiProcessSharedWalTruncationTests : IDisposable
     }
 
     [Fact]
+    public async Task Recovery_WithTheKeyOfAnOlderWalGeneration_LoadsTheCurrentHeader()
+    {
+        await InitialiseAsync(encrypted: true);
+
+        using var a = new StorageEngine(_dbPath, Config(encrypted: true));
+        using var b = new StorageEngine(_dbPath, Config(encrypted: true));
+        await CommitAsync(a, P, 0xAA);
+        Assert.Equal(0xAA, Read(b, P)); // B holds the key of this WAL generation
+
+        await a.CheckpointAsync();
+        Assert.Equal(0, WalLength());
+        await CommitAsync(a, Q, 0xBB); // a new WAL generation with a new header and key
+
+        // Recovery under B's old key would read no record and truncate A's commit.
+        await b.RecoverAsync();
+
+        Assert.Equal(0xBB, Read(a, Q));
+        Assert.Equal(0xBB, Read(b, Q));
+    }
+
+    [Fact]
+    public async Task Truncation_AfterAnotherProcessRestartedTheWal_KeepsItsCommits()
+    {
+        await InitialiseAsync(encrypted: false);
+
+        using var a = new StorageEngine(_dbPath, Config(encrypted: false));
+        using var b = new StorageEngine(_dbPath, Config(encrypted: false));
+        await CommitAsync(b, P, 0xAA);
+        await CommitAsync(b, R, 0xAB);
+        Assert.Equal(0xAA, Read(a, P)); // A's bookmark is at the end of B's two commits
+
+        // A's checkpoint has written and drained its pages, as it does right before it truncates.
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        ((System.Collections.IDictionary)typeof(StorageEngine).GetField("_walIndex", flags)!.GetValue(a)!).Clear();
+        ((System.Collections.IDictionary)typeof(StorageEngine).GetField("_walOffsets", flags)!.GetValue(a)!).Clear();
+
+        // Meanwhile B truncates and commits again: the new WAL ends below A's bookmark.
+        await b.CheckpointAsync();
+        Assert.Equal(0, WalLength());
+        await CommitAsync(b, Q, 0xBB);
+
+        var truncate = typeof(StorageEngine).GetMethod("TryTruncateWalAsync", flags)!;
+        await (Task)truncate.Invoke(a, [CancellationToken.None])!;
+
+        Assert.True(WalLength() > 0, "A must not truncate a WAL generation it has not replayed.");
+        Assert.Equal(0xBB, Read(b, Q));
+        Assert.Equal(0xBB, Read(a, Q));
+    }
+
+    [Fact]
+    public async Task EncryptedWal_UnpublishedTailAfterTheHeader_IsCutOffBeforeTheNextCommit()
+    {
+        await InitialiseAsync(encrypted: true);
+
+        using var a = new StorageEngine(_dbPath, Config(encrypted: true));
+        using var b = new StorageEngine(_dbPath, Config(encrypted: true));
+        await CommitAsync(a, P, 0xAA);
+        var header = new byte[64];
+        using (var fs = new FileStream(WalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            fs.ReadExactly(header);
+        await a.CheckpointAsync();
+        Assert.Equal(0, WalLength());
+
+        // A writer that died after writing a header and part of a record, before publishing them.
+        using (var fs = new FileStream(WalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            fs.Write(header);
+            fs.Write(new byte[] { 0x00, 0x10, 0x00, 0x00, 1, 2, 3, 4, 5, 6 });
+        }
+
+        await CommitAsync(b, Q, 0xBB);
+        Assert.Equal(0xBB, Read(a, Q));
+
+        // A third process opens: its recovery replays the WAL, B's commit included, and truncates it.
+        using (new StorageEngine(_dbPath, Config(encrypted: true))) { }
+
+        Assert.Equal(0xBB, Read(b, Q));
+        Assert.Equal(0xBB, Read(a, Q));
+    }
+
+    [Fact]
     public async Task EncryptedWal_RepeatedTruncationsByEitherProcess_LoseNoCommit()
     {
         await InitialiseAsync(encrypted: true);

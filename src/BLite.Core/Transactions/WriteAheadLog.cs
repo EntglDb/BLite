@@ -203,6 +203,22 @@ public sealed class WriteAheadLog : IWriteAheadLog
     }
 
     /// <summary>
+    /// <c>true</c> when the WAL starts with a complete crypto file header (BLCE magic).
+    /// Must be called while holding <see cref="_lock"/>.
+    /// </summary>
+    private bool HasCryptoHeaderNoLock()
+    {
+        var size = _crypto!.FileHeaderSize;
+        if (_walStream!.Length < size) return false;
+        Span<byte> magic = stackalloc byte[4];
+        var saved = _walStream.Position;
+        _walStream.Position = 0;
+        var read = _walStream.Read(magic);
+        _walStream.Position = saved;
+        return read == 4 && BinaryPrimitives.ReadUInt32LittleEndian(magic) == 0x424C4345u; // "BLCE"
+    }
+
+    /// <summary>
     /// For readers: <c>true</c> when the key of the current WAL is known, loading the header
     /// first if another process has written it since this one last looked (multi-process mode,
     /// #203). <c>false</c> when the WAL has no header yet: there is nothing to decrypt.
@@ -537,7 +553,26 @@ public sealed class WriteAheadLog : IWriteAheadLog
             if (_walStream == null) return;
 
             long length = _walStream.Length;
-            if (sharedEnd > length || (_crypto != null && sharedEnd < _crypto.FileHeaderSize))
+            if (_crypto != null && sharedEnd < _crypto.FileHeaderSize)
+            {
+                // Nothing published in this generation yet. A header already in the file is
+                // kept (a reader may have loaded its key), but whatever follows it was never
+                // published and is cut off, as below. Without a header, EnsureCryptoHeader
+                // writes one into an emptied file.
+                if (HasCryptoHeaderNoLock())
+                {
+                    if (length > _crypto.FileHeaderSize)
+                        _walStream.SetLength(_crypto.FileHeaderSize);
+                    _walStream.Position = _crypto.FileHeaderSize;
+                }
+                else
+                {
+                    _walStream.Position = length;
+                }
+                return;
+            }
+
+            if (sharedEnd > length)
             {
                 _walStream.Position = length;
                 return;
@@ -1018,8 +1053,17 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// Reads all WAL records (for recovery).
     /// Decrypts records transparently when a crypto provider is active.
     /// </summary>
-    public List<WalRecord> ReadAll()
+    public List<WalRecord> ReadAll() => ReadAll(out _);
+
+    /// <summary>
+    /// Reads all WAL records, as <see cref="ReadAll()"/>, and returns in
+    /// <paramref name="readThrough"/> the offset just past the last record read: the end of the
+    /// file when every record could be read, earlier when a torn, corrupt or undecryptable record
+    /// ended the scan.
+    /// </summary>
+    internal List<WalRecord> ReadAll(out long readThrough)
     {
+        readThrough = 0;
         if (!_lock.Wait(_writeTimeoutMs))
             throw new TimeoutException("Timed out acquiring WAL write lock.");
         try
@@ -1035,9 +1079,13 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 // Skip the 64-byte file header and read encrypted record envelopes.
                 var headerSize = _crypto.FileHeaderSize;
                 if (_walStream.Length <= headerSize)
+                {
+                    readThrough = _walStream.Length;
                     return records;
+                }
 
                 _walStream.Position = headerSize;
+                readThrough = headerSize;
 
                 var sizeBuf = new byte[4];
 
@@ -1072,6 +1120,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
                         var record = ParsePlaintextRecord(plainBuf.AsSpan(0, plaintextSize));
                         if (record == null) break;
                         records.Add(record.Value);
+                        readThrough = _walStream.Position;
                     }
                     finally
                     {
@@ -1176,6 +1225,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
                     }
 
                     records.Add(record);
+                    readThrough = _walStream.Position;
                 }
             }
 
