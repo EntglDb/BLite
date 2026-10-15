@@ -5,6 +5,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using BLite.Bson;
+using BLite.Core.Collections;
 using BLite.Core.Metadata;
 
 namespace BLite.Core.Query;
@@ -126,8 +127,7 @@ internal static class BsonExpressionEvaluator
             bareM.Type == typeof(bool) &&
             IsPersistedMember(bareM.Member))
         {
-            var bsonName = bareM.Member.Name.ToLowerInvariant();
-            if (bsonName == "id") bsonName = "_id";
+            var bsonName = FieldName(bareM);
             return CreatePredicate(bsonName, true, ExpressionType.Equal, keyMap);
         }
 
@@ -138,8 +138,7 @@ internal static class BsonExpressionEvaluator
             Nullable.GetUnderlyingType(innerHasValueMember.Type) != null &&
             IsPersistedMember(innerHasValueMember.Member))
         {
-            var bsonName = innerHasValueMember.Member.Name.ToLowerInvariant();
-            if (bsonName == "id") bsonName = "_id";
+            var bsonName = FieldName(innerHasValueMember);
             return CreateNullCheckPredicate(bsonName, expectNull: false, keyMap);
         }
 
@@ -152,8 +151,7 @@ internal static class BsonExpressionEvaluator
                 notM.Type == typeof(bool) &&
                 IsPersistedMember(notM.Member))
             {
-                var bsonName = notM.Member.Name.ToLowerInvariant();
-                if (bsonName == "id") bsonName = "_id";
+                var bsonName = FieldName(notM);
                 return CreatePredicate(bsonName, false, ExpressionType.Equal, keyMap);
             }
             // General: !(compilable sub-expression) — negate the inner predicate.
@@ -174,8 +172,7 @@ internal static class BsonExpressionEvaluator
                 IsPersistedMember(equalsOnMember.Member))
             {
                 var fieldName   = equalsOnMember.Member.Name;
-                var bsonName    = fieldName.ToLowerInvariant();
-                if (bsonName == "id") bsonName = "_id";
+                var bsonName    = FieldName(equalsOnMember);
 
                 var (ok, value) = TryEvaluate(mc.Arguments[0]);
                 if (ok && IsKnownBsonPrimitive(value?.GetType()))
@@ -198,8 +195,7 @@ internal static class BsonExpressionEvaluator
                 mc.Method.Name is "Contains" or "StartsWith" or "EndsWith" &&
                 IsPersistedMember(strMember.Member))
             {
-                var bsonName = strMember.Member.Name.ToLowerInvariant();
-                if (bsonName == "id") bsonName = "_id";
+                var bsonName = FieldName(strMember);
 
                 var (ok, value) = TryEvaluate(mc.Arguments[0]);
                 if (ok && value is string pattern)
@@ -218,8 +214,7 @@ internal static class BsonExpressionEvaluator
                 staticStrMember.Type == typeof(string) &&
                 IsPersistedMember(staticStrMember.Member))
             {
-                var bsonName = staticStrMember.Member.Name.ToLowerInvariant();
-                if (bsonName == "id") bsonName = "_id";
+                var bsonName = FieldName(staticStrMember);
                 bool checkWhiteSpace = mc.Method.Name == "IsNullOrWhiteSpace";
                 return CreateIsNullOrEmptyPredicate(bsonName, checkWhiteSpace, keyMap);
             }
@@ -299,9 +294,7 @@ internal static class BsonExpressionEvaluator
             if (leftInner is MemberExpression member && member.Expression == parameter && IsPersistedMember(member.Member))
             {
                 var fieldName = member.Member.Name;
-                var bsonName  = fieldName.ToLowerInvariant();
-                // "Id" and "_id" both refer to the BSON primary-key field.
-                if (bsonName == "id" || bsonName == "_id") bsonName = "_id";
+                var bsonName  = FieldName(member);
 
                 // Right side: ConstantExpression or closure capture (any non-parameter expr)
                 var (ok, value) = TryEvaluate(rightInner);
@@ -353,8 +346,7 @@ internal static class BsonExpressionEvaluator
             return null;
 
         var fieldName = ctMember.Member.Name;
-        var bsonName  = fieldName.ToLowerInvariant();
-        if (bsonName == "id" || bsonName == "_id") bsonName = "_id";
+        var bsonName  = FieldName(ctMember);
 
         var (ok, value) = TryEvaluate(ctMc.Arguments[0]);
         if (!ok) return null;
@@ -523,8 +515,7 @@ internal static class BsonExpressionEvaluator
     /// </summary>
     private static BsonReaderPredicate? TryCreateInPredicate(MemberExpression memberExpr, object collection, IReadOnlyDictionary<string, ushort>? keyMap = null)
     {
-        var bsonName = memberExpr.Member.Name.ToLowerInvariant();
-        if (bsonName == "id") bsonName = "_id";
+        var bsonName = FieldName(memberExpr);
 
         // Build a HashSet<object> at plan-time to enable O(1) lookups at eval-time.
         var items = new HashSet<object?>();
@@ -699,6 +690,14 @@ internal static class BsonExpressionEvaluator
 
     private static bool IsDirectParameterAccess(Expression expr, ParameterExpression p)
         => expr is MemberExpression m && m.Expression == p;
+
+    /// <summary>
+    /// The field of the root document that stores <paramref name="member"/>, a member of the lambda
+    /// parameter: <c>_id</c> for the key, otherwise the name the mapper writes, which
+    /// <c>[BsonProperty]</c>, <c>[JsonPropertyName]</c> or <c>[Column]</c> may rename (#184).
+    /// </summary>
+    private static string FieldName(MemberExpression member)
+        => BsonFieldNames.OfRoot(member.Expression!.Type, member.Member);
 
     /// <summary>
     /// True when a member is expected to have a persisted BSON field:

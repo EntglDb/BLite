@@ -1,5 +1,6 @@
 using System;
 using System.Linq.Expressions;
+using BLite.Core.Collections;
 using BLite.Core.Indexing;
 
 namespace BLite.Core.Retention;
@@ -54,7 +55,8 @@ public sealed class RetentionPolicyBuilder<T> where T : class
     {
         var fieldName = ExpressionAnalyzer.ExtractPropertyPaths(selector).FirstOrDefault();
         if (fieldName == null) throw new ArgumentException("Could not extract field name from expression.", nameof(selector));
-        _policy.TimestampField = fieldName.ToLowerInvariant();
+        // The field the mapper writes the property to, which a rename attribute may change (#184).
+        _policy.TimestampField = BsonFieldNames.PathOf(selector) ?? fieldName.ToLowerInvariant();
         return this;
     }
 

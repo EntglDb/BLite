@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using BLite.Core.Collections;
 
 namespace BLite.Core.Query;
 
@@ -10,8 +11,8 @@ internal sealed class FieldAccess
     public string PropertyName { get; init; } = default!;
 
     /// <summary>
-    /// BSON field name as stored on disk.
-    /// Follows the convention: <c>PropName.ToLowerInvariant()</c>, except <c>Id</c> → <c>_id</c>.
+    /// BSON field name as stored on disk: <c>_id</c> for the key, otherwise the name the mapper
+    /// writes, which <c>[BsonProperty]</c>, <c>[JsonPropertyName]</c> or <c>[Column]</c> may rename (#184).
     /// </summary>
     public string BsonName { get; init; } = default!;
 
@@ -55,6 +56,7 @@ internal static class ProjectionAnalyzer
         if (lambda.Parameters.Count != 1)
             return new ProjectionAnalysis { IsSimple = false, Fields = [] };
 
+        var entityType = lambda.Parameters[0].Type;
         var visitor = new FieldAccessVisitor(lambda.Parameters[0]);
         visitor.Visit(lambda.Body);
 
@@ -65,8 +67,8 @@ internal static class ProjectionAnalyzer
             .Select((kv, i) => new FieldAccess
             {
                 PropertyName = kv.Key,
-                BsonName = ToBsonName(kv.Key),
-                ClrType = kv.Value,
+                BsonName = BsonFieldNames.OfRoot(entityType, kv.Value.Member),
+                ClrType = kv.Value.Type,
                 Index = i
             })
             .ToArray();
@@ -74,6 +76,10 @@ internal static class ProjectionAnalyzer
         return new ProjectionAnalysis { IsSimple = true, Fields = fields };
     }
 
+    /// <summary>
+    /// The conventional field name of a property with no rename attribute; <see cref="Analyze"/>
+    /// resolves the actual name from the member.
+    /// </summary>
     internal static string ToBsonName(string propertyName)
         => string.Equals(propertyName, "Id", StringComparison.Ordinal) ? "_id"
            : propertyName.ToLowerInvariant();
@@ -115,8 +121,8 @@ internal static class ProjectionAnalyzer
 
         public bool IsSimple { get; private set; } = true;
 
-        /// <summary>Ordered unique property names → CLR type (insertion order preserved).</summary>
-        public Dictionary<string, Type> Accessed { get; } = new();
+        /// <summary>Ordered unique property names → member and CLR type (insertion order preserved).</summary>
+        public Dictionary<string, (MemberInfo Member, Type Type)> Accessed { get; } = new();
 
         public FieldAccessVisitor(ParameterExpression param) => _param = param;
 
@@ -131,7 +137,7 @@ internal static class ProjectionAnalyzer
                     IsSimple = false;
                     return base.VisitMember(node);
                 }
-                Accessed.TryAdd(node.Member.Name, node.Type);
+                Accessed.TryAdd(node.Member.Name, (node.Member, node.Type));
             }
             else if (node.Expression is not null and not ConstantExpression)
             {

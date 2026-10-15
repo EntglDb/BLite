@@ -1,3 +1,4 @@
+using BLite.Core.Collections;
 using BLite.Core.GDPR;
 using BLite.Core.Indexing;
 using System.Linq.Expressions;
@@ -112,8 +113,9 @@ public class EntityTypeBuilder<T> : IGdprModeAccessor where T : class
     /// <param name="retention">How long to retain documents.</param>
     public EntityTypeBuilder<T> HasTimeSeries(Expression<Func<T, DateTime>> timestampSelector, TimeSpan retention)
     {
-        TimeSeriesTtlField = ExpressionAnalyzer.ExtractPropertyPaths(timestampSelector)
-            .FirstOrDefault()?.ToLowerInvariant();
+        // The field the mapper writes the property to, which a rename attribute may change (#184).
+        TimeSeriesTtlField = BsonFieldNames.PathOf(timestampSelector)
+            ?? ExpressionAnalyzer.ExtractPropertyPaths(timestampSelector).FirstOrDefault()?.ToLowerInvariant();
         TimeSeriesRetention = retention;
         return this;
     }

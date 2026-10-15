@@ -160,19 +160,22 @@ namespace BLite.SourceGenerators
                     }
 
                 var columnAttr = AttributeHelper.GetAttribute(prop, BLiteConventions.ColumnAttribute);
-                var bsonFieldName = AttributeHelper.GetAttributeStringValue(prop, BLiteConventions.BsonPropertyAttribute) ?? 
-                                    AttributeHelper.GetAttributeStringValue(prop, BLiteConventions.JsonPropertyNameAttribute);
+                var bsonFieldName = NonEmpty(AttributeHelper.GetAttributeStringValue(prop, BLiteConventions.BsonPropertyAttribute)) ??
+                                    NonEmpty(AttributeHelper.GetAttributeStringValue(prop, BLiteConventions.JsonPropertyNameAttribute));
 
                 if (bsonFieldName == null && columnAttr != null)
                 {
-                    bsonFieldName = columnAttr.ConstructorArguments.Length > 0 ? columnAttr.ConstructorArguments[0].Value?.ToString() : null;
+                    bsonFieldName = NonEmpty(columnAttr.ConstructorArguments.Length > 0 ? columnAttr.ConstructorArguments[0].Value?.ToString() : null);
                 }
-                
+
                     var propInfo = new PropertyInfo
                     {
                         Name = prop.Name,
                         TypeName = SyntaxHelper.GetTypeName(prop.Type),
-                        BsonFieldName = bsonFieldName ?? prop.Name.ToLowerInvariant(),
+                        // Lower-cased like the default: the key dictionary stores names lower-cased, so a
+                        // mixed-case name would be written but never matched when the document is read
+                        // back. BsonFieldNames in BLite.Core resolves names the same way at runtime (#184).
+                        BsonFieldName = (bsonFieldName ?? prop.Name).ToLowerInvariant(),
                         ColumnTypeName = columnAttr != null ? AttributeHelper.GetNamedArgumentValue(columnAttr, BLiteConventions.TypeNameNamedArg) : null,
                         IsNullable = SyntaxHelper.IsNullableType(prop.Type),
                         IsKey = AttributeHelper.IsKey(prop),
@@ -447,5 +450,8 @@ namespace BLite.SourceGenerators
             Accessibility.Private => 3,
             _ => 4
         };
+
+        /// <summary>An empty rename (<c>[Column("")]</c>) names no field: the next attribute or the property name applies.</summary>
+        private static string? NonEmpty(string? name) => string.IsNullOrEmpty(name) ? null : name;
     }
 }
