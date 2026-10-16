@@ -153,7 +153,14 @@ public sealed class MemoryPageStorage : IPageStorage
         lock (_allocationLock)
         {
             if (_freeList.Count > 0)
-                return _freeList.Pop();
+            {
+                var recycled = _freeList.Pop();
+                // Clear the Free header: it marks a page that is on the free list, which is what
+                // FreePage's double-free guard relies on (#238, as in PageFile.AllocatePage).
+                if (_pages.TryGetValue(recycled, out var page))
+                    page.AsSpan(0, 32).Clear(); // PageHeader layout size is 32 bytes
+                return recycled;
+            }
 
             return _nextPageId++;
         }
@@ -166,14 +173,18 @@ public sealed class MemoryPageStorage : IPageStorage
         if (pageId == 0)
             throw new InvalidOperationException("Cannot free the header page (page 0).");
 
-        // Stamp a Free header so a later free-space-index rebuild does not mistake the
-        // page for a Data page (PageFile.FreePage does the same on disk).
-        var freeHeader = new byte[_pageSize];
-        new PageHeader { PageId = pageId, PageType = PageType.Free }.WriteTo(freeHeader);
-        WritePage(pageId, freeHeader);
-
         lock (_allocationLock)
         {
+            // Already on the free list: pushing it again would hand it to two owners (#238).
+            if (_pages.TryGetValue(pageId, out var existing) && (PageType)existing[4] == PageType.Free)
+                return;
+
+            // Stamp a Free header so a later free-space-index rebuild does not mistake the
+            // page for a Data page (PageFile.FreePage does the same on disk).
+            var freeHeader = new byte[_pageSize];
+            new PageHeader { PageId = pageId, PageType = PageType.Free }.WriteTo(freeHeader);
+            WritePage(pageId, freeHeader);
+
             _freeList.Push(pageId);
         }
     }

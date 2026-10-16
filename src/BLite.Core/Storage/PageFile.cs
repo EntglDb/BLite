@@ -1059,6 +1059,13 @@ public sealed class PageFile : IPageStorage
                         // The new head is what the recycled page pointed to
                         _firstFreePageId = header.NextPageId;
                         UpdateFileHeaderFreePtrCore(_firstFreePageId);
+
+                        // Clear the Free header: from here on a Free header on disk means "on the
+                        // free list", which is what FreePage's double-free guard relies on (#238).
+                        // The new owner may write the page only through the WAL for a while, and
+                        // may free it again before any checkpoint reaches the file.
+                        Array.Clear(buffer, 0, 32); // PageHeader layout size is 32 bytes
+                        WritePageCore(recycledPageId, buffer);
                         return recycledPageId;
                     }
                 }
@@ -1095,7 +1102,9 @@ public sealed class PageFile : IPageStorage
     }
     
     /// <summary>
-    /// Marks a page as free and adds it to the free list.
+    /// Marks a page as free and adds it to the free list. Freeing a page that is already on the
+    /// list is a no-op (#238): pushing it again would make the list point at itself and hand the
+    /// page to two owners.
     /// Holds the write lock because it modifies <see cref="_firstFreePageId"/>.
     /// </summary>
     public void FreePage(uint pageId)
@@ -1107,7 +1116,17 @@ public sealed class PageFile : IPageStorage
         {
             if (_fileStream == null) throw new InvalidOperationException("File not open");
             if (pageId == 0) throw new InvalidOperationException("Cannot free header page 0");
-            
+
+            // 0. Already free? A page carries a Free header exactly while it is on the free list:
+            // FreePage writes it and AllocatePage clears it when handing the page out. The same
+            // page can be freed twice when an index is dropped while an open transaction has
+            // merged nodes of it and queued them to be freed at its commit (#233, #238).
+            if (IsFreePageCore(pageId))
+            {
+                Trace.TraceWarning($"BLite: page {pageId} of '{_filePath}' freed twice, second free ignored.");
+                return;
+            }
+
             // 1. Create a free page header pointing to current head
             var header = new PageHeader
             {
@@ -1136,6 +1155,23 @@ public sealed class PageFile : IPageStorage
         }
     }
     
+    // Whether the page's header on disk says Free, i.e. the page is on the free list (see
+    // FreePage). A page that was appended and never written cannot be decrypted: it is not free.
+    // Called only while _rwLock write lock is held.
+    private bool IsFreePageCore(uint pageId)
+    {
+        Span<byte> headerBuf = stackalloc byte[32]; // PageHeader layout size is 32 bytes
+        try
+        {
+            ReadPageHeaderCore(pageId, headerBuf);
+        }
+        catch (System.Security.Cryptography.CryptographicException) when (_cryptoProvider != null)
+        {
+            return false;
+        }
+        return PageHeader.ReadFrom(headerBuf).PageType == PageType.Free;
+    }
+
     /// <summary>
     /// How many times a corrupt free-list head was found and the list discarded.
     /// </summary>
