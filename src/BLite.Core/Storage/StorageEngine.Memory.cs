@@ -389,6 +389,10 @@ public sealed partial class StorageEngine
         if (_collectionNameToSlot != null && _collectionNameToSlot.TryGetValue(collectionName, out var slot))
             DiscardPendingFreePages(slot);
 
+        // Multi-process mode: taking the open lock refreshes every open collection file
+        // (EnterOpenLockCore); removing and disposing the file under it keeps that from finding
+        // the file disposed half-way and throwing ObjectDisposedException (#226).
+        using var openLock = EnterOpenLock();
         if (_collectionFiles.TryRemove(collectionName, out var lazy))
         {
             if (lazy.IsValueCreated) lazy.Value.Dispose();
@@ -665,8 +669,16 @@ public sealed partial class StorageEngine
         if (_collectionNameToSlot!.TryGetValue(collectionName, out var existing))
             return existing;
 
+        // Multi-process mode: other processes assign slots too. Under the open lock (always
+        // taken before _collectionSlotLock), reload .slots, so this engine reuses the slot another
+        // process gave the collection, or takes one after all of theirs, and rewrites .slots with
+        // their entries instead of dropping them (#226). No-op in single-process mode.
+        using var openLock = EnterOpenLock();
         lock (_collectionSlotLock)
         {
+            if (_shm != null)
+                LoadCollectionSlots();
+
             if (_collectionNameToSlot.TryGetValue(collectionName, out existing))
                 return existing;
 

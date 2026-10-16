@@ -353,7 +353,7 @@ await db.VacuumAsync();
 ```
 
 ### 🔄 Multi-Process WAL *(v5.0.0)*
-A `.wal-shm` sidecar enables **N-reader / 1-writer** access across OS processes (opt-in):
+A `.wal-shm` sidecar enables **N-reader / 1-writer** access across OS processes (opt-in). On macOS the cross-process locks also use two empty lock files next to it, `<db>.wal-shm.lock` and `<db>.wal-shm.open.lock`; like the `.wal-shm`, they stay on disk after the database is closed and must not be deleted while a process has it open:
 
 ```csharp
 var config = new PageFileConfig { AllowMultiProcessAccess = true };

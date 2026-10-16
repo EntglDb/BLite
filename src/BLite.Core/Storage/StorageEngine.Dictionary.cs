@@ -227,7 +227,18 @@ public sealed partial class StorageEngine
     {
         if (_dictionaryReverseCache.TryGetValue(id, out var key))
             return key;
-        return null;
+
+        // Multi-process mode: the id may belong to a key another process added after this engine
+        // loaded the dictionary. Reload it once, under the open lock like GetOrAddDictionaryEntry,
+        // so the pages are not read while that process writes them (#226). An id that is still
+        // unknown after the reload returns null, as in single-process mode.
+        if (_shm == null)
+            return null;
+
+        using var openLock = EnterOpenLock();
+        lock (_dictionaryLock)
+            LoadDictionaryCore();
+        return _dictionaryReverseCache.TryGetValue(id, out key) ? key : null;
     }
     
     private bool InsertDictionaryEntryGlobal(string key, ushort value)

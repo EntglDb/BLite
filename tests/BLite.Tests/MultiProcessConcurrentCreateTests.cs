@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using BLite.Bson;
 using BLite.Core.Storage;
+using BLite.Core.Transactions;
 using BLite.Shared;
 
 namespace BLite.Tests;
@@ -149,6 +150,107 @@ public sealed class MultiProcessConcurrentCreateTests : IDisposable
         Assert.NotEqual(alpha, beta);
         Assert.Equal(alpha, b.GetOrAddDictionaryEntry("alpha"));
         Assert.Equal(beta, a.GetOrAddDictionaryEntry("beta"));
+    }
+
+    [Fact]
+    public void DictionaryKeyAddedByAnotherEngine_CanBeDecoded()
+    {
+        var dbPath = Path.Combine(_tempDir, "dictread.db");
+        using var a = new StorageEngine(dbPath, MultiProcess);
+        using var b = new StorageEngine(dbPath, MultiProcess);
+
+        // B loaded the dictionary before A added "gamma": decoding a document A wrote with it
+        // must still find the key instead of null (#226).
+        ushort gamma = a.GetOrAddDictionaryEntry("gamma");
+        Assert.Equal("gamma", b.GetDictionaryKey(gamma));
+
+        // An id no engine added is still unknown after the reload.
+        Assert.Null(b.GetDictionaryKey((ushort)(gamma + 100)));
+    }
+
+    [Fact]
+    public void EngineDisposedWhileAThreadHoldsTheOpenLock_ReleasesItOnce()
+    {
+        var dbPath = Path.Combine(_tempDir, "dispose.db");
+        var a = new StorageEngine(dbPath, MultiProcess);
+        var shmPath = a.SharedMemory!.Path;
+
+        // A thread of A holds the open lock (creating a collection, say) when A is disposed.
+        var hold = a.EnterOpenLock();
+        a.Dispose();
+
+        // Dispose must release it: otherwise every other engine on these files waits for it
+        // until that thread releases it.
+        Assert.True(OpenLockIsFree(shmPath));
+
+        // That thread's release, once B holds the lock, must not release B's hold.
+        using (var b = new StorageEngine(dbPath, MultiProcess))
+        using (b.EnterOpenLock())
+        {
+            hold.Dispose();
+            Assert.False(OpenLockIsFree(shmPath));
+        }
+        Assert.True(OpenLockIsFree(shmPath));
+    }
+
+    [Fact]
+    public void DroppingACollectionFile_WaitsForTheOpenLock()
+    {
+        // Taking the open lock refreshes every open collection file of the engine; a file
+        // dropped while it does so made that throw ObjectDisposedException (#226). Dropping
+        // therefore takes the open lock too, so it waits while another process holds it.
+        var dataDir = Path.Combine(_tempDir, "drop_data");
+        var config = MultiProcess with { CollectionDataDirectory = dataDir };
+        using var engine = new StorageEngine(Path.Combine(_tempDir, "drop.db"), config);
+        engine.AllocateCollectionPage("orders"); // opens the collection file
+
+        using var otherProcess = WalSharedMemory.Open(engine.SharedMemory!.Path, config.PageSize);
+        otherProcess.AcquireOpenLock();
+        var drop = Task.Run(() => engine.DropCollectionFile("orders"));
+        try
+        {
+            Assert.False(drop.Wait(TimeSpan.FromMilliseconds(500)), "the drop did not wait for the open lock");
+        }
+        finally
+        {
+            otherProcess.ReleaseOpenLock();
+        }
+        Assert.True(drop.Wait(TimeSpan.FromSeconds(30)));
+        Assert.False(File.Exists(Path.Combine(dataDir, "orders.db")));
+    }
+
+    [Fact]
+    public void CollectionSlotsAssignedByAnotherEngine_AreNotGivenAway()
+    {
+        var dataDir = Path.Combine(_tempDir, "slots_data");
+        var config = MultiProcess with { CollectionDataDirectory = dataDir };
+        var dbPath = Path.Combine(_tempDir, "slots.db");
+        using var a = new StorageEngine(dbPath, config);
+        using var b = new StorageEngine(dbPath, config);
+
+        // B loaded .slots before A assigned a slot to "orders": it must not give that slot to
+        // "customers" and rewrite .slots without A's entry (#226).
+        int orders = SlotOf(a.AllocateCollectionPage("orders"));
+        int customers = SlotOf(b.AllocateCollectionPage("customers"));
+        Assert.NotEqual(orders, customers);
+        Assert.Equal(orders, SlotOf(b.AllocateCollectionPage("orders")));
+        Assert.Equal(
+            new[] { $"{orders},orders", $"{customers},customers" }.OrderBy(l => l),
+            File.ReadAllLines(Path.Combine(dataDir, ".slots")).OrderBy(l => l));
+    }
+
+    // Collection page ids carry the collection's slot in bits 29:24 (StorageEngine.Memory.cs).
+    private static int SlotOf(uint pageId) => (int)((pageId & 0x3F00_0000u) >> 24);
+
+    // Whether the open lock on this SHM file is free: a single try from a fresh handle, released
+    // at once if it succeeds.
+    private static bool OpenLockIsFree(string shmPath)
+    {
+        using var shm = new FileStream(shmPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        if (!WalShmFcntl.TryAcquireWriteLock(shm, 0, WalShmFcntl.OpenLockSlot))
+            return false;
+        WalShmFcntl.ReleaseWriteLock(shm, WalShmFcntl.OpenLockSlot);
+        return true;
     }
 
     private static byte[] Filled(int size, byte value)

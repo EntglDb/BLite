@@ -123,6 +123,8 @@ StorageEngine                   StorageEngine
           • WAL index hash table (pageId → byte offset)
 ```
 
+**Lock files (macOS).** The cross-process locks live in the `.wal-shm` itself on Windows and Linux (one byte each, past its end). On macOS each lock is an `flock` on a lock file of its own next to it: `<dbname>.wal-shm.lock` for the writer lock and `<dbname>.wal-shm.open.lock` for the open lock ([#216](https://github.com/EntglDb/BLite/issues/216)). Both are empty, are created the first time the lock is taken and, like the `.wal-shm`, stay on disk after every process has closed the database. Deleting them then is harmless; never delete them while a process has the database open, because a process that recreates one locks a different file than the processes still holding the old one.
+
 ### SHM Binary Layout
 
 ```
@@ -161,6 +163,10 @@ The WAL index is a double-buffered open-addressing hash table mapping `uint page
 **Commit paths.** Only group commit appends under the cross-process writer lock, after catching up with the shared WAL, and publishes the new end offset. The direct commit path `CommitTransactionAsync(ulong)` and two-phase commit (`PrepareTransactionAsync`, `MarkTransactionCommittedAsync`) do none of that and throw `NotSupportedException` in multi-process mode ([#188](https://github.com/EntglDb/BLite/issues/188)). Group commit appends at the published `WalEndOffset` and cuts off whatever lies beyond it: the remains of a batch whose writer died before publishing it, never acknowledged.
 
 **Unreadable records.** A catch-up that cannot read a record inside the published range keeps its bookmark, so it never skips the records after it; it retries on the next transaction, commit or checkpoint. Meanwhile that process's checkpoints write nothing (reported as failed in the `Checkpoint` metric, `MetricsSnapshot.CheckpointsFailedTotal`), and a trace warning names the WAL and the offset of the record: the first failure, then every power of two in a row, and from 16 in a row it calls the replay stalled.
+
+**Open lock.** A second cross-process lock, independent of the writer lock and always taken before it, never while holding it, serialises everything that creates or changes shared structures directly in the files rather than through the WAL ([#216](https://github.com/EntglDb/BLite/issues/216)): the engine constructor (creating or initialising the `.wal-shm`, the page and index files, WAL recovery, the dictionary and KV roots), creating or opening a collection (catalog entry, schema, index roots and the indexes the model declares), creating an index at runtime, adding or reloading dictionary keys and, with `CollectionDataDirectory`, assigning a collection slot and opening or deleting a collection file. The threads of one engine share a single hold. A process waits for it at most 60 s (`WalSharedMemory.OpenLockTimeoutMs`) and then throws `TimeoutException`.
+
+Building an index runs under the open lock as well: when a collection is opened, the rebuild of indexes whose key format must change (`MigrateLegacyDecimalIndexes`) and the fill of model-declared indexes that are new or whose definition changed (`ApplyIndexBuilder`); at runtime, `CreateIndexAsync`, `CreateVectorIndexAsync` and `CreateFullTextIndexAsync` on a typed collection. While one process builds a large index, the other processes wait for everything listed above (opening the database or a collection, a new dictionary key, ...); if the build takes longer than 60 s, those operations throw `TimeoutException`, while the build itself goes on. Build large indexes when no other process needs to open the database, or retry the open ([#226](https://github.com/EntglDb/BLite/issues/226)).
 
 ---
 
