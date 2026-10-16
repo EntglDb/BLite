@@ -1,0 +1,37 @@
+Seeded defect for tests/BLite.Tests/Oracles/BTreeModelTests.cs
+
+Reverts 4d3e6b9 (#233) in BTreeIndex.MergeNodes only: the right node emptied by a merge is freed
+at once with StorageEngine.FreePage instead of FreePageOnCommit. A rollback then leaves the
+committed tree linking a page that is queued to be freed (or already on the free list), and the
+next allocation after the WAL truncation hands it out again.
+
+With it applied, 18 rows fail on upstream 0450b97 that are not candidates: Pages.Reachable and
+Structure for all nine key generators (and Generator_ForcesSplitsAndMerges for two whose runs
+now stop early). E.g. int, seed 1, shrunk to 4 steps:
+    1. InsertBatch(#1..#65: ...)        (one leaf split)
+    2. Commit
+    3. DeleteRun(2 consecutive entries from position 556791 mod count)   (the halves merge)
+    4. Rollback
+  Pages.Reachable: page 130 is reachable from the root and queued to be freed
+  Structure (step 4 = Reopen instead): page 130, reached from the root, has type Free
+
+Reproduce: git apply tests/BLite.Tests/Oracles/Seeds/BTreeModelTests.revert-4d3e6b9-merge-free.patch && dotnet test tests/BLite.Tests --filter FullyQualifiedName~BTreeModelTests
+Restore:   git checkout -- src
+
+The source file uses CRLF line endings and so do the diff lines below; apply with
+--ignore-whitespace if the patch was normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/Indexing/BTreeIndex.cs b/src/BLite.Core/Indexing/BTreeIndex.cs
+index 365fc70..c0001f0 100644
+--- a/src/BLite.Core/Indexing/BTreeIndex.cs
++++ b/src/BLite.Core/Indexing/BTreeIndex.cs
+@@ -1923,7 +1923,8 @@ public sealed class BTreeIndex
+ 
+         // Free the empty Right Node once this transaction commits: until then the committed tree,
+         // which a rollback returns to, still links it (#233).
+-        _storage.FreePageOnCommit(rightNodeId, transactionId);
++        // SEEDED DEFECT (#233, reverts 4d3e6b9 here): free the page at once, outside the transaction.
++        _storage.FreePage(rightNodeId);
+ 
+         // Recursive Underflow Check on Parent
+         int minInternal = MaxEntriesPerNode / 2;
