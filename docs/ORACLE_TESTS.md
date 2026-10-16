@@ -27,7 +27,7 @@ Three mechanisms, each in one file, plus two commit trailers.
 
 ### Oracle tests (`tests/BLite.Tests/Oracles/*Tests.cs`)
 
-A test that compares BLite against an exact reference. Two kinds exist today.
+A test that compares BLite against an exact reference. Two kinds exist today, in three tests.
 
 - **Differential**, `DifferentialQueryTests.cs`: a catalogue of query shapes runs over the same seeded
   documents on a collection with a B-Tree index on every queried property
@@ -42,6 +42,17 @@ A test that compares BLite against an exact reference. Two kinds exist today.
   lookups, both secondary indexes) must equal the committed view, and reads through an open
   transaction must equal the pending view. A failing sequence is shrunk and printed as the shortest
   sequence that still fails. The entity is in `tests/BLite.Shared/StoreModelContexts.cs`.
+- **Model-based with page accounting**, `BTreeModelTests.cs`: a seeded random sequence of inserts
+  (batches, long runs of one duplicate key), deletes (single and consecutive runs), commits,
+  rollbacks, checkpoints and reopens runs against a `BTreeIndex` over a `StorageEngine` on 4 KB pages
+  and against a sorted dictionary keyed by `IndexKey` in the index's own order. After every step each
+  query primitive (TryFind, CountRange, Range both ways, Equal, In, Between, GreaterThan, LessThan,
+  StartsWith, Like, sync and async, cursor walks and windows) must answer what the model answers, and
+  a cycle-safe walk of the tree must find it sound. After every commit, rollback, checkpoint and
+  reopen, the reachable pages plus the free list plus the queued frees must be exactly the pages
+  allocated since the index was created. Each key generator (int, long and double extremes, prefix
+  strings, control bytes, keys up to the size limit, unique, multi-process) times each check is a
+  row of its own, so one defect does not hide another; a failing row is shrunk for that check.
 
 Other kinds fit BLite and are not written yet: round trip (a document through the BSON writer and
 reader, a page through encryption and back), differential BLQL against LINQ on a `DynamicCollection`,
@@ -146,6 +157,9 @@ expose an old defect.
 - **A new indexable type or index kind** (composite, nested, descending, full-text, spatial) is one
   more property on `DiffDoc` with a `.HasIndex(...)` in `DiffIndexedDbContext`, plus the predicates
   that use it. Every existing predicate shape then also runs over the new index.
+- **A new index key type or key shape** is one more key generator (a `Scenario` in
+  `BTreeModelTests.cs`: how to draw a value, and its special values). Every check, the page
+  accounting and the key-order check against the type's natural comparison then run over it.
 - **A new collection operation or storage feature** (a transaction mode, a maintenance command, a
   multi-process behaviour) is one more `OpKind` in `StoreModelTests.cs` with its effect on the model's
   committed and pending views. From then on it appears in every generated sequence, interleaved with
