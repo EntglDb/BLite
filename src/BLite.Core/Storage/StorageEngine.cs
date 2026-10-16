@@ -120,6 +120,12 @@ public sealed partial class StorageEngine : IDisposable
 
     private const long MaxWalSize = 16 * 1024 * 1024; // 16MB
 
+    // Freed pages waiting for a WAL truncation (see FreePage) are file space that cannot be reused.
+    // Past this many bytes of them a checkpoint is requested, so a workload that frees pages faster
+    // than it fills the WAL, such as a loop of index creates and drops, does not grow the file by
+    // one tree per cycle until the WAL reaches MaxWalSize (#209).
+    private const long MaxPendingFreeBytes = 4 * 1024 * 1024; // 4MB
+
     private volatile bool _disposed;
 
     // ── Audit ─────────────────────────────────────────────────────────────────

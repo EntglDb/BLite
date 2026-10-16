@@ -183,6 +183,91 @@ public class IndexPageReleaseTests : IDisposable
     }
 
     // ======================================================================
+    //  #209: create/drop cycles
+    // ======================================================================
+
+    /// <summary>
+    /// Each dropped tree's pages have a WAL image, so they wait for a WAL truncation before they
+    /// can be reused, and a tight loop never fills the WAL enough to checkpoint on its own: every
+    /// cycle appended a fresh tree. The pending frees must trigger the checkpoint themselves.
+    /// </summary>
+    [Fact]
+    public async Task CreateDropIndexCycles_Typed_DoNotGrowTheFile()
+    {
+        using var db = new TestDbContext(_dbPath);
+        await db.PeopleV2.InsertBulkAsync(Enumerable.Range(0, 1000).Select(i => new PersonV2 { Name = $"p{i}", Age = i % 90 }));
+
+        async Task CyclesAsync(int n)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                await db.PeopleV2.CreateIndexAsync(p => p.Name, "idx_tmp");
+                await db.PeopleV2.DropIndexAsync("idx_tmp");
+            }
+        }
+
+        await AssertCyclesAreBoundedAsync(db.Storage, () => db.CheckpointAsync(), CyclesAsync);
+    }
+
+    [Fact]
+    public async Task CreateDropIndexCycles_Dynamic_DoNotGrowTheFile()
+    {
+        using var engine = new BLiteEngine(_dbPath);
+        var col = engine.GetOrCreateCollection("docs");
+        await InsertIndexableDocsAsync(col, 1000);
+
+        async Task CyclesAsync(int n)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                await col.CreateIndexAsync("value", "idx_tmp");
+                Assert.True(col.DropIndex("idx_tmp"));
+            }
+        }
+
+        await AssertCyclesAreBoundedAsync(engine.Storage, () => engine.CheckpointAsync(), CyclesAsync);
+    }
+
+    /// <summary>
+    /// Runs a warm-up block of cycles that frees more pages than the pending-free threshold (4 MB,
+    /// 512 pages; a tree of 1000 keys is about 8 pages), releases them all, then a measured block:
+    /// it must allocate (almost) no new pages, because the dropped trees are reused.
+    /// </summary>
+    private static async Task AssertCyclesAreBoundedAsync(StorageEngine storage, Func<Task> checkpoint, Func<int, Task> cycles)
+    {
+        const int warmUp = 100, measured = 200;
+        await cycles(warmUp);
+        await ReleasePendingFreesAsync(storage, checkpoint);
+        var highWaterBefore = MainFile(storage).NextPageId;
+
+        await cycles(measured);
+        await ReleasePendingFreesAsync(storage, checkpoint);
+        var highWaterAfter = MainFile(storage).NextPageId;
+
+        var grown = (long)highWaterAfter - highWaterBefore;
+        // Not one tree per cycle (about 1600 pages). The checkpoint the queued frees request runs
+        // in the background, so the cycles that run before it has released them append a few
+        // pages; that overshoot then serves as slack for the next request, so it does not add up
+        // over the cycles. Allow a quarter of one threshold's worth.
+        Assert.True(grown <= 128, $"{measured} create/drop cycles grew the file by {grown} pages ({grown * storage.PageSize / 1024} KB)");
+    }
+
+    /// <summary>
+    /// Checkpoints until no freed page is still waiting for a WAL truncation. An explicit
+    /// checkpoint returns without truncating while a background one is running.
+    /// </summary>
+    private static async Task ReleasePendingFreesAsync(StorageEngine storage, Func<Task> checkpoint)
+    {
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            await checkpoint();
+            if (PendingFreePages(storage).Count == 0) return;
+            await Task.Delay(20);
+        }
+        Assert.Fail($"{PendingFreePages(storage).Count} freed pages are still waiting for a WAL truncation");
+    }
+
+    // ======================================================================
     //  Helpers
     // ======================================================================
 

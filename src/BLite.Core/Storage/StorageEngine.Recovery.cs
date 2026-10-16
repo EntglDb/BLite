@@ -217,7 +217,8 @@ public sealed partial class StorageEngine
 
     /// <summary>
     /// Truncates the WAL if every committed record has been checkpointed, then releases the
-    /// pages queued by <see cref="FreePage"/>. Skipped when a commit holds the lock.
+    /// pages queued by <see cref="FreePage"/>. Skipped when a commit keeps the lock for longer
+    /// than a short wait.
     /// </summary>
     private Task TryTruncateWalAsync(CancellationToken ct) => TryTruncateWalCoreAsync(commitLockHeld: false, ct);
 
@@ -230,7 +231,14 @@ public sealed partial class StorageEngine
         // only its own _commitLock, not ours), and truncating the shared WAL file underneath it
         // would corrupt the on-disk format. The lock order matches the commit path (in-process
         // _commitLock → cross-process SHM writer lock) to avoid any possible cross-lock deadlock.
-        if (!_walIndex.IsEmpty || (!commitLockHeld && !_commitLock.Wait(0))) return;
+        //
+        // The lock is waited for briefly, not just tried: under a steady stream of commits the
+        // writer holds it (WAL write plus fsync) for much of the time, and a truncation that gives
+        // up at once hardly ever runs, so the pages queued by FreePage pile up and the file grows
+        // (#209). Waiting here delays only this checkpoint's task, never a commit.
+        if (!_walIndex.IsEmpty) return;
+        if (!commitLockHeld && !await _commitLock.WaitAsync(Math.Max(10, _config.LockTimeout.WriteTimeoutMs / 16), ct).ConfigureAwait(false))
+            return;
 
         bool shmHeld = false;
         try

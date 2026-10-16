@@ -88,6 +88,13 @@ public sealed partial class StorageEngine
     /// unsafely, if the process dies first. In multi-process mode every page is queued, since
     /// another process may have written it.
     /// </para>
+    /// <para>
+    /// Nothing truncates the WAL while it stays under <c>MaxWalSize</c>, and a workload that frees
+    /// pages faster than it fills the WAL (a loop of index creates and drops: #209) would find the
+    /// free list empty at every allocation and grow the file by one tree per cycle. So every
+    /// <c>MaxPendingFreeBytes</c> worth of queued pages requests a checkpoint, which truncates the
+    /// WAL and releases them; the request is asynchronous and never blocks the caller.
+    /// </para>
     /// </summary>
     public void FreePage(uint pageId)
     {
@@ -99,8 +106,40 @@ public sealed partial class StorageEngine
             return;
         }
 
+        int queued;
         lock (_pendingFreeLock)
-            _pendingFreePages.Add(pageId);
+        {
+            if (!_pendingFreePages.Add(pageId)) return;
+            queued = _pendingFreePages.Count;
+        }
+
+        // At the threshold, then every eighth of it past the threshold, not at every free: the
+        // truncation is skipped when a commit holds the lock at that instant, and pages an open
+        // transaction uses stay queued, so a retry is needed, but not a checkpoint per free.
+        var threshold = Math.Max(8, (int)(MaxPendingFreeBytes / PageSize));
+        if (queued >= threshold && (queued - threshold) % (threshold / 8) == 0)
+            RequestPendingFreeCheckpoint();
+    }
+
+    private int _pendingFreeCheckpointQueued;
+
+    /// <summary>
+    /// Starts a checkpoint on the thread pool to release the pages queued by <see cref="FreePage"/>,
+    /// unless one requested here is still running. Like the checkpoint a commit requests when the
+    /// WAL exceeds <c>MaxWalSize</c>, it is fire-and-forget; a failure leaves the pages queued for
+    /// the next request or truncation.
+    /// </summary>
+    private void RequestPendingFreeCheckpoint()
+    {
+        if (_disposed || Interlocked.CompareExchange(ref _pendingFreeCheckpointQueued, 1, 0) != 0)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try { await CheckpointAsync().ConfigureAwait(false); }
+            catch { /* best-effort: the pages stay queued */ }
+            finally { Interlocked.Exchange(ref _pendingFreeCheckpointQueued, 0); }
+        });
     }
 
     // Pages each open transaction stops using, freed only once it commits (#233). See FreePageOnCommit.
