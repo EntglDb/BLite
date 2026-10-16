@@ -344,6 +344,34 @@ public sealed partial class StorageEngine
             throw new TimeoutException("Timed out acquiring metadata lock (SaveCollectionMetadata).");
         try
         {
+            SaveCollectionMetadataLocked(metadata);
+        }
+        finally { _metadataLock.Release(); }
+    }
+
+    /// <summary>
+    /// Reads the stored record of <paramref name="name"/> (null if there is none), hands it to
+    /// <paramref name="update"/> and saves what that returns, all under the metadata lock, so
+    /// two savers of the same record on this engine cannot each merge against a copy the other
+    /// is about to overwrite (#192). <paramref name="update"/> must not touch the metadata lock
+    /// (it is not reentrant). Across processes the write still wins last; the callers that
+    /// create indexes hold the open lock for that.
+    /// </summary>
+    public void UpdateCollectionMetadata(string name, Func<CollectionMetadata?, CollectionMetadata> update)
+    {
+        if (update == null) throw new ArgumentNullException(nameof(update));
+        if (!_metadataLock.Wait(_config.LockTimeout.WriteTimeoutMs))
+            throw new TimeoutException("Timed out acquiring metadata lock (UpdateCollectionMetadata).");
+        try
+        {
+            SaveCollectionMetadataLocked(update(FindCollectionMetadata(name)));
+        }
+        finally { _metadataLock.Release(); }
+    }
+
+    /// <summary>Body of <see cref="SaveCollectionMetadata"/>; call with <c>_metadataLock</c> held.</summary>
+    private void SaveCollectionMetadataLocked(CollectionMetadata metadata)
+    {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
 
@@ -512,8 +540,6 @@ public sealed partial class StorageEngine
             MarkSlotDeleted(chain[foundPage].Buffer, foundSlot);
             WritePageImmediate(chain[foundPage].PageId, chain[foundPage].Buffer);
         }
-        } // end try
-        finally { _metadataLock.Release(); }
     }
 
     // ── Collection metadata chain (page 1 and its overflow pages) ────────────

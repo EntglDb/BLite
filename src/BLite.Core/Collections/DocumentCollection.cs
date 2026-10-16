@@ -1015,6 +1015,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         if (keySelector == null)
             throw new ArgumentNullException(nameof(keySelector));
 
+        // Multi-process mode: two processes creating the same index name at once would each
+        // persist their own root; the open lock serialises them like the model path (#192).
+        using var openLock = _storage.EnterOpenLock();
         using (var txn = _storage.BeginTransaction(IsolationLevel.ReadCommitted))
         {
             var index = _indexManager.CreateIndex(keySelector, name, unique);
@@ -1088,6 +1091,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     {
         if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
 
+        // Serialised across processes like CreateIndexAsync (#192).
+        using var openLock = _storage.EnterOpenLock();
         using (var txn = _storage.BeginTransaction(IsolationLevel.ReadCommitted))
         {
             var index = _indexManager.CreateVectorIndex(keySelector, dimensions, metric, name);

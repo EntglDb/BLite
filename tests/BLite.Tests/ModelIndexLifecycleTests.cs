@@ -279,6 +279,42 @@ public sealed class ModelIndexLifecycleTests : IDisposable
         Assert.Equal("e500@x", Assert.Single(await c.Docs.QueryIndexAsync("idx_name_b", "n500", "n500").ToListAsync()).Email);
     }
 
+    /// <summary>
+    /// Two collections of the same type on one engine (two contexts sharing it, or session
+    /// collections) each have their own index manager. Saving their metadata at the same time
+    /// must keep both indexes: read, merge and write run under the engine's metadata lock, not
+    /// only the write (#192 review).
+    /// </summary>
+    [Fact]
+    public async Task TwoManagersOnOneEngine_SavingAtOnce_KeepBothIndexes()
+    {
+        await SeedAsync();
+
+        for (int round = 0; round < 10; round++)
+        {
+            var engine = new StorageEngine(_dbPath, PageFileConfig.Default);
+            var a = new LcNoIndexContext(engine);
+            var b = new LcNoIndexContext(engine);
+            try
+            {
+                using var start = new Barrier(2);
+                var ta = Task.Run(async () => { start.SignalAndWait(); await a.Docs.CreateIndexAsync(x => x.Name, $"idx_a{round}"); });
+                var tb = Task.Run(async () => { start.SignalAndWait(); await b.Docs.CreateIndexAsync(x => x.Score, $"idx_b{round}"); });
+                await Task.WhenAll(ta, tb);
+
+                var names = engine.GetCollectionMetadata(Collection)!.Indexes.Select(i => i.Name).ToList();
+                Assert.Contains($"idx_a{round}", names);
+                Assert.Contains($"idx_b{round}", names);
+            }
+            finally
+            {
+                // Either context disposes the shared engine.
+                a.Dispose();
+                b.Dispose();
+            }
+        }
+    }
+
     private sealed class WarningCollector(string collection) : TraceListener
     {
         private readonly List<string> _messages = new();

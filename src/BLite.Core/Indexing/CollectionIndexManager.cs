@@ -751,22 +751,28 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     /// record (#192). An index this process is dropping right now (<paramref name="dropping"/>)
     /// is the one stored entry that is not adopted back.
     /// <para>
-    /// Limit: two entries under the same name but with different roots cannot be reconciled
-    /// here; the in-memory one wins, as before. Creating the same index in two processes at the
-    /// same time is prevented by the open lock in <c>DocumentCollection.ApplyIndexBuilder</c>.
+    /// Read, merge and write happen under the engine's metadata lock
+    /// (<see cref="StorageEngine.UpdateCollectionMetadata"/>), so two managers on the same engine
+    /// saving at once cannot each merge against a copy the other is overwriting. Across processes
+    /// the lock does not reach, and two entries under the same name but with different roots
+    /// cannot be reconciled by a merge either (the in-memory one wins, as before): that is why
+    /// <c>DocumentCollection</c> creates indexes under the open lock, in the model path and the
+    /// runtime <c>Create*IndexAsync</c> methods alike.
     /// </para>
     /// </summary>
     private void SaveMetadata(string? dropping = null)
     {
-        List<IndexMetadata>? carryOver = null;
-        var stored = _storage.GetCollectionMetadata(_collectionName);
-        if (stored != null)
+        _storage.UpdateCollectionMetadata(_collectionName, stored =>
         {
-            carryOver = AdoptStoredIndexesLocked(stored, dropping);
-            _metadata.SequenceValue = stored.SequenceValue;
-        }
-        UpdateMetadata(carryOver);
-        _storage.SaveCollectionMetadata(_metadata);
+            List<IndexMetadata>? carryOver = null;
+            if (stored != null)
+            {
+                carryOver = AdoptStoredIndexesLocked(stored, dropping);
+                _metadata.SequenceValue = stored.SequenceValue;
+            }
+            UpdateMetadata(carryOver);
+            return _metadata;
+        });
     }
 
     /// <summary>

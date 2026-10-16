@@ -117,6 +117,8 @@ public partial class LcNoIndexContext : DocumentDbContext
     public DocumentCollection<ObjectId, LifecycleDoc> Docs { get; set; } = null!;
     public LcNoIndexContext(string path) : base(path) => InitializeCollections();
     public LcNoIndexContext(string path, PageFileConfig config) : base(path, config) => InitializeCollections();
+    /// <summary>Shares <paramref name="storage"/> with other contexts: a second collection on one engine.</summary>
+    public LcNoIndexContext(StorageEngine storage) : base(storage) => InitializeCollections();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
