@@ -153,8 +153,7 @@ public sealed partial class StorageEngine
             // In multi-process mode we record the WAL byte offset at the start of each
             // Write record so the SHM hash table can map pageId → offset. We use
             // WriteDataRecordAndGetOffsetAsync which atomically captures the position
-            // inside the WAL write lock, ensuring PrepareTransactionAsync callers that
-            // also write to the WAL (without _commitLock) cannot shift the position
+            // inside the WAL write lock, so no other WAL writer can shift the position
             // between the snapshot and the actual write.
             var wal = (_shm != null) ? (_wal as Transactions.WriteAheadLog) : null;
             var pageOffsets = wal != null ? new List<(uint pageId, long walOffset)>() : null;
@@ -185,8 +184,8 @@ public sealed partial class StorageEngine
                     {
                         // When multi-process mode is active, use the offset-returning variant
                         // so the record start offset is captured atomically inside the WAL
-                        // write lock, preventing concurrent PrepareTransactionAsync writers
-                        // from shifting the stream position between snapshot and write.
+                        // write lock, preventing other WAL writers from shifting the stream
+                        // position between snapshot and write.
                         // In single-process mode, fall back to the standard write.
                         if (wal != null)
                             pageOffsets!.Add((pageId, await wal.WriteDataRecordAndGetOffsetAsync(

@@ -218,7 +218,7 @@ public sealed partial class StorageEngine
     /// <summary>
     /// Truncates the WAL if every committed record has been checkpointed, then releases the
     /// pages queued by <see cref="FreePage"/>. Skipped when a commit keeps the lock for longer
-    /// than a short wait.
+    /// than a short wait, and while a prepared transaction has neither committed nor rolled back.
     /// </summary>
     private Task TryTruncateWalAsync(CancellationToken ct) => TryTruncateWalCoreAsync(commitLockHeld: false, ct);
 
@@ -267,7 +267,9 @@ public sealed partial class StorageEngine
             }
             // Double-check: new commits may have promoted entries
             // between our IsEmpty check and acquiring the lock.
-            if (_walIndex.IsEmpty)
+            // A prepared transaction's records stay until it commits or rolls back: committing it
+            // through MarkTransactionCommittedAsync appends only the commit record (#188).
+            if (_walIndex.IsEmpty && _preparedTransactions.IsEmpty)
             {
                 await _wal.TruncateAsync(ct);
                 if (_shm != null)
@@ -378,7 +380,9 @@ public sealed partial class StorageEngine
     
     /// <summary>
     /// Recovers from crash by replaying WAL.
-    /// Applies all committed transactions to PageFile, then truncates WAL.
+    /// Applies all committed transactions to PageFile, then truncates WAL, unless a prepared
+    /// transaction has neither committed nor rolled back yet (see <see cref="PrepareTransactionAsync(ulong)"/>).
+    /// A transaction that never committed, prepared or not, is not applied.
     /// </summary>
     public async Task RecoverAsync(CancellationToken ct = default)
     {
@@ -469,6 +473,20 @@ public sealed partial class StorageEngine
                 System.Diagnostics.Trace.TraceWarning(
                     $"BLite: recovery could not read the shared WAL past offset {readThrough} " +
                     $"(published end {sharedEnd}); the WAL is not truncated.");
+                return;
+            }
+
+            // A prepared transaction's records stay until it commits or rolls back (#188), and with
+            // them the committed images just written, which FreePage must still see as in the WAL,
+            // as after a checkpoint that does not truncate.
+            if (!_preparedTransactions.IsEmpty)
+            {
+                foreach (var txnId in committedTxns)
+                {
+                    if (txnWrites.TryGetValue(txnId, out var writes))
+                        foreach (var (pageId, _) in writes)
+                            _checkpointedWalPages.TryAdd(pageId, 0);
+                }
                 return;
             }
 
