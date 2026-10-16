@@ -428,7 +428,10 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// <param name="minKey">Minimum key (inclusive), null for unbounded</param>
     /// <param name="maxKey">Maximum key (inclusive), null for unbounded</param>
     /// <param name="transaction">Optional transaction to read uncommitted changes</param>
-    /// <returns>Enumerable of document locations in key order</returns>
+    /// <returns>
+    /// Enumerable of document locations in key order; entries with an equal key come in
+    /// document-id order in both directions (#210)
+    /// </returns>
     public IEnumerable<DocumentLocation> Range(object? minKey, object? maxKey, IndexDirection direction = IndexDirection.Forward, ITransaction? transaction = null)
     {
         if (_btreeIndex == null) yield break;
@@ -468,6 +471,13 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
             actualMaxKey = CreateCompositeKeyBoundary(userMaxKey, useMinObjectId: false);
         }
         
+        if (direction == IndexDirection.Backward)
+        {
+            foreach (var location in RangeDescending(actualMinKey, actualMaxKey, transaction?.TransactionId))
+                yield return location;
+            yield break;
+        }
+
         // Use BTreeIndex.Range with WAL-aware reads and direction
         // Extract DocumentLocation from each entry
         foreach (var entry in _btreeIndex.Range(actualMinKey, actualMaxKey, direction, transaction?.TransactionId))
@@ -475,6 +485,164 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
             yield return entry.Location;
         }
     }
+
+    /// <summary>
+    /// Longest run of entries with an equal key that <see cref="RangeDescending"/> buffers; a longer
+    /// run is read a second time, forwards.
+    /// </summary>
+    internal const int MaxBufferedTieRun = 1024;
+
+    /// <summary>
+    /// The entries between the composite bounds from the largest key to the smallest, each run of
+    /// entries with an equal key in ascending document-id order (#210). A full scan returns the
+    /// documents in id order and LINQ's <c>OrderByDescending</c> is a stable sort, so this is the
+    /// order a descending sort the index does not serve returns; the B-Tree read backwards would
+    /// return each run in descending id order instead.
+    /// </summary>
+    /// <remarks>
+    /// The entries of a run are buffered while the tree is read backwards and handed out reversed
+    /// when the key changes. A run longer than <see cref="MaxBufferedTieRun"/> is read again
+    /// forwards from its first entry, and the backward scan resumes below it, so an index with few
+    /// distinct values does not hold its whole result in memory. An entry whose key part cannot be
+    /// told (see <see cref="UserKeyLength"/>) is a run of its own.
+    /// </remarks>
+    private IEnumerable<DocumentLocation> RangeDescending(IndexKey minKey, IndexKey maxKey, ulong? transactionId)
+    {
+        var run = new List<DocumentLocation>();
+        IndexKey runTop = default;   // the run's first (largest) entry
+        int runKeyLength = -1;       // length of the run's key part; -1 while no run is buffered
+        var upper = maxKey;
+
+        while (true)
+        {
+            IndexKey? longRunStart = null;
+            foreach (var entry in _btreeIndex!.Range(minKey, upper, IndexDirection.Backward, transactionId))
+            {
+                int keyLength = UserKeyLength(entry.Key);
+                if (keyLength >= 0 && keyLength == runKeyLength && SameUserKey(entry.Key, runTop, keyLength))
+                {
+                    if (run.Count < MaxBufferedTieRun)
+                    {
+                        run.Add(entry.Location);
+                        continue;
+                    }
+                    // [user key] sorts below every entry of the run.
+                    longRunStart = UserKeyOf(runTop, runKeyLength);
+                    break;
+                }
+
+                for (int i = run.Count - 1; i >= 0; i--)
+                    yield return run[i];
+                run.Clear();
+
+                runTop = entry.Key;
+                runKeyLength = keyLength;
+                if (runKeyLength >= 0)
+                    run.Add(entry.Location);
+                else
+                    yield return entry.Location;
+            }
+
+            if (longRunStart is not { } start)
+                break;
+
+            // Every entry from the start of the long run up to its first entry, in id order. An entry
+            // equal to [user key] itself is a shorter value followed by its id (only possible when the
+            // value holds U+0002 or U+0003): it sorts below the run, so the backward scan resumed at
+            // that bound returns it.
+            foreach (var entry in _btreeIndex.Range(start < minKey ? minKey : start, runTop, IndexDirection.Forward, transactionId))
+            {
+                if (entry.Key != start)
+                    yield return entry.Location;
+            }
+
+            run.Clear();
+            runKeyLength = -1;
+            upper = start;
+        }
+
+        for (int i = run.Count - 1; i >= 0; i--)
+            yield return run[i];
+    }
+
+    // Length of the document-id part of every entry when the id type encodes to a fixed size, else 0.
+    private int? _idKeyLength;
+    private int IdKeyLength => _idKeyLength ??= ComputeIdKeyLength();
+
+    private int ComputeIdKeyLength()
+    {
+        if (!s_fixedSizeId) return 0;
+
+        // A mapper that converts the id (HasConversion) may encode it as a type of another size:
+        // only an id encoded as its own type is known to have a fixed length.
+        IndexKey key;
+        try { key = _mapper.ToIndexKey(default!); }
+        catch (Exception) { return 0; } // a converter that rejects the default id
+        return key.Data.SequenceEqual(IndexKey.Create(default(TId)).Data) ? key.Data.Length : 0;
+    }
+
+    // Length of every user key when the key type encodes to a fixed size, else 0.
+    private int? _fixedUserKeyLength;
+    private int FixedUserKeyLength => _fixedUserKeyLength ??= ComputeFixedUserKeyLength();
+
+    private int ComputeFixedUserKeyLength()
+    {
+        // The key is the boxed value of the selector's body, so its static type is the runtime type
+        // for these (value) types; any other type (string, byte[], object, ...) varies in length.
+        var body = _definition.KeySelectorExpression.Body;
+        while (body is System.Linq.Expressions.UnaryExpression { NodeType: System.Linq.Expressions.ExpressionType.Convert } u
+               && u.Type == typeof(object))
+            body = u.Operand;
+        var type = Nullable.GetUnderlyingType(body.Type) ?? body.Type;
+
+        object? sample = type.IsEnum ? 0L
+            : type == typeof(int) ? 0
+            : type == typeof(long) ? 0L
+            : type == typeof(double) ? 0d
+            : type == typeof(float) ? 0f
+            : type == typeof(decimal) ? 0m
+            : type == typeof(DateTime) ? DateTime.UnixEpoch
+            : type == typeof(DateTimeOffset) ? DateTimeOffset.UnixEpoch
+            : type == typeof(ObjectId) ? ObjectId.Empty
+            : type == typeof(Guid) ? Guid.Empty
+            : null;
+        return sample == null ? 0 : ConvertToIndexKey(sample).Data.Length;
+    }
+
+    /// <summary>
+    /// Length of the user-key part of the <c>[user key][document id]</c> entry
+    /// <paramref name="compositeKey"/>, or -1 when it cannot be told.
+    /// </summary>
+    /// <remarks>
+    /// Exact when the id type or the key type encodes to a fixed size. Otherwise (e.g. string
+    /// values and string ids) the id starts at a <see cref="IndexKey.KeyPrefix"/> or
+    /// <see cref="IndexKey.DecimalKeyPrefix"/> byte, as every encoded key does; when only one byte
+    /// after the user key's own prefix is one of them, the id starts there. A value or id holding
+    /// U+0002 or U+0003 can make that ambiguous, and the length is then not told.
+    /// </remarks>
+    private int UserKeyLength(IndexKey compositeKey)
+    {
+        var data = compositeKey.Data;
+        if (IdKeyLength > 0)
+            return data.Length > IdKeyLength ? data.Length - IdKeyLength : -1;
+        if (FixedUserKeyLength > 0)
+            return data.Length > FixedUserKeyLength ? FixedUserKeyLength : -1;
+
+        int idStart = -1;
+        for (int i = 1; i < data.Length; i++)
+        {
+            if (data[i] is not (IndexKey.KeyPrefix or IndexKey.DecimalKeyPrefix)) continue;
+            if (idStart >= 0) return -1;
+            idStart = i;
+        }
+        return idStart;
+    }
+
+    private static bool SameUserKey(IndexKey a, IndexKey b, int userKeyLength)
+        => a.Data.Slice(0, userKeyLength).SequenceEqual(b.Data.Slice(0, userKeyLength));
+
+    private static IndexKey UserKeyOf(IndexKey compositeKey, int userKeyLength)
+        => IndexKey.FromOwnedArray(compositeKey.Data.Slice(0, userKeyLength).ToArray());
 
     /// <summary>
     /// Counts index entries that fall within the specified key range, performing a
