@@ -3463,8 +3463,9 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
                 var header = SlottedPageHeader.ReadFrom(tempBuffer);
                 var nextPage = header.NextOverflowPage;
 
-                // Recycle this page
-                _storage.FreePage(overflowPageId);
+                // Recycle this page once the transaction commits: until then the committed
+                // document, which a rollback returns to, still uses it (#233).
+                _storage.FreePageOnCommit(overflowPageId, transaction.TransactionId);
 
                 overflowPageId = nextPage;
             }

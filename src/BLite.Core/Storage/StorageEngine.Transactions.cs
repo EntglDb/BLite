@@ -354,6 +354,7 @@ public sealed partial class StorageEngine
                 // No writes for this transaction, just write commit record
                 await _wal.WriteCommitRecordAsync(transactionId);
                 await _wal.FlushAsync();
+                FreePagesOfCommittedTransaction(transactionId);
                 completed = true;
                 goto Completed;
             }
@@ -377,6 +378,9 @@ public sealed partial class StorageEngine
                 _walIndex[kvp.Key] = kvp.Value;
             }
             _walCache.TryRemove(transactionId, out _);
+
+            // The commit is durable: release the pages it stopped using (#233).
+            FreePagesOfCommittedTransaction(transactionId);
 
             // Check if checkpoint is needed, but defer it until after releasing the lock
             needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
@@ -533,6 +537,9 @@ public sealed partial class StorageEngine
                 _walCache.TryRemove(transactionId, out _);
             }
 
+            // The commit is durable: release the pages it stopped using (#233).
+            FreePagesOfCommittedTransaction(transactionId);
+
             // Check if checkpoint is needed, but defer it until after releasing the lock
             needsCheckpoint = _wal.GetCurrentSize() > MaxWalSize;
         }
@@ -575,6 +582,8 @@ public sealed partial class StorageEngine
     public async Task RollbackTransactionAsync(ulong transactionId)
     {
         _walCache.TryRemove(transactionId, out _);
+        // The committed state still uses the pages this transaction meant to free (#233).
+        DiscardFreesOnCommit(transactionId);
         try
         {
             // The abort record is advisory: replay and recovery only apply transactions with a

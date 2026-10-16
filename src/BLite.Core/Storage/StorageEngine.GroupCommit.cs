@@ -242,6 +242,11 @@ public sealed partial class StorageEngine
             if (caughtUp)
                 Volatile.Write(ref _lastKnownWalEndOffset, newWalEnd);
 
+            // The batch is durable and published: release the pages its transactions stopped
+            // using (#233). Last, so that a batch reported as failed never frees anything.
+            foreach (var commit in batch)
+                FreePagesOfCommittedTransaction(commit.TransactionId);
+
             // Check if checkpoint is needed, but defer until after releasing the lock
             needsCheckpoint = newWalEnd > MaxWalSize;
         }

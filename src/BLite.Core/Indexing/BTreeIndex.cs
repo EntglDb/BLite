@@ -1086,11 +1086,11 @@ public sealed class BTreeIndex
             System.Buffers.ArrayPool<byte>.Shared.Return(pageBuffer);
         }
 
-        // The sole child is intentionally left orphaned rather than freed: FreePage acts on disk
-        // immediately, while the copy of this page written by MergeNodes still sits in the
-        // transaction cache and the committed root still points at it until commit. Freeing it
-        // here would let a reallocation be overwritten by the stale image on commit and would
-        // leave the committed tree pointing at a free page if the transaction rolls back.
+        // The sole child is freed only when this transaction commits (#233): until then the
+        // committed root still points at it, and a rollback returns to that tree. By then the
+        // image MergeNodes wrote of it is in the WAL, so FreePage holds the page off the free
+        // list until the next WAL truncation, and a reallocation cannot be overwritten by it.
+        _storage.FreePageOnCommit(soleChildId, transactionId);
     }
 
     /// <summary>Rewrites the page and node headers of a node image so it lives at <paramref name="newPageId"/>.</summary>
@@ -1921,9 +1921,9 @@ public sealed class BTreeIndex
         // Write updated Parent
         WriteInternalNode(parentId, p0, parentEntries, transactionId);
 
-        // Free the empty Right Node
-        _storage.FreePage(rightNodeId); // Not transactional: the page is released even if this
-                                         // transaction rolls back. Might need TransactionalFreePage.
+        // Free the empty Right Node once this transaction commits: until then the committed tree,
+        // which a rollback returns to, still links it (#233).
+        _storage.FreePageOnCommit(rightNodeId, transactionId);
 
         // Recursive Underflow Check on Parent
         int minInternal = MaxEntriesPerNode / 2;

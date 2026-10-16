@@ -103,6 +103,63 @@ public sealed partial class StorageEngine
             _pendingFreePages.Add(pageId);
     }
 
+    // Pages each open transaction stops using, freed only once it commits (#233). See FreePageOnCommit.
+    private readonly ConcurrentDictionary<ulong, HashSet<uint>> _freeOnCommit = new();
+
+    /// <summary>
+    /// Frees a page that <paramref name="transactionId"/> no longer uses, once that transaction
+    /// commits (#233).
+    /// <para>
+    /// <see cref="FreePage"/> acts outside any transaction: the page goes back to the free list
+    /// at once, while the committed state, which a rollback returns to, may still use it. A
+    /// B-Tree merge that unlinks a node is one such case: freed on the spot, a rolled-back merge
+    /// would leave the committed tree pointing at a free page, which the next allocation hands
+    /// out again. A page queued here stays allocated until the transaction's commit is durable
+    /// in the WAL, and is then freed through <see cref="FreePage"/>, which still holds it off the
+    /// free list while the WAL has an image of it. A rollback drops the queue, so the page stays
+    /// in use. The transaction itself cannot be handed the page again either, since it is not
+    /// free until the transaction ends.
+    /// </para>
+    /// <para>
+    /// If the process dies between the commit and the free, or the commit fails, the page is
+    /// leaked: allocated but no longer referenced. It is never freed twice nor freed while in use.
+    /// </para>
+    /// </summary>
+    public void FreePageOnCommit(uint pageId, ulong transactionId)
+    {
+        if (pageId == 0) throw new InvalidOperationException("Cannot free header page 0");
+        if (transactionId == 0)
+            throw new InvalidOperationException("Cannot defer a free without a transaction (transactionId=0 is reserved)");
+
+        var pages = _freeOnCommit.GetOrAdd(transactionId, _ => new HashSet<uint>());
+        lock (pages)
+            pages.Add(pageId);
+    }
+
+    /// <summary>
+    /// Frees the pages queued by <see cref="FreePageOnCommit"/> for a transaction whose commit is
+    /// now durable and whose pages have been moved to <c>_walIndex</c>. Call under
+    /// <c>_commitLock</c>. A page that cannot be freed is leaked rather than failing a commit
+    /// that already happened.
+    /// </summary>
+    private void FreePagesOfCommittedTransaction(ulong transactionId)
+    {
+        if (!_freeOnCommit.TryRemove(transactionId, out var pages))
+            return;
+
+        lock (pages)
+        {
+            foreach (var pageId in pages)
+            {
+                try { FreePage(pageId); }
+                catch { /* best-effort: the page is leaked, never reused while in use */ }
+            }
+        }
+    }
+
+    /// <summary>Drops the frees queued by a transaction that rolled back: its pages stay in use.</summary>
+    private void DiscardFreesOnCommit(ulong transactionId) => _freeOnCommit.TryRemove(transactionId, out _);
+
     /// <summary>
     /// Whether the WAL holds, or an open transaction is about to commit, an image of the page.
     /// </summary>
