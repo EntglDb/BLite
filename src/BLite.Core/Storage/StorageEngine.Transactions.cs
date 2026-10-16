@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using BLite.Core.Transactions;
 
@@ -306,11 +307,24 @@ public sealed partial class StorageEngine
         return pageData;
     }
 
+    // Transactions whose records PrepareTransactionAsync has written to the WAL and that have not
+    // committed or rolled back since. Their records must stay in the WAL until then:
+    // MarkTransactionCommittedAsync appends only the commit record, so recovery needs the prepared
+    // Write records (#188). Added and checked under _commitLock, so no truncation runs between a
+    // prepare and its registration; removed by CompleteTransaction.
+    private readonly ConcurrentDictionary<ulong, byte> _preparedTransactions = new();
+
     /// <summary>
     /// Forgets a transaction once it has committed or rolled back through the <c>ulong</c>
     /// overloads, which callers use directly without going through the <see cref="Transaction"/> ones.
+    /// A prepared transaction no longer holds back WAL truncation: a commit has made its pages
+    /// durable (in the WAL until a checkpoint writes them), and a rolled-back one needs nothing.
     /// </summary>
-    private void CompleteTransaction(ulong transactionId) => _activeTransactions.TryRemove(transactionId, out _);
+    private void CompleteTransaction(ulong transactionId)
+    {
+        _activeTransactions.TryRemove(transactionId, out _);
+        _preparedTransactions.TryRemove(transactionId, out _);
+    }
 
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
@@ -342,24 +356,29 @@ public sealed partial class StorageEngine
     /// <summary>
     /// Prepares a transaction: writes all changes to WAL but doesn't commit yet.
     /// Part of 2-Phase Commit protocol.
+    /// <para>
+    /// The records are appended under the commit lock, like a commit's, so they never interleave
+    /// with a commit batch and no WAL truncation runs while they are written. Until the
+    /// transaction commits or rolls back, checkpoints still write committed pages to the page
+    /// files but do not truncate the WAL, so <see cref="MarkTransactionCommittedAsync"/> finds the
+    /// prepared records there (#188). A prepared transaction that is never resolved therefore
+    /// keeps the WAL growing; <see cref="Transaction.Dispose"/> and <see cref="Dispose"/> roll back
+    /// the transactions they own. Recovery applies only committed transactions: a transaction
+    /// still prepared when the engine closes or the process dies is rolled back on reopen.
+    /// </para>
     /// </summary>
     /// <param name="transactionId">Transaction ID</param>
-    /// <param name="writeSet">All writes to record in WAL</param>
-    /// <returns>True if preparation succeeded</returns>
+    /// <returns>
+    /// True if preparation succeeded; false if it failed, including when the commit lock could not
+    /// be taken within <see cref="LockTimeout.WriteTimeoutMs"/>.
+    /// </returns>
     /// <exception cref="NotSupportedException">Multi-process mode (see <see cref="ThrowIfMultiProcessAccess"/>).</exception>
     public async Task<bool> PrepareTransactionAsync(ulong transactionId)
     {
         ThrowIfMultiProcessAccess(nameof(PrepareTransactionAsync));
         try
         {
-            await _wal.WriteBeginRecordAsync(transactionId);
-
-            foreach (var walEntry in _walCache[transactionId])
-            {
-                await _wal.WriteDataRecordAsync(transactionId, walEntry.Key, walEntry.Value);
-            }
-
-            await _wal.FlushAsync(); // Ensure WAL is persisted
+            await PrepareCoreAsync(transactionId, _walCache[transactionId], CancellationToken.None);
             return true;
         }
         catch (Exception ex)
@@ -375,22 +394,43 @@ public sealed partial class StorageEngine
         ThrowIfMultiProcessAccess(nameof(PrepareTransactionAsync));
         try
         {
-            await _wal.WriteBeginRecordAsync(transactionId, ct);
-
-            if (_walCache.TryGetValue(transactionId, out var changes))
-            {
-                foreach (var walEntry in changes)
-                {
-                    await _wal.WriteDataRecordAsync(transactionId, walEntry.Key, walEntry.Value, ct);
-                }
-            }
-            
-            await _wal.FlushAsync(ct); // Ensure WAL is persisted
+            _walCache.TryGetValue(transactionId, out var changes);
+            await PrepareCoreAsync(transactionId, changes, ct);
             return true;
         }
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Appends the Begin and Write records of a prepared transaction and flushes them, under
+    /// <c>_commitLock</c>, then registers the transaction so that no truncation drops the records
+    /// before it commits or rolls back (see <see cref="TryTruncateWalCoreAsync"/>).
+    /// </summary>
+    private async Task PrepareCoreAsync(ulong transactionId, IEnumerable<KeyValuePair<uint, byte[]>>? pages, CancellationToken ct)
+    {
+        if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring commit lock (PrepareTransaction).");
+        try
+        {
+            await _wal.WriteBeginRecordAsync(transactionId, ct);
+
+            if (pages != null)
+            {
+                foreach (var walEntry in pages)
+                {
+                    await _wal.WriteDataRecordAsync(transactionId, walEntry.Key, walEntry.Value, ct);
+                }
+            }
+
+            await _wal.FlushAsync(ct); // Ensure WAL is persisted
+            _preparedTransactions[transactionId] = 0;
+        }
+        finally
+        {
+            _commitLock.Release();
         }
     }
 
@@ -585,6 +625,8 @@ public sealed partial class StorageEngine
     /// <summary>
     /// Marks a transaction as committed after WAL writes.
     /// Used for 2PC: after PrepareAsync() writes to WAL, this finalizes the commit.
+    /// Appends only the commit record: the Write records are the ones the prepare wrote, which no
+    /// checkpoint truncates before this call (#188).
     /// </summary>
     /// <param name="transactionId">Transaction to mark committed</param>
     /// <exception cref="NotSupportedException">Multi-process mode (see <see cref="ThrowIfMultiProcessAccess"/>).</exception>

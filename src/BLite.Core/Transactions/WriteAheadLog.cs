@@ -591,8 +591,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// <summary>
     /// Writes a WAL data record and returns the byte offset at which the record
     /// starts in the WAL file. The offset is captured atomically inside the WAL
-    /// write lock — so no concurrent WAL writer (e.g. <c>PrepareTransactionAsync</c>)
-    /// can shift the stream position between the snapshot and the actual write.
+    /// write lock — so no concurrent WAL writer can shift the stream position between
+    /// the snapshot and the actual write.
     /// Used by the group-commit path (Phase 4) to build the SHM page index.
     /// </summary>
     internal async ValueTask<long> WriteDataRecordAndGetOffsetAsync(
