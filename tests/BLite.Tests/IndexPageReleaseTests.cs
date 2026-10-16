@@ -114,6 +114,75 @@ public class IndexPageReleaseTests : IDisposable
     }
 
     // ======================================================================
+    //  #211: DynamicCollection releases old index trees
+    // ======================================================================
+
+    [Theory]
+    [InlineData(IndexType.BTree)]
+    [InlineData(IndexType.Vector)]
+    [InlineData(IndexType.Spatial)]
+    public async Task DynamicCollection_DropIndex_FreesTheTree(IndexType type)
+    {
+        using var engine = new BLiteEngine(_dbPath);
+        var col = engine.GetOrCreateCollection("docs");
+        await InsertIndexableDocsAsync(col, 3000);
+        var name = await CreateDynamicIndexAsync(col, type);
+        await engine.CheckpointAsync();
+        var oldPages = DynamicIndexPages(engine.Storage, "docs", name);
+        Assert.True(oldPages.Count > 1, "the index must span more than its root");
+
+        Assert.True(col.DropIndex(name));
+
+        Assert.DoesNotContain(engine.Storage.GetCollectionMetadata("docs")!.Indexes, i => i.Name == name);
+        await AssertPagesFreedAsync(engine, oldPages);
+    }
+
+    [Theory]
+    [InlineData(IndexType.BTree)]
+    [InlineData(IndexType.Vector)]
+    [InlineData(IndexType.Spatial)]
+    public async Task DynamicCollection_VacuumRebuildIndexes_FreesTheOldTree(IndexType type)
+    {
+        using var engine = new BLiteEngine(_dbPath);
+        var col = engine.GetOrCreateCollection("docs");
+        await InsertIndexableDocsAsync(col, 3000);
+        var name = await CreateDynamicIndexAsync(col, type);
+        await engine.CheckpointAsync();
+        var rootBefore = DynamicIndexRoot(engine.Storage, "docs", name);
+        var oldPages = DynamicIndexPages(engine.Storage, "docs", name);
+        Assert.True(oldPages.Count > 1, "the index must span more than its root");
+
+        await col.VacuumAsync(new VacuumOptions { RebuildIndexes = true, TruncateFile = false });
+
+        Assert.NotEqual(rootBefore, DynamicIndexRoot(engine.Storage, "docs", name));
+        await AssertDynamicIndexAnswersAsync(col, type, name);
+        await AssertPagesFreedAsync(engine, oldPages);
+    }
+
+    /// <summary>
+    /// A rebuild that fails on a document that cannot be read keeps the old index, in memory and
+    /// on disk, reports the failure and frees the half-built copy, including the pages its splits
+    /// added outside the transaction.
+    /// </summary>
+    [Fact]
+    public async Task DynamicCollection_VacuumRebuildIndexes_UnreadableDocument_FailsKeepsIndexAndFreesCopy()
+    {
+        using var engine = new BLiteEngine(_dbPath);
+        var col = engine.GetOrCreateCollection("docs");
+        await InsertIndexableDocsAsync(col, 3000);
+        var name = await CreateDynamicIndexAsync(col, IndexType.BTree);
+        await engine.CheckpointAsync();
+        var rootBefore = DynamicIndexRoot(engine.Storage, "docs", name);
+        CorruptLastDocument(col, engine.Storage);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => col.VacuumAsync(new VacuumOptions { RebuildIndexes = true, TruncateFile = false }));
+
+        Assert.Equal(rootBefore, DynamicIndexRoot(engine.Storage, "docs", name));
+        Assert.Equal(3000 / 90 + 1, (await col.QueryIndexAsync(name, 7, 7).ToListAsync()).Count);
+        await AssertCopyWasFreedAsync(engine);
+    }
+
+    // ======================================================================
     //  Helpers
     // ======================================================================
 

@@ -312,6 +312,23 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
+    /// <summary>
+    /// The pages of <paramref name="index"/>'s tree as <paramref name="transactionId"/> sees it
+    /// (0: committed state), whatever its kind. Walks the tree without taking its lock: callers
+    /// hold the collection lock, or drop the index before any writer can reach it.
+    /// </summary>
+    private static IReadOnlyList<uint> CollectIndexPages(DynamicSecondaryIndex index, ulong transactionId = 0)
+    {
+        return index.Kind switch
+        {
+            DynamicIndexKind.BTree    => index.BTree!.CollectAllPages(transactionId),
+            DynamicIndexKind.Vector   => index.Vector!.CollectAllPages(transactionId),
+            DynamicIndexKind.Spatial  => index.Spatial!.CollectAllPages(transactionId),
+            DynamicIndexKind.FullText => index.FullText!.CollectAllPages(transactionId),
+            _                         => Array.Empty<uint>()
+        };
+    }
+
     private void FreePagesBestEffort(IReadOnlyList<uint> pages)
     {
         try
@@ -1822,12 +1839,18 @@ public sealed class DynamicCollection : IDisposable
                     rebuildEntries[name] = freshEntry;
                 }
 
+                // Only the entries actually rebuilt get swapped and their old trees freed.
+                var rebuilt = rebuildEntries.Where(kv => !ReferenceEquals(kv.Value, _secondaryIndexes[kv.Key])).ToList();
+
                 var rebuildTxn = _storage.BeginTransaction(IsolationLevel.ReadCommitted);
                 try
                 {
                     foreach (var e in _primaryIndex.Range(IndexKey.MinKey, IndexKey.MaxKey, IndexDirection.Forward, rebuildTxn.TransactionId))
                     {
                         ct.ThrowIfCancellationRequested();
+                        // A document that cannot be read or indexed fails the rebuild, as in the typed
+                        // collection (#170): the old indexes stay in place rather than being replaced
+                        // by incomplete copies.
                         var doc = ReadDocumentAt(e.Location, rebuildTxn.TransactionId);
                         if (doc != null)
                         {
@@ -1839,14 +1862,56 @@ public sealed class DynamicCollection : IDisposable
                 }
                 catch
                 {
-                    await rebuildTxn.RollbackAsync().ConfigureAwait(false);
+                    // Collect the copies' pages through the transaction before rolling it back: pages
+                    // added by splits are allocated outside the transaction but linked only from nodes
+                    // written in it, so after the rollback they could not be found any more (#211).
+                    var copyPages = new List<uint>();
+                    foreach (var (_, copy) in rebuilt)
+                    {
+                        try { copyPages.AddRange(CollectIndexPages(copy, rebuildTxn.TransactionId)); }
+                        catch { /* best-effort: never mask the original failure */ }
+                    }
+
+                    try { await rebuildTxn.RollbackAsync().ConfigureAwait(false); }
+                    catch { /* best-effort: never mask the original failure */ }
+
+                    FreePagesBestEffort(copyPages);
                     throw;
                 }
 
-                // Swap in the rebuilt indexes and persist their new root page IDs.
-                foreach (var (name, entry) in rebuildEntries)
+                // Swap in the rebuilt indexes and persist their new root page IDs. The old trees are
+                // collected first and freed only after the swap is persisted: a crash in between leaks
+                // them, whereas the reverse order would let the next open free them a second time (#211).
+                var previous = new List<(string Name, DynamicSecondaryIndex Entry, IReadOnlyList<uint> Pages)>(rebuilt.Count);
+                foreach (var (name, _) in rebuilt)
+                {
+                    var old = _secondaryIndexes[name];
+                    previous.Add((name, old, CollectIndexPages(old)));
+                }
+
+                foreach (var (name, entry) in rebuilt)
                     _secondaryIndexes[name] = entry;
-                PersistIndexMetadata();
+                try
+                {
+                    PersistIndexMetadata();
+                }
+                catch
+                {
+                    // The old indexes stay registered, as on disk; the copies are unreachable, free them.
+                    foreach (var (name, old, _) in previous)
+                        _secondaryIndexes[name] = old;
+                    var copyPages = new List<uint>();
+                    foreach (var (_, copy) in rebuilt)
+                    {
+                        try { copyPages.AddRange(CollectIndexPages(copy)); }
+                        catch { /* best-effort: never mask the original failure */ }
+                    }
+                    FreePagesBestEffort(copyPages);
+                    throw;
+                }
+
+                foreach (var (_, _, pages) in previous)
+                    FreePagesBestEffort(pages);
             }
 
             success = true;
@@ -2007,13 +2072,30 @@ public sealed class DynamicCollection : IDisposable
         }
     }
 
-    /// <summary>Drops a secondary index by name.</summary>
+    /// <summary>
+    /// Drops a secondary index by name and frees its pages. If the metadata cannot be saved, the
+    /// index stays registered and the exception propagates.
+    /// </summary>
     public bool DropIndex(string name)
     {
-        if (!_secondaryIndexes.Remove(name))
+        if (!_secondaryIndexes.TryGetValue(name, out var index))
             return false;
 
-        PersistIndexMetadata();
+        // Free the tree only after the drop is persisted: a crash in between leaks the pages,
+        // whereas the reverse order would let the next open free them a second time (#211).
+        var pages = CollectIndexPages(index);
+        _secondaryIndexes.Remove(name);
+        try
+        {
+            PersistIndexMetadata();
+        }
+        catch
+        {
+            _secondaryIndexes[name] = index;
+            throw;
+        }
+
+        FreePagesBestEffort(pages);
         return true;
     }
 
