@@ -477,8 +477,19 @@ public sealed partial class StorageEngine : IDisposable
         // one (see FreePage); checkpoint now so they are not leaked when the engine closes. A
         // checkpoint the queued frees requested may still be running: the one below would return
         // at once while it holds _checkpointRunning, and closing the files under it would make
-        // its truncation and frees fail, leaking the pages for good. Wait for it first (#209).
-        try { PendingFreeCheckpointCompletion.Wait(_config.LockTimeout.WriteTimeoutMs); } catch { /* best-effort */ }
+        // its truncation and frees fail, leaking the pages for good. Wait for it to finish (#209).
+        //
+        // The wait lasts as long as that checkpoint, not a lock timeout: on a loaded CI runner one
+        // took longer than WriteTimeoutMs (500 ms) and was cut short while releasing the pages. It
+        // cannot hang: every lock the checkpoint takes (commit lock, cross-process writer lock,
+        // page file locks) is waited for with its own timeout, its I/O is finite (the WAL images,
+        // one flush, the truncation, one free per queued page), it waits for nothing Dispose
+        // holds, and its task swallows failures, so it completes on its own. The cap is only for
+        // I/O that never returns (a hung file system), where closing the files beats never
+        // returning: 10 × WriteTimeoutMs, and at least 30 s, is far beyond the few lock timeouts a
+        // checkpoint can spend and any checkpoint that makes progress.
+        var pendingFreeWait = TimeSpan.FromMilliseconds(Math.Min(int.MaxValue, Math.Max(30_000L, 10L * _config.LockTimeout.WriteTimeoutMs)));
+        try { PendingFreeCheckpointCompletion.Wait(pendingFreeWait); } catch { /* best-effort */ }
         if (HasPendingFreePages)
         {
             try { Task.Run(() => CheckpointAsync()).GetAwaiter().GetResult(); } catch { /* best-effort: the pages stay leaked */ }

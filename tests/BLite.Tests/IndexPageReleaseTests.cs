@@ -284,13 +284,16 @@ public class IndexPageReleaseTests : IDisposable
     /// <summary>
     /// The pending-free checkpoint runs in the background. Disposing the engine while it runs
     /// used to close the files under it: the engine's own closing checkpoint returned at once
-    /// because one was running, and the queued pages were leaked for good.
+    /// because one was running, and the queued pages were leaked for good. Dispose now waits for
+    /// it, however long it takes (the next test); here the task must have completed when Dispose
+    /// returns, whatever the machine's speed, and the reopened file must reuse the pages.
     /// </summary>
     [Fact]
     public async Task Dispose_DuringPendingFreeCheckpoint_DoesNotLeakTheQueuedPages()
     {
         uint highWater;
         int count;
+        Task checkpoint;
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             count = (int)(4L * 1024 * 1024 / storage.PageSize) + 16; // past the 4 MB threshold
@@ -309,13 +312,40 @@ public class IndexPageReleaseTests : IDisposable
 
             foreach (var page in pages)
                 storage.FreePage(page); // queued (WAL images); crossing the threshold requests a checkpoint
+            checkpoint = storage.PendingFreeCheckpointCompletion;
+            Assert.NotSame(Task.CompletedTask, checkpoint); // one was requested
         }
+        Assert.True(checkpoint.IsCompleted, "Dispose returned while the pending-free checkpoint was still running");
 
         using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
         {
             for (int i = 0; i < count; i++)
                 Assert.True(storage.AllocatePage() < highWater, $"page {i} was appended: the queued frees were leaked");
         }
+    }
+
+    /// <summary>
+    /// Dispose waits for the pending-free checkpoint until it completes, not for the lock timeout:
+    /// a checkpoint slower than that (as on a loaded CI runner) was cut short, and the pages it had
+    /// not released yet were leaked. A task the test completes stands in for the checkpoint, so the
+    /// outcome does not depend on how long a real one takes on this machine: Dispose must still be
+    /// waiting well past the lock timeout, and return once the task completes.
+    /// </summary>
+    [Fact]
+    public async Task Dispose_WaitsForThePendingFreeCheckpoint_LongerThanTheLockTimeout()
+    {
+        var storage = new StorageEngine(_dbPath, PageFileConfig.Default);
+        var timeout = storage.LockTimeout.WriteTimeoutMs;
+        Assert.InRange(timeout, 1, 1000);
+        var checkpoint = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        typeof(StorageEngine).GetField("_pendingFreeCheckpointTask", Flags)!.SetValue(storage, checkpoint.Task);
+
+        var dispose = Task.Run(storage.Dispose);
+        await Task.WhenAny(dispose, Task.Delay(3 * timeout));
+        Assert.False(dispose.IsCompleted, $"Dispose returned within {3 * timeout} ms while the pending-free checkpoint was still running");
+
+        checkpoint.SetResult(true);
+        await dispose.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>

@@ -145,7 +145,8 @@ public sealed partial class StorageEngine
 
     /// <summary>
     /// Completes when the checkpoint last requested by <see cref="RequestPendingFreeCheckpoint"/>
-    /// has finished (at once if none is running). For tests, which would otherwise race it.
+    /// has finished (at once if none is running). <see cref="Dispose"/> waits for it before its
+    /// closing checkpoint; tests, which would otherwise race it, wait for it too.
     /// </summary>
     internal Task PendingFreeCheckpointCompletion => Volatile.Read(ref _pendingFreeCheckpointTask) ?? Task.CompletedTask;
 
