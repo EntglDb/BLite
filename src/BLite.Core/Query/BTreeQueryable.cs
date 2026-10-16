@@ -136,7 +136,11 @@ internal class BTreeQueryable<T> : IBLiteQueryable<T>, IAsyncEnumerable<T>
     {
         // AOT-safe fast path: compile the inverted predicate at the BSON level and
         // scan for the first non-matching document (limit:1). No POCO deserialization.
-        var inversePred = BsonExpressionEvaluator.TryCompileInverse<T>(predicate);
+        // The scan reads the whole collection, so it answers only for the collection itself: a
+        // query (Where, Take, Skip, ...) in front of AllAsync narrows the documents to test (#230).
+        var inversePred = Expression is ConstantExpression
+            ? BsonExpressionEvaluator.TryCompileInverse<T>(predicate)
+            : null;
         if (inversePred != null)
         {
             var core = (IBTreeQueryCore<T>)Provider;

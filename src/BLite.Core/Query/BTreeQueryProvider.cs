@@ -276,8 +276,10 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
         // 2. Data fetching.
         // When Take (+ optional Skip) is present without complex operators or ordering that
         // requires a full scan first, cap how many rows we need to materialise.
+        // The model's Skip and Take describe the query's window exactly (#230); their sum is
+        // computed in long so that a large Skip cannot wrap around to a negative limit.
         int fetchLimit = (model.Take.HasValue && model.OrderByClause == null && !model.HasComplexOperators)
-            ? (model.Skip.GetValueOrDefault() + model.Take.Value)
+            ? (int)Math.Min((long)model.Skip.GetValueOrDefault() + model.Take.Value, int.MaxValue)
             : int.MaxValue;
 
         // ── Fast path: OrderBy(indexedField).Skip(S).Take(N) without WHERE ───────────
@@ -298,8 +300,13 @@ public class BTreeQueryProvider<TId, T> : IQueryProvider, IAsyncQueryProvider, I
                     int skip = model.Skip ?? 0;
                     int take = model.Take.Value;
                     var topN = new List<T>(take);
-                    await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, skip, take, cancellationToken))
-                        topN.Add(item);
+                    // QueryIndexAsync yields an entry before it checks the limit, so Take(0) must
+                    // not reach it.
+                    if (take > 0)
+                    {
+                        await foreach (var item in _collection.QueryIndexAsync(orderOpt.IndexName, null, null, ascending, skip, take, cancellationToken))
+                            topN.Add(item);
+                    }
                     if (model.SelectClause != null)
                         return ProjectEnumerable<TResult>(topN, model.SelectClause);
                     return TerminalReturn<TResult>(topN);

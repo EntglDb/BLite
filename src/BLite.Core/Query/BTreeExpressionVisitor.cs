@@ -123,28 +123,70 @@ internal class BTreeExpressionVisitor : ExpressionVisitor
         _model.SelectClause = (LambdaExpression)selector.Operand;
     }
 
+    /// <summary>
+    /// Records an ordering. The direct pipeline sorts before it skips or takes, and sorts once, so
+    /// an ordering after <c>Take</c> or <c>Skip</c> (which sorts only the window) or after another
+    /// ordering (which keeps the first order among ties) is left to the in-memory replay. The model
+    /// keeps the first ordering, so an index can still serve the window taken in that order (#230).
+    /// </summary>
     private void VisitOrderBy(MethodCallExpression node)
     {
         Visit(node.Arguments[0]);
+        if (_model.Take.HasValue || _model.Skip.HasValue || _model.OrderByClause != null)
+        {
+            _model.HasComplexOperators = true;
+            return;
+        }
+
         var keySelector = (UnaryExpression)node.Arguments[1];
         _model.OrderByClause = (LambdaExpression)keySelector.Operand;
         _model.OrderDescending = node.Method.Name == "OrderByDescending";
     }
 
+    /// <summary>
+    /// Records <c>Take(n)</c> as the window the direct pipeline takes after skipping. A later
+    /// <c>Take</c> narrows that window: <c>Take(a).Take(b)</c> is <c>Take(min(a, b))</c>. A negative
+    /// count takes nothing, as in LINQ. The <c>Take(Range)</c> overload is left to the replay (#230).
+    /// </summary>
     private void VisitTake(MethodCallExpression node)
     {
         Visit(node.Arguments[0]);
-        var countExpression = (ConstantExpression)node.Arguments[1];
-        if (countExpression.Value != null)
-            _model.Take = (int)countExpression.Value;
+        if (node.Arguments[1] is not ConstantExpression { Value: int count })
+        {
+            _model.HasComplexOperators = true;
+            return;
+        }
+
+        count = Math.Max(count, 0);
+        _model.Take = _model.Take.HasValue ? Math.Min(_model.Take.Value, count) : count;
     }
 
+    /// <summary>
+    /// Records <c>Skip(n)</c>. The direct pipeline skips before it takes, so a <c>Skip</c> after a
+    /// window is folded into it exactly: <c>Skip(a).Skip(b)</c> is <c>Skip(a + b)</c> and
+    /// <c>Take(a).Skip(b)</c> is <c>Skip(b).Take(max(a - b, 0))</c>. A negative count skips nothing,
+    /// as in LINQ. A total beyond <see cref="int.MaxValue"/> is left to the replay (#230).
+    /// </summary>
     private void VisitSkip(MethodCallExpression node)
     {
         Visit(node.Arguments[0]);
-        var countExpression = (ConstantExpression)node.Arguments[1];
-        if (countExpression.Value != null)
-            _model.Skip = (int)countExpression.Value;
+        if (node.Arguments[1] is not ConstantExpression { Value: int count })
+        {
+            _model.HasComplexOperators = true;
+            return;
+        }
+
+        count = Math.Max(count, 0);
+        long skip = (long)_model.Skip.GetValueOrDefault() + count;
+        if (skip > int.MaxValue)
+        {
+            _model.HasComplexOperators = true;
+            return;
+        }
+
+        _model.Skip = (int)skip;
+        if (_model.Take.HasValue)
+            _model.Take = Math.Max(_model.Take.Value - count, 0);
     }
 
     /// <summary>
