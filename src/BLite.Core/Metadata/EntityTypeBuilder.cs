@@ -64,18 +64,46 @@ public class EntityTypeBuilder<T> : IGdprModeAccessor where T : class
         return this;
     }
 
+    /// <summary>
+    /// Declares a B-Tree index on <paramref name="keySelector"/>. The default name is
+    /// <c>idx_{property}</c> (properties joined with <c>_</c> for a compound key).
+    /// </summary>
+    /// <remarks>
+    /// The declared indexes are applied each time the context opens, against what the collection
+    /// already stores:
+    /// <list type="bullet">
+    /// <item>A missing index is built from the existing documents, then persisted; if it cannot be
+    /// built, the open throws and nothing is saved.</item>
+    /// <item>An existing index of the same name whose definition differs (key selector, unique
+    /// flag, type, vector dimensions or metric) is dropped and rebuilt from the documents under
+    /// the new definition, with a trace warning (#191). A changed key selector under a generated
+    /// name is a new index instead, since the name changes with it.</item>
+    /// <item>An index of the collection that the model does not declare, including one left behind
+    /// by a renamed or removed declaration, is kept and maintained, and reported with a trace
+    /// warning on each open. Drop it with <c>DropIndexAsync</c> when it is no longer needed.</item>
+    /// </list>
+    /// </remarks>
     public EntityTypeBuilder<T> HasIndex<TKey>(Expression<Func<T, TKey>> keySelector, string? name = null, bool unique = false)
     {
         Indexes.Add(new IndexBuilder<T>(keySelector, name, unique));
         return this;
     }
 
+    /// <summary>
+    /// Declares a vector (HNSW) index on <paramref name="keySelector"/>. Changing
+    /// <paramref name="dimensions"/> or <paramref name="metric"/> of an existing index rebuilds it
+    /// on the next open; see <see cref="HasIndex{TKey}"/> for how declared indexes are applied.
+    /// </summary>
     public EntityTypeBuilder<T> HasVectorIndex<TKey>(Expression<Func<T, TKey>> keySelector, int dimensions, VectorMetric metric = VectorMetric.Cosine, string? name = null)
     {
         Indexes.Add(new IndexBuilder<T>(keySelector, name, false, IndexType.Vector, dimensions, metric));
         return this;
     }
 
+    /// <summary>
+    /// Declares a spatial (R-Tree) index on <paramref name="keySelector"/>; see
+    /// <see cref="HasIndex{TKey}"/> for how declared indexes are applied when the context opens.
+    /// </summary>
     public EntityTypeBuilder<T> HasSpatialIndex<TKey>(Expression<Func<T, TKey>> keySelector, string? name = null)
     {
         Indexes.Add(new IndexBuilder<T>(keySelector, name, false, IndexType.Spatial));
@@ -91,6 +119,7 @@ public class EntityTypeBuilder<T> : IGdprModeAccessor where T : class
     /// noticeably more than without the index; insert and update in batches
     /// (<c>InsertBulkAsync</c> or one explicit transaction) where possible.
     /// </para>
+    /// See <see cref="HasIndex{TKey}"/> for how declared indexes are applied when the context opens.
     /// </summary>
     public EntityTypeBuilder<T> HasFullTextIndex(Expression<Func<T, string?>> keySelector, string? name = null)
     {

@@ -1155,16 +1155,62 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         return _indexManager.GetIndexInfo();
     }
 
+    /// <summary>
+    /// Applies the indexes the model declares for this collection when the context opens.
+    /// <list type="bullet">
+    /// <item>An index that does not exist yet is built from the documents and then persisted
+    /// (<see cref="ApplyIndexBuilder"/>, #171).</item>
+    /// <item>An index that exists under the declared name with a different definition (property
+    /// paths, unique flag, type, vector dimensions or metric) is dropped and rebuilt from the
+    /// documents under the new definition, and a warning is traced (#191). If the rebuild fails,
+    /// nothing is saved, the old index stays in place and the open throws, as for a new index.</item>
+    /// <item>An index of the collection that the model does not declare is never dropped: the
+    /// model cannot tell an index removed from the model from one created with
+    /// <see cref="CreateIndexAsync{TKey}"/>, and other code may rely on it. It is kept, maintained
+    /// on every write and reported with a trace warning on each open; drop it with
+    /// <see cref="DropIndexAsync"/> when it is no longer needed. A key selector that changes under a
+    /// generated name ends up here: the new index is added and the old one reported.</item>
+    /// </list>
+    /// </summary>
+    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
+    internal void ApplyModelIndexes(IReadOnlyList<Metadata.IndexBuilder<T>> builders)
+    {
+        var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var builder in builders)
+        {
+            declared.Add(CollectionIndexManager<TId, T>.ResolveIndexName(builder.KeySelector, builder.Name, builder.Type));
+            ApplyIndexBuilder(builder);
+        }
+
+        foreach (var index in _indexManager.GetAllIndexes())
+        {
+            if (declared.Contains(index.Name)) continue;
+            System.Diagnostics.Trace.TraceWarning(
+                $"BLite: collection '{_collectionName}' has index '{index.Name}' ({CollectionIndexManager<TId, T>.Describe(index.Definition)}) " +
+                $"that the model of {typeof(T).Name} does not declare. It is kept and maintained on every write; " +
+                "drop it with DropIndexAsync if it is no longer needed.");
+        }
+    }
+
+    /// <summary>
+    /// Creates the index <paramref name="builder"/> declares, filled from the documents already in
+    /// the collection, or rebuilds it the same way when it exists with a different definition
+    /// (see <see cref="ApplyModelIndexes"/>).
+    /// </summary>
     [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     internal void ApplyIndexBuilder(Metadata.IndexBuilder<T> builder, CancellationToken ct = default)
     {
         var name = CollectionIndexManager<TId, T>.ResolveIndexName(builder.KeySelector, builder.Name, builder.Type);
-        if (_indexManager.GetIndex(name) != null)
+        var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(builder.KeySelector);
+        var existing = _indexManager.GetIndex(name);
+        if (existing != null && CollectionIndexManager<TId, T>.DefinitionMatches(
+                existing.Definition, propertyPaths, builder.IsUnique, builder.Type, builder.Dimensions, builder.Metric))
             return;
 
         // The collection may already hold documents, e.g. when a new app version adds the index.
         // Fill the index before registering it, so neither a crash nor a document that cannot be
-        // indexed leaves an empty index persisted that later opens would trust.
+        // indexed leaves an empty index persisted that later opens would trust. A changed
+        // definition (#191) takes the same path and replaces the old index only once filled.
         var definition = CollectionIndexManager<TId, T>.BuildDefinition(
             builder.KeySelector, name, builder.IsUnique, builder.Type, builder.Dimensions, builder.Metric);
         var index = _indexManager.CreateUnregistered(definition);
@@ -1175,12 +1221,27 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
         }
         catch (Exception ex)
         {
+            var what = existing == null
+                ? $"Cannot build index '{name}' of collection '{_collectionName}'"
+                : $"Cannot rebuild index '{name}' of collection '{_collectionName}' under its changed definition " +
+                  $"({CollectionIndexManager<TId, T>.Describe(existing.Definition)} -> {CollectionIndexManager<TId, T>.Describe(definition)})";
+            var saved = existing == null ? "Nothing was saved" : "Nothing was saved and the index keeps its previous definition";
             throw new InvalidOperationException(
-                $"Cannot build index '{name}' of collection '{_collectionName}' from the documents already in it: {ex.Message.TrimEnd('.')}. " +
-                "Nothing was saved, but every open fails the same way until those documents can be indexed or the index " +
+                $"{what} from the documents already in it: {ex.Message.TrimEnd('.')}. " +
+                $"{saved}, but every open fails the same way until those documents can be indexed or the index " +
                 "is removed from the model (OnModelCreating).", ex);
         }
-        PublishFilledIndex(index, _indexManager.Register);
+
+        if (existing == null)
+        {
+            PublishFilledIndex(index, _indexManager.Register);
+            return;
+        }
+
+        System.Diagnostics.Trace.TraceWarning(
+            $"BLite: index '{name}' of collection '{_collectionName}' was rebuilt because the model changed its definition: " +
+            $"{CollectionIndexManager<TId, T>.Describe(existing.Definition)} -> {CollectionIndexManager<TId, T>.Describe(definition)}.");
+        PublishFilledIndex(index, copy => _indexManager.ReplaceIndex(name, copy));
     }
 
     /// <summary>

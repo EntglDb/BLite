@@ -315,8 +315,7 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             if (builder.PropertyConverters.Count > 0)
                 collection.SetConverterRegistry(new ValueConverterRegistry(builder.PropertyConverters));
 
-            foreach (var indexBuilder in builder.Indexes)
-                collection.ApplyIndexBuilder(indexBuilder);
+            collection.ApplyModelIndexes(builder.Indexes);
 
             if (builder.TimeSeriesTtlField != null && builder.TimeSeriesRetention.HasValue)
                 collection.SetTimeSeries(builder.TimeSeriesTtlField, builder.TimeSeriesRetention.Value);
@@ -460,10 +459,8 @@ public abstract partial class DocumentDbContext : IDocumentDbContext
             if (builder.PropertyConverters.Count > 0)
                 collection.SetConverterRegistry(new ValueConverterRegistry(builder.PropertyConverters));
 
-            foreach (var indexBuilder in builder.Indexes)
-            {
-                collection.ApplyIndexBuilder(indexBuilder);
-            }
+            // Creates missing indexes, rebuilds changed ones and reports undeclared ones (#191).
+            collection.ApplyModelIndexes(builder.Indexes);
 
             if (builder.TimeSeriesTtlField != null && builder.TimeSeriesRetention.HasValue)
                 collection.SetTimeSeries(builder.TimeSeriesTtlField, builder.TimeSeriesRetention.Value);

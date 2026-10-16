@@ -167,6 +167,33 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
     }
 
     /// <summary>
+    /// Whether an existing index has the definition the model declares, in everything the
+    /// metadata persists: property paths, unique flag, type and, for vector indexes, dimensions
+    /// and metric (#191). Dimensions and metric are stored for vector indexes only, so they are
+    /// compared only there.
+    /// </summary>
+    internal static bool DefinitionMatches(
+        CollectionIndexDefinition<T> existing, string[] propertyPaths, bool unique, IndexType type, int dimensions, VectorMetric metric)
+    {
+        return existing.Type == type
+            && existing.IsUnique == unique
+            && existing.PropertyPaths.SequenceEqual(propertyPaths, StringComparer.Ordinal)
+            && (type != IndexType.Vector || (existing.Dimensions == dimensions && existing.Metric == metric));
+    }
+
+    /// <summary>A definition in one line, for warnings: <c>B-Tree on [Email], unique</c>.</summary>
+    internal static string Describe(string[] propertyPaths, bool unique, IndexType type, int dimensions, VectorMetric metric)
+    {
+        var text = $"{type} on [{string.Join(", ", propertyPaths)}]";
+        if (unique) text += ", unique";
+        if (type == IndexType.Vector) text += $", {dimensions} dimensions, {metric}";
+        return text;
+    }
+
+    internal static string Describe(CollectionIndexDefinition<T> definition)
+        => Describe(definition.PropertyPaths, definition.IsUnique, definition.Type, definition.Dimensions, definition.Metric);
+
+    /// <summary>
     /// Creates an index for <paramref name="definition"/> without registering or persisting it,
     /// so it can be filled before queries or the collection metadata see it. The index owns its
     /// root page: hand it to <see cref="Register"/> or <see cref="ReplaceIndex"/>, or release its
