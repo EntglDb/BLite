@@ -77,9 +77,15 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
         _hasUniqueBTreeIndex = any;
     }
 
-    private void UpdateMetadata()
+    /// <param name="carryOver">
+    /// Stored entries to write back unchanged because this manager cannot maintain them (see
+    /// <see cref="AdoptStoredIndexesLocked"/>); null when there are none.
+    /// </param>
+    private void UpdateMetadata(List<IndexMetadata>? carryOver = null)
     {
         _metadata.Indexes.Clear();
+        if (carryOver != null)
+            _metadata.Indexes.AddRange(carryOver);
         foreach (var index in _indexes.Values)
         {
             var info = index.GetInfo();
@@ -123,9 +129,9 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             _cachedIndexInfo = null; // invalidate cache
             RefreshHasUniqueBTreeIndex();
             
-            // Persist metadata
-            UpdateMetadata();
-            _storage.SaveCollectionMetadata(_metadata);
+            // Persist metadata (through SaveMetadata, so the sequence value and the indexes other
+            // processes added are kept, see #192).
+            SaveMetadata();
 
             return secondaryIndex;
         }
@@ -382,7 +388,9 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
                 _cachedIndexInfo = null; // invalidate cache
                 RefreshHasUniqueBTreeIndex();
                 
-                SaveMetadata(); // Save metadata after dropping index
+                // Save metadata after dropping index. The dropped name is the one stored entry
+                // that must not be adopted back from the file (see SaveMetadata).
+                SaveMetadata(dropping: name);
                 return true;
             }
 
@@ -727,31 +735,103 @@ public sealed class CollectionIndexManager<TId, T> : IDisposable where T : class
             if (_metadata.PrimaryRootPageId != pageId)
             {
                 _metadata.PrimaryRootPageId = pageId;
-                RefreshSequenceValue();
-                _storage.SaveCollectionMetadata(_metadata);
+                SaveMetadata();
             }
         }
     }
 
     public CollectionMetadata GetMetadata() => _metadata;
 
-    private void SaveMetadata()
+    /// <summary>
+    /// Persists the in-memory metadata. The stored record is read first, because this snapshot is
+    /// not the only writer of it: the auto-increment counter that
+    /// <see cref="StorageEngine.GetNextSequence"/> maintains is taken over from the file, and so
+    /// are the indexes another process (or another manager on the same engine) added meanwhile,
+    /// which this process adopts and maintains from now on instead of dropping them from the
+    /// record (#192). An index this process is dropping right now (<paramref name="dropping"/>)
+    /// is the one stored entry that is not adopted back.
+    /// <para>
+    /// Limit: two entries under the same name but with different roots cannot be reconciled
+    /// here; the in-memory one wins, as before. Creating the same index in two processes at the
+    /// same time is prevented by the open lock in <c>DocumentCollection.ApplyIndexBuilder</c>.
+    /// </para>
+    /// </summary>
+    private void SaveMetadata(string? dropping = null)
     {
-        UpdateMetadata();
-        RefreshSequenceValue();
+        List<IndexMetadata>? carryOver = null;
+        var stored = _storage.GetCollectionMetadata(_collectionName);
+        if (stored != null)
+        {
+            carryOver = AdoptStoredIndexesLocked(stored, dropping);
+            _metadata.SequenceValue = stored.SequenceValue;
+        }
+        UpdateMetadata(carryOver);
         _storage.SaveCollectionMetadata(_metadata);
     }
 
     /// <summary>
-    /// Reads the current SequenceValue from the page file so that this in-memory
-    /// <c>_metadata</c> snapshot does not overwrite the auto-increment counter
-    /// that <see cref="StorageEngine.GetNextSequence"/> maintains independently.
+    /// Picks up the indexes the stored metadata has and this manager does not know yet (added by
+    /// another process since it loaded them, #192), so that they are maintained and not dropped
+    /// by the next save. Does not persist anything.
     /// </summary>
-    private void RefreshSequenceValue()
+    internal void AdoptStoredIndexes()
     {
-        var current = _storage.GetCollectionMetadata(_collectionName);
-        if (current != null)
-            _metadata.SequenceValue = current.SequenceValue;
+        var stored = _storage.GetCollectionMetadata(_collectionName);
+        if (stored == null) return;
+        lock (_lock)
+        {
+            if (_disposed) return;
+            UpdateMetadata(AdoptStoredIndexesLocked(stored, dropping: null));
+        }
+    }
+
+    /// <summary>
+    /// Adds the indexes of <paramref name="stored"/> this manager does not have to
+    /// <see cref="_indexes"/>, except <paramref name="dropping"/>. Returns the entries it cannot
+    /// adopt because their property paths do not exist on <typeparamref name="T"/> (an index another
+    /// model or a dynamic collection added); the caller writes those back unchanged rather than
+    /// dropping them, and the next save reads them afresh. Must be called under <see cref="_lock"/>.
+    /// </summary>
+    // Suppressed rather than annotated: the manager exists only through its constructor, which
+    // requires dynamic and unreferenced code already, so callers have accepted both.
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The constructor of this type requires dynamic code.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "The constructor of this type requires unreferenced code.")]
+    private List<IndexMetadata>? AdoptStoredIndexesLocked(CollectionMetadata stored, string? dropping)
+    {
+        List<IndexMetadata>? carryOver = null;
+        var adopted = false;
+        foreach (var idxMeta in stored.Indexes)
+        {
+            if (_indexes.ContainsKey(idxMeta.Name)) continue;
+            if (dropping != null && string.Equals(idxMeta.Name, dropping, StringComparison.OrdinalIgnoreCase)) continue;
+
+            CollectionIndexDefinition<T> definition;
+            try
+            {
+                definition = RebuildDefinition(idxMeta.Name, idxMeta.PropertyPaths, idxMeta.IsUnique, idxMeta.Type, idxMeta.Dimensions, idxMeta.Metric);
+            }
+            catch (ArgumentException)
+            {
+                (carryOver ??= new List<IndexMetadata>()).Add(idxMeta);
+                System.Diagnostics.Trace.TraceWarning(
+                    $"BLite: collection '{_collectionName}' has index '{idxMeta.Name}' on [{string.Join(", ", idxMeta.PropertyPaths)}], " +
+                    $"members {typeof(T).Name} does not have. It is kept in the metadata but not maintained by this process.");
+                continue;
+            }
+
+            _indexes[idxMeta.Name] = new CollectionSecondaryIndex<TId, T>(definition, _storage, _mapper, idxMeta.RootPageId)
+            {
+                KeyFormat = idxMeta.KeyFormat
+            };
+            adopted = true;
+        }
+
+        if (adopted)
+        {
+            _cachedIndexInfo = null;
+            RefreshHasUniqueBTreeIndex();
+        }
+        return carryOver;
     }
 
     public void Dispose()

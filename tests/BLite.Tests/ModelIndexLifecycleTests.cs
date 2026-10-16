@@ -195,6 +195,90 @@ public sealed class ModelIndexLifecycleTests : IDisposable
         Assert.Equal("n100", Assert.Single(await v1.Docs.QueryIndexAsync("idx_email", "late@x", "late@x").ToListAsync()).Name);
     }
 
+    // ── #192: two processes ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TwoProcessesOpeningAModelWithNewIndexes_ShareOneIndex()
+    {
+        for (int round = 0; round < 3; round++)
+        {
+            foreach (var f in new[] { _dbPath, Path.ChangeExtension(_dbPath, ".wal"), Path.ChangeExtension(_dbPath, ".wal-shm") })
+                if (File.Exists(f)) File.Delete(f);
+            using (var v0 = new LcNoIndexContext(_dbPath, MultiProcess))
+                for (int i = 0; i < 200; i++)
+                    await v0.Docs.InsertAsync(Doc(i));
+
+            // Both open the model that declares the three indexes at the same moment.
+            var contexts = new LcBaseContext[2];
+            var failures = new List<Exception>();
+            using (var start = new Barrier(2))
+            {
+                var threads = Enumerable.Range(0, 2).Select(i => new Thread(() =>
+                {
+                    start.SignalAndWait();
+                    try { contexts[i] = new LcBaseContext(_dbPath, MultiProcess); }
+                    catch (Exception ex) { lock (failures) failures.Add(ex); }
+                })).ToArray();
+                foreach (var t in threads) t.Start();
+                foreach (var t in threads) Assert.True(t.Join(TimeSpan.FromMinutes(1)), $"round {round}: an opener hung");
+            }
+            Assert.True(failures.Count == 0, $"round {round}: {string.Join("\n\n", failures)}");
+
+            var (a, b) = (contexts[0], contexts[1]);
+            try
+            {
+                // Exactly one index per name, and both processes maintain that one.
+                var stored = a.Storage.GetCollectionMetadata(Collection)!.Indexes;
+                Assert.Equal(3, stored.Count);
+                foreach (var idx in stored)
+                {
+                    Assert.Equal(idx.RootPageId, a.Docs.IndexManager.GetIndex(idx.Name)!.RootPageId);
+                    Assert.Equal(idx.RootPageId, b.Docs.IndexManager.GetIndex(idx.Name)!.RootPageId);
+                }
+
+                await a.Docs.InsertAsync(Doc(1000, $"a{round}@x"));
+                await b.Docs.InsertAsync(Doc(1001, $"b{round}@x"));
+            }
+            finally
+            {
+                a.Dispose();
+                b.Dispose();
+            }
+
+            // Both processes' later writes reach the persisted index.
+            using var c = new LcBaseContext(_dbPath, MultiProcess);
+            Assert.Equal("n1000", Assert.Single(await c.Docs.QueryIndexAsync("idx_email", $"a{round}@x", $"a{round}@x").ToListAsync()).Name);
+            Assert.Equal("n1001", Assert.Single(await c.Docs.QueryIndexAsync("idx_email", $"b{round}@x", $"b{round}@x").ToListAsync()).Name);
+            Assert.Equal(21, (await c.Docs.QueryIndexAsync("idx_Age", 0, 0).ToListAsync()).Count);
+        }
+    }
+
+    [Fact]
+    public async Task SavingMetadataFromOneProcess_KeepsTheIndexAnotherProcessAdded()
+    {
+        await SeedAsync(MultiProcess);
+
+        using (var a = new LcNoIndexContext(_dbPath, MultiProcess))
+        using (var b = new LcNoIndexContext(_dbPath, MultiProcess))
+        {
+            // B adds an index that A has never seen; A then saves its own metadata.
+            await b.Docs.CreateIndexAsync(x => x.Name, "idx_name_b");
+            await a.Docs.CreateIndexAsync(x => x.Score, "idx_score_a");
+
+            var stored = a.Storage.GetCollectionMetadata(Collection)!.Indexes.Select(i => i.Name).ToList();
+            Assert.Contains("idx_name_b", stored);
+            Assert.Contains("idx_score_a", stored);
+
+            // A adopted B's index, so A's writes reach it too.
+            Assert.Contains(a.Docs.GetIndexes(), i => i.Name == "idx_name_b");
+            await a.Docs.InsertAsync(Doc(500));
+        }
+
+        using var c = new LcNoIndexContext(_dbPath, MultiProcess);
+        Assert.Equal(5, c.Docs.GetIndexes().Count()); // the three of the seeding model plus the two added at runtime
+        Assert.Equal("e500@x", Assert.Single(await c.Docs.QueryIndexAsync("idx_name_b", "n500", "n500").ToListAsync()).Email);
+    }
+
     private sealed class WarningCollector(string collection) : TraceListener
     {
         private readonly List<string> _messages = new();

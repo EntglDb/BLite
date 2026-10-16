@@ -1195,11 +1195,19 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Creates the index <paramref name="builder"/> declares, filled from the documents already in
     /// the collection, or rebuilds it the same way when it exists with a different definition
-    /// (see <see cref="ApplyModelIndexes"/>).
+    /// (see <see cref="ApplyModelIndexes"/>). In multi-process mode this runs under the open lock,
+    /// so two processes declaring the same new index build it once: the second re-reads the stored
+    /// metadata under the lock and adopts the first one's index (#192).
     /// </summary>
     [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
     internal void ApplyIndexBuilder(Metadata.IndexBuilder<T> builder, CancellationToken ct = default)
     {
+        // Nested inside the open lock the context holds while it creates the collection; taken
+        // here as well for the index-creation APIs that call this at runtime (#192).
+        using var openLock = _storage.EnterOpenLock();
+        if (_storage.SharedMemory != null)
+            _indexManager.AdoptStoredIndexes();
+
         var name = CollectionIndexManager<TId, T>.ResolveIndexName(builder.KeySelector, builder.Name, builder.Type);
         var propertyPaths = ExpressionAnalyzer.ExtractPropertyPaths(builder.KeySelector);
         var existing = _indexManager.GetIndex(name);
