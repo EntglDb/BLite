@@ -27,8 +27,10 @@ public sealed partial class StorageEngine
             return;
         }
         
-        // 2. Check WAL index (committed but not checkpointed)
-        if (_walIndex.TryGetValue(pageId, out var committedData))
+        // 2. Check WAL index (committed but not checkpointed). In multi-process mode the image
+        //    is served only if another process has not rewritten the page since (#241); the
+        //    check comes first because catching up may replace the image.
+        if (LocalImageIsCurrent(pageId) && _walIndex.TryGetValue(pageId, out var committedData))
         {
             var length = Math.Min(committedData.Length, destination.Length);
             committedData.AsSpan(0, length).CopyTo(destination);
@@ -75,7 +77,8 @@ public sealed partial class StorageEngine
             return;
         }
 
-        if (_walIndex.TryGetValue(pageId, out var committedData))
+        // Multi-process: the image is served only if it is still current (#241), see ReadPage.
+        if (LocalImageIsCurrent(pageId) && _walIndex.TryGetValue(pageId, out var committedData))
         {
             var length = Math.Min(committedData.Length, destination.Length);
             committedData.AsSpan(0, length).CopyTo(destination);
@@ -140,7 +143,8 @@ public sealed partial class StorageEngine
     /// so it can cross <c>await</c> boundaries.
     /// <list type="number">
     ///   <item>WAL cache (uncommitted, per-transaction) — resolved synchronously, no I/O.</item>
-    ///   <item>WAL index (committed, not yet checkpointed) — resolved synchronously, no I/O.</item>
+    ///   <item>WAL index (committed, not yet checkpointed) — resolved synchronously; in multi-process
+    ///         mode it may first replay what other processes committed, a synchronous WAL read.</item>
     ///   <item>PageFile — true async OS read via <see cref="RandomAccess.ReadAsync"/>.</item>
     /// </list>
     /// </summary>
@@ -165,8 +169,9 @@ public sealed partial class StorageEngine
 #endif
         }
 
-        // 2. WAL index — committed but not yet checkpointed (synchronous, no I/O)
-        if (_walIndex.TryGetValue(pageId, out var committedData))
+        // 2. WAL index — committed but not yet checkpointed (synchronous, no I/O). Multi-process:
+        //    the image is served only if it is still current (#241), see ReadPage.
+        if (LocalImageIsCurrent(pageId) && _walIndex.TryGetValue(pageId, out var committedData))
         {
             var length = Math.Min(committedData.Length, destination.Length);
             committedData.AsMemory(0, length).CopyTo(destination);

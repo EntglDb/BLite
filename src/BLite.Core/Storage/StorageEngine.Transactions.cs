@@ -137,7 +137,79 @@ public sealed partial class StorageEngine
 
         Volatile.Write(ref _lastKnownWalEndOffset, shmEnd);
         _failedCatchUps = 0;
+        Volatile.Write(ref _catchUpFailedAtEnd, -1);
         return true;
+    }
+
+    /// <summary>
+    /// Multi-process: decides whether the image of <paramref name="pageId"/> this engine holds in
+    /// <c>_walIndex</c> may be served, bringing the engine up to date with the shared WAL first
+    /// when another process has appended to it since (#241). Before this, only
+    /// <see cref="BeginTransaction"/>, a commit and a checkpoint caught up, so a read made with no
+    /// transaction (<c>FindAllAsync</c>, <c>CountAsync</c>, an index query with no transaction)
+    /// kept serving a page this engine had committed or cached after another process rewrote it.
+    /// <para>
+    /// Costs two reads of the SHM header when nothing new was committed. Otherwise the shared WAL
+    /// is replayed if <c>_commitLock</c> is free; if a commit or a checkpoint holds it, or the
+    /// replay failed, the decision falls back to this page alone, so that a read never waits for
+    /// a commit: the offset of the image this engine holds against the SHM page index, or, for a
+    /// page the index no longer lists, against the offset up to which the WAL has been
+    /// checkpointed. An image at or below it has been written to the page file by the process
+    /// that checkpointed it, in that version or a newer one; one above it is the newest there is,
+    /// and is missing from the index only because this engine is publishing it right now or the
+    /// index is full. After a failed replay the retry is left to <see cref="BeginTransaction"/>
+    /// until the WAL changes, so that reads of a WAL with an unreadable record do not replay it
+    /// over and over.
+    /// </para>
+    /// </summary>
+    private bool LocalImageIsCurrent(uint pageId)
+    {
+        if (_shm == null || _wal is not Transactions.WriteAheadLog wal)
+            return true;
+
+        long shmEnd = _shm.ReadWalEndOffset();
+        if (shmEnd == Volatile.Read(ref _lastKnownWalEndOffset)
+            && _shm.ReadWalGeneration() == Volatile.Read(ref _knownWalGeneration))
+            return true;
+
+        if (shmEnd != Volatile.Read(ref _catchUpFailedAtEnd) && _commitLock.Wait(0))
+        {
+            try
+            {
+                if (TryCatchUpWithSharedWal(wal))
+                    return true;
+            }
+            finally { _commitLock.Release(); }
+        }
+
+        // Another process truncated the WAL: everything this engine holds from it is on disk, and
+        // the new WAL is read through the SHM page index (ReadFromSharedWal). Checked again after
+        // the lookups, which otherwise could compare offsets of two different WALs.
+        long generation = Volatile.Read(ref _knownWalGeneration);
+        if (_shm.ReadWalGeneration() != generation)
+            return false;
+
+        long localOffset = _walOffsets != null && _walOffsets.TryGetValue(pageId, out long offset) ? offset : 0;
+        long sharedOffset = _shm.LookupPageOffset(pageId);
+        bool current = sharedOffset > 0
+            ? localOffset >= sharedOffset
+            : localOffset > _shm.ReadCheckpointedOffset();
+        return current && _shm.ReadWalGeneration() == generation;
+    }
+
+    /// <summary>
+    /// Test hook: holds <c>_commitLock</c> until the result is disposed, as a commit in flight
+    /// would, so that a read takes the per-page path of <see cref="LocalImageIsCurrent"/>.
+    /// </summary>
+    internal IDisposable HoldCommitLockForTests()
+    {
+        _commitLock.Wait();
+        return new CommitLockHold(_commitLock);
+    }
+
+    private sealed class CommitLockHold(SemaphoreSlim commitLock) : IDisposable
+    {
+        public void Dispose() => commitLock.Release();
     }
 
     /// <summary>
@@ -157,6 +229,7 @@ public sealed partial class StorageEngine
     private void ReportFailedCatchUp(Transactions.WriteAheadLog wal, long fromOffset, long toOffset, string reason)
     {
         int failures = ++_failedCatchUps;
+        Volatile.Write(ref _catchUpFailedAtEnd, toOffset);
         if ((failures & (failures - 1)) != 0)
             return;
         Trace.TraceWarning(
