@@ -904,15 +904,27 @@ internal static class BsonExpressionEvaluator
             {
                 return false;
             }
-            return false;
+            // Field absent: read as null, as CreateNullCheckPredicate does.
+            return NullMatches(targetValue, op);
         };
     }
+
+    /// <summary>
+    /// Result of comparing a null (or absent) field with <paramref name="target"/>, following C#'s
+    /// lifted operators: <c>(int?)null != 5</c> is true, <c>(int?)null == 5</c> and
+    /// <c>(int?)null &lt; 5</c> are false.
+    /// </summary>
+    private static bool NullMatches(object? target, ExpressionType op)
+        => op == ExpressionType.NotEqual && target != null;
 
     private static bool Compare(ref BsonSpanReader reader, BsonType type, object? target, ExpressionType op)
     {
         // This is complex because we need to handle types.
         // For MVP, handle Int32, String, ObjectId
         
+        if (type == BsonType.Null)
+            return NullMatches(target, op);
+
         if (type == BsonType.Int32)
         {
             var val = reader.ReadInt32();
