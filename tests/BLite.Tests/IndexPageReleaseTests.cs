@@ -197,16 +197,13 @@ public class IndexPageReleaseTests : IDisposable
         using var db = new TestDbContext(_dbPath);
         await db.PeopleV2.InsertBulkAsync(Enumerable.Range(0, 1000).Select(i => new PersonV2 { Name = $"p{i}", Age = i % 90 }));
 
-        async Task CyclesAsync(int n)
+        async Task CycleAsync()
         {
-            for (int i = 0; i < n; i++)
-            {
-                await db.PeopleV2.CreateIndexAsync(p => p.Name, "idx_tmp");
-                await db.PeopleV2.DropIndexAsync("idx_tmp");
-            }
+            await db.PeopleV2.CreateIndexAsync(p => p.Name, "idx_tmp");
+            await db.PeopleV2.DropIndexAsync("idx_tmp");
         }
 
-        await AssertCyclesAreBoundedAsync(db.Storage, () => db.CheckpointAsync(), CyclesAsync);
+        await AssertCyclesAreBoundedAsync(db.Storage, () => db.CheckpointAsync(), CycleAsync);
     }
 
     [Fact]
@@ -216,40 +213,48 @@ public class IndexPageReleaseTests : IDisposable
         var col = engine.GetOrCreateCollection("docs");
         await InsertIndexableDocsAsync(col, 1000);
 
+        async Task CycleAsync()
+        {
+            await col.CreateIndexAsync("value", "idx_tmp");
+            Assert.True(col.DropIndex("idx_tmp"));
+        }
+
+        await AssertCyclesAreBoundedAsync(engine.Storage, () => engine.CheckpointAsync(), CycleAsync);
+    }
+
+    /// <summary>
+    /// Runs a priming block of cycles that frees more pages than the pending-free threshold (4 MB:
+    /// 256 pages of 16 KB; a tree of 1000 keys is a handful of pages), releases them all, then a
+    /// measured block: it must allocate (almost) no new pages, because the dropped trees are
+    /// reused. The checkpoint the queued frees request runs in the background; the loop waits
+    /// for it, and for any other checkpoint, after each cycle instead of racing it, so the
+    /// outcome does not depend on the machine's speed. Without the request the measured block
+    /// appends one tree per cycle (hundreds of pages beyond the primed free list).
+    /// </summary>
+    private static async Task AssertCyclesAreBoundedAsync(StorageEngine storage, Func<Task> checkpoint, Func<Task> cycle)
+    {
+        const int priming = 100, measured = 200;
+
         async Task CyclesAsync(int n)
         {
             for (int i = 0; i < n; i++)
             {
-                await col.CreateIndexAsync("value", "idx_tmp");
-                Assert.True(col.DropIndex("idx_tmp"));
+                await cycle();
+                await storage.PendingFreeCheckpointCompletion;
+                await WaitForRunningCheckpointAsync(storage);
             }
         }
 
-        await AssertCyclesAreBoundedAsync(engine.Storage, () => engine.CheckpointAsync(), CyclesAsync);
-    }
-
-    /// <summary>
-    /// Runs a warm-up block of cycles that frees more pages than the pending-free threshold (4 MB,
-    /// 512 pages; a tree of 1000 keys is about 8 pages), releases them all, then a measured block:
-    /// it must allocate (almost) no new pages, because the dropped trees are reused.
-    /// </summary>
-    private static async Task AssertCyclesAreBoundedAsync(StorageEngine storage, Func<Task> checkpoint, Func<int, Task> cycles)
-    {
-        const int warmUp = 100, measured = 200;
-        await cycles(warmUp);
+        await CyclesAsync(priming);
         await ReleasePendingFreesAsync(storage, checkpoint);
         var highWaterBefore = MainFile(storage).NextPageId;
 
-        await cycles(measured);
+        await CyclesAsync(measured);
         await ReleasePendingFreesAsync(storage, checkpoint);
         var highWaterAfter = MainFile(storage).NextPageId;
 
         var grown = (long)highWaterAfter - highWaterBefore;
-        // Not one tree per cycle (about 1600 pages). The checkpoint the queued frees request runs
-        // in the background, so the cycles that run before it has released them append a few
-        // pages; that overshoot then serves as slack for the next request, so it does not add up
-        // over the cycles. Allow a quarter of one threshold's worth.
-        Assert.True(grown <= 128, $"{measured} create/drop cycles grew the file by {grown} pages ({grown * storage.PageSize / 1024} KB)");
+        Assert.True(grown <= 16, $"{measured} create/drop cycles grew the file by {grown} pages ({grown * storage.PageSize / 1024} KB)");
     }
 
     /// <summary>
@@ -265,6 +270,120 @@ public class IndexPageReleaseTests : IDisposable
             await Task.Delay(20);
         }
         Assert.Fail($"{PendingFreePages(storage).Count} freed pages are still waiting for a WAL truncation");
+    }
+
+    /// <summary>Waits until no checkpoint (requested by a commit or by the queued frees) is running.</summary>
+    private static async Task WaitForRunningCheckpointAsync(StorageEngine storage)
+    {
+        var field = typeof(StorageEngine).GetField("_checkpointRunning", Flags)!;
+        for (int attempt = 0; attempt < 5000 && (int)field.GetValue(storage)! != 0; attempt++)
+            await Task.Delay(1);
+        Assert.Equal(0, (int)field.GetValue(storage)!);
+    }
+
+    /// <summary>
+    /// The pending-free checkpoint runs in the background. Disposing the engine while it runs
+    /// used to close the files under it: the engine's own closing checkpoint returned at once
+    /// because one was running, and the queued pages were leaked for good.
+    /// </summary>
+    [Fact]
+    public async Task Dispose_DuringPendingFreeCheckpoint_DoesNotLeakTheQueuedPages()
+    {
+        uint highWater;
+        int count;
+        using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
+        {
+            count = (int)(4L * 1024 * 1024 / storage.PageSize) + 16; // past the 4 MB threshold
+            var pages = new List<uint>(count);
+            using (var txn = storage.BeginTransaction())
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    var page = storage.AllocatePage();
+                    storage.WritePage(page, txn.TransactionId, new byte[storage.PageSize]);
+                    pages.Add(page);
+                }
+                await txn.CommitAsync();
+            }
+            highWater = MainFile(storage).NextPageId;
+
+            foreach (var page in pages)
+                storage.FreePage(page); // queued (WAL images); crossing the threshold requests a checkpoint
+        }
+
+        using (var storage = new StorageEngine(_dbPath, PageFileConfig.Default))
+        {
+            for (int i = 0; i < count; i++)
+                Assert.True(storage.AllocatePage() < highWater, $"page {i} was appended: the queued frees were leaked");
+        }
+    }
+
+    /// <summary>
+    /// DropIndex frees the tree, so it must not run while a writer holds the collection lock and
+    /// may be mid-split in that index.
+    /// </summary>
+    [Fact]
+    public async Task DynamicCollection_DropIndex_WaitsForTheCollectionLock()
+    {
+        using var engine = new BLiteEngine(_dbPath);
+        var col = engine.GetOrCreateCollection("docs");
+        await InsertIndexableDocsAsync(col, 100);
+        await col.CreateIndexAsync("value", "idx_value");
+
+        var collectionLock = (SemaphoreSlim)typeof(DynamicCollection).GetField("_collectionLock", Flags)!.GetValue(col)!;
+        await collectionLock.WaitAsync();
+        Task<bool> drop;
+        try
+        {
+            drop = Task.Run(() => col.DropIndex("idx_value"));
+            await Task.Delay(100);
+            Assert.False(drop.IsCompleted);
+            Assert.Contains("idx_value", col.ListIndexes());
+        }
+        finally
+        {
+            collectionLock.Release();
+        }
+
+        Assert.True(await drop);
+        Assert.DoesNotContain("idx_value", col.ListIndexes());
+    }
+
+    /// <summary>
+    /// Inserts from several tasks while another task drops one of two indexes: every document is
+    /// stored and found through the remaining index, no page is handed out twice, and no page of
+    /// the remaining index was freed.
+    /// </summary>
+    [Fact]
+    public async Task DynamicCollection_DropIndex_WhileInserting_KeepsCollectionAndOtherIndexConsistent()
+    {
+        using var engine = new BLiteEngine(_dbPath);
+        var col = engine.GetOrCreateCollection("docs");
+        await InsertIndexableDocsAsync(col, 500);
+        await col.CreateIndexAsync("value", "idx_value");
+        await col.CreateIndexAsync("payload", "idx_payload");
+        await engine.CheckpointAsync();
+
+        const int writers = 8, perWriter = 150;
+        var inserts = Enumerable.Range(0, writers).Select(w => Task.Run(async () =>
+        {
+            for (int i = 0; i < perWriter; i++)
+                await col.InsertAsync(col.CreateDocument(["value", "payload"],
+                    b => b.AddInt32("value", 1000 + w * perWriter + i).AddString("payload", $"w{w}-{i:D4}")));
+        })).ToList();
+        var drop = Task.Run(async () => { await Task.Delay(20); return col.DropIndex("idx_value"); });
+        await Task.WhenAll(inserts);
+        Assert.True(await drop);
+
+        const int total = 500 + writers * perWriter;
+        Assert.Equal(total, (await col.FindAllAsync().ToListAsync()).Count);
+        Assert.Equal(total, (await col.QueryIndexAsync("idx_payload", null, null).ToListAsync()).Count);
+        Assert.Equal(["idx_payload"], col.ListIndexes());
+
+        await engine.CheckpointAsync();
+        var livePages = DynamicIndexPages(engine.Storage, "docs", "idx_payload").ToHashSet();
+        var reused = DrainFreeList(engine.Storage);
+        Assert.Empty(livePages.Intersect(reused));
     }
 
     // ======================================================================

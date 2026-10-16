@@ -122,6 +122,7 @@ public sealed partial class StorageEngine
     }
 
     private int _pendingFreeCheckpointQueued;
+    private Task? _pendingFreeCheckpointTask;
 
     /// <summary>
     /// Starts a checkpoint on the thread pool to release the pages queued by <see cref="FreePage"/>,
@@ -134,13 +135,19 @@ public sealed partial class StorageEngine
         if (_disposed || Interlocked.CompareExchange(ref _pendingFreeCheckpointQueued, 1, 0) != 0)
             return;
 
-        _ = Task.Run(async () =>
+        _pendingFreeCheckpointTask = Task.Run(async () =>
         {
             try { await CheckpointAsync().ConfigureAwait(false); }
             catch { /* best-effort: the pages stay queued */ }
             finally { Interlocked.Exchange(ref _pendingFreeCheckpointQueued, 0); }
         });
     }
+
+    /// <summary>
+    /// Completes when the checkpoint last requested by <see cref="RequestPendingFreeCheckpoint"/>
+    /// has finished (at once if none is running). For tests, which would otherwise race it.
+    /// </summary>
+    internal Task PendingFreeCheckpointCompletion => Volatile.Read(ref _pendingFreeCheckpointTask) ?? Task.CompletedTask;
 
     // Pages each open transaction stops using, freed only once it commits (#233). See FreePageOnCommit.
     private readonly ConcurrentDictionary<ulong, HashSet<uint>> _freeOnCommit = new();
@@ -210,48 +217,50 @@ public sealed partial class StorageEngine
     }
 
     /// <summary>
-    /// Returns the pages queued by <see cref="FreePage"/> to their file's free list. Call only
-    /// right after the WAL was truncated, under <c>_commitLock</c>, so no commit can append to it.
-    /// A page that an open transaction has written stays queued: its image reaches the WAL only
-    /// when that transaction commits, so it is released after the truncation that follows. A
-    /// page whose release fails stays queued as well, and is retried at the next truncation.
+    /// Picks the pages queued by <see cref="FreePage"/> that the truncation just made releasable.
+    /// Call only right after the WAL was truncated, under <c>_commitLock</c>, so no commit can
+    /// append to it. A page that an open transaction has written stays queued: its image reaches
+    /// the WAL only when that transaction commits, so it is released after the truncation that
+    /// follows. The returned pages are freed by <see cref="ReleaseTruncatedPages"/> once the
+    /// locks are released: freeing thousands of them, each a header read and two page writes,
+    /// kept <c>_commitLock</c> for longer than a commit may wait (#209).
     /// </summary>
-    private void OnWalTruncated()
+    private List<uint>? OnWalTruncated()
     {
         _checkpointedWalPages.Clear();
 
-        HashSet<uint> pages;
+        List<uint>? released = null;
         lock (_pendingFreeLock)
         {
-            if (_pendingFreePages.Count == 0) return;
-            pages = _pendingFreePages;
-            _pendingFreePages = new HashSet<uint>();
+            foreach (var pageId in _pendingFreePages)
+                if (!IsInOpenTransaction(pageId))
+                    (released ??= new List<uint>()).Add(pageId);
         }
+        return released;
+    }
 
-        var keep = new List<uint>();
+    /// <summary>
+    /// Returns pages picked by <see cref="OnWalTruncated"/> to their file's free list, outside
+    /// <c>_commitLock</c>. That is safe: their free was requested before the truncation, so no
+    /// committed structure refers to them, no transaction can write them, and the truncation
+    /// removed their last WAL image; a commit that runs meanwhile cannot give them a new one.
+    /// Each page stays queued until it is actually freed, so scans keep skipping it, a repeated
+    /// free request is a no-op, and a page dropped from the queue meanwhile (its collection file
+    /// was deleted: <see cref="DiscardPendingFreePages"/>) is left alone. A page whose release
+    /// fails stays queued and is retried at the next truncation.
+    /// </summary>
+    private void ReleaseTruncatedPages(List<uint> pages)
+    {
         foreach (var pageId in pages)
         {
-            if (IsInOpenTransaction(pageId))
-            {
-                keep.Add(pageId);
-                continue;
-            }
-
-            try
-            {
-                GetPageFile(pageId, out var physId).FreePage(physId);
-            }
-            catch
-            {
-                keep.Add(pageId);
-            }
-        }
-
-        if (keep.Count > 0)
-        {
             lock (_pendingFreeLock)
-                foreach (var pageId in keep)
-                    _pendingFreePages.Add(pageId);
+                if (!_pendingFreePages.Contains(pageId)) continue;
+
+            try { GetPageFile(pageId, out var physId).FreePage(physId); }
+            catch { continue; }
+
+            lock (_pendingFreeLock)
+                _pendingFreePages.Remove(pageId);
         }
     }
 

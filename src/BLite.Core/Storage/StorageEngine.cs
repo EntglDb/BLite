@@ -474,7 +474,11 @@ public sealed partial class StorageEngine : IDisposable
         }
 
         // 2b. Pages freed since the last WAL truncation only reach the free list after the next
-        // one (see FreePage); checkpoint now so they are not leaked when the engine closes.
+        // one (see FreePage); checkpoint now so they are not leaked when the engine closes. A
+        // checkpoint the queued frees requested may still be running: the one below would return
+        // at once while it holds _checkpointRunning, and closing the files under it would make
+        // its truncation and frees fail, leaking the pages for good. Wait for it first (#209).
+        try { PendingFreeCheckpointCompletion.Wait(_config.LockTimeout.WriteTimeoutMs); } catch { /* best-effort */ }
         if (HasPendingFreePages)
         {
             try { Task.Run(() => CheckpointAsync()).GetAwaiter().GetResult(); } catch { /* best-effort: the pages stay leaked */ }

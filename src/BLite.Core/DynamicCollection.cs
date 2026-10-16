@@ -2076,27 +2076,40 @@ public sealed class DynamicCollection : IDisposable
     /// Drops a secondary index by name and frees its pages. If the metadata cannot be saved, the
     /// index stays registered and the exception propagates.
     /// </summary>
+    /// <exception cref="TimeoutException">The collection write lock could not be acquired.</exception>
     public bool DropIndex(string name)
     {
-        if (!_secondaryIndexes.TryGetValue(name, out var index))
-            return false;
-
-        // Free the tree only after the drop is persisted: a crash in between leaks the pages,
-        // whereas the reverse order would let the next open free them a second time (#211).
-        var pages = CollectIndexPages(index);
-        _secondaryIndexes.Remove(name);
+        // Writers hold the collection lock while they update the indexes inside their transaction.
+        // Collecting and freeing the tree while an insert is mid-split would free pages its commit
+        // then links into the index (#211).
+        if (!_collectionLock.Wait(WriteLockTimeoutMs))
+            throw new TimeoutException("Timed out acquiring collection write lock (DropIndex).");
         try
         {
-            PersistIndexMetadata();
-        }
-        catch
-        {
-            _secondaryIndexes[name] = index;
-            throw;
-        }
+            if (!_secondaryIndexes.TryGetValue(name, out var index))
+                return false;
 
-        FreePagesBestEffort(pages);
-        return true;
+            // Free the tree only after the drop is persisted: a crash in between leaks the pages,
+            // whereas the reverse order would let the next open free them a second time (#211).
+            var pages = CollectIndexPages(index);
+            _secondaryIndexes.Remove(name);
+            try
+            {
+                PersistIndexMetadata();
+            }
+            catch
+            {
+                _secondaryIndexes[name] = index;
+                throw;
+            }
+
+            FreePagesBestEffort(pages);
+            return true;
+        }
+        finally
+        {
+            _collectionLock.Release();
+        }
     }
 
     /// <summary>Lists all secondary index names.</summary>

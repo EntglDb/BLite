@@ -235,12 +235,14 @@ public sealed partial class StorageEngine
         // The lock is waited for briefly, not just tried: under a steady stream of commits the
         // writer holds it (WAL write plus fsync) for much of the time, and a truncation that gives
         // up at once hardly ever runs, so the pages queued by FreePage pile up and the file grows
-        // (#209). Waiting here delays only this checkpoint's task, never a commit.
+        // (#209). Waiting here delays only this checkpoint's task, never a commit, and the lock is
+        // held only for the truncation itself: the queued pages are freed after it is released.
         if (!_walIndex.IsEmpty) return;
         if (!commitLockHeld && !await _commitLock.WaitAsync(Math.Max(10, _config.LockTimeout.WriteTimeoutMs / 16), ct).ConfigureAwait(false))
             return;
 
         bool shmHeld = false;
+        List<uint>? released = null;
         try
         {
             if (_shm != null)
@@ -270,7 +272,7 @@ public sealed partial class StorageEngine
                 await _wal.TruncateAsync(ct);
                 if (_shm != null)
                     PublishSharedWalTruncation();
-                OnWalTruncated();
+                released = OnWalTruncated();
             }
         }
         finally
@@ -278,6 +280,9 @@ public sealed partial class StorageEngine
             if (shmHeld) { try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ } }
             if (!commitLockHeld) _commitLock.Release();
         }
+
+        if (released != null)
+            ReleaseTruncatedPages(released);
     }
 
     /// <summary>
@@ -380,6 +385,7 @@ public sealed partial class StorageEngine
         if (!await _commitLock.WaitAsync(_config.LockTimeout.WriteTimeoutMs))
             throw new TimeoutException("Timed out acquiring commit lock (Recovery).");
         bool shmHeld = false;
+        List<uint>? released = null;
         try
         {
             // Multi-process: other processes may be using the shared WAL (#200). Under the SHM
@@ -470,13 +476,16 @@ public sealed partial class StorageEngine
             await _wal.TruncateAsync(ct);
             if (_shm != null)
                 PublishSharedWalTruncation();
-            OnWalTruncated();
+            released = OnWalTruncated();
         }
         finally
         {
             if (shmHeld) { try { _shm!.ReleaseWriterLock(); } catch { /* best-effort */ } }
             _commitLock.Release();
         }
+
+        if (released != null)
+            ReleaseTruncatedPages(released);
     }
 
     /// <summary>
