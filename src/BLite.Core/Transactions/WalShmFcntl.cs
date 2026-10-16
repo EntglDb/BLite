@@ -16,7 +16,8 @@ namespace BLite.Core.Transactions;
 /// <item><description><b>Linux:</b> <c>fcntl(F_OFD_SETLK)</c> — open-file-description locks,
 /// owned by the file description rather than the process/thread, auto-released on close.</description></item>
 /// <item><description><b>macOS/iOS:</b> <c>flock(LOCK_EX | LOCK_NB)</c> on a <em>dedicated
-/// lock file</em> (<c>&lt;shm&gt;.lock</c>) opened with a raw <c>open()</c> descriptor for
+/// lock file</em> (<c>&lt;shm&gt;.lock</c> for the writer lock, <c>&lt;shm&gt;.open.lock</c> for
+/// the open lock; both stay on disk, like the SHM file) opened with a raw <c>open()</c> descriptor for
 /// the duration of the lock. The lock lives on its own open file description, so it is
 /// released by closing that descriptor (or by process exit) and excludes other processes and
 /// other instances in the same process. It must not be taken on the <see cref="FileStream"/>

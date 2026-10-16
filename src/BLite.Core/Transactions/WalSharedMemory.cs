@@ -68,6 +68,15 @@ public sealed class WalSharedMemory : IDisposable
     private bool _basePtrAcquired;
 
     private bool _writerLockHeld;
+
+    // Whether this instance holds the open lock (see AcquireOpenLock). Per instance, not per
+    // thread: the lock is thread-agnostic, and StorageEngine shares one hold between its threads,
+    // so the last of them may release it from a different thread than the first. Guarded by
+    // _openLockSync, because Dispose also releases it, from the thread that disposes the engine,
+    // possibly while another thread of the engine still holds it.
+    private readonly object _openLockSync = new();
+    private bool _openLockHeld;
+
     private bool _disposed;
 
     /// <summary>
@@ -425,13 +434,40 @@ public sealed class WalSharedMemory : IDisposable
     /// <exception cref="TimeoutException">Not acquired within <see cref="OpenLockTimeoutMs"/>.</exception>
     internal void AcquireOpenLock()
     {
+        ThrowIfDisposed();
         if (!WalShmFcntl.TryAcquireWriteLock(_backingFile!, OpenLockTimeoutMs, WalShmFcntl.OpenLockSlot))
             throw new TimeoutException(
                 $"Timed out after {OpenLockTimeoutMs} ms waiting for another process to finish opening the database ('{_shmPath}').");
+
+        lock (_openLockSync)
+        {
+            if (!_disposed)
+            {
+                _openLockHeld = true;
+                return;
+            }
+            // Disposed while this call waited: Dispose found nothing to release, so release here.
+            WalShmFcntl.ReleaseWriteLock(_backingFile!, WalShmFcntl.OpenLockSlot);
+        }
+        throw new ObjectDisposedException(nameof(WalSharedMemory));
     }
 
-    /// <summary>Releases the open lock taken by <see cref="AcquireOpenLock"/>.</summary>
-    internal void ReleaseOpenLock() => WalShmFcntl.ReleaseWriteLock(_backingFile!, WalShmFcntl.OpenLockSlot);
+    /// <summary>
+    /// Releases the open lock taken by <see cref="AcquireOpenLock"/>; a no-op when this instance
+    /// does not hold it, like <see cref="ReleaseWriterLock"/>. The in-process semaphore and the
+    /// macOS lock descriptor behind the lock are shared by every instance on the same SHM file,
+    /// so a release by an instance that no longer holds it (<see cref="Dispose"/> released it
+    /// already) would otherwise release another instance's hold (#226).
+    /// </summary>
+    internal void ReleaseOpenLock()
+    {
+        lock (_openLockSync)
+        {
+            if (!_openLockHeld) return;
+            _openLockHeld = false;
+            WalShmFcntl.ReleaseWriteLock(_backingFile!, WalShmFcntl.OpenLockSlot);
+        }
+    }
 
     // ── Cross-process writer lock ───────────────────────────────────────────
 
@@ -762,6 +798,12 @@ public sealed class WalSharedMemory : IDisposable
 
         // Best-effort lock release in case Dispose runs while still held.
         try { ReleaseWriterLock(); } catch { /* swallow */ }
+        // The open lock too, while the SHM file is still open (#226). An engine disposed while one
+        // of its threads holds it (creating a collection, say) would otherwise keep it from the
+        // other engines in this process, and on macOS from other processes, until that thread
+        // releases it, through a handle closed below. That release now finds it released and
+        // does nothing.
+        try { ReleaseOpenLock(); } catch { /* swallow */ }
 
         // Release the cached base pointer reservation before disposing the accessor.
         if (_basePtrAcquired)
