@@ -805,18 +805,43 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
 
     private bool? _isDecimalKeyed;
 
-    private bool IsDecimalKeyed => _isDecimalKeyed ??= ComputeIsDecimalKeyed();
+    private bool IsDecimalKeyed => _isDecimalKeyed ??= SingleKeyType() == typeof(decimal);
 
-    private bool ComputeIsDecimalKeyed()
+    /// <summary>The type of the single indexed property (nullable unwrapped), or null for a compound key.</summary>
+    private Type? SingleKeyType()
     {
-        if (_definition.PropertyPaths.Length != 1) return false;
+        if (_definition.PropertyPaths.Length != 1) return null;
         // Only the boxing conversion to object is looked through: an explicit cast in the selector
         // (e.g. (double)p.Price) changes the key type on purpose and is encoded as that type.
         var body = _definition.KeySelectorExpression.Body;
         while (body is System.Linq.Expressions.UnaryExpression { NodeType: System.Linq.Expressions.ExpressionType.Convert } u
                && u.Type == typeof(object))
             body = u.Operand;
-        return (Nullable.GetUnderlyingType(body.Type) ?? body.Type) == typeof(decimal);
+        return Nullable.GetUnderlyingType(body.Type) ?? body.Type;
+    }
+
+    // ── Double-keyed indexes ──────────────────────────────────────────────────
+    // IndexKey(double) gives -0.0 the key of +0.0 (#249). Earlier releases keyed -0.0 apart, just
+    // below +0.0; such an entry is neither found by a query nor removed when its document is updated
+    // or deleted, so a double- or float-keyed index that still holds one is rebuilt on open
+    // (NeedsKeyFormatMigration). Looking for it costs one seek per index and open.
+
+    // The former key of -0.0: every bit of 0x8000_0000_0000_0000 inverted, after KeyPrefix.
+    private static readonly IndexKey s_legacyNegativeZeroKey =
+        new IndexKey(new byte[] { 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF });
+
+    private bool HoldsLegacyNegativeZeroKey()
+    {
+        if (_btreeIndex == null) return false;
+        var keyType = SingleKeyType();
+        if (keyType != typeof(double) && keyType != typeof(float)) return false;
+
+        foreach (var _ in _btreeIndex.Range(
+                     CreateCompositeKeyBoundary(s_legacyNegativeZeroKey, useMinObjectId: true),
+                     CreateCompositeKeyBoundary(s_legacyNegativeZeroKey, useMinObjectId: false),
+                     IndexDirection.Forward, null))
+            return true;
+        return false;
     }
 
     private static decimal ToDecimalClamped(double d)
@@ -848,10 +873,12 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// True when this B-tree index keys a <c>decimal</c> property and its pages still use the legacy
     /// format, i.e. hold <c>(double)value</c> keys that the exact decimal encoding cannot match; or
     /// when this full-text index was written with another analyzer version or holds keys it did not
-    /// write (e.g. from an older BLite that read it as a plain B-tree).
+    /// write (e.g. from an older BLite that read it as a plain B-tree); or when this double- or
+    /// float-keyed B-tree index holds a key of -0.0 written before -0.0 and +0.0 shared a key.
     /// </summary>
     internal bool NeedsKeyFormatMigration =>
         (_btreeIndex != null && KeyFormat < IndexMetadata.CurrentKeyFormat && IsDecimalKeyed)
+        || HoldsLegacyNegativeZeroKey()
         || (_fullTextIndex != null && (KeyFormat != FullTextIndex.FormatVersion || _fullTextIndex.HasForeignKeys()));
 
     /// <summary>The key format a rebuilt copy of this index is written in.</summary>

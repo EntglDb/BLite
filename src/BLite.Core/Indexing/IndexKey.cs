@@ -97,6 +97,8 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         // Positive: flip sign bit only  → 1xxx…  (positive doubles sort after all negatives)
         // Negative: flip all bits        → sort from least-negative first
         // Result: lexicographic byte order == IEEE 754 numeric order for all finite and ±Inf.
+        // -0.0 == +0.0, so both take the key of +0.0; -0.0 would otherwise encode just below it (#249).
+        if (value == 0) value = 0.0;
         var bits = BitConverter.DoubleToInt64Bits(value);
         ulong u = bits < 0 ? ~(ulong)bits : (ulong)bits | 0x8000_0000_0000_0000UL;
         _data = [KeyPrefix, (byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
