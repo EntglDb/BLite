@@ -41,7 +41,10 @@ A test that compares BLite against an exact reference. Three kinds exist today, 
   pending view. After every step the collection's committed contents (full scan, count, point
   lookups, both secondary indexes) must equal the committed view, and reads through an open
   transaction must equal the pending view. A failing sequence is shrunk and printed as the shortest
-  sequence that still fails. The entity is in `tests/BLite.Shared/StoreModelContexts.cs`.
+  sequence that still fails. Every seed runs twice, each a row of its own: on a plaintext database
+  and on an AES-GCM encrypted one (an engine with an `AesGcmCryptoProvider`, as
+  `DocumentDbContext(path, CryptoOptions)` configures it; the backup opens with the same passphrase).
+  The entity is in `tests/BLite.Shared/StoreModelContexts.cs`.
 - **Model-based with page accounting**, `BTreeModelTests.cs`: a seeded random sequence of inserts
   (batches, long runs of one duplicate key), deletes (single and consecutive runs), commits,
   rollbacks, checkpoints and reopens runs against a `BTreeIndex` over a `StorageEngine` on 4 KB pages
@@ -65,7 +68,10 @@ A test that compares BLite against an exact reference. Three kinds exist today, 
   records), `PowerLoss` (only fsynced WAL bytes survive), and crashes during the recovery of sampled
   crash states. Each mode times each check is a row; a failing row is shrunk to the shortest
   sequence that still fails at a crash in its last step. The record replayed in full must equal the
-  files, so a write path that bypasses the wrappers fails the run instead of going unseen.
+  files, so a write path that bypasses the wrappers fails the run instead of going unseen. Every row
+  also runs encrypted, as in `StoreModelTests`: the recorder then takes each page as it is stored
+  (ciphertext, after the file's crypto header), a torn write is cut at the envelopes of the encrypted
+  WAL, and the replay check holds byte for byte as in plaintext.
 
 Other kinds fit BLite and are not written yet: round trip (a document through the BSON writer and
 reader, a page through encryption and back), differential BLQL against LINQ on a `DynamicCollection`,
@@ -94,7 +100,8 @@ candidates are registered in `tools/aot-smoke/candidates.md`, whose table `run.s
 warning or failed section is printed as `KNOWN ... [known candidate: A<n>]` and does not fail the
 run. Its first run, on upstream `0450b97`, found seven (A1 to A7): typed collections cannot write
 under Native AOT, an encrypted database cannot read a page that a never-committed transaction
-allocated (both builds), and five sets of warnings the document says a consumer does not get, most
+allocated (both builds; the encrypted rows of `StoreModelTests` and `WalCrashTests` now catch it in
+the test suite), and five sets of warnings the document says a consumer does not get, most
 of them hidden from BLite's own build by `#pragma warning disable IL...`.
 
 It does not see IL2CPP (Unity), Mono AOT and MAUI, `browser-wasm` (WASM_SUPPORT.md covers it
@@ -221,7 +228,9 @@ expose an old defect.
   once it is a `StoreOpKind`, one more step the injector of `WalCrashTests.cs` interrupts: every
   page and WAL write it makes becomes a crash point in every mode, with no new fixture.
 - **A new serialization or encryption option** is a new round-trip oracle test with its own seed,
-  after which every later option is one more case in it.
+  after which every later option is one more case in it. **A new page-file configuration** (a crypto
+  provider, a key mode) is one more mode of `StoreModelTests` and `WalCrashTests`, as encryption is:
+  every seed and every crash point then runs over it.
 - **A new public API** is one more call in `tools/aot-smoke/Consumer` with its result in the dump,
   so it runs under JIT and Native AOT and its publish warnings are counted; **a new
   `[RequiresDynamicCode]` or `[RequiresUnreferencedCode]` annotation** is one more call in
