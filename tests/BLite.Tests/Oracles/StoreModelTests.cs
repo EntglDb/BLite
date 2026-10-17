@@ -171,7 +171,10 @@ public class StoreModelTests
     private static async Task<Failure?> Replay(List<Op> ops, bool multiProcess)
     {
         var path = Path.Combine(Path.GetTempPath(), $"store_model_{Guid.NewGuid():N}.db");
-        var backupPath = Path.Combine(Path.GetTempPath(), $"store_model_backup_{Guid.NewGuid():N}.db");
+        // A directory of its own: a backup writes backup.manifest.json next to it, under that fixed
+        // name, and other tests back up into the temp directory at the same time.
+        var backupDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"store_model_backup_{Guid.NewGuid():N}")).FullName;
+        var backupPath = Path.Combine(backupDir, "backup.db");
         var config = multiProcess ? PageFileConfig.Default with { AllowMultiProcessAccess = true } : PageFileConfig.Default;
 
         var committed = new Dictionary<int, StoreDoc>();
@@ -204,7 +207,7 @@ public class StoreModelTests
             tx?.Dispose();
             db.Dispose();
             DeleteDatabase(path);
-            DeleteDatabase(backupPath);
+            try { Directory.Delete(backupDir, recursive: true); } catch { /* best-effort */ }
         }
 
         // The view a write goes to and is read back from: the open transaction's, else the committed one.
