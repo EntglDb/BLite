@@ -27,7 +27,7 @@ Three mechanisms, each in one file, plus two commit trailers.
 
 ### Oracle tests (`tests/BLite.Tests/Oracles/*Tests.cs`)
 
-A test that compares BLite against an exact reference. Two kinds exist today, in three tests.
+A test that compares BLite against an exact reference. Three kinds exist today, in four tests.
 
 - **Differential**, `DifferentialQueryTests.cs`: a catalogue of query shapes runs over the same seeded
   documents on a collection with a B-Tree index on every queried property
@@ -53,11 +53,23 @@ A test that compares BLite against an exact reference. Two kinds exist today, in
   allocated since the index was created. Each key generator (int, long and double extremes, prefix
   strings, control bytes, keys up to the size limit, unique, multi-process) times each check is a
   row of its own, so one defect does not hide another; a failing row is shrunk for that check.
+- **Fault injection**, `WalCrashTests.cs`: the store model's sequences (generator and model shared
+  with `StoreModelTests` in `StoreModel.cs`) run once per seed while every write the engine makes is
+  recorded, through a wrapper of its `IPageStorage` and of the WAL's stream: pages written,
+  allocated and freed, WAL writes as they leave the WAL's buffer, truncations, flushes and fsyncs.
+  The files are rebuilt at each crash point, reopened and checked: the reopen succeeds, the
+  collection (scan, count, lookups, both indexes) is a committed state of the model and not older
+  than the last acknowledged commit, the pages add up as in `BTreeModelTests`, a second reopen
+  changes nothing, and the rest of the sequence then runs against the model. Three crash modes:
+  `ProcessCrash` (the OS keeps what it was handed), `TornWrite` (the last WAL write cut inside its
+  records), `PowerLoss` (only fsynced WAL bytes survive), and crashes during the recovery of sampled
+  crash states. Each mode times each check is a row; a failing row is shrunk to the shortest
+  sequence that still fails at a crash in its last step. The record replayed in full must equal the
+  files, so a write path that bypasses the wrappers fails the run instead of going unseen.
 
 Other kinds fit BLite and are not written yet: round trip (a document through the BSON writer and
 reader, a page through encryption and back), differential BLQL against LINQ on a `DynamicCollection`,
-`DynamicCollection` against the typed collection for the same documents and queries, and fault
-injection at the WAL boundary (a write cut at every offset, then reopen and compare with the model).
+and `DynamicCollection` against the typed collection for the same documents and queries.
 
 ### Seeds (`tests/BLite.Tests/Oracles/Seeds/*.patch`)
 
@@ -113,6 +125,9 @@ per line, the engine that disagreed: `indexed/sync`, `indexed/async`, `plain/syn
 If only the indexed lines appear, an index changes the answer; if the plain lines appear too, the
 evaluator itself is wrong. A model-based failure names the seed, the step that failed and the
 shortest failing sequence, one operation per line; replaying that sequence by hand is the repro.
+A fault-injection failure names the crash mode, the seed, the crash point (the write after which
+the files were cut, and the step it belongs to) and the shortest sequence that still fails at a
+crash in its last step.
 
 **Triage, in this order.**
 
@@ -161,13 +176,18 @@ expose an old defect.
   `BTreeModelTests.cs`: how to draw a value, and its special values). Every check, the page
   accounting and the key-order check against the type's natural comparison then run over it.
 - **A new collection operation or storage feature** (a transaction mode, a maintenance command, a
-  multi-process behaviour) is one more `OpKind` in `StoreModelTests.cs` with its effect on the model's
+  multi-process behaviour) is one more `StoreOpKind` in `StoreModel.cs` with its effect on the model's
   committed and pending views. From then on it appears in every generated sequence, interleaved with
   every other operation, in single- and multi-process mode.
+- **A new storage operation** (a vacuum, an index rebuild, a new checkpoint or truncation path) is,
+  once it is a `StoreOpKind`, one more step the injector of `WalCrashTests.cs` interrupts: every
+  page and WAL write it makes becomes a crash point in every mode, with no new fixture.
 - **A new serialization or encryption option** is a new round-trip oracle test with its own seed,
   after which every later option is one more case in it.
 
 What the tests do not see: targets other than `net10.0` (`netstandard2.1`, Unity, MAUI; the test
 project runs on `net10.0` only), real multi-process races beyond the alternation the model drives,
-performance, and anything whose correct answer has no exact reference, such as API design and
-documentation drift. Those stay with review.
+crashes in multi-process mode, inside `Backup` and inside the engine's constructor on a reopen (the
+injector steps aside there, see `WalCrashTests`), torn page writes, performance, and anything whose
+correct answer has no exact reference, such as API design and documentation drift. Those stay
+with review.

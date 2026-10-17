@@ -527,3 +527,208 @@ or truncate the file to `_nextPageId` on a clean `Dispose`. The second also repa
 already affected, and `TruncateToMinimumAsync` could treat trailing `Empty` pages like `Free` ones.
 In multi-process mode another process may have allocated past this one's view
 (`PageFile.cs:1076-1087`), so the fix has to respect the shared allocation state.
+
+---
+
+# Candidate issues from the WAL crash test
+
+Status: **drafts, not filed.** Triage of the rows that `WalCrashTests` reports as failing on
+upstream `0450b97` (v5.2.3): 8 of 24 rows, in three families (W1 to W3). Run on macOS, Arm64,
+.NET 10, 6 seeds of 60 steps, 1,886 crash states (950 `ProcessCrash`, 687 `TornWrite`, 249
+`PowerLoss`; 282 of the `ProcessCrash` states crash a recovery). The repros are the shortest
+failing sequences the test prints when the entry's issue is empty; the crash point is named by the
+recorded write after which the files were cut.
+
+What holds in every crash state of `ProcessCrash` and `TornWrite`, including crashes during
+checkpoints, WAL truncations, reopens, the closing `Dispose`, the first open and recovery itself:
+the reopen succeeds, the collection is a committed state (scan, count, point lookups, both
+secondary indexes), never older than the last acknowledged commit, no page is reachable twice or
+both reachable and free, a second reopen changes nothing, and the rest of the sequence runs against
+the model. The October fixes in this area hold: no freed page reused while a WAL image still
+refers to it (#168, `e19035c`), no torn record replayed or skipped over (#198 is the multi-process
+twin; single-process recovery stops at the first torn record, `WriteAheadLog.cs:1064-1240`), no
+loss on a crash while `Dispose` waits for a pending-free checkpoint (#209/#242, `9b9c655`).
+#197, #200 and #203 are multi-process and out of the test's scope.
+
+Open issues checked on 2026-10-17 (`gh issue list --repo EntglDb/BLite --state all`, searched for
+fsync, durab, flush, power, crash, torn, truncat, leak, free): none covers W1 to W3. The closest are
+#237 (pages a rolled-back transaction allocated are never reclaimed, the sibling of W2) and #238
+(the double-free guard that W3 undermines).
+
+**Registry entries.** Each draft is one family of `s_candidates` in
+`tests/BLite.Tests/Oracles/WalCrashTests.cs`. A row is `"<crash mode> / <check>"`:
+
+| Draft | Registry family label | Rows |
+|---|---|---|
+| W1 | `the WAL is never fsynced: a power loss drops acknowledged commits and keeps the frees they made` | 4 |
+| W2 | `a crash leaks the pages that the interrupted work freed or allocated outside the WAL` | 3 |
+| W3 | `a crash between the two writes of PageFile.FreePage or AllocatePage leaves a free page off the free list` | 1 |
+
+---
+
+## W1. The WAL is never fsynced: a power loss drops acknowledged commits and corrupts documents
+
+**Rows:** `PowerLoss / Durability` (108 of 249 crash states), `PowerLoss / Atomicity` (6),
+`PowerLoss / Pages.Reachable` (6), `PowerLoss / Continue` (3).
+
+**Repro (shortest sequences):**
+
+```text
+Durability, crash after the WAL flush of step 2:
+    1. Insert(id=64, count=9, code=c15, payload=2500 chars)
+    2. Update(id=64, count=6, code=c06, payload=0 chars)
+  the collection is the state after the first open: document 64, inserted and acknowledged
+  in step 1, is missing
+
+Atomicity and Pages.Reachable, crash after FreePage(21) of step 3:
+    1. Insert(id=74, count=3, code=c08, payload=18000 chars)
+    2. Backup
+    3. Upsert(id=74, count=7, code=null, payload=20 chars)
+  document 74 is back in its step-1 version, but its payload differs at index 3899: expected
+  'llll...', got '....' (zeros); page 24, on its overflow chain, has type Free
+```
+
+**Expected:** README "Transactions & ACID": "Durable: WAL ensures data safety even in power loss."
+A commit that `CommitAsync` (or an auto-committing write) has acknowledged survives a power loss,
+and whatever survives is a committed state.
+
+**Actual:** after a power loss, only what the WAL had when the database was opened (or at the last
+backup) survives in it. Every commit since then is lost unless a checkpoint copied its pages to the
+page file. Worse, the pages those lost commits stopped using are already free, so the documents
+that come back point at overflow pages that are on the free list (step 3 above) or have been handed
+out again (the `Continue` row: a later insert overwrites them).
+
+**Mechanism (confirmed):**
+
+- A commit is acknowledged after `await _wal.FlushAsync()` (`StorageEngine.GroupCommit.cs:202`;
+  the direct path `StorageEngine.Transactions.cs:445` says "Durability: ensure WAL is on disk").
+  `WriteAheadLog.FlushAsync` calls `FileStream.FlushAsync` (`WriteAheadLog.cs:491`), which hands
+  the 64 KB buffer to the OS and does not fsync: on .NET 6 to 10 `OSFileStreamStrategy.FlushAsync`
+  returns `Task.CompletedTask`; only `Flush(flushToDisk: true)` calls `FlushToDisk`. The comment at
+  `WriteAheadLog.cs:492-499` already doubts it. The WAL is opened without
+  `FileOptions.WriteThrough` (`WriteAheadLog.cs:119-126`, removed in `f5802f9`). The only fsync of
+  the WAL is in `WriteAheadLog.BackupAsync` (`:1002`).
+- Page writes, by contrast, are durable at once: `PageFile.WritePageCore` flushes its view after
+  every write (`PageFile.cs:712`, `:727`; `msync(MS_SYNC)` on Unix).
+- So the order on disk is wrong wherever the engine acts on a commit: the group commit frees the
+  pages the batch stopped using right after the (unsynced) flush
+  (`StorageEngine.GroupCommit.cs:248`, `FreePagesOfCommittedTransaction`), and `FreePage` writes
+  the Free header and the free-list head straight to the page file when the page has no WAL image
+  (`StorageEngine.Memory.cs:105`, as after the backup's truncation in the repro). A power loss
+  then keeps the free and drops the commit.
+- The same holds for the WAL truncation: `TruncateAsync` (`WriteAheadLog.cs:1035-1037`) is not
+  fsynced either, while the pages it releases are freed durably right after
+  (`StorageEngine.Recovery.cs:272`, `:285`).
+
+The seed `WalCrashTests.ack-before-wal-flush.patch` (no flush at all) shows the same corruption
+under a process crash: what W1 does on a power loss, the seed does on any crash.
+
+**Affected versions:** commits have been acknowledged without an fsync since `f5802f9` (v1.0.0,
+"REMOVED FileOptions.WriteThrough"). The frees that turn a lost commit into a corrupted document
+are those of the current code: right after the commit (#233, `4d3e6b9`) or at the next truncation
+(#168, `e19035c`), both merged after v5.2.3; before them pages were freed earlier still. Not
+reproduced on hardware; the test models a power loss as "only fsynced WAL bytes and msynced pages
+survive".
+
+**Fix considerations:** fsync the WAL before acknowledging a batch (`Flush(flushToDisk: true)` or
+`RandomAccess.FlushToDisk` in `WriteAheadLog.FlushAsync`; group commit already amortises it over a
+batch), and before the pages a truncation releases are freed. On macOS, `fsync` does not flush the
+drive cache; SQLite uses `F_FULLFSYNC` there. If an unsynced mode is wanted for speed, it should be
+an option, documented as losing the last commits on a power loss, and it still has to fsync before
+freeing pages a commit released, or those documents are corrupted rather than just older.
+
+---
+
+## W2. A crash leaks the pages that the interrupted work freed or allocated outside the WAL
+
+**Rows:** `ProcessCrash / Pages.Leaked` (243 of 950), `TornWrite / Pages.Leaked` (107 of 687),
+`PowerLoss / Pages.Leaked` (24 of 249).
+
+**Repro (shortest sequences):**
+
+```text
+crash after WritePage(18) during the first open (collection creation), no steps:
+  1 of the 35 pages is an index page that nothing reaches and that is not free: 18
+
+crash at any write between a delete or shrinking update of a document with overflow pages and
+the next WAL truncation, e.g. after a WAL flush of a later Insert:
+  4 of the 48 pages are overflow pages that nothing reaches and that are not free: 32, 33, 34, 35
+```
+
+**Expected:** after recovery every page is reachable or free (or, if leaks are accepted, recovery
+reclaims them; nothing does today, and `TruncateToMinimumAsync` trims only `Free` pages).
+
+**Actual:** two ways a crash strands written pages:
+
+- *Frees outside the WAL.* A page freed while the WAL holds an image of it is queued until the next
+  truncation (`StorageEngine.Memory.cs:99-121`), and a page a transaction stopped using is freed
+  only after its commit is durable (`FreePageOnCommit`, `:175`; freed at
+  `StorageEngine.GroupCommit.cs:248`). A crash in between leaks them, and so does a crash between a
+  truncation and `ReleaseTruncatedPages` (`StorageEngine.Recovery.cs:272`, `:285`). This is
+  documented as the accepted trade-off (`StorageEngine.Memory.cs:87`, "A queued page is leaked,
+  never reused unsafely, if the process dies first", and `:171`), but there is no issue and no
+  reclamation. The window is long: without an explicit checkpoint the WAL is truncated only past
+  16 MB (`MaxWalSize`) or 4 MB of queued frees, and every page queued until then is leaked by a
+  crash.
+- *Index roots of a collection being created.* `BTreeIndex`'s constructor allocates the root and
+  writes it at once (`BTreeIndex.cs:37`, `:66`); the root id reaches the collection metadata only in
+  the following `SaveMetadata` (`DocumentCollection.cs:885`, `CollectionIndexManager.cs:125-134`).
+  A crash in between, during the first open, leaves the root orphaned and the next open allocates a
+  new one.
+
+**Mechanism (confirmed):** as above; frees and allocations are writes to the page file, not WAL
+records, so recovery cannot redo or undo them.
+
+**Affected versions:** the queued frees since #168 (`e19035c`) and the commit-time frees since
+#233 (`4d3e6b9`), both merged after v5.2.3; roots written before the metadata since #151
+(`e187bd6`, v5.2.0). #237 is the same class for a rollback instead of a crash.
+
+**Fix considerations:** log frees in the WAL with the commit (a Free record replayed by recovery
+after the commit's pages), which also closes W1's ordering; or let recovery rebuild the free list
+from what the catalog, the indexes and the documents reach (the test's page accounting is such a
+walk), which repairs leaks of any cause, #237 and #258 included; or create collections with their
+roots in one transaction.
+
+---
+
+## W3. A crash between the two writes of `PageFile.FreePage` or `AllocatePage` leaves a free page off the free list
+
+**Rows:** `ProcessCrash / Pages.FreeList` (46 of 950).
+
+**Repro (shortest sequences):**
+
+```text
+crash after AllocatePage() = 21 wrote page 0, in step 4:
+    1. Upsert(id=100, count=8, code=null, payload=18000 chars)
+    2. Update(id=100, count=2, code=c12, payload=0 chars)
+    3. Backup
+    4. InsertBulk(id=22/..., id=87/..., id=4/..., id=8/...)
+  1 page is marked free but not on the free list: 21
+
+crash after FreePage(24) wrote page 24, in the closing Dispose of
+    1. Upsert(id=100, count=8, code=null, payload=18000 chars)
+    2. Update(id=100, count=2, code=c12, payload=0 chars)
+  1 page is marked free but not on the free list: 24
+```
+
+**Expected:** a page carries a `Free` header exactly while it is on the free list, which the
+double-free guard of #238 relies on (`PageFile.cs:1118-1127`, `IsFreePageCore` at `:1161`).
+
+**Actual:** `FreePage` writes the page's Free header (`PageFile.cs:1144`) and then the free-list
+head in page 0 (`:1150`); `AllocatePage` moves the head first (`:1061`) and clears the recycled
+page's header after (`:1068`). Each write is durable at once (`PageFile.cs:727`), so a crash between
+the two leaves a page with a Free header that the free list does not reach. It is never handed out
+again, never freed again (the guard takes it for already free) and not reclaimed; when it is not the
+last page, `TruncateToMinimumAsync` does not reach it either.
+
+**Mechanism (confirmed):** the two writes, in that order, and no recovery step that checks the
+free list against the headers.
+
+**Affected versions:** the free list has lived in page headers since `4236d9e` (v1.0.0); the guard
+that makes the stray header matter came with #238.
+
+**Fix considerations:** write the two pages in an order that leaves a stray free page harmless
+(for `FreePage`: page 0 last is what it does; for `AllocatePage`: clear the header before moving the
+head, so a crash leaves a non-free page off the list, which is only a leak); or, cheaper and more
+general, rebuild or check the free list on open after a crash (W2's walk); or make allocation and
+free WAL records.
