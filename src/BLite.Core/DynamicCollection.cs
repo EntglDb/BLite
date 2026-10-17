@@ -2811,6 +2811,10 @@ public sealed class DynamicCollection : IDisposable
         Guid g => new IndexKey(g),
         double d => new IndexKey(BitConverter.GetBytes(d)),
         BsonId bid => new IndexKey(bid.ToBytes()),
+        // Keyed like the stored values (BsonValueToIndexKey): the instant in Unix milliseconds, a
+        // DateTime converted to UTC the way the BSON writer converts it (#270).
+        DateTime dt => new IndexKey(new DateTimeOffset(dt.ToUniversalTime()).ToUnixTimeMilliseconds()),
+        DateTimeOffset dto => new IndexKey(dto.ToUnixTimeMilliseconds()),
         _ => throw new ArgumentException($"Cannot create IndexKey from type {value.GetType().Name}")
     };
 
