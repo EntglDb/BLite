@@ -675,9 +675,11 @@ public sealed partial class StorageEngine
                     $"Maximum number of per-collection files ({MaxCollections}) reached. "
                   + $"Use single-file mode (no CollectionDataDirectory) for more than {MaxCollections} collections.");
 
+            // Slot → name first: a thread that finds the slot through _collectionNameToSlot may
+            // route a page of the collection right away, and must find its file by the slot.
             var newSlot = _nextSlotIndex++;
-            _collectionNameToSlot[collectionName] = newSlot;
             _collectionSlotToName![newSlot] = collectionName;
+            _collectionNameToSlot[collectionName] = newSlot;
             SaveCollectionSlots();
             return newSlot;
         }
@@ -699,8 +701,8 @@ public sealed partial class StorageEngine
 #endif
             var name = line.Substring(sep + 1);
             if (string.IsNullOrEmpty(name)) continue;
-            _collectionNameToSlot![name] = slot;
             _collectionSlotToName![slot] = name;
+            _collectionNameToSlot![name] = slot;
             if (slot >= _nextSlotIndex)
                 _nextSlotIndex = slot + 1;
         }

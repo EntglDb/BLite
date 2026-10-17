@@ -74,9 +74,11 @@ public sealed partial class StorageEngine : IDisposable
     private readonly ConcurrentDictionary<string, Lazy<IPageStorage>>? _collectionFiles;
 
     // Collection slot registry — only populated in multi-file mode
-    // Maps collection name → slot index (0-63) and slot → name
+    // Maps collection name → slot index (0-63) and slot → name. Both are written under
+    // _collectionSlotLock but read without it: every collection page I/O resolves its slot
+    // (GetPageFile), so both must be safe for readers that run during a write (#312).
     private readonly ConcurrentDictionary<string, int>? _collectionNameToSlot;
-    private readonly Dictionary<int, string>? _collectionSlotToName;
+    private readonly ConcurrentDictionary<int, string>? _collectionSlotToName;
     private int _nextSlotIndex;
     private readonly string? _slotsFilePath;
     private readonly object _collectionSlotLock = new();
@@ -309,7 +311,7 @@ public sealed partial class StorageEngine : IDisposable
                 Directory.CreateDirectory(config.CollectionDataDirectory);
                 _collectionFiles = new ConcurrentDictionary<string, Lazy<IPageStorage>>(StringComparer.OrdinalIgnoreCase);
                 _collectionNameToSlot = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                _collectionSlotToName = new Dictionary<int, string>();
+                _collectionSlotToName = new ConcurrentDictionary<int, string>();
                 _slotsFilePath = Path.Combine(config.CollectionDataDirectory, ".slots");
                 LoadCollectionSlots();
             }

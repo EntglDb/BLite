@@ -792,4 +792,72 @@ public class MultiFileStorageTests : IDisposable
         await Task.WhenAll(tasks);
         Assert.Empty(errors);
     }
+
+    /// <summary>
+    /// Every read or write of a collection page looks its slot up to find the collection file,
+    /// without the slot lock. Creating collections at the same time must not make that lookup
+    /// miss: a miss sent the page to the main file ("Page ... is outside the page file", #312).
+    /// Readers race the lookup against every resize of the slot map, up to
+    /// <see cref="StorageEngine.MaxCollections"/> collections; one of them also reads the page
+    /// through the engine, so the end-to-end symptom is covered as well. The slots are assigned
+    /// without creating the collection files, which keeps a round cheap enough to run many.
+    /// </summary>
+    [Fact]
+    public void CollectionPageRouting_WhileCollectionsAreCreated_FindsTheCollectionFile()
+    {
+        const int rounds = 100;
+        var readers = Math.Max(2, Environment.ProcessorCount - 1);
+        const System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var lookup = typeof(StorageEngine).GetMethod("GetCollectionNameBySlot", Private)!;
+        var assign = typeof(StorageEngine).GetMethod("GetOrAssignCollectionSlot", Private)!;
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        for (int round = 0; round < rounds && errors.IsEmpty; round++)
+        {
+            var dbPath = Path.Combine(_tempDir, $"slots_{round}.db");
+            var config = PageFileConfig.Small with { CollectionDataDirectory = Path.Combine(_tempDir, $"slots_{round}") };
+            using var engine = new StorageEngine(dbPath, config);
+            var nameBySlot = (Func<int, string?>)lookup.CreateDelegate(typeof(Func<int, string?>), engine);
+            var assignSlot = (Func<string, int>)assign.CreateDelegate(typeof(Func<string, int>), engine);
+
+            var pageId = engine.AllocateCollectionPage("c0");
+            var data = new byte[engine.PageSize];
+            data[0] = 0x5A;
+            engine.WritePageImmediate(pageId, data);
+
+            var creating = true;
+            var threads = Enumerable.Range(0, readers).Select(r => new Thread(() =>
+            {
+                var buf = new byte[engine.PageSize];
+                while (Volatile.Read(ref creating) && errors.IsEmpty)
+                {
+                    try
+                    {
+                        if (r == 0)
+                        {
+                            engine.ReadPage(pageId, null, buf);
+                            if (buf[0] != 0x5A) errors.Enqueue($"round {round}: page {pageId:X8} read back {buf[0]:X2}");
+                        }
+                        else if (nameBySlot(0) != "c0")
+                        {
+                            errors.Enqueue($"round {round}: slot 0 not found while collections were created");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Enqueue($"round {round}: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+            }) { IsBackground = true }).ToList();
+            threads.ForEach(t => t.Start());
+
+            for (int c = 1; c < StorageEngine.MaxCollections; c++)
+                assignSlot($"c{c}");
+
+            Volatile.Write(ref creating, false);
+            threads.ForEach(t => t.Join());
+        }
+
+        Assert.True(errors.IsEmpty, string.Join("\n", errors.Take(5)));
+    }
 }
