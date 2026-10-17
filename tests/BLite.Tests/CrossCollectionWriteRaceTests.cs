@@ -34,7 +34,9 @@ namespace BLite.Tests
         [Fact]
         public async Task Concurrent_Inserts_Into_Different_Collections_LoseNothing()
         {
-            using var db = new TestDbContext(_path);
+            // Three writers share the file-wide write lock, and each holds it through its commit.
+            // The default 500 ms is not enough on a loaded runner (see LoadTolerant).
+            using var db = new TestDbContext(_path, LoadTolerant.SingleFile);
             using var cts = new CancellationTokenSource(Duration);
 
             var failures = new System.Collections.Concurrent.ConcurrentBag<Exception>();

@@ -37,7 +37,9 @@ public class CdcScalabilityTests : IDisposable
         await _db.SaveChangesAsync();
 
         // 3. Wait for events to propagate
-        await Task.Delay(1000);
+        await LoadTolerant.WaitUntilAsync(
+            () => Enumerable.Range(0, SubscriberCount).All(i => Volatile.Read(ref eventCounts[i]) >= 2),
+            "every subscriber has received both events");
 
         // 4. Verify all subscribers received both events
         for (int i = 0; i < SubscriberCount; i++)
@@ -54,41 +56,54 @@ public class CdcScalabilityTests : IDisposable
         var fastEventCount = 0;
         var slowEventCount = 0;
 
-        // 1. Register a slow subscriber that blocks SYNCHRONOUSLY
-        using var slowSub = _db.People.Watch().Subscribe(_ => 
+        // 1. Register a slow subscriber that blocks SYNCHRONOUSLY, for as long as the test
+        //    keeps the gate closed, so that the ordering below does not depend on timing.
+        var slowGate = new ManualResetEventSlim(false);
+        using var slowSub = _db.People.Watch().Subscribe(_ =>
         {
             Interlocked.Increment(ref slowEventCount);
             // Synchronous block to block the BridgeChannelToObserverAsync loop for this sub
-            Thread.Sleep(2000); 
+            slowGate.Wait();
         });
 
         // 2. Register a fast subscriber
-        using var fastSub = _db.People.Watch().Subscribe(_ => 
+        using var fastSub = _db.People.Watch().Subscribe(_ =>
         {
             Interlocked.Increment(ref fastEventCount);
         });
 
-        // 3. Perform a write
-        await _db.People.InsertAsync(new Person { Id = 1, Name = "John", Age = 30 });
-        await _db.SaveChangesAsync();
+        try
+        {
+            // 3. Perform a write
+            await _db.People.InsertAsync(new Person { Id = 1, Name = "John", Age = 30 });
+            await _db.SaveChangesAsync();
 
-        // 4. Verification: Fast subscriber should receive it immediately
-        await Task.Delay(200);
-        Assert.Equal(1, fastEventCount);
-        Assert.Equal(1, slowEventCount); // Started but not finished or blocking others
+            // 4. Verification: both subscribers receive it; the slow one then blocks on the gate
+            await LoadTolerant.WaitUntilAsync(
+                () => Volatile.Read(ref fastEventCount) == 1 && Volatile.Read(ref slowEventCount) == 1,
+                "both subscribers have received the first event");
 
-        // 5. Perform another write
-        await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane", Age = 25 });
-        await _db.SaveChangesAsync();
+            // 5. Perform another write
+            await _db.People.InsertAsync(new Person { Id = 2, Name = "Jane", Age = 25 });
+            await _db.SaveChangesAsync();
 
-        // 6. Verification: Fast subscriber should receive second event while slow one is still busy
-        await Task.Delay(200);
-        Assert.Equal(2, fastEventCount);
-        Assert.Equal(1, slowEventCount); // Still processing first one or second one queued in private channel
+            // 6. Verification: the fast subscriber receives the second event while the slow one
+            //    is still blocked in the first; the second one waits in its private channel
+            await LoadTolerant.WaitUntilAsync(
+                () => Volatile.Read(ref fastEventCount) == 2,
+                "the fast subscriber has received the second event");
+            Assert.Equal(1, Volatile.Read(ref slowEventCount));
 
-        // 7. Wait for slow one to eventually catch up
-        await Task.Delay(2500); // Wait for the second one in slow sub to be processed after the first Sleep
-        Assert.Equal(2, slowEventCount);
+            // 7. Release the slow one: it catches up
+            slowGate.Set();
+            await LoadTolerant.WaitUntilAsync(
+                () => Volatile.Read(ref slowEventCount) == 2,
+                "the slow subscriber has caught up");
+        }
+        finally
+        {
+            slowGate.Set(); // never leave the bridge loop blocked
+        }
     }
 
     public void Dispose()

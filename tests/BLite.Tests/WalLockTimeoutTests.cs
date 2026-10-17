@@ -15,6 +15,19 @@ public class WalLockTimeoutTests : IDisposable
     /// </summary>
     private const int TestWriteTimeoutMs = 100;
 
+    /// <summary>
+    /// How much later than <see cref="TestWriteTimeoutMs"/> a timed-out wait may return. The timer
+    /// fires late on a loaded runner (770 ms seen in CI for the 100 ms timeout); the bound only
+    /// has to tell the configured timeout from the 5 s production default.
+    /// </summary>
+    private const int SchedulingSlackMs = 2000;
+
+    /// <summary>
+    /// Write timeout for the cancellation test: long enough that a cancellation token due in
+    /// 10 ms wins even when the runner delays both timers.
+    /// </summary>
+    private const int LongWriteTimeoutMs = 10_000;
+
     public WalLockTimeoutTests(ITestOutputHelper output)
     {
         _output = output;
@@ -50,7 +63,7 @@ public class WalLockTimeoutTests : IDisposable
             _output.WriteLine($"TimeoutException after {sw.ElapsedMilliseconds} ms: {ex.Message}");
             Assert.True(sw.ElapsedMilliseconds >= TestWriteTimeoutMs - 20,
                 $"Should wait ~{TestWriteTimeoutMs} ms, was {sw.ElapsedMilliseconds} ms");
-            Assert.True(sw.ElapsedMilliseconds < TestWriteTimeoutMs * 5,
+            Assert.True(sw.ElapsedMilliseconds < TestWriteTimeoutMs + SchedulingSlackMs,
                 $"Should not wait much longer than {TestWriteTimeoutMs} ms, was {sw.ElapsedMilliseconds} ms");
         }
         finally
@@ -164,7 +177,7 @@ public class WalLockTimeoutTests : IDisposable
     [Fact]
     public async Task CancellationToken_AbortsBeforeTimeout()
     {
-        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: TestWriteTimeoutMs);
+        using var wal = new WriteAheadLog(_walPath, writeTimeoutMs: LongWriteTimeoutMs);
         var semaphore = GetInternalLock(wal);
 
         await semaphore.WaitAsync();
@@ -179,7 +192,7 @@ public class WalLockTimeoutTests : IDisposable
             sw.Stop();
 
             _output.WriteLine($"Cancelled after {sw.ElapsedMilliseconds} ms");
-            Assert.True(sw.ElapsedMilliseconds < TestWriteTimeoutMs,
+            Assert.True(sw.ElapsedMilliseconds < LongWriteTimeoutMs,
                 $"Cancellation should fire before the timeout, was {sw.ElapsedMilliseconds} ms");
         }
         finally

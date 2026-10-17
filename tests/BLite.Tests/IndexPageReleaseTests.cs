@@ -194,7 +194,7 @@ public class IndexPageReleaseTests : IDisposable
     [Fact]
     public async Task CreateDropIndexCycles_Typed_DoNotGrowTheFile()
     {
-        using var db = new TestDbContext(_dbPath);
+        using var db = new TestDbContext(_dbPath, LoadTolerant.SingleFile);
         await db.PeopleV2.InsertBulkAsync(Enumerable.Range(0, 1000).Select(i => new PersonV2 { Name = $"p{i}", Age = i % 90 }));
 
         async Task CycleAsync()
@@ -209,7 +209,7 @@ public class IndexPageReleaseTests : IDisposable
     [Fact]
     public async Task CreateDropIndexCycles_Dynamic_DoNotGrowTheFile()
     {
-        using var engine = new BLiteEngine(_dbPath);
+        using var engine = new BLiteEngine(_dbPath, LoadTolerant.SingleFile);
         var col = engine.GetOrCreateCollection("docs");
         await InsertIndexableDocsAsync(col, 1000);
 
@@ -355,7 +355,9 @@ public class IndexPageReleaseTests : IDisposable
     [Fact]
     public async Task DynamicCollection_DropIndex_WaitsForTheCollectionLock()
     {
-        using var engine = new BLiteEngine(_dbPath);
+        // The drop must still be waiting when this test looks at it after Task.Delay(100): on a
+        // loaded runner that continuation can run after the default 500 ms lock timeout.
+        using var engine = new BLiteEngine(_dbPath, LoadTolerant.SingleFile);
         var col = engine.GetOrCreateCollection("docs");
         await InsertIndexableDocsAsync(col, 100);
         await col.CreateIndexAsync("value", "idx_value");

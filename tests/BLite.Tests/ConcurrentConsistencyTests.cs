@@ -32,7 +32,7 @@ public class ConcurrentConsistencyTests : IDisposable
     public ConcurrentConsistencyTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"blite_consistency_{Guid.NewGuid()}.db");
-        _engine = new BLiteEngine(_dbPath, PageFileConfig.Server(_dbPath));
+        _engine = new BLiteEngine(_dbPath, LoadTolerant.Server(_dbPath));
     }
 
     public void Dispose()
@@ -145,11 +145,13 @@ public class ConcurrentConsistencyTests : IDisposable
             await session.CommitAsync();
         })).ToArray();
 
-        // Readers: continuously read seeded documents while writers are active
+        // Readers: continuously read seeded documents while writers are active. Each reader
+        // reads at least once: on a loaded runner the writers can finish before a reader task
+        // is even scheduled.
         var readerTasks = Enumerable.Range(0, readerCount).Select(r => Task.Run(async () =>
         {
             int reads = 0;
-            while (!cts.Token.IsCancellationRequested)
+            do
             {
                 using var session = _engine.OpenSession();
                 var col = session.GetOrCreateCollection(readCollection);
@@ -166,8 +168,7 @@ public class ConcurrentConsistencyTests : IDisposable
                     break;
                 }
                 reads++;
-                if (reads >= 500) break;
-            }
+            } while (reads < 500 && !cts.Token.IsCancellationRequested);
             readSuccesses.Add(reads);
         })).ToArray();
 
