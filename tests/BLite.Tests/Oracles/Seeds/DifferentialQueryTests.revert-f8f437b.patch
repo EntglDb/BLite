@@ -1,0 +1,123 @@
+Seeded defect for tests/BLite.Tests/Oracles/DifferentialQueryTests.cs
+
+This is `git revert --no-commit f8f437b` restricted to src/ (the fix for #206: typed string
+index bounds matched every longer value starting with the searched one, so Name == "p7" also
+returned "p70".."p79" and StartsWith("p7") also returned "p8".."p89"). With it applied, 22
+additional rows of the differential test fail on upstream 0450b97, e.g. `name == p7`,
+`name startswith p7`, `Count(name == p7)`, `name in list`, `nick == ab`.
+
+Reproduce: git revert --no-commit f8f437b && git checkout HEAD -- tests && dotnet test tests/BLite.Tests --filter FullyQualifiedName~DifferentialQueryTests
+Restore:   git reset --hard HEAD
+
+The source files use CRLF line endings; apply with `git apply --ignore-whitespace` if the
+patch was normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/Indexing/CollectionSecondaryIndex.cs b/src/BLite.Core/Indexing/CollectionSecondaryIndex.cs
+index 887135d..60e1b22 100644
+--- a/src/BLite.Core/Indexing/CollectionSecondaryIndex.cs
++++ b/src/BLite.Core/Indexing/CollectionSecondaryIndex.cs
+@@ -24,9 +24,7 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
+     // Pre-allocated boundary sentinels — single allocation at type-init time.
+     // 255 bytes of 0xFF covers any composite key length used in this implementation.
+     private static readonly IndexKey s_maxBoundaryKey;
+-    // Upper bound for the document-id part of a composite key: one byte above every id key prefix.
+-    // Must not be longer: [user key][0xFF..] also covers the entries of longer values that start with
+-    // the user key ("p70", "p71".. for "p7"), see CreateCompositeKeyBoundary.
++    // 16 bytes of 0xFF covers any GUID or ObjectId suffix in composite keys.
+     private static readonly IndexKey s_maxIdBoundaryKey;
+     // Id types whose index key always has the same length (used by EnsureUnique).
+     private static readonly bool s_fixedSizeId =
+@@ -38,9 +36,10 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
+     {
+         // Fill the pre-allocated boundary buffers with 0xFF.
+         var buf255 = new byte[256]; Array.Fill(buf255, (byte)0xFF);
++        var buf16  = new byte[20];  Array.Fill(buf16,  (byte)0xFF);
+         // Raw (un-prefixed) so it sorts above keys of every prefix, including DecimalKeyPrefix (0x03).
+         s_maxBoundaryKey   = IndexKey.FromOwnedArray(buf255);
+-        s_maxIdBoundaryKey = IndexKey.FromOwnedArray([IndexKey.PrefixUpperBound]); // raw: above ids of every key prefix
++        s_maxIdBoundaryKey = IndexKey.FromOwnedArray(buf16); // raw: above ids of every key prefix
+     }
+ 
+     private readonly CollectionIndexDefinition<T> _definition;
+@@ -720,11 +719,8 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
+     /// </summary>
+     private IndexKey CreateCompositeKeyBoundary(IndexKey userKey, bool useMinObjectId)
+     {
+-        // Min: [user key] sorts before every [user key][id] entry.
+-        // Max: [user key][PrefixUpperBound] sorts after every [user key][id] entry (every id key starts
+-        // with KeyPrefix or DecimalKeyPrefix) but before the entries of a longer value starting with the
+-        // user key, whose next byte is that value's next byte (0x04 or above for every character but
+-        // U+0000..U+0003). An all-0xFF id bound sorted after those too, so "p7" matched "p70".."p79" (#206).
++        // For range boundaries, we use an empty key for Min and a cached all-0xFF key for Max
++        // to wrap around all possible IDs for this user key.
+         IndexKey idBoundary = useMinObjectId 
+             ? IndexKey.MinKey
+             : s_maxIdBoundaryKey;
+diff --git a/src/BLite.Core/Indexing/IndexKey.cs b/src/BLite.Core/Indexing/IndexKey.cs
+index 35b2269..2d08f05 100644
+--- a/src/BLite.Core/Indexing/IndexKey.cs
++++ b/src/BLite.Core/Indexing/IndexKey.cs
+@@ -24,11 +24,6 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
+     // 0x03 sorts after every KeyPrefix key, so range scans must use an upper bound above both prefixes.
+     internal const byte DecimalKeyPrefix = 0x03;
+ 
+-    // One above the highest prefix byte: every encoded (non-sentinel) key starts with a smaller byte.
+-    // CollectionSecondaryIndex appends it to a user key to bound the [user key][document id] entries of
+-    // exactly that value, below the entries of longer values that start with it.
+-    internal const byte PrefixUpperBound = DecimalKeyPrefix + 1;
+-
+     // Prefix + class byte + exponent byte + 15 bytes (30 BCD nibbles, a decimal has at most 29 digits).
+     private const int DecimalKeyLength = 18;
+ 
+diff --git a/src/BLite.Core/Query/IndexOptimizer.cs b/src/BLite.Core/Query/IndexOptimizer.cs
+index d7ab7ea..7bb375a 100644
+--- a/src/BLite.Core/Query/IndexOptimizer.cs
++++ b/src/BLite.Core/Query/IndexOptimizer.cs
+@@ -377,17 +377,13 @@ internal static class IndexOptimizer
+                  foreach (var idx in indexes) { if (Matches(idx, member.Member.Name) && idx.Type == IndexType.BTree) { index = idx; break; } }
+                  if (index != null && index.Type == IndexType.BTree)
+                  {
+-                     // [prefix, upper bound): the scan also returns entries equal to the exclusive
+-                     // upper bound (a string such as "p8" for "p7"), so the post-filter must run.
+-                     return new OptimizationResult
+-                     {
++                     var nextPrefix = IncrementPrefix(prefix);
++                     return new OptimizationResult 
++                     { 
+                          IndexName = index.Name,
+                          MinValue = prefix,
+-                         MaxValue = PrefixUpperBound(prefix),
+-                         IsRange = true,
+-                         FilterCompleteness = FilterCompleteness.StrictBoundary,
+-                         StartInclusive = true,
+-                         EndInclusive = false
++                         MaxValue = nextPrefix,
++                         IsRange = true
+                      };
+                  }
+              }
+@@ -591,19 +587,12 @@ internal static class IndexOptimizer
+         }
+     }
+ 
+-    /// <summary>
+-    /// Exclusive upper bound for the index keys of the strings starting with <paramref name="prefix"/>:
+-    /// its UTF-8 bytes with the last byte incremented (UTF-8 never contains 0xFF). Every key holding those
+-    /// bytes as a prefix sorts below it, every other key above the prefix sorts above it.
+-    /// <c>null</c> (unbounded) for an empty prefix, and for one ending in a high surrogate, whose UTF-8
+-    /// form is not a prefix of the strings that complete the surrogate pair.
+-    /// </summary>
+-    private static IndexKey? PrefixUpperBound(string prefix)
++    private static string IncrementPrefix(string prefix)
+     {
+-        if (prefix.Length == 0 || char.IsHighSurrogate(prefix[prefix.Length - 1])) return null;
+-        var bytes = System.Text.Encoding.UTF8.GetBytes(prefix);
+-        bytes[bytes.Length - 1]++;
+-        return new IndexKey(bytes);
++        if (string.IsNullOrEmpty(prefix)) return null!;
++        char lastChar = prefix[prefix.Length - 1];
++        if (lastChar == char.MaxValue) return prefix; // Cannot increment
++        return prefix.Substring(0, prefix.Length - 1) + (char)(lastChar + 1);
+     }
+ 
+     [RequiresDynamicCode("Fallback expression evaluation uses Expression.Compile() which requires dynamic code generation.")]

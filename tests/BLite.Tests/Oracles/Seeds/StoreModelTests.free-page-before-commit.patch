@@ -1,0 +1,34 @@
+Seeded defect for tests/BLite.Tests/Oracles/StoreModelTests.cs
+
+Hand-made: StorageEngine.FreePageOnCommit frees the page at once instead of queueing it until
+the transaction commits (the defect of #233, fixed in 4d3e6b9). An update or delete of a
+document with overflow pages inside a caller-owned transaction then releases the committed
+document's overflow page while the committed document still points at it.
+
+With it applied, 4 of the 8 runs fail on upstream 0450b97 (the single-process ones; in
+multi-process mode FreePage queues every page). Each shrinks to 4 steps, e.g. seed 2:
+    1. Insert(id=74, count=3, code=c08, payload=18000 chars)
+    2. Begin
+    3. Update(id=74, count=1, code=c29, payload=0 chars)
+    4. Backup
+  the backup: document 74: payload differs at index 16187: expected 18000 chars of "l", got "............"
+
+Reproduce: git apply --ignore-whitespace tests/BLite.Tests/Oracles/Seeds/StoreModelTests.free-page-before-commit.patch && dotnet test tests/BLite.Tests --filter FullyQualifiedName~StoreModelTests
+Restore:   git checkout -- src
+
+The source file uses CRLF line endings; apply with --ignore-whitespace if the patch was
+normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/Storage/StorageEngine.Memory.cs b/src/BLite.Core/Storage/StorageEngine.Memory.cs
+index a70bee1..206c661 100644
+--- a/src/BLite.Core/Storage/StorageEngine.Memory.cs
++++ b/src/BLite.Core/Storage/StorageEngine.Memory.cs
+@@ -178,6 +178,8 @@ public sealed partial class StorageEngine
+         if (transactionId == 0)
+             throw new InvalidOperationException("Cannot defer a free without a transaction (transactionId=0 is reserved)");
+ 
++        // SEEDED DEFECT (#233): free the page at once instead of when the transaction commits.
++        if (transactionId != 0) { FreePage(pageId); return; }
+         var pages = _freeOnCommit.GetOrAdd(transactionId, _ => new HashSet<uint>());
+         lock (pages)
+             pages.Add(pageId);

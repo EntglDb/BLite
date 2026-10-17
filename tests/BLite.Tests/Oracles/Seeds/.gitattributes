@@ -1,0 +1,2 @@
+# Seeds are applied verbatim with git apply: keep each hunk's line endings as the target file has them.
+*.patch -text

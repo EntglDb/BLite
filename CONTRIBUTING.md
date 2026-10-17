@@ -58,4 +58,26 @@ We use `xUnit` for testing. Please ensure all tests pass before submitting your 
 dotnet test
 ```
 
+### Oracle tests
+
+An oracle test checks BLite against an independent answer instead of hand-written expectations: `DifferentialQueryTests` runs ~330 query shapes on an indexed collection, an unindexed one and LINQ-to-Objects; `StoreModelTests` replays random writes, transactions, checkpoints, backups and reopens against an in-memory model. They live in `tests/BLite.Tests/Oracles/`; [docs/ORACLE_TESTS.md](docs/ORACLE_TESTS.md) describes them, their seeds and the candidate registry.
+
+- **Adding one**: put `<Name>Tests.cs` under `Oracles/` (entities in `BLite.Shared`), seeded and deterministic, with the seed and the failing row's name in every failure message.
+- **Every oracle test ships a seed**: `Oracles/Seeds/<Name>Tests.<defect>.patch`, a change to `src/` only (a revert of a past fix, or a hand-made defect) that the test was shown to catch by applying it locally. Describe the defect and the failures it causes above the diff. `OracleSeedsTests` checks in CI that each oracle has a seed and that every seed still applies; `dotnet run tools/oracle-seeds.cs` re-proves locally that each one is caught. Refresh a seed when a refactor strands it.
+- **Known candidates**: a row that disagrees and is not fixed yet goes into the test's `Candidates` registry with its family label and the issue that tracks it. While its `Issue` is empty the row keeps failing, labelled `[known candidate: <family>]`; once the issue is filled in the row passes and writes `SKIPPED [known candidate: <family>, <issue>]` to the test output, which is the only trace a run shows because xunit 2 has no dynamic skip. When the fix lands the row agrees and fails with `candidate fixed: remove the entry for '<name>'`: remove the entry in the fix's PR.
+
+### Commit trailers
+
+Fix commits name how the defect was found and what kind it is, as git trailers after the body:
+
+```
+Found-By: OT
+Defect-Class: IDX
+```
+
+- `Found-By:` `RV` code review, `OT` oracle test, `IS` issue report, `US` user, `CA` analyst.
+- `Defect-Class:` `IDX` index serving diverges from scan, `WAL` durability and replay, `TXN` isolation, `BSON` encoding, `LINQ` translation, `MP` multi-process, `PLT` platform.
+
+`git log --format='%(trailers:key=Found-By,valueonly)' | grep . | sort | uniq -c` counts the finders.
+
 Thank you/Grazie per il tuo contributo! 🚀
