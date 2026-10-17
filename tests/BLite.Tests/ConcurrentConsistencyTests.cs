@@ -239,9 +239,16 @@ public class ConcurrentConsistencyTests : IDisposable
             {
                 var found = await readCol.FindByIdAsync(id);
                 Assert.NotNull(found);
-                Assert.True(found.TryGetInt32("t", out var ft) && ft == thread);
-                Assert.True(found.TryGetInt32("tx", out var ftx) && ftx == txn);
-                Assert.True(found.TryGetInt32("d", out var fd) && fd == doc);
+                // Name the document that came back, so a failure says what was wrong.
+                string Mismatch() =>
+                    $"contention_{thread}: id {id} written as t={thread} tx={txn} d={doc} read back as " +
+                    string.Join(", ", found.EnumerateFields().Select(f => $"{f.Name}={f.Value}"));
+                var tOk = found.TryGetInt32("t", out var ft) && ft == thread;
+                Assert.True(tOk, tOk ? null : Mismatch());
+                var txOk = found.TryGetInt32("tx", out var ftx) && ftx == txn;
+                Assert.True(txOk, txOk ? null : Mismatch());
+                var dOk = found.TryGetInt32("d", out var fd) && fd == doc;
+                Assert.True(dOk, dOk ? null : Mismatch());
             }
         }
     }
