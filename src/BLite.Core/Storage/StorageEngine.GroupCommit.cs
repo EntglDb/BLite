@@ -245,6 +245,14 @@ public sealed partial class StorageEngine
             // The batch is durable and published: release the pages its transactions stopped
             // using (#233). Last, so that a batch reported as failed never frees anything.
             foreach (var commit in batch)
+            {
+                if (_freeOnCommit.ContainsKey(commit.TransactionId))
+                {
+                    await SyncDeferredWalAsync().ConfigureAwait(false);
+                    break;
+                }
+            }
+            foreach (var commit in batch)
                 FreePagesOfCommittedTransaction(commit.TransactionId);
 
             // Check if checkpoint is needed, but defer until after releasing the lock

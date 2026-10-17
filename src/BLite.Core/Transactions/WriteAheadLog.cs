@@ -55,6 +55,7 @@ public sealed class WriteAheadLog : IWriteAheadLog
     // allocation, the .wal-shm sidecar, and stale-PID recovery are owned by
     // StorageEngine + WalSharedMemory; see roadmap/v5/MULTI_PROCESS_WAL.md.
     private readonly bool _allowMultiProcessAccess;
+    private readonly bool _syncOnFlush;
 
     /// <summary>
     /// Whether this WAL was opened in multi-process mode
@@ -106,11 +107,17 @@ public sealed class WriteAheadLog : IWriteAheadLog
     /// relaxes its own <see cref="FileShare"/> mode based on the flag. See
     /// <c>roadmap/v5/MULTI_PROCESS_WAL.md</c> for the full design.
     /// </param>
-    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000, bool allowMultiProcessAccess = false)
+    /// <param name="syncOnFlush">
+    /// When <c>true</c> (the default), <see cref="FlushAsync"/> syncs the file to disk. When
+    /// <c>false</c> it only hands the buffered records to the OS, and the owner calls
+    /// <see cref="SyncAsync"/> where durability is required (<see cref="WalSyncMode.Normal"/>).
+    /// </param>
+    public WriteAheadLog(string walPath, ICryptoProvider? crypto, int writeTimeoutMs = 5_000, bool allowMultiProcessAccess = false, bool syncOnFlush = true)
     {
         _walPath = walPath ?? throw new ArgumentNullException(nameof(walPath));
         _writeTimeoutMs = writeTimeoutMs;
         _allowMultiProcessAccess = allowMultiProcessAccess;
+        _syncOnFlush = syncOnFlush;
 
         // Treat providers that add no overhead (NullCryptoProvider) as no encryption so
         // the on-disk format stays byte-for-byte identical to the pre-encryption format.
@@ -122,8 +129,8 @@ public sealed class WriteAheadLog : IWriteAheadLog
             FileAccess.ReadWrite,
             _allowMultiProcessAccess ? FileShare.ReadWrite : FileShare.None,
             bufferSize: 64 * 1024);
-        // REMOVED FileOptions.WriteThrough for SQLite-style lazy checkpointing
-        // Durability is ensured by explicit Flush() calls
+        // No FileOptions.WriteThrough, for SQLite-style lazy checkpointing: records are buffered
+        // and FlushAsync syncs them to disk once per commit (once per group commit batch).
 
         // If the WAL file already exists with content and encryption is enabled,
         // read the file header to derive the encryption key before any I/O.
@@ -480,6 +487,17 @@ public sealed class WriteAheadLog : IWriteAheadLog
     }
 
 
+    /// <summary>
+    /// Writes the buffered records to the file and, unless the log was opened with
+    /// <c>syncOnFlush: false</c>, syncs it to disk, so that every record written before the call
+    /// survives a power loss. Every commit path calls this before it acknowledges a commit.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FileStream.FlushAsync(CancellationToken)"/> alone only hands the buffer to the OS:
+    /// it does not sync on .NET 6 to 10, so a power loss dropped acknowledged commits while the
+    /// pages they freed stayed freed in the page file (#260). <c>Flush(flushToDisk: true)</c> adds
+    /// the sync (fsync, <c>FlushFileBuffers</c> on Windows).
+    /// </remarks>
     public async Task FlushAsync(CancellationToken ct = default)
     {
         if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
@@ -489,14 +507,32 @@ public sealed class WriteAheadLog : IWriteAheadLog
             if (_walStream != null)
             {
                 await _walStream.FlushAsync(ct);
-                // FlushAsync doesn't guarantee flushToDisk on all platforms/implementations in the same way as Flush(true)
-                // but FileStream in .NET 6+ handles this reasonable well. 
-                // For strict durability, we might still want to invoke a sync flush or check platform specifics,
-                // but typically FlushAsync(ct) is sufficient for "Async" pattern.
-                // However, FileStream.FlushAsync() acts like flushToDisk=false by default in older .NET?
-                // Actually, FileStream.Flush() has flushToDisk arg, FlushAsync does not but implementation usually does buffer flush.
-                // To be safe for WAL, we might care about fsync.
-                // For now, just FlushAsync();
+                if (_syncOnFlush)
+                    _walStream.Flush(flushToDisk: true);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>Whether <see cref="FlushAsync"/> syncs to disk (see the constructor's <c>syncOnFlush</c>).</summary>
+    public bool SyncsOnFlush => _syncOnFlush;
+
+    /// <summary>
+    /// Writes the buffered records to the file and syncs it to disk, whatever <see cref="SyncsOnFlush"/> says.
+    /// </summary>
+    public async Task SyncAsync(CancellationToken ct = default)
+    {
+        if (!await _lock.WaitAsync(_writeTimeoutMs, ct))
+            throw new TimeoutException("Timed out acquiring WAL write lock.");
+        try
+        {
+            if (_walStream != null)
+            {
+                await _walStream.FlushAsync(ct);
+                _walStream.Flush(flushToDisk: true);
             }
         }
         finally
@@ -1035,6 +1071,9 @@ public sealed class WriteAheadLog : IWriteAheadLog
                 _walStream.SetLength(0);
                 _walStream.Position = 0;
                 await _walStream.FlushAsync(ct);
+                // The caller frees the pages the truncation released right after this returns: a
+                // truncation lost to a power loss would let recovery replay old images over them.
+                _walStream.Flush(flushToDisk: true);
                 // Reset so the crypto file header is re-written on the next record write.
                 lock (_cryptoHeaderLock)
                 {

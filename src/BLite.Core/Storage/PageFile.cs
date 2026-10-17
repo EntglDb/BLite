@@ -133,6 +133,13 @@ public readonly struct PageFileConfig
     public bool AllowMultiProcessAccess { get; init; }
 
     /// <summary>
+    /// When the write-ahead log is synced to disk. Defaults to <see cref="WalSyncMode.Full"/>: every
+    /// commit is on disk before it is acknowledged. <see cref="WalSyncMode.Normal"/> skips that sync
+    /// for lower commit latency and may lose the last commits on a power loss (#260).
+    /// </summary>
+    public WalSyncMode WalSync { get; init; }
+
+    /// <summary>
     /// Returns a copy of this config where any zero-valued numeric fields are replaced
     /// with the corresponding values from <see cref="Default"/>.
     /// This ensures that a partially-constructed <see cref="PageFileConfig"/>

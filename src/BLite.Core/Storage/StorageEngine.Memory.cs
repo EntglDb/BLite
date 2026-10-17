@@ -204,6 +204,16 @@ public sealed partial class StorageEngine
         }
     }
 
+    /// <summary>
+    /// With <see cref="WalSyncMode.Normal"/> a commit is acknowledged before its WAL records are on
+    /// disk. Syncs them before an action a power loss must not keep without them: freeing the pages
+    /// a commit stopped using (a free is written to the data file at once), or a checkpoint copying
+    /// committed pages to the data file. In <see cref="WalSyncMode.Full"/> every commit is synced
+    /// already and this does nothing.
+    /// </summary>
+    private Task SyncDeferredWalAsync()
+        => _wal is Transactions.WriteAheadLog fileWal && !fileWal.SyncsOnFlush ? fileWal.SyncAsync() : Task.CompletedTask;
+
     /// <summary>Drops the frees queued by a transaction that rolled back: its pages stay in use.</summary>
     private void DiscardFreesOnCommit(ulong transactionId) => _freeOnCommit.TryRemove(transactionId, out _);
 
