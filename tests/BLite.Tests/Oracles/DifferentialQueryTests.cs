@@ -157,6 +157,9 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
 
     public static TheoryData<string> Cases => new(s_cases.Keys);
 
+    /// <summary>The query shapes by name, shared with <see cref="DynamicDifferentialTests"/> so both run the same catalogue.</summary>
+    internal static IReadOnlyDictionary<string, QueryCase> Catalogue => s_cases;
+
     private static readonly Dictionary<string, QueryCase> s_cases = BuildCatalogue();
 
     private static Dictionary<string, QueryCase> BuildCatalogue()
@@ -581,7 +584,7 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
     }
 
     /// <summary>The value the query produced, or the exception it threw (both are compared).</summary>
-    private static async Task<Outcome> Guard(Func<Task<object?>> run)
+    internal static async Task<Outcome> Guard(Func<Task<object?>> run)
     {
         try { return Outcome.Of(await run()); }
         catch (Exception ex) { return Outcome.Threw(ex); }
@@ -589,14 +592,14 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
 
     // ── Case model ────────────────────────────────────────────────────────────
 
-    private readonly record struct Outcome(object? Value, Exception? Error)
+    internal readonly record struct Outcome(object? Value, Exception? Error)
     {
         public static Outcome Of(object? value) => new(value, null);
         public static Outcome Threw(Exception ex) => new(null, ex is AggregateException { InnerException: { } inner } ? inner : ex);
         public override string ToString() => Error != null ? $"threw {Error.GetType().Name}: {Error.Message}" : Describe(Value);
     }
 
-    private abstract class QueryCase
+    internal abstract class QueryCase
     {
         protected QueryCase(string name) => Name = name;
         public string Name { get; }
@@ -604,6 +607,11 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
         public abstract Task<object?> RunAsync(IQueryable<DiffDoc> source);
         /// <summary>Null when <paramref name="actual"/> agrees with LINQ-to-Objects over <paramref name="docs"/>.</summary>
         public abstract string? Compare(List<DiffDoc> docs, Outcome actual);
+        /// <summary>
+        /// What every correct answer to this query has in common, as text: two engines that both
+        /// answer correctly give the same text, even where the query leaves the choice among ties open.
+        /// </summary>
+        public abstract string Determined(Outcome outcome);
     }
 
     /// <summary>A query that yields documents: Where* [OrderBy [ThenBy Id]] (Skip|Take)* [Where].</summary>
@@ -714,6 +722,25 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
 
             return null;
         }
+
+        public override string Determined(Outcome outcome)
+        {
+            if (outcome.Error != null) return $"threw {outcome.Error.GetType().Name}";
+            var result = (List<DiffDoc>)outcome.Value!;
+            bool windowed = _window.Count > 0 || _whereAfter != null;
+            var text = new StringBuilder($"{result.Count} documents");
+            // Which documents: fixed unless a window picks among ties; their order: fixed when total.
+            if (!windowed || _thenById)
+            {
+                var ids = result.Select(d => IdNo(d.Id));
+                if (_order == null || !_thenById) ids = ids.OrderBy(i => i);
+                text.Append(" ids [").Append(string.Join(",", ids)).Append(']');
+            }
+            // The keys in order: fixed whenever there is an order.
+            if (_order != null && !_thenById)
+                text.Append(" keys [").Append(string.Join(", ", result.Select(_key!).Select(KeyText))).Append(']');
+            return text.ToString();
+        }
     }
 
     /// <summary>A terminal: the value (or the exception type) must equal LINQ-to-Objects'.</summary>
@@ -748,6 +775,12 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
             var a = Canonical(actual.Value, _ordered);
             return e == a ? null : $"expected {e}, got {a}";
         }
+
+        // A First/Single without an order may pick any matching document: only whether it found one is fixed.
+        public override string Determined(Outcome outcome)
+            => outcome.Error != null ? $"threw {outcome.Error.GetType().Name}"
+                : _custom != null ? (outcome.Value == null ? "no document" : "a document")
+                : Canonical(outcome.Value, _ordered);
     }
 
     private static SequenceCase W(string name, params Expression<Func<DiffDoc, bool>>[] wheres) => new(name, wheres);
@@ -804,14 +837,22 @@ public class DifferentialQueryTests : IClassFixture<DifferentialQueryTests.Fixtu
         _ => Equals(a, b),
     };
 
-    private static int IdNo(ObjectId id) => (int)(id.Timestamp - DateTime.UnixEpoch).TotalSeconds;
+    /// <summary>A sort key as text, equal for keys that <see cref="SameKey"/> finds equal.</summary>
+    private static string KeyText(object? key) => key switch
+    {
+        double d => Describe(d == 0 ? 0.0 : d),
+        decimal m => Describe(m / 1.0000000000000000000000000000m),
+        _ => Describe(key),
+    };
+
+    internal static int IdNo(ObjectId id) => (int)(id.Timestamp - DateTime.UnixEpoch).TotalSeconds;
 
     private static bool SameDocument(DiffDoc a, DiffDoc b)
         => a.Id == b.Id && a.Name == b.Name && a.Nick == b.Nick && a.Count == b.Count && a.Total == b.Total
            && a.Ratio.Equals(b.Ratio) && a.Price == b.Price && a.When == b.When && a.Flag == b.Flag
            && a.MaybeCount == b.MaybeCount && a.Kind == b.Kind;
 
-    private static string Describe(object? value) => value switch
+    internal static string Describe(object? value) => value switch
     {
         null => "null",
         DiffDoc d => $"{{#{IdNo(d.Id)} {d.Name} nick={d.Nick ?? "null"} count={d.Count} total={d.Total} ratio={d.Ratio.ToString("R", System.Globalization.CultureInfo.InvariantCulture)} price={d.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)} when={d.When:O} flag={d.Flag} maybe={d.MaybeCount?.ToString() ?? "null"} kind={d.Kind}}}",
