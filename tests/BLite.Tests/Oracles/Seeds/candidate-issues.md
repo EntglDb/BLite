@@ -245,7 +245,7 @@ null-keyed documents found by a scan.
 
 # Candidate issues from the B-tree model test
 
-Status: **not filed.** Triage of the rows that `BTreeModelTests` reports as disagreeing with its
+Status: **filed 2026-10-17 as #255 (B1), #256 (B2), #257 (B3) and #258 (B4).** Triage of the rows that `BTreeModelTests` reports as disagreeing with its
 model on upstream `0450b97` (v5.2.3), in four new families (B1 to B4) and two that are already
 filed. Every repro below was run as a Fact on `0450b97` (macOS, Arm64, .NET 10); the repros are
 not part of the test suite, the rows listed under each family are. The shortest failing sequences
@@ -269,16 +269,16 @@ growth, reopen, file grows, GreaterThan, cursor, duplicates, NaN): none covers B
 
 | Draft | Registry family label | Rows |
 |---|---|---|
-| B1 | `BTreeIndex cursor primitives drop duplicates and fail past the last key` | 55 |
-| B2 | `equal keys come back in reverse insertion order` | 8 |
-| B3 | `a NaN with the sign bit clear sorts above +Infinity` | 1 |
-| B4 | `a reopen strands the unwritten rest of the last growth block` | 9 |
+| B1, #255 | `BTreeIndex cursor primitives drop duplicates and fail past the last key` | 55 |
+| B2, #256 | `equal keys come back in reverse insertion order` | 8 |
+| B3, #257 | `a NaN with the sign bit clear sorts above +Infinity` | 1 |
+| B4, #258 | `a reopen strands the unwritten rest of the last growth block` | 9 |
 | #237 | `pages a rolled-back transaction allocated are never reclaimed` | 9 |
 | #249 | `-0.0 and +0.0 get different index keys` | 1 |
 
 ---
 
-## B1. `BTreeIndex.Equal`, `In`, `GreaterThan`, `LessThan`, `Between` and `StartsWith` miss duplicates and fail past the last key
+## B1 (#255). `BTreeIndex.Equal`, `In`, `GreaterThan`, `LessThan`, `Between` and `StartsWith` miss duplicates and fail past the last key
 
 **Rows:** `<generator> / Equal`, `/ In` and `/ In.Async` (8 non-unique generators each),
 `/ GreaterThan`, `/ LessThan`, `/ Between` (all 9), `/ StartsWith` (4 string generators).
@@ -360,7 +360,7 @@ use them.
 
 ---
 
-## B2. Equal keys come back from a B-Tree in reverse insertion order, scanning forwards
+## B2 (#256). Equal keys come back from a B-Tree in reverse insertion order, scanning forwards
 
 **Rows:** `<generator> / Ties.Order` for the 8 non-unique generators. Every one of them fails first
 on the **forward** scan (`Range(MinKey, MaxKey, Forward)`), at the first pair of equal keys.
@@ -417,7 +417,7 @@ is "no", the check `Ties.Order` should go instead, and README should say so.
 
 ---
 
-## B3. A NaN with the sign bit clear sorts above `+Infinity` in an index on a double
+## B3 (#257). A NaN with the sign bit clear sorts above `+Infinity` in an index on a double
 
 **Rows:** `double / KeyOrder.NaN`.
 
@@ -474,7 +474,7 @@ same question the index already answers for `-Infinity`, and the BSON post-filte
 
 ---
 
-## B4. Every reopen strands the unwritten rest of the last growth block
+## B4 (#258). Every reopen strands the unwritten rest of the last growth block
 
 **Rows:** `<generator> / Pages.Leaked` for all 9 generators; each shrinks to a single `Reopen`.
 

@@ -224,12 +224,12 @@ public class BTreeModelTests
     /// </summary>
     private static readonly Candidates s_candidates = new()
     {
-        // Draft B1: Equal, In, GreaterThan, LessThan, Between and StartsWith walk a cursor from one
+        // #255 (draft B1): Equal, In, GreaterThan, LessThan, Between and StartsWith walk a cursor from one
         // Seek: they return one entry per duplicated key or skip only one copy of it, throw
         // "Cursor is not valid" (or return nothing) when the key is past the last one or the index
         // is empty, and StartsWith compares with the current culture. InAsync returns one entry
         // per key too; the other async twins, built on RangeAsync, agree.
-        { "BTreeIndex cursor primitives drop duplicates and fail past the last key", "",
+        { "BTreeIndex cursor primitives drop duplicates and fail past the last key", "#255",
             "double / Equal", "int / Equal", "int-mp / Equal", "long / Equal", "string-control / Equal",
             "string-long / Equal", "string-prefix / Equal", "string-prefix-mp / Equal",
             "double / In", "int / In", "int-mp / In", "long / In", "string-control / In", "string-long / In",
@@ -246,19 +246,19 @@ public class BTreeModelTests
             "string-prefix-mp / StartsWith",
             "double / In.Async", "int / In.Async", "int-mp / In.Async", "long / In.Async", "string-control / In.Async",
             "string-long / In.Async", "string-prefix / In.Async", "string-prefix-mp / In.Async" },
-        // Draft B2: a leaf inserts a duplicate before the copies it already holds, so equal keys
+        // #256 (draft B2): a leaf inserts a duplicate before the copies it already holds, so equal keys
         // come back in reverse insertion order even scanning forwards. Sibling of #210 (typed,
         // descending); its fix #244 changes CollectionSecondaryIndex only, not these rows.
-        { "equal keys come back in reverse insertion order", "",
+        { "equal keys come back in reverse insertion order", "#256",
             "double / Ties.Order", "int / Ties.Order", "int-mp / Ties.Order", "long / Ties.Order",
             "string-control / Ties.Order", "string-long / Ties.Order", "string-prefix / Ties.Order",
             "string-prefix-mp / Ties.Order" },
         // -0.0 and +0.0 compare equal but encode as different keys: the defect of #249.
         { "-0.0 and +0.0 get different index keys", "#249",
             "double / KeyOrder" },
-        // Draft B3: a NaN with the sign bit clear (what Arm64 computes) encodes above +Infinity.
+        // #257 (draft B3): a NaN with the sign bit clear (what Arm64 computes) encodes above +Infinity.
         // Sibling of #249, whose text leaves NaN as a separate question.
-        { "a NaN with the sign bit clear sorts above +Infinity", "",
+        { "a NaN with the sign bit clear sorts above +Infinity", "#257",
             "double / KeyOrder.NaN" },
         // Pages a rolled-back transaction allocated (split nodes, a new root) are never reclaimed: #237.
         { "pages a rolled-back transaction allocated are never reclaimed", "#237",
@@ -266,9 +266,9 @@ public class BTreeModelTests
             "long / Pages.LeakedByRollback", "string-control / Pages.LeakedByRollback",
             "string-long / Pages.LeakedByRollback", "string-prefix / Pages.LeakedByRollback",
             "string-prefix-mp / Pages.LeakedByRollback", "unique-int / Pages.LeakedByRollback" },
-        // Draft B4: a reopen counts the unwritten rest of the last growth block as allocated, and
+        // #258 (draft B4): a reopen counts the unwritten rest of the last growth block as allocated, and
         // nothing ever hands it out or frees it.
-        { "a reopen strands the unwritten rest of the last growth block", "",
+        { "a reopen strands the unwritten rest of the last growth block", "#258",
             "double / Pages.Leaked", "int / Pages.Leaked", "int-mp / Pages.Leaked", "long / Pages.Leaked",
             "string-control / Pages.Leaked", "string-long / Pages.Leaked", "string-prefix / Pages.Leaked",
             "string-prefix-mp / Pages.Leaked", "unique-int / Pages.Leaked" },
