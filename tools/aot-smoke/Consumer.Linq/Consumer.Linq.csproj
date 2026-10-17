@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Consumer plus the calls in LinqCalls.cs, which use APIs that AOT_LIMITATIONS.md lists as
+    not AOT-safe. run.sh publishes it and checks the document's promise: each marked line gets the
+    IL2026/IL3050 warnings it names, at that line of this project's source, and no BLite assembly
+    gets an IL2104/IL3053 rollup. The publish keeps the default TrimmerSingleWarn for that reason.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AotSmoke</RootNamespace>
+    <AssemblyName>BLite.AotSmoke.Linq</AssemblyName>
+    <IsPackable>false</IsPackable>
+
+    <PublishAot>true</PublishAot>
+    <TrimMode>full</TrimMode>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Consumer\*.cs" Exclude="..\Consumer\obj\**;..\Consumer\bin\**" LinkBase="Consumer" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\BLite\BLite.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.Bson\BLite.Bson.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.Caching\BLite.Caching.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.SourceGenerators\BLite.SourceGenerators.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,60 @@
+Seeded defect for tools/aot-smoke/run.sh (the call-site check of Consumer.Linq)
+
+Hand-made: DocumentCollection.CreateIndexAsync and its IDocumentCollection declaration lose
+their [RequiresDynamicCode] (both, or the build fails with IL3051), and the analyzer is silenced
+around the inner call to CollectionIndexManager.CreateIndex with #pragma warning disable IL3050,
+the way BLite.Core keeps its build green elsewhere. BLite.Core and BLite still build with
+TreatWarningsAsErrors; the method still compiles its key selector at runtime.
+
+With it applied, the call of CreateIndexAsync in Consumer.Linq/LinqCalls.cs:22 loses its IL3050,
+which AOT_LIMITATIONS.md promises at the call site, and the warning moves into BLite.Core, where
+the Consumer.Linq "additional" count reports it as not registered (osx-arm64, 2026-10-17):
+    FAIL    call site LinqCalls.cs:22 CreateIndexAsync: expected IL3050, absent
+    new: src/BLite.Core/Collections/DocumentCollection.cs(1025): AOT analysis warning IL3050:
+         BLite.Core.Collections.DocumentCollection`2.<CreateIndexAsync>d__60`1.MoveNext(): Using member
+         'BLite.Core.Indexing.CollectionIndexManager`2<TId,T>.CreateIndex<TKey>(...)' ...
+    FAIL    Consumer.Linq additional: 12 BLite warnings, expected 0; 1 not registered; known: A6 x10, A7 x1
+
+Reproduce: tools/aot-smoke/run.sh --prove-seeds create-index-unannotated
+   or:    git apply --ignore-whitespace tools/aot-smoke/seeds/aot-smoke.create-index-unannotated.patch && tools/aot-smoke/run.sh
+Restore:   git checkout -- src
+
+The source files mix LF and CRLF line endings; apply with --ignore-whitespace if the patch was
+normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/Collections/DocumentCollection.cs b/src/BLite.Core/Collections/DocumentCollection.cs
+index 9518912..ec66f17 100644
+--- a/src/BLite.Core/Collections/DocumentCollection.cs
++++ b/src/BLite.Core/Collections/DocumentCollection.cs
+@@ -1005,7 +1005,6 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
+     /// <summary>
+     /// Asynchronously creates a secondary index on the specified property.
+     /// </summary>
+-    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
+     public async Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
+         System.Linq.Expressions.Expression<Func<T, TKey>> keySelector,
+         string? name = null,
+@@ -1020,7 +1019,11 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
+         using var openLock = _storage.EnterOpenLock();
+         using (var txn = _storage.BeginTransaction(IsolationLevel.ReadCommitted))
+         {
++            // SEEDED DEFECT: the [RequiresDynamicCode] of this method was removed and the analyzer
++            // silenced here, so its callers get no call-site warning.
++#pragma warning disable IL3050
+             var index = _indexManager.CreateIndex(keySelector, name, unique);
++#pragma warning restore IL3050
+ 
+             // Rebuild index for existing documents
+             await RebuildIndexAsync(index, ct);
+diff --git a/src/BLite.Core/Collections/IDocumentCollection.cs b/src/BLite.Core/Collections/IDocumentCollection.cs
+index daa4267..f677921 100644
+--- a/src/BLite.Core/Collections/IDocumentCollection.cs
++++ b/src/BLite.Core/Collections/IDocumentCollection.cs
+@@ -158,7 +158,6 @@ public interface IDocumentCollection<TId, T> where T : class
+     // Local engine: fully supported.
+     // Remote (BLite.Client): CreateIndexAsync/Drop/List supported; Scan/ForcePruneAsync throw NotSupportedException.
+ 
+-    [RequiresDynamicCode("Index creation compiles key selector expressions using Expression.Compile() which requires dynamic code generation.")]
+     Task<ICollectionIndex<TId, T>> CreateIndexAsync<TKey>(
+         Expression<Func<T, TKey>> keySelector,
+         string? name = null,

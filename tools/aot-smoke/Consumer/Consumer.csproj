@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A consumer of BLite that uses only the APIs AOT_LIMITATIONS.md calls AOT-safe and the ones it
+    does not mention. run.sh builds it under JIT and publishes it with Native AOT; the two dumps
+    must be byte-identical and the publish log must carry no BLite warning. See ../README.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AotSmoke</RootNamespace>
+    <AssemblyName>BLite.AotSmoke</AssemblyName>
+    <IsPackable>false</IsPackable>
+
+    <PublishAot>true</PublishAot>
+    <TrimMode>full</TrimMode>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <!-- Every warning itemised with its origin, none rolled up into IL2104/IL3053, so the runner
+         can count them per assembly. Consumer.Linq keeps the default to check the rollups. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <!-- Warnings are the measurement here; they must not stop the build. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Same culture and globalization under JIT and AOT, so the dumps can be compared bytewise. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\BLite\BLite.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.Bson\BLite.Bson.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.Caching\BLite.Caching.csproj" />
+    <ProjectReference Include="..\..\..\src\BLite.SourceGenerators\BLite.SourceGenerators.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

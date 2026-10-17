@@ -23,7 +23,7 @@ file; `tests/BLite.Tests/Oracles/Seeds/candidate-issues.md` has the drafts.
 
 ## What it is
 
-Three mechanisms, each in one file, plus two commit trailers.
+Three mechanisms, each in one file, plus two commit trailers, and a local tool for Native AOT.
 
 ### Oracle tests (`tests/BLite.Tests/Oracles/*Tests.cs`)
 
@@ -70,6 +70,37 @@ A test that compares BLite against an exact reference. Three kinds exist today, 
 Other kinds fit BLite and are not written yet: round trip (a document through the BSON writer and
 reader, a page through encryption and back), differential BLQL against LINQ on a `DynamicCollection`,
 and `DynamicCollection` against the typed collection for the same documents and queries.
+
+### Native AOT smoke test (`tools/aot-smoke/`)
+
+A fourth kind, outside the test project because a publish needs clang and takes longer than a test
+should: a **twin build**. `tools/aot-smoke/Consumer` is a console app that uses only what
+AOT_LIMITATIONS.md calls AOT-safe and what it does not mention (a source-generated context with
+model-declared indexes running the store model's sequence, encryption at rest, `DynamicCollection`
+with CDC and BLQL, the key-value store, BLite.Caching) and writes a canonical dump. Two oracles:
+
+- **the JIT build of the same consumer** is the reference for the Native AOT binary: same seed,
+  fresh databases, and the two dumps must be byte-identical, section by section. What differs is
+  something that trimming or AOT compilation changed.
+- **the publish log** is the reference for the annotation promise: no ILC trim or AOT warning in a
+  BLite assembly for the safe consumer, and for `tools/aot-smoke/Consumer.Linq` (the same consumer
+  plus the annotated calls, each line marked `// aot-expect: IL2026 IL3050`) exactly the marked
+  warnings at the marked lines, with no IL2104/IL3053 rollup for a BLite assembly.
+
+`tools/aot-smoke/run.sh` runs both, prints one verdict per check and exits 1 on a finding;
+`run.sh --prove-seeds` shows that each of its seeds (`tools/aot-smoke/seeds/*.patch`, same header
+format) makes it fail, which `tools/oracle-seeds.cs` cannot do without a test class. Its
+candidates are registered in `tools/aot-smoke/candidates.md`, whose table `run.sh` reads: a listed
+warning or failed section is printed as `KNOWN ... [known candidate: A<n>]` and does not fail the
+run. Its first run, on upstream `0450b97`, found seven (A1 to A7): typed collections cannot write
+under Native AOT, an encrypted database cannot read a page that a never-committed transaction
+allocated (both builds), and five sets of warnings the document says a consumer does not get, most
+of them hidden from BLite's own build by `#pragma warning disable IL...`.
+
+It does not see IL2CPP (Unity), Mono AOT and MAUI, `browser-wasm` (WASM_SUPPORT.md covers it
+separately; the Consumer's sections could run there later over `MemoryPageStorage`), other RIDs
+than the host's, or behaviour that both builds share unless it fails outright. Details, the
+prerequisites and the result per run are in `tools/aot-smoke/README.md`.
 
 ### Seeds (`tests/BLite.Tests/Oracles/Seeds/*.patch`)
 
@@ -119,6 +150,13 @@ dotnet test tests/BLite.Tests --filter FullyQualifiedName~BLite.Tests.Oracles
 
 `BLITE_DIFF_SEED=<n>` changes the documents of the differential test; the seed is part of every
 failure message so a run can be repeated.
+
+**Run the AOT smoke test** (local only; needs clang, see `tools/aot-smoke/README.md`).
+
+```bash
+tools/aot-smoke/run.sh
+tools/aot-smoke/run.sh --prove-seeds
+```
 
 **Read a failure.** A differential failure names the seed, the query (`query 'nick == null'`) and,
 per line, the engine that disagreed: `indexed/sync`, `indexed/async`, `plain/sync`, `plain/async`.
@@ -184,10 +222,14 @@ expose an old defect.
   page and WAL write it makes becomes a crash point in every mode, with no new fixture.
 - **A new serialization or encryption option** is a new round-trip oracle test with its own seed,
   after which every later option is one more case in it.
+- **A new public API** is one more call in `tools/aot-smoke/Consumer` with its result in the dump,
+  so it runs under JIT and Native AOT and its publish warnings are counted; **a new
+  `[RequiresDynamicCode]` or `[RequiresUnreferencedCode]` annotation** is one more call in
+  `Consumer.Linq/LinqCalls.cs` with an `// aot-expect:` marker, one more expected call-site warning.
 
 What the tests do not see: targets other than `net10.0` (`netstandard2.1`, Unity, MAUI; the test
-project runs on `net10.0` only), real multi-process races beyond the alternation the model drives,
-crashes in multi-process mode, inside `Backup` and inside the engine's constructor on a reopen (the
-injector steps aside there, see `WalCrashTests`), torn page writes, performance, and anything whose
-correct answer has no exact reference, such as API design and documentation drift. Those stay
-with review.
+project runs on `net10.0` only, the AOT smoke test publishes for the host RID only), real
+multi-process races beyond the alternation the model drives, crashes in multi-process mode, inside
+`Backup` and inside the engine's constructor on a reopen (the injector steps aside there, see
+`WalCrashTests`), torn page writes, performance, and anything whose correct answer has no exact
+reference, such as API design and documentation drift. Those stay with review.
