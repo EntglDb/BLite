@@ -232,7 +232,7 @@ public class DynamicDifferentialTests : IClassFixture<DynamicDifferentialTests.F
 
     /// <summary>
     /// Rows that disagree on upstream 0450b97 plus the oracle branches, by family, with the issue that
-    /// tracks each (empty until filed; drafts D1 to D8 in <c>Seeds/candidate-issues.md</c>). None is a
+    /// tracks each (drafts D1 to D8 in <c>Seeds/candidate-issues.md</c>, filed as #264 to #270). None is a
     /// documented difference between the typed and the schema-less collection: README.md:880 (dynamic
     /// indexes an explicit null, typed indexes do not) changes which values a unique index accepts,
     /// which <see cref="DynamicStoreModelTests"/> encodes, and no query answer here.
@@ -246,40 +246,40 @@ public class DynamicDifferentialTests : IClassFixture<DynamicDifferentialTests.F
             "ratio range [-1, 1.5]") },
         // The typed collection misses -0.0 the same way (#249), so only the LINQ rows disagree.
         { "dynamic double keys are little-endian bytes", "#254", Named(IndexedWays, [Linq], "Count(ratio == 0.0)", "ratio == 0.0") },
-        // D1: BLQL reads a field with BsonDocument.TryGetValue, which does not follow a dotted path, so
+        // #264: BLQL reads a field with BsonDocument.TryGetValue, which does not follow a dotted path, so
         // a filter on "meta.kind" matches nothing (and $ne everything); the indexed sort is served by the
         // nested index and agrees, the in-memory sort does not.
-        { "BLQL cannot reach a nested field", "", Named(BlqlWays, BothOracles,
+        { "BLQL cannot reach a nested field", "#264", Named(BlqlWays, BothOracles,
             "(int)kind == 2", "Count(kind == Blue)", "flag and kind == Red", "kind != Blue", "kind < Blue", "kind == Black",
             "kind == Blue", "kind == Red or kind == Black", "kind >= Green", "kind in list", "three wheres") },
-        { "BLQL cannot reach a nested field", "", Named([PlainBlql], BothOracles, "orderby kind", "orderby kind skip 10 take 10") },
-        // D2: BsonValueComparer orders ObjectIds by ObjectId.WriteTo's bytes (timestamp little-endian),
+        { "BLQL cannot reach a nested field", "#264", Named([PlainBlql], BothOracles, "orderby kind", "orderby kind skip 10 take 10") },
+        // #265: BsonValueComparer orders ObjectIds by ObjectId.WriteTo's bytes (timestamp little-endian),
         // ObjectId.CompareTo by the timestamp's value.
-        { "BLQL orders ObjectIds by their little-endian bytes", "", Named(BlqlWays, BothOracles,
+        { "BLQL orders ObjectIds by their little-endian bytes", "#265", Named(BlqlWays, BothOracles,
             "OrderBy(count).ThenBy(id).ElementAt(10)", "OrderBy(count).ThenBy(id).Select(id) (ordered)", "OrderBy(count).ThenBy(id).Take(5).Last()",
             "OrderBy(id).Take(10).Sum(count)", "Where(count > 5).OrderBy(id).Skip(2).Take(10).Sum(count)", "orderby count desc thenby id",
             "orderby count thenby id", "orderby count thenby id take 20 where flag", "orderby count thenby id take 7", "orderby id",
             "orderby id desc", "orderby id desc skip 10 take 50 where name startswith p1", "orderby id take 50 where count > 5",
             "where flag orderby when thenby id", "where name startswith p1 orderby count thenby id take 10") },
-        // D3: BlqlQuery.FirstOrDefaultAsync scans in storage order and ignores Sort and Skip.
-        { "BLQL First and FirstOrDefault ignore Sort and Skip", "", Named(BlqlWays, BothOracles,
+        // #266: BlqlQuery.FirstOrDefaultAsync scans in storage order and ignores Sort and Skip.
+        { "BLQL First and FirstOrDefault ignore Sort and Skip", "#266", Named(BlqlWays, BothOracles,
             "OrderBy(count).ThenBy(id).First()", "OrderBy(count).ThenBy(id).Skip(3).First()", "OrderByDescending(when).ThenBy(id).First()",
             "Where(count > 5).OrderBy(name).ThenBy(id).FirstOrDefault()") },
-        // D4: BsonValueComparer orders values of different BSON types by type (null lowest, strings above
+        // #267: BsonValueComparer orders values of different BSON types by type (null lowest, strings above
         // numbers), so $lt and $lte match a null field (and $gt a string); the index range skips null
         // keys, so the indexed collection agrees with LINQ and the plain one does not.
-        { "BLQL range operators match fields of another BSON type", "", Named([PlainBlql], BothOracles, "maybe < 9.5 (double bound)", "maybe <= 0") },
-        // D5: two Int64 values are compared as doubles, which cannot tell long.MaxValue - 1 from long.MaxValue.
-        { "BLQL compares two Int64 values through double", "", Named(BlqlWays, BothOracles, "total > long.MaxValue - 1") },
-        // D6: the bound is keyed in its own type (a double as BitConverter bytes) against Int32 and Int64
+        { "BLQL range operators match fields of another BSON type", "#267", Named([PlainBlql], BothOracles, "maybe < 9.5 (double bound)", "maybe <= 0") },
+        // #268: two Int64 values are compared as doubles, which cannot tell long.MaxValue - 1 from long.MaxValue.
+        { "BLQL compares two Int64 values through double", "#268", Named(BlqlWays, BothOracles, "total > long.MaxValue - 1") },
+        // #269: the bound is keyed in its own type (a double as BitConverter bytes) against Int32 and Int64
         // keys, the dynamic counterpart of the typed #222.
-        { "a numeric bound of another type than the stored values misses keys of a dynamic index", "", Named(IndexedWays, BothOracles,
+        { "a numeric bound of another type than the stored values misses keys of a dynamic index", "#269", Named(IndexedWays, BothOracles,
             "Count(count < 9.5)", "Where(count < 9.5).Max(count)", "count < 9.5 (double bound)", "count == 5.0 (double bound)",
             "maybe < 9.5 (double bound)", "total < 9.5 (double bound)") },
-        // D7: BsonValueToIndexKey has no key for Decimal128 and Boolean, so the index stays empty: the
+        // #269: BsonValueToIndexKey has no key for Decimal128 and Boolean, so the index stays empty: the
         // index-served sort returns nothing and QueryIndexAsync rejects such a bound.
-        { "a dynamic index keys no Decimal128 or Boolean value", "", Named(IndexedWays, BothOracles, "orderby flag", "orderby price", "orderby price take 20") },
-        { "a dynamic index keys no Decimal128 or Boolean value", "", Named([IndexedApi], BothOracles,
+        { "a dynamic index keys no Decimal128 or Boolean value", "#269", Named(IndexedWays, BothOracles, "orderby flag", "orderby price", "orderby price take 20") },
+        { "a dynamic index keys no Decimal128 or Boolean value", "#269", Named([IndexedApi], BothOracles,
             "Count(flag)", "Count(price == 5m)", "Select(new { id, count })", "Select(price * 2)", "Where(flag).Max(total)",
             "Where(flag).Select(kind).Distinct()", "Where(price < 1e19m).Average(price)", "Where(price < 1e19m).Sum(price)",
             "Where(price == 5m).FirstOrDefault()", "flag", "flag == false", "flag == true", "flag and count > 5", "flag and kind == Red",
@@ -287,8 +287,8 @@ public class DynamicDifferentialTests : IClassFixture<DynamicDifferentialTests.F
             "price == 5 (int bound)", "price == 5.00m", "price == 5m", "price == 5m and ratio == 1.0", "price > 1e19m",
             "price > 5 (int bound)", "price >= 9.99m", "price range [1, 10)", "where flag orderby when take 3 skip 1",
             "where flag orderby when thenby id", "where flag, where name startswith p1") },
-        // D8: CreateIndexKeyFromObject has no case for DateTime, which the index keys as Unix milliseconds.
-        { "QueryIndexAsync rejects a DateTime bound", "", Named([IndexedApi], BothOracles,
+        // #270: CreateIndexKeyFromObject has no case for DateTime, which the index keys as Unix milliseconds.
+        { "QueryIndexAsync rejects a DateTime bound", "#270", Named([IndexedApi], BothOracles,
             "Count(when < t5)", "when < t5", "when <= T0", "when == T0.AddMinutes(5) (call)", "when == t5", "when == t5 and maybe == null",
             "when > t20", "when >= t10 and < t20") },
         // The typed oracle is wrong here, see DifferentialQueryTests: its indexes skip null keys (README.md:880)

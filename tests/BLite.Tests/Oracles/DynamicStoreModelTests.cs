@@ -83,14 +83,14 @@ public class DynamicStoreModelTests
 
     /// <summary>
     /// Rows known to fail on upstream 0450b97 plus the oracle branches, see <see cref="Candidates"/>
-    /// (draft D9 in <c>Seeds/candidate-issues.md</c>). The page checks pass: <c>DropIndex</c> and
+    /// (#271, draft D9 in <c>Seeds/candidate-issues.md</c>). The page checks pass: <c>DropIndex</c> and
     /// <c>VacuumAsync(RebuildIndexes)</c> free the old trees since #211.
     /// </summary>
     private static readonly Candidates s_candidates = new()
     {
-        // D9: CreateIndexAsync registers the index before it fills it and, when a unique violation
+        // #271: CreateIndexAsync registers the index before it fills it and, when a unique violation
         // throws mid-fill, neither unregisters it nor ends the fill's transaction.
-        { "a failed unique CreateIndexAsync leaves the half-filled index registered", "",
+        { "a failed unique CreateIndexAsync leaves the half-filled index registered", "#271",
             Label(3, UniqueBackfill), Label(4, UniqueBackfill), Label(5, UniqueBackfill), Label(6, UniqueBackfill) },
         // #234: dynamic index keys carry no document id, so each delete of a duplicated key searches
         // every leaf that holds the key.

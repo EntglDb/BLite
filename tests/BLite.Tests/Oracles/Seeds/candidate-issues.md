@@ -747,7 +747,12 @@ free WAL records.
 
 # Candidate issues from the DynamicCollection tests
 
-Status: **not filed.** Triage of the rows that `DynamicDifferentialTests` and
+Status: **filed 2026-10-17 as #264 (D1), #265 (D2), #266 (D3), #267 (D4), #268 (D5), #269 (D6 and
+D7), #270 (D8) and #271 (D9).** D6 and D7 are one issue: both come from the same two key switches
+(`BsonValueToIndexKey` and `CreateIndexKeyFromObject`), and one key encoding fixes both. D4 and D5 stay
+apart: D4 is `CompareFilter` applying range operators across the comparer's type order (a design
+question), D5 the comparer's numeric branch contradicting its own summary (a two-line fix). Triage of
+the rows that `DynamicDifferentialTests` and
 `DynamicStoreModelTests` report on upstream `0450b97` (v5.2.3; the oracle branches change no file
 under `src/`): 248 differential rows in eight families (D1 to D8) and 4 store-model rows in one
 (D9), next to reproductions of #254 (48 rows), #234 (the scaling row) and the typed oracle's own
@@ -789,15 +794,15 @@ and D7 are its siblings in the same key switch), #222 (closed, the typed twin of
 
 | Draft | Registry family label | Rows |
 |---|---|---|
-| D1 | `BLQL cannot reach a nested field` | 48 |
-| D2 | `BLQL orders ObjectIds by their little-endian bytes` | 60 |
-| D3 | `BLQL First and FirstOrDefault ignore Sort and Skip` | 16 |
-| D4 | `BLQL range operators match fields of another BSON type` | 4 |
-| D5 | `BLQL compares two Int64 values through double` | 4 |
-| D6 | `a numeric bound of another type than the stored values misses keys of a dynamic index` | 24 |
-| D7 | `a dynamic index keys no Decimal128 or Boolean value` | 76 |
-| D8 | `QueryIndexAsync rejects a DateTime bound` | 16 |
-| D9 | `a failed unique CreateIndexAsync leaves the half-filled index registered` | 4 |
+| D1, #264 | `BLQL cannot reach a nested field` | 48 |
+| D2, #265 | `BLQL orders ObjectIds by their little-endian bytes` | 60 |
+| D3, #266 | `BLQL First and FirstOrDefault ignore Sort and Skip` | 16 |
+| D4, #267 | `BLQL range operators match fields of another BSON type` | 4 |
+| D5, #268 | `BLQL compares two Int64 values through double` | 4 |
+| D6, #269 | `a numeric bound of another type than the stored values misses keys of a dynamic index` | 24 |
+| D7, #269 | `a dynamic index keys no Decimal128 or Boolean value` | 76 |
+| D8, #270 | `QueryIndexAsync rejects a DateTime bound` | 16 |
+| D9, #271 | `a failed unique CreateIndexAsync leaves the half-filled index registered` | 4 |
 | #254 | `dynamic double keys are little-endian bytes` | 48 |
 | #234 | `deleting N documents that share an indexed value is quadratic` | 1 |
 | #247 | `the typed oracle: == null and a nullable top-N on an index find no null-keyed document` | 20 |
@@ -814,7 +819,7 @@ and 200 ms (x10.5) for distinct values; N log N allows x10.3, the test fails abo
 
 ---
 
-## D1. BLQL filters and sorts cannot reach a nested field, though a dynamic index can be built on one
+## D1 (#264). BLQL filters and sorts cannot reach a nested field, though a dynamic index can be built on one
 
 **Rows:** `indexed/blql` and `plain/blql`, both oracles: `(int)kind == 2`, `Count(kind == Blue)`,
 `flag and kind == Red`, `kind != Blue`, `kind < Blue`, `kind == Black`, `kind == Blue`,
@@ -863,7 +868,7 @@ so a dotted name can always mean a path.
 
 ---
 
-## D2. BLQL orders and compares ObjectIds by their little-endian bytes, not as `ObjectId.CompareTo`
+## D2 (#265). BLQL orders and compares ObjectIds by their little-endian bytes, not as `ObjectId.CompareTo`
 
 **Rows:** `indexed/blql` and `plain/blql`, both oracles: `orderby id`, `orderby id desc`,
 `orderby id take 50 where count > 5`, `orderby id desc skip 10 take 50 where name startswith p1`,
@@ -911,7 +916,7 @@ format change with a rebuild, and could join the v6 key-format bump (#212, #234)
 
 ---
 
-## D3. BLQL `First` and `FirstOrDefault` ignore `Sort` and `Skip`
+## D3 (#266). BLQL `First` and `FirstOrDefault` ignore `Sort` and `Skip`
 
 **Rows:** `indexed/blql` and `plain/blql`, both oracles: `OrderBy(count).ThenBy(id).First()`,
 `OrderBy(count).ThenBy(id).Skip(3).First()`, `OrderByDescending(when).ThenBy(id).First()`,
@@ -946,7 +951,7 @@ filter); the current body is from `6364585` (v3.8.1-preview.2).
 
 ---
 
-## D4. BLQL range operators match fields of another BSON type: `null` under `$lt`, strings under `$gt`
+## D4 (#267). BLQL range operators match fields of another BSON type: `null` under `$lt`, strings under `$gt`
 
 **Rows:** `plain/blql`, both oracles: `maybe <= 0`, `maybe < 9.5 (double bound)` (e.g. expected 72
 documents, got 178: every document whose `maybecount` is null). The indexed rows agree.
@@ -982,7 +987,7 @@ keep the total order.
 
 ---
 
-## D5. BLQL compares two Int64 values through `double`
+## D5 (#268). BLQL compares two Int64 values through `double`
 
 **Rows:** `indexed/blql` and `plain/blql`, both oracles: `total > long.MaxValue - 1` (expected the
 one document with `long.MaxValue`, got none).
@@ -1012,7 +1017,7 @@ summary describes.
 
 ---
 
-## D6. A numeric bound of another BSON type than the indexed values misses keys of a dynamic index
+## D6 (#269). A numeric bound of another BSON type than the indexed values misses keys of a dynamic index
 
 **Rows:** `indexed/api` and `indexed/blql`, both oracles: `count < 9.5 (double bound)`,
 `count == 5.0 (double bound)`, `maybe < 9.5 (double bound)`, `total < 9.5 (double bound)`,
@@ -1052,7 +1057,7 @@ to the property's type (#222, `7e37f33`, PR #228).
 
 ---
 
-## D7. A dynamic index keys no Decimal128 or Boolean value: index-served sorts return nothing
+## D7 (#269). A dynamic index keys no Decimal128 or Boolean value: index-served sorts return nothing
 
 **Rows:** `indexed/api` and `indexed/blql`, both oracles: `orderby price`, `orderby price take 20`,
 `orderby flag` (expected 400 documents, got 0); `indexed/api`, both oracles, 32 queries with a
@@ -1097,7 +1102,7 @@ values it may not hold.
 
 ---
 
-## D8. `QueryIndexAsync` rejects a `DateTime` bound
+## D8 (#270). `QueryIndexAsync` rejects a `DateTime` bound
 
 **Rows:** `indexed/api`, both oracles: `when == t5`, `when < t5`, `when <= T0`, `when > t20`,
 `when >= t10 and < t20`, `when == T0.AddMinutes(5) (call)`, `when == t5 and maybe == null`,
@@ -1127,7 +1132,7 @@ README sample also uses the old synchronous names (`QueryIndex`, `Near`, `Within
 
 ---
 
-## D9. A failed unique `CreateIndexAsync` leaves the half-filled index registered
+## D9 (#271). A failed unique `CreateIndexAsync` leaves the half-filled index registered
 
 **Rows:** `seed 3 / Index.UniqueBackfill`, `seed 4 / ...`, `seed 5 / ...`, `seed 6 / ...` of
 `DynamicStoreModelTests`.
