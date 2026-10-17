@@ -750,6 +750,8 @@ public sealed class BTreeIndex
         offsets[count] = off; // end-of-data sentinel
 
         // Pass 2 — binary search for sorted insertion point (O(log N), zero-alloc).
+        // Upper bound: the first entry greater than the new key, so a duplicate goes after the
+        // copies already there and a forward scan returns equal keys in insertion order (#256).
         var newKeyData = entry.Key.Data;
         int lo = 0, hi = count - 1;
         int insertIdx = count; // default: append at end
@@ -758,7 +760,7 @@ public sealed class BTreeIndex
             int mid = (lo + hi) >> 1;
             int midOff = offsets[mid];
             int midKeyLen = BitConverter.ToInt32(pageBuffer.Slice(midOff, 4));
-            if (IndexKey.CompareRaw(newKeyData, pageBuffer.Slice(midOff + 4, midKeyLen)) <= 0)
+            if (IndexKey.CompareRaw(newKeyData, pageBuffer.Slice(midOff + 4, midKeyLen)) < 0)
             { insertIdx = mid; hi = mid - 1; }
             else { lo = mid + 1; }
         }
