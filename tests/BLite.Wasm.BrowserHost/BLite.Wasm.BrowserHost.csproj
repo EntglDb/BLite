@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <!--
+    Browser host for the BLite.Wasm test harness. It exposes each scenario as a
+    [JSInvokable] method; tests/BLite.Wasm.BrowserTests publishes this project,
+    serves it and drives it with Playwright.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <!-- Trimming warnings are part of what the harness reports, so they must not fail the build. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
+  </ItemGroup>
+
+  <!--
+    The scenarios are only reached from JavaScript, so TrimMode=full would remove them.
+    Root this assembly only; the BLite assemblies stay subject to the trimmer.
+  -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="BLite.Wasm.BrowserHost" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BLite.Wasm\BLite.Wasm.csproj" />
+    <ProjectReference Include="..\..\src\BLite.Bson\BLite.Bson.csproj" />
+    <ProjectReference Include="..\..\src\BLite.Core\BLite.Core.csproj" />
+    <ProjectReference Include="..\..\src\BLite.SourceGenerators\BLite.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!--
+    BLite.Wasm is a plain class library, so its wwwroot modules are not static web
+    assets. The interop classes import them from the site root ("../blite-*.mjs"
+    relative to _framework/), so link them into this host's wwwroot.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\src\BLite.Wasm\wwwroot\*.mjs" Link="wwwroot\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

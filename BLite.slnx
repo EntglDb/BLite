@@ -27,6 +27,8 @@
     <Project Path="tests/BLite.Shared/BLite.Shared.csproj" Id="c1cb8033-8381-4f75-8a26-23ea9f8f8f4e" />
     <Project Path="tests/BLite.StressMonitor/BLite.StressMonitor.csproj" />
     <Project Path="tests/BLite.Tests/BLite.Tests.csproj" />
+    <Project Path="tests/BLite.Wasm.BrowserHost/BLite.Wasm.BrowserHost.csproj" />
+    <Project Path="tests/BLite.Wasm.BrowserTests/BLite.Wasm.BrowserTests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/BLite.Studio/BLite.Studio.csproj" />

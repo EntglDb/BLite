@@ -1,0 +1,40 @@
+Seeded defect for tests/BLite.Wasm.BrowserTests (BrowserScenarioTests)
+
+Hand-made: OpfsPageStorage.FlushAsync forgets its dirty pages. It clears the dirty set and
+flushes the OPFS file in the Worker without writing a single page to it, so a checkpoint
+persists nothing on OPFS; the WAL (in IndexedDB) still holds every commit, and the checkpoint
+truncates it. BLite.Wasm still builds with TreatWarningsAsErrors.
+
+With it applied, the rows that pass on upstream 0450b97 because CheckpointAsync ran before the
+reload lose their data on OPFS, and none of them is a registered candidate (Chromium 153,
+variant trimmed, 2026-10-17):
+    Committed_write_survives_reload Opfs/checkpoint: Expected marker m1 after reload, found ''.
+    Typed_write_survives_reload Opfs/checkpoint=True/indexed=False: Expected t1 after reload, found ''.
+    Large_database_open_time_and_memory Opfs/20MB: Filled 20971 documents and checkpointed, but the reopened database holds 0.
+The IndexedDB rows are unchanged, which places the defect in the OPFS page store.
+
+Reproduce: git apply --ignore-whitespace tests/BLite.Wasm.BrowserTests/seeds/BrowserScenarioTests.opfs-flush-dropped.patch && dotnet test tests/BLite.Wasm.BrowserTests
+Restore:   git checkout -- src
+
+The source files mix LF and CRLF line endings; apply with --ignore-whitespace if the patch was
+normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Wasm/Storage/OpfsPageStorage.cs b/src/BLite.Wasm/Storage/OpfsPageStorage.cs
+index de866bf..f79109d 100644
+--- a/src/BLite.Wasm/Storage/OpfsPageStorage.cs
++++ b/src/BLite.Wasm/Storage/OpfsPageStorage.cs
+@@ -225,14 +225,6 @@ public sealed class OpfsPageStorage : IPageStorage
+         ThrowIfDisposed();
+         if (!_opened) return;
+ 
+-        foreach (var pageId in _dirtyPages)
+-        {
+-            cancellationToken.ThrowIfCancellationRequested();
+-            if (_pageCache.TryGetValue(pageId, out var page))
+-            {
+-                await OpfsWorkerInterop.WritPageAsync(_dbName, (int)pageId, Convert.ToBase64String(page));
+-            }
+-        }
+         _dirtyPages.Clear();
+ 
+         // Flush the OPFS file in the Worker to ensure durability.

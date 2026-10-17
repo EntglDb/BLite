@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Runs BLite.Wasm in a real browser. The fixture publishes tests/BLite.Wasm.BrowserHost,
+    serves it from Kestrel and drives it with Playwright. See README.md for variants.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.63.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The candidate registry; the tests read the table at run time. -->
+    <Content Include="candidates.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <HostProjectPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\BLite.Wasm.BrowserHost\BLite.Wasm.BrowserHost.csproj'))</HostProjectPath>
+    <WasmProjectPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\src\BLite.Wasm\BLite.Wasm.csproj'))</WasmProjectPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>HostProjectPath</_Parameter1>
+      <_Parameter2>$(HostProjectPath)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>WasmProjectPath</_Parameter1>
+      <_Parameter2>$(WasmProjectPath)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>BLite.Wasm browser harness</title>
+    <base href="/" />
+    <link rel="preload" id="webassembly" />
+    <script type="importmap"></script>
+</head>
+<body>
+    <div id="app">loading</div>
+    <script src="_framework/blazor.webassembly#[.{fingerprint}].js" autostart="false"></script>
+    <script>
+        // Tests wait for window.harness.ready before calling a scenario.
+        window.harness = { ready: false };
+        Blazor.start().then(() => { window.harness.ready = true; });
+        window.harness.run = (method, ...args) =>
+            DotNet.invokeMethodAsync("BLite.Wasm.BrowserHost", method, ...args);
+    </script>
+</body>
+</html>
