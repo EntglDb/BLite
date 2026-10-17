@@ -36,7 +36,7 @@ check with `grep` that the fix removed what it names.
 | A1 | dump | `BSON Key 'name' not found in dictionary cache` | #273 | typed writes fail under Native AOT: the generated mapper reports no keys |
 | A1 | warning | `UsedKeys.get: Using member` | #273 | the reflection behind it, hidden by a pragma |
 | A1 | warning | `BsonSchemaGenerator.GetCollectionItemType` | #273 | the same path, one call further |
-| A2 | dump | `AuthenticationTagMismatchException` | #274 | encrypted database: a page allocated by a transaction that never commits cannot be read |
+| A2 | dump | `AuthenticationTagMismatchException` | #274 | encrypted database: a page allocated but never written (a transaction that does not commit, a crash) cannot be read |
 | A3 | warning | `DocumentDbContext.CreateCollection<` | #275 | every source-generated DbContext warns in its generated InitializeCollections |
 | A3 | warning | `DocumentDbContext.CreateSessionCollection<` | #275 | and in its generated Set<TId, T> |
 | A4 | warning | `ValueConverterRegistry..cctor` | #275 | ValueConverterRegistry.Empty calls the annotated constructor, hidden by a pragma |
@@ -104,10 +104,12 @@ callers that want a schema. A Native AOT publish of a consumer in CI would have 
 
 ---
 
-## A2. Encrypted database: a page allocated by a transaction that never commits cannot be read (#274)
+## A2. Encrypted database: a page allocated but never written cannot be read (#274)
 
 Not an AOT defect: both builds fail identically. The smoke test found it because it runs the store
-model's sequence on an encrypted context, which no oracle test does.
+model's sequence on an encrypted context, which no oracle test did. `StoreModelTests` and
+`WalCrashTests` now run every seed on an encrypted engine as well, and their encrypted rows catch it
+(below); the crash oracle adds shapes without any transaction.
 
 **API:** `DocumentDbContext(path, CryptoOptions)` (or an engine with `AesGcmCryptoProvider`), any
 typed collection, and a caller-owned transaction that allocates a data page and then does not
@@ -134,6 +136,43 @@ The third shape means an encrypted database that is closed, or whose process die
 transaction that allocated a page is open cannot be opened again. A first committed insert before
 `Begin` avoids all three (the transaction then reuses the existing page instead of allocating one).
 
+**What the oracle tests report.** `StoreModelTests` (300 steps per seed): 5 of the 8 encrypted rows
+fail, `seed 2`, `seed 3` and `seed 4, multiProcess=False, encrypted`, and `seed 2` and
+`seed 3, multiProcess=True, encrypted`; seeds 1 and 5 pass, and every plaintext row passes. Each
+shrinks to 3 or 4 steps (the multi-process rows to the same sequences as the single-process ones);
+the failing step throws `AuthenticationTagMismatchException`:
+
+```
+seed 2:  1. Begin  2. Insert(id=101, count=9, code=null, payload=18000 chars)  3. Rollback
+         4. InsertBulk(6 documents)                    -> FindPageWithSpace (DocumentCollection.cs:1909)
+seed 3:  1. Begin  2. InsertBulk(6 documents, two of 18000 chars)  3. Rollback
+         4. InsertBulk(4 documents)                    -> FindPageWithSpace (DocumentCollection.cs:1909)
+seed 4:  1. Begin  2. Insert(id=56, count=7, code=c38, payload=18000 chars)  3. Backup
+                                                       -> opening the backup: RebuildFreeSpaceIndex (DocumentCollection.cs:955)
+```
+
+`WalCrashTests` (60 steps per seed, every crash point): the encrypted rows `ProcessCrash / Recovery`,
+`TornWrite / Recovery`, `PowerLoss / Recovery`, `ProcessCrash / Continue` and
+`TornWrite / Continue` fail, 98, 100, 59, 36 and 18 crash states, every one with
+`AuthenticationTagMismatchException` from `RebuildFreeSpaceIndex` (`DocumentCollection.cs:955`) on
+the reopen; `PowerLoss / Continue, encrypted` has 8 such states too, but is registered under #260,
+which it fails first. The shortest sequences:
+
+```
+ProcessCrash / Recovery: 0 steps. The first open creates the collection; a crash right after
+    AllocatePage() = 3 has grown the file to 4 pages and before page 3 is written. The reopen throws.
+TornWrite / Recovery:    1 step, Insert(id=4, count=3, code=c27, payload=20 chars) without a
+    transaction; the crash cuts its WAL write after 1 byte. The commit is lost, the data page it
+    allocated is in the grown file but all zero. The reopen throws.
+PowerLoss / Recovery:    the same step, a power loss after its WAL flush (the WAL is not fsynced, #260).
+ProcessCrash / Continue, TornWrite / Continue: 12 steps, a crash during a Reopen; the recovered
+    database opens, and a later Reopen of the continuation throws.
+```
+
+So a process that dies between the growth of an encrypted file and the page's first write, with or
+without a transaction of the caller's, leaves a database that cannot be opened. The plaintext rows
+of the same crash states pass.
+
 **Expected:** the rolled-back or uncommitted page is never visible: the insert goes to a valid page,
 the backup and the reopened database open, as they do without encryption.
 
@@ -148,14 +187,30 @@ with no free space, and is skipped; with encryption `PageFile.ReadPageHeaderCore
 (`src/BLite.Core/Storage/PageFile.cs:676`) decrypts the whole page, and zeros fail AES-GCM
 authentication.
 
+On the open the scan is wider than the collection's pages: in single-file mode
+`StorageEngine.GetCollectionPageIds` yields every page of the file, `0..NextPageId`
+(`src/BLite.Core/Storage/StorageEngine.Memory.cs:631`), and `RebuildFreeSpaceIndex` reads each
+header. Any page that the file holds and that was never written then fails the open: a page of a
+transaction that did not commit, and also a page whose growth reached the file while its first
+write did not (the crash shapes above). `PageFile` grows an encrypted file by exactly one page for
+this reason ("Extra (unwritten) pages contain all-zeros and cannot be decrypted",
+`PageFile.EnsureCapacityCore`, `PageFile.cs:767`), which closes the gap of a growth block but not
+the window between the growth and the write. `PageFile.IsFreePageCore` already treats a page that
+cannot be decrypted as not free (`PageFile.cs:1168`); `RebuildFreeSpaceIndex` and
+`FindPageWithSpace` do not catch it.
+
 **Affected versions:** encryption since `c2bfec6` (#100, v5.0.0); the FSI fast path since `4c56f63`
 (#54, v4.2.1). So v5.0.0 to v5.2.3.
 
 **Fix considerations:** either treat a page that was never written (all zero on disk, or beyond the
 last committed size) as free/empty in the encrypted read path, or keep page allocation inside the
-transaction (release the id on rollback, do not persist it in the page list before commit). The
-store model would catch a regression once it runs once per seed on an encrypted context; adding
-`PageFileConfig` with a crypto provider as a mode of `StoreModelTests` is the cheapest guard.
+transaction (release the id on rollback, do not persist it in the page list before commit). Only
+the first also covers the crash shapes, where the file grew and no transaction is left to roll
+back. The rows listed above are registered under `A2` and #274 in
+`tests/BLite.Tests/Oracles/StoreModelTests.cs` and `WalCrashTests.cs`, so they report `SKIPPED`
+with the label and the issue; once the fix lands they report `candidate fixed` and their entries
+go in the same PR. #274 as filed describes the transaction shapes; the crash shapes above belong
+in it too.
 
 ---
 

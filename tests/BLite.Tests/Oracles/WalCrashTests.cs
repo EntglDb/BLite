@@ -2,8 +2,10 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using BLite.Core;
+using BLite.Core.Encryption;
 using BLite.Core.Indexing;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
@@ -74,6 +76,17 @@ namespace BLite.Tests.Oracles;
 /// counted as leaked: every reopen strands the rest of the last growth block (#258) and every
 /// rolled-back transaction strands what it allocated (#237), in the same way.
 /// </para>
+/// <para>
+/// <b>Encryption.</b> Every row also runs on an AES-GCM encrypted database (an engine with an
+/// <see cref="AesGcmCryptoProvider"/>, as <c>DocumentDbContext(path, CryptoOptions)</c> configures
+/// it). The page file and the WAL then hold ciphertext: the recorder takes each page's physical
+/// bytes from the file (after the 64-byte crypto header, page size plus 28 bytes each) instead of
+/// the decrypted page, a torn write is cut at the envelopes of the encrypted WAL
+/// (<c>[plaintext size][nonce][ciphertext][tag]</c>, a record without a page image has 17 plaintext
+/// bytes), and the page accounting takes a page that cannot be decrypted and is all zero on disk for
+/// a never-written one, as the plaintext accounting does with an all-zero header. The replay
+/// self-check (the record replayed in full equals both files) holds byte for byte as in plaintext.
+/// </para>
 /// </remarks>
 public class WalCrashTests
 {
@@ -103,43 +116,51 @@ public class WalCrashTests
     private const string Continue = "Continue";
     private static readonly string[] s_checks = [Recovery, Atomicity, Durability, PagesReachable, PagesFreeList, PagesLeaked, Idempotent, Continue];
 
-    public static TheoryData<string, string> Rows
+    public static TheoryData<string, string, bool> Rows
     {
         get
         {
-            var rows = new TheoryData<string, string>();
-            foreach (var mode in s_modes)
-                foreach (var check in s_checks)
-                    rows.Add(mode, check);
+            var rows = new TheoryData<string, string, bool>();
+            foreach (var encrypted in new[] { false, true })
+                foreach (var mode in s_modes)
+                    foreach (var check in s_checks)
+                        rows.Add(mode, check, encrypted);
             return rows;
         }
     }
 
-    private static string Label(string mode, string check) => $"{mode} / {check}";
+    private static string Label(string mode, string check, bool encrypted = false) => $"{mode} / {check}{(encrypted ? ", encrypted" : "")}";
 
     /// <summary>
     /// Rows known to fail on upstream 0450b97, by <see cref="Label"/>, see <see cref="Candidates"/>
-    /// and the drafts W1 to W3 in <c>Oracles/Seeds/candidate-issues.md</c>.
+    /// and the drafts W1 to W3 in <c>Oracles/Seeds/candidate-issues.md</c>. The encrypted rows fail
+    /// as their plaintext twins do, and in Recovery and Continue also by A2 (#274), drafted in
+    /// <c>tools/aot-smoke/candidates.md</c> (PowerLoss / Continue, encrypted, by both).
     /// </summary>
     private static readonly Candidates s_candidates = new()
     {
         { "the WAL is never fsynced: a power loss drops acknowledged commits and keeps the frees they made", "#260",
-            Label(PowerLoss, Durability), Label(PowerLoss, Atomicity), Label(PowerLoss, PagesReachable), Label(PowerLoss, Continue) },
+            Label(PowerLoss, Durability), Label(PowerLoss, Atomicity), Label(PowerLoss, PagesReachable), Label(PowerLoss, Continue),
+            Label(PowerLoss, Durability, true), Label(PowerLoss, Atomicity, true), Label(PowerLoss, PagesReachable, true), Label(PowerLoss, Continue, true) },
         { "a crash leaks the pages that the interrupted work freed or allocated outside the WAL", "#261",
-            Label(ProcessCrash, PagesLeaked), Label(TornWrite, PagesLeaked), Label(PowerLoss, PagesLeaked) },
+            Label(ProcessCrash, PagesLeaked), Label(TornWrite, PagesLeaked), Label(PowerLoss, PagesLeaked),
+            Label(ProcessCrash, PagesLeaked, true), Label(TornWrite, PagesLeaked, true), Label(PowerLoss, PagesLeaked, true) },
         { "a crash between the two writes of PageFile.FreePage or AllocatePage leaves a free page off the free list", "#262",
-            Label(ProcessCrash, PagesFreeList) },
+            Label(ProcessCrash, PagesFreeList), Label(ProcessCrash, PagesFreeList, true) },
+        { "A2: encrypted database: a page allocated but never written (a transaction that does not commit, a crash) cannot be read", "#274",
+            Label(ProcessCrash, Recovery, true), Label(TornWrite, Recovery, true), Label(PowerLoss, Recovery, true),
+            Label(ProcessCrash, Continue, true), Label(TornWrite, Continue, true) },
     };
 
     [Fact]
-    public void Candidates_NameExistingRows() => s_candidates.AssertAllIn(Rows.Select(r => Label((string)r[0], (string)r[1])));
+    public void Candidates_NameExistingRows() => s_candidates.AssertAllIn(Rows.Select(r => Label((string)r[0], (string)r[1], (bool)r[2])));
 
     [Theory]
     [MemberData(nameof(Rows))]
-    public async Task Crash_RecoversToAnAcknowledgedCommit(string mode, string check)
+    public async Task Crash_RecoversToAnAcknowledgedCommit(string mode, string check, bool encrypted)
     {
-        var campaign = await s_campaigns.GetOrAdd(mode, m => new Lazy<Task<Campaign>>(() => Task.Run(() => RunCampaign(m)))).Value;
-        var label = Label(mode, check);
+        var campaign = await s_campaigns.GetOrAdd((mode, encrypted), m => new Lazy<Task<Campaign>>(() => Task.Run(() => RunCampaign(m.Mode, m.Encrypted)))).Value;
+        var label = Label(mode, check, encrypted);
         _output.WriteLine($"{mode}: {campaign.Images} crash states ({campaign.RecoveryImages} of them during a recovery) from {s_seeds.Length} seeds of {Steps} steps ({campaign.Events} recorded writes), {campaign.Elapsed.TotalSeconds:F1} s");
         _output.WriteLine($"  by step: {string.Join(", ", campaign.ByStep.Select(kv => $"{kv.Key} {kv.Value}"))}; right after a WAL truncation: {campaign.AtTruncation}");
         foreach (var note in campaign.Notes) _output.WriteLine(note);
@@ -150,7 +171,7 @@ public class WalCrashTests
             return;
         }
 
-        var (ops, failure) = await Shrink(found, mode, check, s_shrinkBudget);
+        var (ops, failure) = await Shrink(found, mode, check, encrypted, s_shrinkBudget);
         var sb = new StringBuilder();
         sb.AppendLine($"{label}: seed {found.Seed}, {campaign.Failures[check]} of {campaign.Images} crash states fail; the first: a crash {found.Point}: {found.Message}");
         sb.AppendLine($"Shortest failing sequence found ({ops.Count} of {found.Ops.Count} steps), crash {failure.Point}: {failure.Message}");
@@ -176,19 +197,19 @@ public class WalCrashTests
         public readonly List<string> Notes = new();
     }
 
-    private static readonly ConcurrentDictionary<string, Lazy<Task<Campaign>>> s_campaigns = new();
-    private static readonly ConcurrentDictionary<int, Lazy<Task<Recording>>> s_recordings = new();
+    private static readonly ConcurrentDictionary<(string Mode, bool Encrypted), Lazy<Task<Campaign>>> s_campaigns = new();
+    private static readonly ConcurrentDictionary<(int Seed, bool Encrypted), Lazy<Task<Recording>>> s_recordings = new();
 
-    private static async Task<Campaign> RunCampaign(string mode)
+    private static async Task<Campaign> RunCampaign(string mode, bool encrypted)
     {
         var sw = Stopwatch.StartNew();
         var campaign = new Campaign();
         // BLITE_WALCRASH_LOG=<directory> writes every failing crash state to <directory>/<mode>.tsv.
         using var log = Environment.GetEnvironmentVariable("BLITE_WALCRASH_LOG") is { Length: > 0 } logDir
-            ? new StreamWriter(Path.Combine(logDir, $"{mode}.tsv")) : null;
+            ? new StreamWriter(Path.Combine(logDir, $"{mode}{(encrypted ? ".encrypted" : "")}.tsv")) : null;
         foreach (var seed in s_seeds)
         {
-            var rec = await s_recordings.GetOrAdd(seed, s => new Lazy<Task<Recording>>(() => Task.Run(() => Record(StoreModel.Generate(s, Steps))))).Value;
+            var rec = await s_recordings.GetOrAdd((seed, encrypted), k => new Lazy<Task<Recording>>(() => Task.Run(() => Record(StoreModel.Generate(k.Seed, Steps), k.Encrypted)))).Value;
             campaign.Events += rec.Events.Count;
             if (rec.StoppedAt != null) campaign.Notes.Add($"seed {seed}: {rec.StoppedAt}");
             await Explore(rec, mode, onlyStep: null, (step, point, failures) =>
@@ -231,7 +252,7 @@ public class WalCrashTests
             // step whose WAL is not empty (every third such step, or every one when shrinking).
             if (mode == TornWrite || !point.EndOfStep || wal.Length == 0) continue;
             if (onlyStep == null && recoveries++ % 3 != 0) continue;
-            var recovery = await RecordRecovery(db, wal);
+            var recovery = await RecordRecovery(db, wal, rec.Encrypted);
             foreach (var inner in RecoveryCrashPoints(recovery))
             {
                 var (rdb, rwal) = Materialize(recovery, inner, mode == PowerLoss, null);
@@ -265,7 +286,7 @@ public class WalCrashTests
                     break;
                 case TornWrite:
                     if (e.Kind != EvKind.WalWrite) break;
-                    foreach (var (cut, what) in Cuts(e.Data!))
+                    foreach (var (cut, what) in Cuts(e.Data!, rec.Encrypted ? (e.Offset == 0 ? AesGcmCryptoProvider.HeaderSize : 0) : null))
                         yield return new CrashPoint(i, e.Step, false, cut, $"in {e.What}, {what}");
                     break;
             }
@@ -275,12 +296,22 @@ public class WalCrashTests
     /// <summary>
     /// Offsets inside one WAL write at which it is cut: one byte into it, inside the header and the
     /// image of its last data record, just before its last commit record, and inside that record.
+    /// With <paramref name="envelopesAt"/> the WAL is encrypted and its records are envelopes from
+    /// that offset on (after the crypto header in the WAL's first write); an envelope of 17
+    /// plaintext bytes carries no page image, and the last such one is taken for the commit.
     /// </summary>
-    private static IEnumerable<(int Cut, string What)> Cuts(byte[] data)
+    private static IEnumerable<(int Cut, string What)> Cuts(byte[] data, int? envelopesAt = null)
     {
         var records = new List<(int Start, int Length, WalRecordType Type)>();
-        for (int at = 0; at < data.Length;)
+        for (int at = envelopesAt ?? 0; at < data.Length;)
         {
+            if (envelopesAt != null)
+            {
+                int size = at + 4 <= data.Length ? BitConverter.ToInt32(data, at) : 0;
+                records.Add((at, 4 + size + 28, size > 17 ? WalRecordType.Write : WalRecordType.Commit));
+                at += 4 + size + 28;
+                continue;
+            }
             var type = (WalRecordType)data[at];
             int length = type == WalRecordType.Write && at + 17 <= data.Length ? 17 + BitConverter.ToInt32(data, at + 13) : 17;
             records.Add((at, length, type));
@@ -345,6 +376,7 @@ public class WalCrashTests
     {
         public required List<StoreOp> Ops { get; init; }
         public required List<Ev> Events { get; init; }
+        public required bool Encrypted { get; init; }
 
         /// <summary>The committed view before and after each step: 0 is the first open, 1..n the operations, n + 1 the close.</summary>
         public required List<Dictionary<int, StoreDoc>> Before { get; init; }
@@ -357,18 +389,18 @@ public class WalCrashTests
     }
 
     /// <summary>Runs <paramref name="ops"/> on a new database through the recording wrappers.</summary>
-    private static async Task<Recording> Record(List<StoreOp> ops)
+    private static async Task<Recording> Record(List<StoreOp> ops, bool encrypted)
     {
         var dir = NewDirectory();
         var path = Path.Combine(dir, "store.db");
-        var rec = new Recorder(s_config.PageSize);
+        var rec = new Recorder(s_config.PageSize, encrypted);
         var before = new List<Dictionary<int, StoreDoc>> { new() };
         var after = new List<Dictionary<int, StoreDoc>>();
         string? stoppedAt = null;
         StoreModelRunner? runner = null;
         try
         {
-            runner = new StoreModelRunner(() => OpenRecorded(path, rec), Path.Combine(dir, "backup.db"), s_config,
+            runner = new StoreModelRunner(() => OpenRecorded(path, rec, encrypted), Path.Combine(dir, "backup.db"), p => Open(p, encrypted),
                 aroundBackup: backup => AroundBackup(runner!, rec, backup));
             after.Add(new(runner.Committed));
             for (int i = 0; i < ops.Count; i++)
@@ -387,7 +419,7 @@ public class WalCrashTests
                     before.RemoveAt(before.Count - 1);
                     rec.Suspend();
                     rec.DropStep(i + 1);
-                    return new Recording { Ops = ops, Events = rec.Events, Before = before, After = after, StoppedAt = stoppedAt };
+                    return new Recording { Ops = ops, Events = rec.Events, Encrypted = encrypted, Before = before, After = after, StoppedAt = stoppedAt };
                 }
                 after.Add(new(runner.Committed));
             }
@@ -401,7 +433,7 @@ public class WalCrashTests
             var (db, wal) = Materialize(rec.Events, rec.Events.Count - 1, false, null);
             AssertSameFile(File.ReadAllBytes(path), db, "page file");
             AssertSameFile(File.ReadAllBytes(Path.ChangeExtension(path, ".wal")), wal, "WAL");
-            return new Recording { Ops = ops, Events = rec.Events, Before = before, After = after };
+            return new Recording { Ops = ops, Events = rec.Events, Encrypted = encrypted, Before = before, After = after };
         }
         finally
         {
@@ -418,10 +450,32 @@ public class WalCrashTests
         throw new InvalidOperationException($"the injector missed a write to the {what}: the file ({actual.Length} bytes) and the record ({recorded.Length} bytes) differ from byte {i} on");
     }
 
-    /// <summary>Opens the database through the engine's file constructor, then puts the recording wrappers in.</summary>
-    private static StoreModelDbContext OpenRecorded(string path, Recorder rec)
+    private const string Passphrase = "wal crash passphrase";
+
+    /// <summary>The configuration of one open: encrypted, with a new provider (a provider holds the key of one file).</summary>
+    private static PageFileConfig Config(bool encrypted)
+        => encrypted ? s_config with { CryptoProvider = new AesGcmCryptoProvider(new CryptoOptions(Passphrase, iterations: 1000)) } : s_config;
+
+    /// <summary>Opens the database at <paramref name="path"/> through the engine's file constructor.</summary>
+    private static StoreModelDbContext Open(string path, bool encrypted)
     {
-        var engine = new StorageEngine(path, s_config);
+        if (!encrypted) return new StoreModelDbContext(path, s_config);
+        var engine = new StorageEngine(path, Config(encrypted));
+        try
+        {
+            return new StoreModelDbContext(engine);
+        }
+        catch
+        {
+            engine.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Opens the database through the engine's file constructor, then puts the recording wrappers in.</summary>
+    private static StoreModelDbContext OpenRecorded(string path, Recorder rec, bool encrypted)
+    {
+        var engine = new StorageEngine(path, Config(encrypted));
         try
         {
             var wrapper = Install((PageFile)s_enginePageFile.GetValue(engine)!, (WriteAheadLog)s_engineWal.GetValue(engine)!, rec, "the open");
@@ -471,19 +525,21 @@ public class WalCrashTests
     }
 
     /// <summary>Recovers the crash state <paramref name="db"/> / <paramref name="wal"/> through the recording wrappers.</summary>
-    private static async Task<List<Ev>> RecordRecovery(byte[] db, byte[] wal)
+    private static async Task<List<Ev>> RecordRecovery(byte[] db, byte[] wal, bool encrypted)
     {
         var dir = NewDirectory();
         var path = Path.Combine(dir, "store.db");
         File.WriteAllBytes(path, db);
         File.WriteAllBytes(Path.ChangeExtension(path, ".wal"), wal);
-        var rec = new Recorder(s_config.PageSize);
+        var rec = new Recorder(s_config.PageSize, encrypted);
         StorageEngine? engine = null;
         try
         {
-            var pageFile = new PageFile(path, s_config);
+            var config = Config(encrypted);
+            var pageFile = new PageFile(path, config);
             pageFile.Open();
-            var walLog = new WriteAheadLog(Path.ChangeExtension(path, ".wal"), null, s_config.LockTimeout.WriteTimeoutMs);
+            // As the engine's file constructor derives it (StorageEngine.cs:319).
+            var walLog = new WriteAheadLog(Path.ChangeExtension(path, ".wal"), config.CryptoProvider?.CreateSiblingProvider(3, 0), s_config.LockTimeout.WriteTimeoutMs);
             engine = new StorageEngine(Install(pageFile, walLog, rec, "the open"), walLog);
             await engine.RecoverAsync();
             rec.Suspend();
@@ -517,7 +573,9 @@ public class WalCrashTests
     /// <summary>The record of one run: the events and a copy of the page file as they leave it.</summary>
     private sealed class Recorder
     {
-        private readonly int _pageSize;
+        private readonly bool _encrypted;
+        private readonly int _physicalPageSize;
+        private readonly int _headerSize;
         private readonly List<FileStream> _replacedStreams = new();
         private PageFile? _pageFile;
         private SafeFileHandle? _dbHandle;
@@ -525,7 +583,13 @@ public class WalCrashTests
         private byte[] _db = [];
         private bool _suspended;
 
-        public Recorder(int pageSize) => _pageSize = pageSize;
+        /// <param name="encrypted">The page file holds ciphertext: a page is read from the file as it is stored.</param>
+        public Recorder(int pageSize, bool encrypted)
+        {
+            _encrypted = encrypted;
+            _physicalPageSize = encrypted ? pageSize + 12 + AesGcmCryptoProvider.TagSize : pageSize; // nonce, ciphertext, tag
+            _headerSize = encrypted ? AesGcmCryptoProvider.HeaderSize : 0;
+        }
 
         public List<Ev> Events { get; } = new();
 
@@ -579,15 +643,16 @@ public class WalCrashTests
             if (length != _db.Length)
             {
                 Array.Resize(ref _db, (int)length);
-                Events.Add(new Ev(EvKind.PageLength, Step, $"{what}: the page file sized to {length / _pageSize} pages", Length: length));
+                Events.Add(new Ev(EvKind.PageLength, Step, $"{what}: the page file sized to {(length - _headerSize) / _physicalPageSize} pages", Length: length));
             }
             foreach (var page in pages)
             {
-                long offset = (long)page * _pageSize;
-                if (offset + _pageSize > _db.Length) continue;
-                var bytes = new byte[_pageSize];
-                _pageFile!.ReadPage(page, bytes);
-                if (bytes.AsSpan().SequenceEqual(_db.AsSpan((int)offset, _pageSize))) continue;
+                long offset = _headerSize + (long)page * _physicalPageSize;
+                if (offset + _physicalPageSize > _db.Length) continue;
+                var bytes = new byte[_physicalPageSize];
+                if (_encrypted) RandomAccess.Read(_dbHandle!, bytes, offset);
+                else _pageFile!.ReadPage(page, bytes);
+                if (bytes.AsSpan().SequenceEqual(_db.AsSpan((int)offset, _physicalPageSize))) continue;
                 bytes.CopyTo(_db, offset);
                 Events.Add(new Ev(EvKind.Page, Step, $"{what}: page {page} written", Offset: offset, Data: bytes));
             }
@@ -819,7 +884,7 @@ public class WalCrashTests
         {
             try
             {
-                ctx = new StoreModelDbContext(path, s_config);
+                ctx = Open(path, rec.Encrypted);
             }
             catch (Exception ex)
             {
@@ -854,7 +919,7 @@ public class WalCrashTests
             // Every access path (count, point lookups, both secondary indexes) agrees with the documents.
             if (matched != null)
             {
-                var verify = new StoreModelRunner(Once(ctx), Path.Combine(dir, "backup.db"), s_config, new(matched));
+                var verify = new StoreModelRunner(Once(ctx, rec.Encrypted), Path.Combine(dir, "backup.db"), p => Open(p, rec.Encrypted), new(matched));
                 ctx = null;
                 try
                 {
@@ -876,7 +941,7 @@ public class WalCrashTests
             }
 
             // Idempotent: a second reopen finds the same documents.
-            ctx = new StoreModelDbContext(path, s_config);
+            ctx = Open(path, rec.Encrypted);
             var again = await StoreModel.ReadAll(ctx.Docs.FindAllAsync());
             if (!StoreModel.Same(scanned, again))
                 failures[Idempotent] = $"a second reopen changed the collection: {Difference(scanned, again)}";
@@ -889,7 +954,7 @@ public class WalCrashTests
             rest.Add(new StoreOp(StoreOpKind.Reopen));
             var next = ctx;
             ctx = null;
-            using (var runner = new StoreModelRunner(Once(next, path), Path.Combine(dir, "backup.db"), s_config, new(again)))
+            using (var runner = new StoreModelRunner(Once(next, rec.Encrypted, path), Path.Combine(dir, "backup.db"), p => Open(p, rec.Encrypted), new(again)))
             {
                 foreach (var op in rest)
                 {
@@ -922,13 +987,13 @@ public class WalCrashTests
     private static string Describe(Exception ex) => ex is StoreModelMismatchException ? ex.Message : $"{ex.GetType().Name}: {ex.Message}";
 
     /// <summary>The context first, then a fresh open of <paramref name="path"/> at every reopen.</summary>
-    private static Func<StoreModelDbContext> Once(StoreModelDbContext first, string? path = null)
+    private static Func<StoreModelDbContext> Once(StoreModelDbContext first, bool encrypted, string? path = null)
     {
         var used = false;
         return () =>
         {
             if (!used) { used = true; return first; }
-            return new StoreModelDbContext(path ?? throw new InvalidOperationException("no reopen here"), s_config);
+            return Open(path ?? throw new InvalidOperationException("no reopen here"), encrypted);
         };
     }
 
@@ -984,7 +1049,14 @@ public class WalCrashTests
         var types = new PageType[count];
         for (uint p = 0; p < count; p++)
         {
-            storage.ReadPageHeader(p, null, page.AsSpan(0, 32));
+            try
+            {
+                storage.ReadPageHeader(p, null, page.AsSpan(0, 32));
+            }
+            catch (CryptographicException) when (NeverWritten(storage, p))
+            {
+                page.AsSpan(0, 32).Clear(); // what a never-written page reads as without encryption
+            }
             types[p] = PageHeader.ReadFrom(page).PageType;
         }
         var freeMarked = Enumerable.Range(1, (int)count - 1).Select(p => (uint)p).Where(p => types[p] == PageType.Free).ToHashSet();
@@ -1047,6 +1119,15 @@ public class WalCrashTests
                 yield return (PagesLeaked, $"{leaked.Count} of the {count} pages are index or overflow pages that nothing reaches and that are not free: "
                     + string.Join(", ", leaked.Take(12).Select(p => $"{p} ({types[p]})")) + (leaked.Count > 12 ? ", ..." : ""));
         }
+    }
+
+    /// <summary>Whether page <paramref name="pageId"/> of an encrypted page file is all zero on disk: allocated, never written.</summary>
+    private static bool NeverWritten(StorageEngine storage, uint pageId)
+    {
+        var handle = ((FileStream)s_pageFileStream.GetValue(s_enginePageFile.GetValue(storage))!).SafeFileHandle;
+        var physical = new byte[storage.PageSize + 12 + AesGcmCryptoProvider.TagSize];
+        var read = RandomAccess.Read(handle, physical, AesGcmCryptoProvider.HeaderSize + (long)pageId * physical.Length);
+        return read == physical.Length && !physical.AsSpan().ContainsAnyExcept((byte)0);
     }
 
     private static string Pages(List<uint> pages) => string.Join(", ", pages.Take(12)) + (pages.Count > 12 ? ", ..." : "");
@@ -1135,7 +1216,7 @@ public class WalCrashTests
     /// until a pass over single steps removes nothing or the time is up. The algorithm of
     /// <see cref="StoreModelTests"/>, for one check and a crash in the last step.
     /// </summary>
-    private static async Task<(List<StoreOp> Ops, (string Point, string Message) Failure)> Shrink(Found found, string mode, string check, TimeSpan budget)
+    private static async Task<(List<StoreOp> Ops, (string Point, string Message) Failure)> Shrink(Found found, string mode, string check, bool encrypted, TimeSpan budget)
     {
         var sw = Stopwatch.StartNew();
         // The crashed step is the last one kept; a crash in the first open or the close keeps none or all.
@@ -1152,7 +1233,7 @@ public class WalCrashTests
             for (int start = current.Count - keep - chunk; start >= 0 && sw.Elapsed < budget; start -= chunk)
             {
                 var candidate = current.Where((_, j) => j < start || j >= start + chunk).ToList();
-                if (await FailsAtLastStep(candidate, mode, check, closing) is { } f)
+                if (await FailsAtLastStep(candidate, mode, check, closing, encrypted) is { } f)
                 {
                     current = candidate;
                     failure = f;
@@ -1165,12 +1246,12 @@ public class WalCrashTests
         return (current, failure);
     }
 
-    private static async Task<(string Point, string Message)?> FailsAtLastStep(List<StoreOp> ops, string mode, string check, bool closing)
+    private static async Task<(string Point, string Message)?> FailsAtLastStep(List<StoreOp> ops, string mode, string check, bool closing, bool encrypted)
     {
         Recording rec;
         try
         {
-            rec = await Record(ops);
+            rec = await Record(ops, encrypted);
         }
         catch
         {
