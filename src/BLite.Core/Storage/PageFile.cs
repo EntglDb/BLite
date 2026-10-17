@@ -1089,10 +1089,20 @@ public sealed class PageFile : IPageStorage
             }
 
             var pageId = _nextPageId++;
-            
+
             // Extend file if necessary (EnsureCapacityCore replaces the mapping in-place)
             EnsureCapacityCore(_cryptoFileHeaderSize + (long)pageId * _physicalPageSize);
-            
+
+            // An encrypted file must hold only pages that decrypt. The new owner often writes the
+            // page only through the WAL, so it reaches the file on commit or not at all: after a
+            // rollback, or with the transaction still open at a backup or close, the page would
+            // stay all zeros, which fail AES-GCM authentication wherever the page is read later
+            // (the scan of a collection's pages on open, the next insert's free-space check:
+            // #274). Writing an empty page now makes it read back as zeros, as an unwritten page
+            // of a plain file does. Recycled pages above are written for the same reason.
+            if (_cryptoProvider != null)
+                WritePageCore(pageId, new byte[_config.PageSize]);
+
             return pageId;
         }
         finally
