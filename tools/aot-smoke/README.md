@@ -117,7 +117,8 @@ JIT and AOT (871 dump lines). A run takes about 20 s with warm build caches, a p
 (ILC included); `--prove-seeds`, which builds everything in a fresh worktree per seed, 37 s for
 both. The AOT binary is 6.5 MB.
 
-The seven candidates are drafted in [`candidates.md`](candidates.md): A1, typed collections cannot
+The seven candidates are in [`candidates.md`](candidates.md), filed as #273 (A1), #274 (A2),
+#275 (A3, A4, A6, A7) and #276 (A5): A1, typed collections cannot
 write under Native AOT (the generated mapper reports no BSON keys); A2, an encrypted database
 cannot read a page that a never-committed transaction allocated (both builds; it also makes such a
 database unopenable after a close with an open transaction); A3, every generated DbContext warns
@@ -161,7 +162,7 @@ CAUGHT  aot-smoke.index-key-reflection.patch: FAIL    Consumer publish: 11 BLite
 
 ## Candidates
 
-`candidates.md` holds the drafts and, at its top, the registry table `run.sh` reads: a row names a
+`candidates.md` holds the triage and, at its top, the registry table `run.sh` reads: a row names a
 candidate, a kind (`warning`, `linq-warning` for the warnings only the annotated calls add, or
 `dump` for a failed section) and a substring of the warning or of the `!!` line. A match prints
 `KNOWN ... [known candidate: A<n>]`. A section that a `dump` row matches is not compared beyond its

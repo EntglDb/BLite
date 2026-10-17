@@ -1,7 +1,9 @@
 # Candidate issues from the Native AOT smoke test
 
-Status: **not filed.** Triage of what `tools/aot-smoke/run.sh` reports on `test/oracle-aot`
-(upstream `0450b97`, v5.2.3, plus the oracle-test branches, which change nothing under `src/`),
+Status: **filed** on 2026-10-17: A1 as #273, A2 as #274, A3, A4, A6 and A7 together as #275 (one
+cause, `#pragma warning disable IL...` in BLite.Core), A5 as #276; the registry's Issue column
+links each row. Triage of what `tools/aot-smoke/run.sh` reports on `test/oracle-aot` (upstream
+`0450b97`, v5.2.3, plus the oracle-test branches, which change nothing under `src/`),
 osx-arm64, .NET SDK 10.0.401, ILCompiler 10.0.12, on 2026-10-17. Seven candidates, two of them
 functional failures (A1 under Native AOT only, A2 under both builds), five about the warnings the
 publish reports where AOT_LIMITATIONS.md promises none, or promises them at the call site only.
@@ -12,7 +14,7 @@ instead of annotating or restructuring the code. The pragma satisfies the librar
 (`IsAotCompatible` plus `TreatWarningsAsErrors`), which is the check AOT_LIMITATIONS.md relies on
 ("BLite.Core's own build validates annotations"), but it is a Roslyn directive: ILC analyses the
 IL again in the consumer's publish and reports every one of those sites there.
-`git grep -n 'pragma warning disable IL' -- src` lists 12 of them.
+`git grep -n 'pragma warning disable IL' -- src/BLite.Core` lists 13 of them.
 
 Open and closed issues checked on 2026-10-17 (`gh issue list --repo EntglDb/BLite --state all
 --search AOT`): #45 (the original IL2104/IL3053 report, closed by #47) and #50 (AOT-safe query
@@ -29,28 +31,28 @@ row matches is not compared beyond the failure until the candidate is fixed. Whe
 delete the candidate's rows in the same PR; a stale row matches nothing and costs nothing, so
 check with `grep` that the fix removed what it names.
 
-| Id | Kind | Match | Summary |
-|---|---|---|---|
-| A1 | dump | `BSON Key 'name' not found in dictionary cache` | typed writes fail under Native AOT: the generated mapper reports no keys |
-| A1 | warning | `UsedKeys.get: Using member` | the reflection behind it, hidden by a pragma |
-| A1 | warning | `BsonSchemaGenerator.GetCollectionItemType` | the same path, one call further |
-| A2 | dump | `AuthenticationTagMismatchException` | encrypted database: a page allocated by a transaction that never commits cannot be read |
-| A3 | warning | `DocumentDbContext.CreateCollection<` | every source-generated DbContext warns in its generated InitializeCollections |
-| A3 | warning | `DocumentDbContext.CreateSessionCollection<` | and in its generated Set<TId, T> |
-| A4 | warning | `ValueConverterRegistry..cctor` | ValueConverterRegistry.Empty calls the annotated constructor, hidden by a pragma |
-| A5 | warning | `BLite.Caching.BLiteDistributedCache.` | BLite.Caching's typed helpers use reflection-based System.Text.Json, unannotated |
-| A5 | dump | `Reflection-based serialization has been disabled` | and throw in every app with PublishAot or PublishTrimmed |
-| A6 | linq-warning | `BLite.Core.Query.BTreeQueryProvider` | the LINQ provider's internals warn inside BLite.Core, hidden by pragmas |
-| A6 | linq-warning | `BLite.Core.Query.BTreeQueryable` | |
-| A6 | linq-warning | `BLite.Core.Query.EnumerableRewriter.VisitMethodCall` | |
-| A6 | linq-warning | `BLite.Core.Query.BsonExpressionEvaluator.TryEvaluate` | |
-| A6 | linq-warning | `BLite.Core.Query.BsonExpressionEvaluator.HasFieldInHierarchy` | |
-| A6 | linq-warning | `BLite.Core.Query.BTreeExpressionVisitor.AddPredicate` | |
-| A7 | linq-warning | `PersonalDataResolver.ReferencesOrIsAssembly` | typed Watch is annotated but not documented, and warns inside BLite.Core |
+| Id | Kind | Match | Issue | Summary |
+|---|---|---|---|---|
+| A1 | dump | `BSON Key 'name' not found in dictionary cache` | #273 | typed writes fail under Native AOT: the generated mapper reports no keys |
+| A1 | warning | `UsedKeys.get: Using member` | #273 | the reflection behind it, hidden by a pragma |
+| A1 | warning | `BsonSchemaGenerator.GetCollectionItemType` | #273 | the same path, one call further |
+| A2 | dump | `AuthenticationTagMismatchException` | #274 | encrypted database: a page allocated by a transaction that never commits cannot be read |
+| A3 | warning | `DocumentDbContext.CreateCollection<` | #275 | every source-generated DbContext warns in its generated InitializeCollections |
+| A3 | warning | `DocumentDbContext.CreateSessionCollection<` | #275 | and in its generated Set<TId, T> |
+| A4 | warning | `ValueConverterRegistry..cctor` | #275 | ValueConverterRegistry.Empty calls the annotated constructor, hidden by a pragma |
+| A5 | warning | `BLite.Caching.BLiteDistributedCache.` | #276 | BLite.Caching's typed helpers use reflection-based System.Text.Json, unannotated |
+| A5 | dump | `Reflection-based serialization has been disabled` | #276 | and throw in every app with PublishAot or PublishTrimmed |
+| A6 | linq-warning | `BLite.Core.Query.BTreeQueryProvider` | #275 | the LINQ provider's internals warn inside BLite.Core, hidden by pragmas |
+| A6 | linq-warning | `BLite.Core.Query.BTreeQueryable` | #275 | |
+| A6 | linq-warning | `BLite.Core.Query.EnumerableRewriter.VisitMethodCall` | #275 | |
+| A6 | linq-warning | `BLite.Core.Query.BsonExpressionEvaluator.TryEvaluate` | #275 | |
+| A6 | linq-warning | `BLite.Core.Query.BsonExpressionEvaluator.HasFieldInHierarchy` | #275 | |
+| A6 | linq-warning | `BLite.Core.Query.BTreeExpressionVisitor.AddPredicate` | #275 | |
+| A7 | linq-warning | `PersonalDataResolver.ReferencesOrIsAssembly` | #275 | typed Watch is annotated but not documented, and warns inside BLite.Core |
 
 ---
 
-## A1. Typed collections cannot write under Native AOT: the generated mapper reports no BSON keys
+## A1. Typed collections cannot write under Native AOT: the generated mapper reports no BSON keys (#273)
 
 **API:** every write of a `DocumentCollection<TId, T>` from a source-generated `DocumentDbContext`
 (`InsertAsync`, `InsertBulkAsync`, `UpdateAsync`, `UpsertAsync`), the core of what
@@ -102,7 +104,7 @@ callers that want a schema. A Native AOT publish of a consumer in CI would have 
 
 ---
 
-## A2. Encrypted database: a page allocated by a transaction that never commits cannot be read
+## A2. Encrypted database: a page allocated by a transaction that never commits cannot be read (#274)
 
 Not an AOT defect: both builds fail identically. The smoke test found it because it runs the store
 model's sequence on an encrypted context, which no oracle test does.
@@ -157,7 +159,7 @@ store model would catch a regression once it runs once per seed on an encrypted 
 
 ---
 
-## A3. Every source-generated DbContext warns: its generated code calls annotated methods
+## A3. Every source-generated DbContext warns: its generated code calls annotated methods (#275)
 
 **API:** any `partial class X : DocumentDbContext` with collection properties.
 
@@ -195,7 +197,7 @@ what A4 and A1 need too. Either way AOT_LIMITATIONS.md should say what a generat
 
 ---
 
-## A4. `ValueConverterRegistry.Empty` calls the annotated constructor, hidden by a pragma
+## A4. `ValueConverterRegistry.Empty` calls the annotated constructor, hidden by a pragma (#275)
 
 **API:** every typed collection (the static field initialises with the type).
 
@@ -222,7 +224,7 @@ dictionary, so nothing annotated is called; then delete the pragma.
 
 ---
 
-## A5. BLite.Caching's typed helpers use reflection-based System.Text.Json and are not annotated
+## A5. BLite.Caching's typed helpers use reflection-based System.Text.Json and are not annotated (#276)
 
 **API:** `BLiteDistributedCache.Get<T>`, `Set<T>`, `GetAsync<T>`, `SetAsync<T>`, `GetOrSet<T>`,
 `GetOrSetAsync<T>` (`IBLiteCache`). BLite.Caching is not mentioned in AOT_LIMITATIONS.md and is not
@@ -262,7 +264,7 @@ own build check this.
 
 ---
 
-## A6. The LINQ provider's internals warn inside BLite.Core, hidden by pragmas
+## A6. The LINQ provider's internals warn inside BLite.Core, hidden by pragmas (#275)
 
 **API:** `AsQueryable()` and the LINQ terminals, which are annotated and documented as not AOT-safe.
 
@@ -300,7 +302,7 @@ deserves its own decision: interpret instead of compile, or annotate the evaluat
 
 ---
 
-## A7. Typed `Watch` is annotated but not in AOT_LIMITATIONS.md, and warns inside BLite.Core
+## A7. Typed `Watch` is annotated but not in AOT_LIMITATIONS.md, and warns inside BLite.Core (#275)
 
 **API:** `DocumentCollection<TId, T>.Watch(WatchOptions?)` and `Watch(bool)`, the typed CDC
 subscription. (The dynamic `DynamicCollection.Watch` is unannotated and passes under AOT: section
