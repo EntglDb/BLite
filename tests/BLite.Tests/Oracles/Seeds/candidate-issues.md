@@ -553,7 +553,12 @@ loss on a crash while `Dispose` waits for a pending-free checkpoint (#209/#242, 
 Open issues checked on 2026-10-17 (`gh issue list --repo EntglDb/BLite --state all`, searched for
 fsync, durab, flush, power, crash, torn, truncat, leak, free): none covers W1 to W3. The closest are
 #237 (pages a rolled-back transaction allocated are never reclaimed, the sibling of W2) and #238
-(the double-free guard that W3 undermines).
+(the double-free guard that W3 undermines). Closed issues and PRs checked the same day (WAL, fsync,
+flush, durability, WriteThrough, checkpoint, power loss, free page, free list): none discusses
+commit fsync or power loss. #169 and #236 accept a crash leaking queued and commit-time frees as a
+trade-off, which W2 does not dispute (it asks for reclamation and adds the index-root case, a
+different mechanism); W3 is a remaining gap in the header invariant of #239, which #178's head
+check does not see. Each issue carries a "Related" line.
 
 **Registry entries.** Each draft is one family of `s_candidates` in
 `tests/BLite.Tests/Oracles/WalCrashTests.cs`. A row is `"<crash mode> / <check>"`:
@@ -623,8 +628,11 @@ out again (the `Continue` row: a later insert overwrites them).
 The seed `WalCrashTests.ack-before-wal-flush.patch` (no flush at all) shows the same corruption
 under a process crash: what W1 does on a power loss, the seed does on any crash.
 
-**Affected versions:** commits have been acknowledged without an fsync since `f5802f9` (v1.0.0,
-"REMOVED FileOptions.WriteThrough"). The frees that turn a lost commit into a corrupted document
+**Affected versions:** `f5802f9` (v1.0.0) dropped `WriteThrough` for performance but kept one
+`Flush(flushToDisk: true)` per commit; `a4e052b` (v1.0.0) added the async `FlushAsync` path without
+it (with the comment above), group commit (`d72b73a`, v3.6.2) was meant to amortise the fsync, and
+`63465aa` (v4.0.0) removed the last synchronous commit path. So `CommitAsync` has not fsynced since
+v1.0.0, and no commit path since v4.0.0. The frees that turn a lost commit into a corrupted document
 are those of the current code: right after the commit (#233, `4d3e6b9`) or at the next truncation
 (#168, `e19035c`), both merged after v5.2.3; before them pages were freed earlier still. Not
 reproduced on hardware; the test models a power loss as "only fsynced WAL bytes and msynced pages
@@ -681,7 +689,9 @@ records, so recovery cannot redo or undo them.
 
 **Affected versions:** the queued frees since #168 (`e19035c`) and the commit-time frees since
 #233 (`4d3e6b9`), both merged after v5.2.3; roots written before the metadata since #151
-(`e187bd6`, v5.2.0). #237 is the same class for a rollback instead of a crash.
+(`e187bd6`, v5.2.0). #237 is the same class for a rollback instead of a crash. The leaks of
+queued and commit-time frees are the accepted trade-off of #169 and #236 ("a crash still leaks
+queued pages"); the issue asks for reclamation, the index roots are new.
 
 **Fix considerations:** log frees in the WAL with the commit (a Free record replayed by recovery
 after the commit's pages), which also closes W1's ordering; or let recovery rebuild the free list
