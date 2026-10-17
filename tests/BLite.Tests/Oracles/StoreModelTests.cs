@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using BLite.Core.Encryption;
 using BLite.Core.Storage;
 using Xunit.Abstractions;
 
@@ -22,6 +23,11 @@ namespace BLite.Tests.Oracles;
 /// leaves the transaction usable while any other failure rolls it
 /// back; a unique index violation is also a BLiteValidationException (checked before any write);
 /// a checkpoint, a backup and a reopen change nothing.
+/// <para>
+/// Each seed runs on a plaintext database and on an AES-GCM encrypted one (an engine with an
+/// <see cref="AesGcmCryptoProvider"/>, as <c>DocumentDbContext(path, CryptoOptions)</c> configures
+/// it); the backup opens with the same passphrase. The contract does not depend on the mode.
+/// </para>
 /// </remarks>
 public class StoreModelTests
 {
@@ -31,35 +37,55 @@ public class StoreModelTests
 
     private const int Steps = 300;
 
-    public static TheoryData<int, bool> Seeds => new()
+    private static readonly (int Seed, bool MultiProcess)[] s_seeds =
+    [
+        (1, false), (2, false), (3, false), (4, false), (5, false),
+        (1, true), (2, true), (3, true),
+    ];
+
+    public static TheoryData<int, bool, bool> Seeds
     {
-        { 1, false }, { 2, false }, { 3, false }, { 4, false }, { 5, false },
-        { 1, true }, { 2, true }, { 3, true },
+        get
+        {
+            var rows = new TheoryData<int, bool, bool>();
+            foreach (var encrypted in new[] { false, true })
+                foreach (var (seed, multiProcess) in s_seeds)
+                    rows.Add(seed, multiProcess, encrypted);
+            return rows;
+        }
+    }
+
+    /// <summary>
+    /// Runs known to fail, by <see cref="Label"/>, see <see cref="Candidates"/>: on upstream 0450b97
+    /// none of the plaintext ones; the encrypted ones of A2 (#274), drafted in <c>tools/aot-smoke/candidates.md</c>.
+    /// </summary>
+    private static readonly Candidates s_candidates = new()
+    {
+        { "A2: encrypted database: a page allocated but never written (a transaction that does not commit, a crash) cannot be read", "#274",
+            Label(2, false, true), Label(3, false, true), Label(4, false, true), Label(2, true, true), Label(3, true, true) },
     };
 
-    /// <summary>Runs known to fail, by <see cref="Label"/>, see <see cref="Candidates"/>. None on upstream 0450b97.</summary>
-    private static readonly Candidates s_candidates = new();
-
-    private static string Label(int seed, bool multiProcess) => $"seed {seed}, multiProcess={multiProcess}";
+    private static string Label(int seed, bool multiProcess, bool encrypted)
+        => $"seed {seed}, multiProcess={multiProcess}{(encrypted ? ", encrypted" : "")}";
 
     [Fact]
-    public void Candidates_NameExistingRuns() => s_candidates.AssertAllIn(Seeds.Select(r => Label((int)r[0], (bool)r[1])));
+    public void Candidates_NameExistingRuns() => s_candidates.AssertAllIn(Seeds.Select(r => Label((int)r[0], (bool)r[1], (bool)r[2])));
 
     [Theory]
     [MemberData(nameof(Seeds))]
-    public async Task RandomOperations_MatchTheModel(int seed, bool multiProcess)
+    public async Task RandomOperations_MatchTheModel(int seed, bool multiProcess, bool encrypted)
     {
         var ops = Generate(seed, Steps);
-        var label = Label(seed, multiProcess);
+        var label = Label(seed, multiProcess, encrypted);
 
-        var failure = await Replay(ops, multiProcess);
+        var failure = await Replay(ops, multiProcess, encrypted);
         if (failure == null)
         {
             s_candidates.Verify(label, null, _output);
             return;
         }
 
-        var shrunk = await Shrink(ops.Take(failure.Step + 1).ToList(), multiProcess, TimeSpan.FromSeconds(45));
+        var shrunk = await Shrink(ops.Take(failure.Step + 1).ToList(), multiProcess, encrypted, TimeSpan.FromSeconds(45));
         var sb = new StringBuilder();
         sb.AppendLine($"{label}: step {failure.Step + 1} of {ops.Count} ({ops[failure.Step]}) failed: {failure.Message}");
         sb.AppendLine($"Shortest failing sequence found ({shrunk.Ops.Count} of {failure.Step + 1} steps), failing at its step {shrunk.Failure.Step + 1}: {shrunk.Failure.Message}");
@@ -76,13 +102,35 @@ public class StoreModelTests
 
     private static List<StoreOp> Generate(int seed, int steps) => StoreModel.Generate(seed, steps);
 
-    private static async Task<Failure?> Replay(List<StoreOp> ops, bool multiProcess)
+    private const string Passphrase = "store model passphrase";
+
+    /// <summary>
+    /// Opens the database at <paramref name="path"/>. Encrypted: an engine with a new
+    /// <see cref="AesGcmCryptoProvider"/> per open (a provider holds the key of one file).
+    /// </summary>
+    private static StoreModelDbContext Open(string path, bool multiProcess, bool encrypted)
+    {
+        var config = multiProcess ? PageFileConfig.Default with { AllowMultiProcessAccess = true } : PageFileConfig.Default;
+        if (!encrypted) return new StoreModelDbContext(path, config);
+
+        var engine = new StorageEngine(path, config with { CryptoProvider = new AesGcmCryptoProvider(new CryptoOptions(Passphrase, iterations: 1000)) });
+        try
+        {
+            return new StoreModelDbContext(engine);
+        }
+        catch
+        {
+            engine.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<Failure?> Replay(List<StoreOp> ops, bool multiProcess, bool encrypted)
     {
         var path = Path.Combine(Path.GetTempPath(), $"store_model_{Guid.NewGuid():N}.db");
         var backupPath = Path.Combine(Path.GetTempPath(), $"store_model_backup_{Guid.NewGuid():N}.db");
-        var config = multiProcess ? PageFileConfig.Default with { AllowMultiProcessAccess = true } : PageFileConfig.Default;
 
-        var model = new StoreModelRunner(path, backupPath, config);
+        var model = new StoreModelRunner(path, backupPath, p => Open(p, multiProcess, encrypted));
         try
         {
             for (int step = 0; step < ops.Count; step++)
@@ -117,11 +165,11 @@ public class StoreModelTests
     /// steps), keeping a removal if the sequence still fails (any failure counts), until a pass
     /// over single steps removes nothing or the time is up. The last step is never removed.
     /// </summary>
-    private static async Task<ShrinkResult> Shrink(List<StoreOp> ops, bool multiProcess, TimeSpan budget)
+    private static async Task<ShrinkResult> Shrink(List<StoreOp> ops, bool multiProcess, bool encrypted, TimeSpan budget)
     {
         var sw = Stopwatch.StartNew();
         var current = ops;
-        var failure = (await Replay(current, multiProcess))!;
+        var failure = (await Replay(current, multiProcess, encrypted))!;
         int chunk = Math.Max(1, (current.Count - 1) / 2);
         while (sw.Elapsed < budget)
         {
@@ -129,7 +177,7 @@ public class StoreModelTests
             for (int start = current.Count - 1 - chunk; start >= 0 && sw.Elapsed < budget; start -= chunk)
             {
                 var candidate = current.Where((_, j) => j < start || j >= start + chunk).ToList();
-                var f = await Replay(candidate, multiProcess);
+                var f = await Replay(candidate, multiProcess, encrypted);
                 if (f != null)
                 {
                     current = candidate;

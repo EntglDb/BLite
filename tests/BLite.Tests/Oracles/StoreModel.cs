@@ -181,7 +181,7 @@ internal sealed class StoreModelMismatchException : Exception
 internal sealed class StoreModelRunner : IDisposable
 {
     private readonly string _backupPath;
-    private readonly PageFileConfig _config;
+    private readonly Func<string, StoreModelDbContext> _openCopy;
     private readonly Func<StoreModelDbContext> _open;
     private readonly Func<Func<Task>, Task> _aroundBackup;
     private Dictionary<int, StoreDoc> _committed;
@@ -190,21 +190,23 @@ internal sealed class StoreModelRunner : IDisposable
     private StoreModelDbContext _db;
 
     /// <param name="open">Opens the database; called now and by every <see cref="StoreOpKind.Reopen"/>.</param>
+    /// <param name="openCopy">Opens the backup at the given path, configured as the database is (the same crypto).</param>
     /// <param name="committed">What the database already holds; empty for a new one.</param>
     /// <param name="aroundBackup">Runs the backup of the open database (default: just runs it).</param>
-    public StoreModelRunner(Func<StoreModelDbContext> open, string backupPath, PageFileConfig config,
+    public StoreModelRunner(Func<StoreModelDbContext> open, string backupPath, Func<string, StoreModelDbContext> openCopy,
         Dictionary<int, StoreDoc>? committed = null, Func<Func<Task>, Task>? aroundBackup = null)
     {
         _open = open;
         _backupPath = backupPath;
-        _config = config;
+        _openCopy = openCopy;
         _committed = committed ?? new Dictionary<int, StoreDoc>();
         _aroundBackup = aroundBackup ?? (backup => backup());
         _db = open();
     }
 
-    public StoreModelRunner(string path, string backupPath, PageFileConfig config)
-        : this(() => new StoreModelDbContext(path, config), backupPath, config) { }
+    /// <param name="open">Opens the database at the given path; called for the database and for each backup.</param>
+    public StoreModelRunner(string path, string backupPath, Func<string, StoreModelDbContext> open)
+        : this(() => open(path), backupPath, open) { }
 
     /// <summary>The committed view of the model.</summary>
     public Dictionary<int, StoreDoc> Committed => _committed;
@@ -346,7 +348,7 @@ internal sealed class StoreModelRunner : IDisposable
             {
                 StoreModel.DeleteDatabase(_backupPath);
                 await _aroundBackup(() => db.Storage.BackupAsync(_backupPath));
-                using var copy = new StoreModelDbContext(_backupPath, _config);
+                using var copy = _openCopy(_backupPath);
                 var contents = await StoreModel.ReadAll(copy.Docs.FindAllAsync());
                 StoreModel.CheckSame(_committed, contents, "the backup");
                 break;
