@@ -79,7 +79,10 @@ public class StoreModelTests
     private static async Task<Failure?> Replay(List<StoreOp> ops, bool multiProcess)
     {
         var path = Path.Combine(Path.GetTempPath(), $"store_model_{Guid.NewGuid():N}.db");
-        var backupPath = Path.Combine(Path.GetTempPath(), $"store_model_backup_{Guid.NewGuid():N}.db");
+        // A directory of its own: a backup writes backup.manifest.json next to it, under that fixed
+        // name, and other tests back up into the temp directory at the same time.
+        var backupDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"store_model_backup_{Guid.NewGuid():N}")).FullName;
+        var backupPath = Path.Combine(backupDir, "backup.db");
         var config = multiProcess ? PageFileConfig.Default with { AllowMultiProcessAccess = true } : PageFileConfig.Default;
 
         var model = new StoreModelRunner(path, backupPath, config);
@@ -108,7 +111,7 @@ public class StoreModelTests
         {
             model.Dispose();
             StoreModel.DeleteDatabase(path);
-            StoreModel.DeleteDatabase(backupPath);
+            try { Directory.Delete(backupDir, recursive: true); } catch { /* best-effort */ }
         }
     }
 
