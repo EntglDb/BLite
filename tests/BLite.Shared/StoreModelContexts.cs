@@ -27,6 +27,9 @@ public partial class StoreModelDbContext : DocumentDbContext
 
     public StoreModelDbContext(string path, PageFileConfig config) : base(path, config) => InitializeCollections();
 
+    /// <summary>Over an engine the caller opened; the context disposes it.</summary>
+    public StoreModelDbContext(StorageEngine storage) : base(storage) => InitializeCollections();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<StoreDoc>().ToCollection("store_docs")

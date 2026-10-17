@@ -1,0 +1,37 @@
+Seeded defect for tests/BLite.Tests/Oracles/WalCrashTests.cs
+
+Hand-made: the group commit writer acknowledges a batch without flushing the WAL
+(StorageEngine.GroupCommit.cs, ProcessBatchAsync drops `await _wal.FlushAsync()`). The commit
+records stay in the WAL's 64 KB stream buffer, CommitAsync returns, and the pages the commit
+stopped using are freed in the page file at once. A process that dies before the buffer fills
+loses commits it acknowledged, and the documents they replaced come back with overflow pages
+that are already on the free list.
+
+With it applied, rows that pass on upstream 0450b97 fail, e.g. ProcessCrash / Durability
+(123 of 492 crash states), ProcessCrash / Pages.Reachable, ProcessCrash / Continue,
+TornWrite / Atomicity and TornWrite / Durability. ProcessCrash / Pages.Reachable shrinks to:
+    1. Insert(id=74, count=3, code=c08, payload=18000 chars)
+    2. Backup
+    3. Upsert(id=74, count=7, code=null, payload=20 chars)
+  crash after FreePage(24): page 24 written during step 3: page 24, on the overflow chain of
+  the document at page 25, slot 0, has type Free
+
+Reproduce: git apply tests/BLite.Tests/Oracles/Seeds/WalCrashTests.ack-before-wal-flush.patch && dotnet test tests/BLite.Tests --filter FullyQualifiedName~WalCrashTests
+Restore:   git checkout -- src
+
+The source file uses CRLF line endings; apply with --ignore-whitespace if the patch was
+normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/Storage/StorageEngine.GroupCommit.cs b/src/BLite.Core/Storage/StorageEngine.GroupCommit.cs
+index cc66c76..cbc08aa 100644
+--- a/src/BLite.Core/Storage/StorageEngine.GroupCommit.cs
++++ b/src/BLite.Core/Storage/StorageEngine.GroupCommit.cs
+@@ -199,7 +199,7 @@ public sealed partial class StorageEngine
+             }
+ 
+             // ONE flush for all transactions in this batch.
+-            await _wal.FlushAsync().ConfigureAwait(false);
++            // (seeded defect: the batch is acknowledged before its records leave the WAL buffer)
+ 
+             // Promote to WAL index (makes pages visible to readers).
+             foreach (var commit in batch)
