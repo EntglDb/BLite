@@ -192,7 +192,7 @@ modelBuilder.Entity<Order>()
     .HasConversion<OrderIdConverter>();
 
 // 3. Use it naturally
-var order = collection.FindById(new OrderId("ORD-123"));
+var order = await collection.FindByIdAsync(new OrderId("ORD-123"));
 ```
 
 ### 🔒 Encryption at Rest *(v5.0.0)*
@@ -255,18 +255,11 @@ Supply a pre-existing 32-byte key (e.g. from Azure Key Vault or AWS KMS). BLite 
 
 ```csharp
 byte[] masterKey = await myKeyVault.GetKeyAsync("blite-prod");
-using var db = new AppDb("users.db", CryptoOptions.FromMasterKey(masterKey));
+using var db = new AppDbContext("users.db", CryptoOptions.FromMasterKey(masterKey));
 ```
 
 #### Migration and key rotation
-```csharp
-// Offline migration (plaintext ↔ encrypted)
-await BLiteEngine.MigrateToEncryptedAsync("old.db", "new-encrypted.db", keyProvider);
-await BLiteEngine.MigrateToPlaintextAsync("old-encrypted.db", "new-plain.db", keyProvider);
-
-// Online key rotation
-await engine.RotateEncryptionKeyAsync(newKeyProvider, new KeyRotationOptions { EmitAuditEvent = true });
-```
+BLite has no API yet to encrypt an existing plaintext database, decrypt an encrypted one, or rotate the key of an open database. The `CryptoOptions` you pass when a database is created apply for the life of the file.
 
 In multi-file mode, `EncryptionCoordinator` derives a **unique 256-bit HKDF-SHA256 subkey per file** — stealing one file does not expose the others. The default `NullCryptoProvider` is a transparent no-op with **zero overhead** for code that does not opt in.
 
@@ -343,21 +336,26 @@ modelBuilder.Entity<AuditLogEntry>()
 ```
 
 ### 🗑️ Secure Erase & VACUUM *(v5.0.0)*
-Zero the storage slot on delete for GDPR Art. 17 (Right to Erasure):
+Deleting a document zero-fills the bytes it occupied on its page, for GDPR Art. 17 (Right to Erasure). Like every write, the zeroed page reaches the database file at the next checkpoint; until then the file or the WAL can still hold the deleted bytes. `VacuumAsync` compacts the pages and, with `SecureErase` (the default), zero-fills all their free space:
 
 ```csharp
-modelBuilder.Entity<Customer>().HasSecureErase(true);
+// Every collection of a schema-less engine
+await engine.VacuumAsync(new VacuumOptions { SecureErase = true });
+await engine.CheckpointAsync();   // write the zeroed pages into the database file
 
-// Compact and reclaim free space
-await db.VacuumAsync();
+// One typed collection
+await db.Customers.VacuumAsync(new VacuumOptions { SecureErase = true });
+await db.CheckpointAsync();
 ```
+
+Zero-filling covers the database file only, not the OS page cache, SSD wear-levelling or swap.
 
 ### 🔄 Multi-Process WAL *(v5.0.0)*
 A `.wal-shm` sidecar enables **N-reader / 1-writer** access across OS processes (opt-in):
 
 ```csharp
 var config = new PageFileConfig { AllowMultiProcessAccess = true };
-using var db = new AppDb("shared.db", config); // open from multiple processes
+using var db = new AppDbContext("shared.db", config); // open from multiple processes
 ```
 
 Each transaction starts by replaying what other processes have committed since. If a commit in the same process is running, it waits up to `LockTimeout.ReadTimeoutMs` for it; after that it starts anyway and may not see those other commits until the next transaction. A checkpoint writes its pages under the cross-process writer lock, so commits in every process wait for those writes (not for the flush that follows).
@@ -408,7 +406,7 @@ A dedicated `PageType.TimeSeries` — an append-only page format optimised for h
 // Enable on any DynamicCollection
 var sensors = engine.GetOrCreateCollection("sensors");
 sensors.SetTimeSeries("timestamp", TimeSpan.FromDays(7));
-engine.Commit();
+await engine.CommitAsync();
 
 // Insert as normal — routing to TS pages is automatic
 var doc = sensors.CreateDocument(
@@ -669,8 +667,8 @@ User user = await cache.GetOrSetAsync("user:42",
 
 For in-depth technical details, see the complete specification documents:
 
-- **[RFC.md](RFC.md)** - Full architectural specification covering storage engine, indexing, transactions, WAL protocol, and query processing
-- **[C-BSON.md](C-BSON.md)** - Detailed wire format specification for BLite's Compressed BSON format, including hex dumps and performance analysis
+- **[RFC.md](https://github.com/EntglDb/BLite/blob/main/RFC.md)** - Full architectural specification covering storage engine, indexing, transactions, WAL protocol, and query processing
+- **[C-BSON.md](https://github.com/EntglDb/BLite/blob/main/C-BSON.md)** - Detailed wire format specification for BLite's Compressed BSON format, including hex dumps and performance analysis
 
 ---
 
@@ -786,16 +784,23 @@ BsonDocument? doc = await orders.FindByIdAsync(id, ct);
 await foreach (var d in orders.FindAllAsync(ct)) { ... }
 
 // Predicate filter
-await foreach (var d in orders.FindAsync(d => d.GetString("status") == "pending", ct)) { ... }
+await foreach (var d in orders.FindAsync(d => d.TryGetString("status", out var s) && s == "pending", ct)) { ... }
 
 // Zero-copy predicate scan (BsonSpanReader — no heap allocation per document)
-var pending = orders.Scan(reader =>
+await foreach (var d in orders.ScanAsync(reader =>
 {
-    // Read "status" field directly from the BSON bytes
-    if (reader.TryReadString("status", out var status))
-        return status == "shipped";
+    // Read the "status" field directly from the BSON bytes
+    reader.ReadDocumentSize();
+    while (reader.Remaining > 0)
+    {
+        var type = reader.ReadBsonType();
+        if (type == BsonType.EndOfDocument) break;
+        if (reader.ReadElementHeader() == "status")
+            return type == BsonType.String && reader.ReadString() == "shipped";
+        reader.SkipValue(type);
+    }
     return false;
-});
+})) { ... }
 
 // B-Tree range query on a secondary index
 var recent = orders.QueryIndex("idx_placed_at", minDate, maxDate);
@@ -852,23 +857,23 @@ List<UpsertResult<BsonId>> results = await orders.UpsertBulkAsync([doc1, doc2, d
 
 ```csharp
 // B-Tree secondary index
-orders.CreateIndex("status");                         // default name = "idx_status"
-orders.CreateIndex("placed_at", unique: false);
+await orders.CreateIndexAsync("status");              // default name = "idx_status"
+await orders.CreateIndexAsync("placed_at", unique: false);
 
 // Unique index
-orders.CreateIndex("order_number", unique: true);
+await orders.CreateIndexAsync("order_number", unique: true);
 
 // Nested path index (dot-notation) — indexes a field inside an embedded document
-orders.CreateIndex("shipping.city");                  // indexes doc["shipping"]["city"]
-orders.CreateIndex("customer.address.zip");           // arbitrary depth; null intermediates skipped
+await orders.CreateIndexAsync("shipping.city");       // indexes doc["shipping"]["city"]
+await orders.CreateIndexAsync("customer.address.zip"); // arbitrary depth; null intermediates skipped
 
 // Vector index (HNSW) — supports nested paths too
-orders.CreateVectorIndex("embedding", dimensions: 1536, metric: VectorMetric.Cosine);
-orders.CreateVectorIndex("meta.embedding", dimensions: 768, metric: VectorMetric.Cosine);
+await orders.CreateVectorIndexAsync("embedding", dimensions: 1536, metric: VectorMetric.Cosine);
+await orders.CreateVectorIndexAsync("meta.embedding", dimensions: 768, metric: VectorMetric.Cosine);
 
 // Spatial index (R-Tree) — supports nested paths too
-orders.CreateSpatialIndex("location");
-orders.CreateSpatialIndex("store.location");
+await orders.CreateSpatialIndexAsync("location");
+await orders.CreateSpatialIndexAsync("store.location");
 
 // Introspect
 IReadOnlyList<string> indexes = orders.ListIndexes();
@@ -882,12 +887,14 @@ A unique index rejects a second document with the same value (`InvalidOperationE
 ### Reading BsonDocument fields
 
 ```csharp
-BsonDocument? doc = orders.FindById(id);
+BsonDocument? doc = await orders.FindByIdAsync(id);
 if (doc is not null)
 {
-    string status   = doc.GetString("status");
-    double total    = doc.GetDouble("total");
-    BsonId docId    = doc.Id;
+    string status   = doc.GetValue("status").AsString;  // GetValue returns BsonValue.Null for a missing field
+    double total    = doc.GetValue("total").AsDouble;   // As* throws when the stored type does not match
+    doc.TryGetId(out BsonId docId);
+
+    if (doc.TryGetString("nickname", out var nickname)) { ... } // no exception when absent
 }
 ```
 
@@ -938,7 +945,7 @@ BsonDocument? doc = await session.FindByIdAsync("users", id, ct);
 
 // Access collections scoped to this session
 var col = session.GetOrCreateCollection("events");
-col.Insert(eventDoc);
+await col.InsertAsync(eventDoc, ct);
 ```
 
 > **BLiteSession API** (selected): `BeginTransaction()`, `CommitAsync()`, `Rollback()`, `GetOrCreateCollection(name)`, `GetCollection(name)`, `InsertAsync/InsertBulkAsync`, `FindByIdAsync/FindAllAsync/FindAsync`, `UpdateAsync/UpdateBulkAsync`, `DeleteAsync/DeleteBulkAsync`.
@@ -973,12 +980,12 @@ var config = PageFileConfig.Server("data/mydb.db", PageFileConfig.Large); // 32 
 
 ```csharp
 // Migrate from single-file to server multi-file layout
-BLiteMigration.ToMultiFile(
+await BLiteMigration.ToMultiFileAsync(
     sourcePath:   "data/mydb.db",
     targetConfig: PageFileConfig.Server("data/mydb.db"));
 
 // Migrate back to a single file
-BLiteMigration.ToSingleFile(
+await BLiteMigration.ToSingleFileAsync(
     sourcePath:   "data/mydb.db",
     sourceConfig: PageFileConfig.Server("data/mydb.db"),
     targetPath:   "export/mydb-single.db");
@@ -1165,14 +1172,14 @@ We are actively building the core. Here is where we stand:
 - ✅ **HNSW Vector Search Correctness (v3.6.2)**: full correctness pass — fixes `AllocateNode` overflow, neighbor link integrity, `SelectNeighbors` heuristic, random level distribution (`mL = 1/ln(M)`), and index persistence across close/reopen. 12 dedicated edge-case tests added.
 - ✅ **OLAP GroupBy Push-down (v3.7.0)**: aggregate terminal operators (`Count`, `Sum`, `Min`, `Max`, `Average`) are pushed down to the storage layer via `BTreeQueryProvider.TryBsonAggregate<TResult>`, eliminating unnecessary document materialization for large scans.
 - ✅ **BLiteSession — Per-Connection Isolation (v3.8.0)**: `BLiteEngine.OpenSession()` returns a `BLiteSession` with its own isolated transaction context. Multiple sessions on the same engine run independent concurrent transactions. Disposing a session rolls back any uncommitted transaction automatically.
-- ✅ **Multi-File Storage Layout (v3.8.0)**: `PageFileConfig.Server(dbPath)` configures separate files for WAL, index data, and per-collection data. `BLiteMigration.ToMultiFile()` / `ToSingleFile()` migrate existing databases between layouts, preserving all documents, KV entries (including TTL), and index definitions.
+- ✅ **Multi-File Storage Layout (v3.8.0)**: `PageFileConfig.Server(dbPath)` configures separate files for WAL, index data, and per-collection data. `BLiteMigration.ToMultiFileAsync()` / `ToSingleFileAsync()` migrate existing databases between layouts, preserving all documents, KV entries (including TTL), and index definitions.
 - ✅ **Non-Blocking Checkpoints (v3.8.0)**: checkpoint and metadata writes are deferred to avoid blocking the hot path. `PageFile` uses `Lazy<T>` for collection file initialization and `ReaderWriterLockSlim` to fix concurrent read/write races.
 - ✅ **Async-Only CRUD API (v4.0.0 — Breaking Change)**: Synchronous data methods (`Insert`, `Update`, `Delete`, `FindById`, `FindAll`, `Find`, and all bulk variants) have been **removed** from `DocumentCollection<TId, T>` and `DynamicCollection`. All data operations are now exclusively async — this eliminates accidental blocking calls on thread-pool threads, simplifies the internal code paths, and enforces correct async usage throughout the entire stack.
-- ✅ **Encryption at Rest (v5.0.0)**: Transparent AES-256-GCM page-level encryption. `CryptoOptions` (passphrase or master-key), `EncryptionCoordinator` for per-file HKDF-SHA256 subkeys in multi-file mode, offline migration helpers, and online key rotation. Zero overhead when disabled (`NullCryptoProvider`).
+- ✅ **Encryption at Rest (v5.0.0)**: Transparent AES-256-GCM page-level encryption. `CryptoOptions` (passphrase or master-key), `EncryptionCoordinator` for per-file HKDF-SHA256 subkeys in multi-file mode. Zero overhead when disabled (`NullCryptoProvider`).
 - ✅ **Audit Trail (v5.0.0)**: `IBLiteAuditSink` callbacks, in-memory `BLiteMetrics` (lock-free Interlocked counters), and `BLiteDiagnostics.ActivitySource` for OpenTelemetry. `IAuditContextProvider` for caller identity injection. Zero overhead when not configured.
 - ✅ **GDPR Compliance Primitives (v5.0.0)**: `[PersonalData]` annotation, `DataSensitivity` levels, Subject Export (`ExportSubjectDataAsync` — Art. 15/20), Database Inspection (`InspectDatabase` — Art. 30), CDC Field Masking (WP2 — `RevealPersonalData`, `IncludeOnlyFields`, `ExcludeFields`), and `GdprMode.Strict` (Art. 25 privacy-by-default orchestration).
 - ✅ **Generalized Retention Policy (v5.0.0)**: `HasRetentionPolicy` now applies to any typed collection (not only `TimeSeries`). Supports `maxAge`, `maxDocumentCount`, and configurable `RetentionTrigger` (on-insert or scheduled).
-- ✅ **Secure Erase & VACUUM (v5.0.0)**: `HasSecureErase(true)` zeros the storage slot on delete for GDPR Art. 17. `VacuumAsync()` compacts the database and reclaims free space.
+- ✅ **Secure Erase & VACUUM (v5.0.0)**: Deleting a document zero-fills its bytes on the page; `VacuumAsync()` compacts the database, reclaims free space and, with `VacuumOptions.SecureErase` (the default), zero-fills the free space of every page, for GDPR Art. 17.
 - ✅ **Multi-Process WAL (v5.0.0)**: `.wal-shm` sidecar enables N-reader / 1-writer access across OS processes. Opt in via `PageFileConfig.AllowMultiProcessAccess = true`.
 
 ## 🔮 Future Vision
