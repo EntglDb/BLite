@@ -164,6 +164,7 @@ public static class BsonSchemaGenerator
         return !type.IsValueType || Nullable.GetUnderlyingType(type) != null;
     }
 
+    [RequiresUnreferencedCode("Finding the item type of a collection reads the interfaces of its type, which trimming may remove.")]
     private static Type GetCollectionItemType(Type type)
     {
         if (type.IsArray) return type.GetElementType()!;
@@ -174,10 +175,8 @@ public static class BsonSchemaGenerator
             return type.GetGenericArguments()[0];
         }
 
-#pragma warning disable IL2070
         var enumerableType = type.GetInterfaces()
             .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
-#pragma warning restore IL2070
             
         return enumerableType?.GetGenericArguments()[0] ?? typeof(object);
     }

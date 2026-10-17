@@ -23,7 +23,8 @@ public class SchemaTests
         Assert.Contains("mainaddress", keys);
         Assert.Contains("otheraddresses", keys);
         Assert.Contains("tags", keys);
-        Assert.Contains("secret", keys);
+        // [BsonIgnore]: not written, so the generated list leaves it out (#273).
+        Assert.DoesNotContain("secret", keys);
         Assert.Contains("street", keys);
         Assert.Contains("city", keys);
 
