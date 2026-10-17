@@ -532,7 +532,7 @@ In multi-process mode another process may have allocated past this one's view
 
 # Candidate issues from the WAL crash test
 
-Status: **drafts, not filed.** Triage of the rows that `WalCrashTests` reports as failing on
+Status: **filed 2026-10-17 as #260 (W1), #261 (W2) and #262 (W3).** Triage of the rows that `WalCrashTests` reports as failing on
 upstream `0450b97` (v5.2.3): 8 of 24 rows, in three families (W1 to W3). Run on macOS, Arm64,
 .NET 10, 6 seeds of 60 steps, 1,886 crash states (950 `ProcessCrash`, 687 `TornWrite`, 249
 `PowerLoss`; 282 of the `ProcessCrash` states crash a recovery). The repros are the shortest
@@ -560,13 +560,13 @@ fsync, durab, flush, power, crash, torn, truncat, leak, free): none covers W1 to
 
 | Draft | Registry family label | Rows |
 |---|---|---|
-| W1 | `the WAL is never fsynced: a power loss drops acknowledged commits and keeps the frees they made` | 4 |
-| W2 | `a crash leaks the pages that the interrupted work freed or allocated outside the WAL` | 3 |
-| W3 | `a crash between the two writes of PageFile.FreePage or AllocatePage leaves a free page off the free list` | 1 |
+| W1, #260 | `the WAL is never fsynced: a power loss drops acknowledged commits and keeps the frees they made` | 4 |
+| W2, #261 | `a crash leaks the pages that the interrupted work freed or allocated outside the WAL` | 3 |
+| W3, #262 | `a crash between the two writes of PageFile.FreePage or AllocatePage leaves a free page off the free list` | 1 |
 
 ---
 
-## W1. The WAL is never fsynced: a power loss drops acknowledged commits and corrupts documents
+## W1 (#260). The WAL is never fsynced: a power loss drops acknowledged commits and corrupts documents
 
 **Rows:** `PowerLoss / Durability` (108 of 249 crash states), `PowerLoss / Atomicity` (6),
 `PowerLoss / Pages.Reachable` (6), `PowerLoss / Continue` (3).
@@ -639,7 +639,7 @@ freeing pages a commit released, or those documents are corrupted rather than ju
 
 ---
 
-## W2. A crash leaks the pages that the interrupted work freed or allocated outside the WAL
+## W2 (#261). A crash leaks the pages that the interrupted work freed or allocated outside the WAL
 
 **Rows:** `ProcessCrash / Pages.Leaked` (243 of 950), `TornWrite / Pages.Leaked` (107 of 687),
 `PowerLoss / Pages.Leaked` (24 of 249).
@@ -691,7 +691,7 @@ roots in one transaction.
 
 ---
 
-## W3. A crash between the two writes of `PageFile.FreePage` or `AllocatePage` leaves a free page off the free list
+## W3 (#262). A crash between the two writes of `PageFile.FreePage` or `AllocatePage` leaves a free page off the free list
 
 **Rows:** `ProcessCrash / Pages.FreeList` (46 of 950).
 

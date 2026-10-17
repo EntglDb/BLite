@@ -123,11 +123,11 @@ public class WalCrashTests
     /// </summary>
     private static readonly Candidates s_candidates = new()
     {
-        { "the WAL is never fsynced: a power loss drops acknowledged commits and keeps the frees they made", "",
+        { "the WAL is never fsynced: a power loss drops acknowledged commits and keeps the frees they made", "#260",
             Label(PowerLoss, Durability), Label(PowerLoss, Atomicity), Label(PowerLoss, PagesReachable), Label(PowerLoss, Continue) },
-        { "a crash leaks the pages that the interrupted work freed or allocated outside the WAL", "",
+        { "a crash leaks the pages that the interrupted work freed or allocated outside the WAL", "#261",
             Label(ProcessCrash, PagesLeaked), Label(TornWrite, PagesLeaked), Label(PowerLoss, PagesLeaked) },
-        { "a crash between the two writes of PageFile.FreePage or AllocatePage leaves a free page off the free list", "",
+        { "a crash between the two writes of PageFile.FreePage or AllocatePage leaves a free page off the free list", "#262",
             Label(ProcessCrash, PagesFreeList) },
     };
 
