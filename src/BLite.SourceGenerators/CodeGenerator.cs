@@ -9,7 +9,11 @@ namespace BLite.SourceGenerators
 {
     public static class CodeGenerator
     {
-        public static string GenerateMapperClass(EntityInfo entity, string mapperNamespace)
+        /// <param name="mappers">
+        /// Every mapper generated alongside this one, by entity type name, so the BSON keys of nested
+        /// types can be listed; without it only the entity's own fields are listed.
+        /// </param>
+        public static string GenerateMapperClass(EntityInfo entity, string mapperNamespace, IReadOnlyDictionary<string, EntityInfo>? mappers = null)
         {
             var sb = new StringBuilder();
             var mapperName = GetMapperName(entity.FullTypeName);
@@ -176,6 +180,8 @@ namespace BLite.SourceGenerators
                 GenerateIdAccessors(sb, entity);
                 sb.AppendLine();
                 GenerateVerbatimFieldNames(sb, entity);
+                sb.AppendLine();
+                GenerateUsedKeys(sb, entity, mappers);
             }
 
             // Emit PersonalData static members (WP1)
@@ -1110,6 +1116,81 @@ namespace BLite.SourceGenerators
             sb.AppendLine($"                default: return null;");
             sb.AppendLine($"            }}");
             sb.AppendLine($"        }}");
+        }
+
+        /// <summary>
+        /// Emits <c>UsedKeys</c>: every BSON field name <c>Serialize</c> can write, the fields of nested
+        /// types (single objects and collection items, at any depth) included. The collection registers
+        /// these keys before the first write; the base implementation finds them by reflection over the
+        /// entity type, which trimming breaks under Native AOT (#273), so a generated mapper never
+        /// reaches it.
+        /// </summary>
+        private static void GenerateUsedKeys(StringBuilder sb, EntityInfo entity, IReadOnlyDictionary<string, EntityInfo>? mappers)
+        {
+            var keys = CollectBsonKeys(entity, mappers);
+
+            sb.AppendLine($"        private static readonly string[] __usedKeys = new string[]");
+            sb.AppendLine($"        {{");
+            foreach (var key in keys)
+            {
+                sb.AppendLine($"            \"{key}\",");
+            }
+            sb.AppendLine($"        }};");
+            sb.AppendLine();
+            sb.AppendLine($"        public override global::System.Collections.Generic.IEnumerable<string> UsedKeys => __usedKeys;");
+        }
+
+        /// <summary>
+        /// The BSON field names the generated <c>Serialize</c> of <paramref name="entity"/> can write, in
+        /// the order they are first written, nested types' fields included.
+        /// </summary>
+        /// <remarks>
+        /// Keeps one rule of the reflection-based schema this replaces (<c>BsonSchemaGenerator</c>): a
+        /// property named <c>Id</c> registers <c>_id</c> as well as its own field name, whichever of the
+        /// two the mapper writes. Ignored properties are not written, so they are not listed.
+        /// </remarks>
+        internal static List<string> CollectBsonKeys(EntityInfo entity, IReadOnlyDictionary<string, EntityInfo>? mappers)
+        {
+            var keys = new List<string>();
+            var visited = new HashSet<string> { entity.FullTypeName };
+            AddBsonKeys(entity, mappers, keys, new HashSet<string>(), visited);
+            return keys;
+        }
+
+        private static void AddBsonKeys(EntityInfo entity, IReadOnlyDictionary<string, EntityInfo>? mappers,
+            List<string> keys, HashSet<string> seen, HashSet<string> visited)
+        {
+            foreach (var prop in entity.Properties)
+            {
+                if (prop.IsKey && !entity.IsNestedTypeMapper)
+                {
+                    AddKey(BLiteConventions.BsonIdFieldName, keys, seen);
+                }
+                AddKey(prop.BsonFieldName, keys, seen);
+                if (string.Equals(prop.Name, "id", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddKey(BLiteConventions.BsonIdFieldName, keys, seen);
+                }
+
+                // A converter writes the property as a primitive, so its nested type's fields are not written.
+                if ((prop.IsNestedObject || prop.IsCollectionItemNested)
+                    && prop.ConverterTypeName == null
+                    && prop.NestedTypeFullName != null
+                    && mappers != null
+                    && mappers.TryGetValue(prop.NestedTypeFullName, out var nested)
+                    && visited.Add(nested.FullTypeName))
+                {
+                    AddBsonKeys(nested, mappers, keys, seen, visited);
+                }
+            }
+        }
+
+        private static void AddKey(string key, List<string> keys, HashSet<string> seen)
+        {
+            if (!string.IsNullOrEmpty(key) && seen.Add(key))
+            {
+                keys.Add(key);
+            }
         }
 
         private static string GetBaseMapperClass(PropertyInfo? keyProp, EntityInfo entity)

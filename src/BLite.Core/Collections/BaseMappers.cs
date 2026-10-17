@@ -34,6 +34,18 @@ public abstract class DocumentMapperBase<TId, T> : IDocumentMapper<TId, T> where
     /// </remarks>
     public virtual string? GetVerbatimFieldName(string propertyName) => null;
 
+    /// <summary>
+    /// The BSON field names <see cref="Serialize"/> can write. The collection registers them in the
+    /// key dictionary before its first write, and a write of an unregistered name fails.
+    /// </summary>
+    /// <remarks>
+    /// Generated mappers override this with the list the source generator emits, so they use no
+    /// reflection. This default reads the names from <typeparamref name="T"/> by reflection, which
+    /// trimming breaks: under Native AOT it finds no names and every write fails (#273). A hand-written
+    /// mapper used in a trimmed or Native AOT app must override it. The suppression below only quiets
+    /// BLite's own build: the trim analysis of the app's publish still reports this getter when a
+    /// mapper that does not override it is compiled in.
+    /// </remarks>
 #pragma warning disable IL2026
     public virtual IEnumerable<string> UsedKeys => GetSchema().GetAllKeys();
 #pragma warning restore IL2026

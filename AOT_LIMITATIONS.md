@@ -153,6 +153,7 @@ fully AOT-safe.
 | `FindAsync`, `FindOneAsync`, `AsQueryable`  | ❌ No     | Use scan/index APIs above                 |
 | `CreateIndexAsync`, `EnsureIndexAsync`      | ❌ No     | Pre-create indexes at startup             |
 | `BsonSchemaGenerator.FromType`              | ❌ No     | Implement `IDocumentMapper` manually      |
+| Hand-written `DocumentMapperBase` without a `UsedKeys` override | ❌ No | Override `UsedKeys` with the field names `Serialize` writes (generated mappers do, #273) |
 | `ValueConverterRegistry` constructor        | ❌ No     | Convert in custom mapper `Serialize`      |
 | Generated mapper (no private setters)       | ✅ Yes    | N/A — fully safe path                     |
 | Generated mapper (private/init setter from external assembly) | ❌ No | Avoid external private setters or suppress |

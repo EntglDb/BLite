@@ -132,25 +132,27 @@ public readonly struct BLiteDiagnostic
                 sb.AppendLine($"namespace {mapperNamespace}");
                 sb.AppendLine($"{{");
 
-                var generatedMappers = new HashSet<string>();
+                // One mapper per type, entity mappers first: a nested property of an entity type
+                // is written by that entity's mapper.
+                var mappers = new Dictionary<string, EntityInfo>();
 
-                // Generate Entity Mappers
+                // Entity Mappers
                 foreach (var entity in dbContext.Entities)
                 {
-                    if (generatedMappers.Add(entity.FullTypeName))
+                    if (!mappers.ContainsKey(entity.FullTypeName))
                     {
-                        sb.AppendLine(CodeGenerator.GenerateMapperClass(entity, mapperNamespace));
+                        mappers[entity.FullTypeName] = entity;
                     }
                 }
 
-                // Generate Nested Mappers
+                // Nested Mappers
                 foreach (var nested in dbContext.GlobalNestedTypes.Values)
                 {
-                    if (generatedMappers.Add(nested.FullTypeName))
+                    if (!mappers.ContainsKey(nested.FullTypeName))
                     {
-                        var nestedEntity = new EntityInfo 
-                        { 
-                            Name = nested.Name, 
+                        var nestedEntity = new EntityInfo
+                        {
+                            Name = nested.Name,
                             Namespace = nested.Namespace,
                             FullTypeName = nested.FullTypeName,
                             IsNestedTypeMapper = true,
@@ -160,9 +162,13 @@ public readonly struct BLiteDiagnostic
                             SelectedConstructorIsPublic = nested.SelectedConstructorIsPublic,
                         };
                         nestedEntity.Properties.AddRange(nested.Properties);
-                        
-                        sb.AppendLine(CodeGenerator.GenerateMapperClass(nestedEntity, mapperNamespace));
+                        mappers[nested.FullTypeName] = nestedEntity;
                     }
+                }
+
+                foreach (var mapperEntity in mappers.Values)
+                {
+                    sb.AppendLine(CodeGenerator.GenerateMapperClass(mapperEntity, mapperNamespace, mappers));
                 }
 
                 sb.AppendLine($"}}");
@@ -427,13 +433,11 @@ public readonly struct BLiteDiagnostic
                 sb.AppendLine($"namespace {mapperNamespace}");
                 sb.AppendLine("{");
 
-                var generatedMappers = new HashSet<string>();
-                if (generatedMappers.Add(entity.FullTypeName))
-                    sb.AppendLine(CodeGenerator.GenerateMapperClass(entity, mapperNamespace));
+                var mappers = new Dictionary<string, EntityInfo> { [entity.FullTypeName] = entity };
 
                 foreach (var nested in nestedTypes.Values)
                 {
-                    if (generatedMappers.Add(nested.FullTypeName))
+                    if (!mappers.ContainsKey(nested.FullTypeName))
                     {
                         var nestedEntity = new EntityInfo
                         {
@@ -442,9 +446,12 @@ public readonly struct BLiteDiagnostic
                             FullTypeName = nested.FullTypeName,
                         };
                         nestedEntity.Properties.AddRange(nested.Properties);
-                        sb.AppendLine(CodeGenerator.GenerateMapperClass(nestedEntity, mapperNamespace));
+                        mappers[nested.FullTypeName] = nestedEntity;
                     }
                 }
+
+                foreach (var mapperEntity in mappers.Values)
+                    sb.AppendLine(CodeGenerator.GenerateMapperClass(mapperEntity, mapperNamespace, mappers));
 
                 sb.AppendLine("}");
 
