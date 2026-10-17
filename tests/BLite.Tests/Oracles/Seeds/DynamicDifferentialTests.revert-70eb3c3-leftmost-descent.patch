@@ -1,0 +1,37 @@
+Seeded defect for tests/BLite.Tests/Oracles/DynamicDifferentialTests.cs
+
+Reverts the #213 part of 70eb3c3 (#232) that still applies: BTreeIndex.FindChildIndex descends
+to the right of a separator equal to the key again, also when the caller asks for the leftmost
+leaf. In a non-unique index, which is what every DynamicCollection index is (its keys carry no
+document id, #234), copies of a key left of an equal separator are then skipped by a forward
+range scan. The rest of 70eb3c3 (splits by size, #217; Delete searching every child that can
+hold the key) stays.
+
+With it applied, 96 rows fail on upstream 0450b97 that are not candidates (tools/oracle-seeds.cs:
+CAUGHT, 96 new failures), all on the indexed ways (indexed/api and indexed/blql, against both
+oracles): every equality and range on an indexed field with ties that straddle a leaf split, e.g.
+  indexed/api linq: count == 5: expected 70 documents, got 51
+      ran as: QueryIndexAsync("idx_count", 5, 5, ascending: true) with the filter as residual
+  indexed/blql linq: when == t5: expected 78 documents, got 43
+  indexed/api linq: nick == null: expected 108 documents, got 44 (the null bucket too)
+The typed collection is not affected: its keys are unique, so no separator equals a search key.
+
+Reproduce: git apply tests/BLite.Tests/Oracles/Seeds/DynamicDifferentialTests.revert-70eb3c3-leftmost-descent.patch && dotnet test tests/BLite.Tests --filter FullyQualifiedName~DynamicDifferentialTests
+Restore:   git checkout -- src
+
+The source file uses CRLF line endings and so do the diff lines below; apply with
+--ignore-whitespace if the patch was normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/Indexing/BTreeIndex.cs b/src/BLite.Core/Indexing/BTreeIndex.cs
+index 365fc70..beb7b50 100644
+--- a/src/BLite.Core/Indexing/BTreeIndex.cs
++++ b/src/BLite.Core/Indexing/BTreeIndex.cs
+@@ -540,7 +540,7 @@ public sealed class BTreeIndex
+             int midOff = offsets[mid];
+             int midKeyLen = BitConverter.ToInt32(nodeBuffer.Slice(midOff, 4));
+             int cmp = IndexKey.CompareRaw(keyData, nodeBuffer.Slice(midOff + 4, midKeyLen));
+-            if (cmp < 0 || (leftmost && cmp == 0))
++            if (cmp < 0)
+             { firstAbove = mid; hi = mid - 1; }
+             else { lo = mid + 1; }
+         }

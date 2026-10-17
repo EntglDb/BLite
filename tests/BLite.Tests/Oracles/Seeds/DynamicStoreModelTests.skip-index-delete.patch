@@ -1,0 +1,43 @@
+Seeded defect for tests/BLite.Tests/Oracles/DynamicStoreModelTests.cs
+
+Hand-made: DynamicCollection.DeleteAsync leaves the document's entries in its B-Tree secondary
+indexes (it skips IndexDelete for them; vector, spatial and full-text indexes are still
+maintained, DeleteBulkAsync is unchanged). The stale entry points at the freed slot, so a later
+document stored in that slot is found under the deleted document's values, and a unique index
+keeps rejecting the deleted document's value.
+
+With it applied, 9 rows fail on upstream 0450b97 that are not candidates (tools/oracle-seeds.cs:
+CAUGHT, 9 new failures): Index for all six seeds, Model for seeds 1 and 5, and
+seed 5 / Index.UniqueBackfill, which reports "candidate fixed" because the run now ends at its
+Model failure (step 153) before the unique index creation that fails at step 259. The rows shrink
+to 3 steps, e.g. seed 3 / Index:
+    1. Insert(id=89, count=4, code=c10, payload=2500 chars)
+    2. Delete(id=89)
+    3. Insert(id=83, count=3, code=c17, payload=2500 chars)
+  QueryIndexAsync("idx_count", 4, 4) returned 1 documents, the model has 0; unexpected [83]
+and seed 1 / Model:
+    1. Insert(id=109, count=4, code=c08, payload=300 chars)
+    2. Delete(id=109)
+    3. Insert(id=22, count=8, code=c08, payload=300 chars)
+  unexpected BLiteValidationException: Duplicate key violation for unique index 'idx_code'
+
+Reproduce: git apply tests/BLite.Tests/Oracles/Seeds/DynamicStoreModelTests.skip-index-delete.patch && dotnet test tests/BLite.Tests --filter FullyQualifiedName~DynamicStoreModelTests
+Restore:   git checkout -- src
+
+The source file uses CRLF line endings and so do the diff lines below; apply with
+--ignore-whitespace if the patch was normalised. Never commit the seeded state.
+
+diff --git a/src/BLite.Core/DynamicCollection.cs b/src/BLite.Core/DynamicCollection.cs
+index 4e14437..490b1a9 100644
+--- a/src/BLite.Core/DynamicCollection.cs
++++ b/src/BLite.Core/DynamicCollection.cs
+@@ -1600,7 +1600,8 @@ public sealed class DynamicCollection : IDisposable
+             if (doc != null)
+             {
+                 foreach (var (_, idx) in _secondaryIndexes)
+-                    IndexDelete(idx, doc, location, transaction);
++                    if (idx.Kind != DynamicIndexKind.BTree)
++                        IndexDelete(idx, doc, location, transaction);
+             }
+ 
+             DeleteSlot(location, transaction);
