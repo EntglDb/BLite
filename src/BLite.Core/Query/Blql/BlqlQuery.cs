@@ -176,7 +176,10 @@ public sealed class BlqlQuery
         return count;
     }
 
-    /// <summary>Returns the first matching document, or <c>null</c> if none.</summary>
+    /// <summary>
+    /// Returns the first document of the query, as <see cref="ToList"/> would return it (sort, skip
+    /// and take applied), or <c>null</c> if there is none.
+    /// </summary>
     public BsonDocument? FirstOrDefault()
     {
         return FirstOrDefaultAsync().GetAwaiter().GetResult();
@@ -184,17 +187,14 @@ public sealed class BlqlQuery
 
     public async Task<BsonDocument?> FirstOrDefaultAsync(CancellationToken cancellationToken = default)
     {
-        await foreach (var doc in GetScanSource(_filter, cancellationToken).WithCancellation(cancellationToken))
-        {
-            if (!_filter.Matches(doc)) continue;
-            return _projection.IsIdentity
-                ? doc
-                : _collection.ProjectDocument(doc, _projection);
-        }
+        // The first item of the query itself, so Sort/OrderBy and Skip are honoured (#266); with a
+        // single-key sort on an indexed field this stops after the first index entry that matches.
+        await foreach (var doc in AsAsyncEnumerable(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+            return doc;
         return null;
     }
 
-    /// <summary>Returns the first matching document or throws <see cref="InvalidOperationException"/>.</summary>
+    /// <summary>Returns the first document of the query (see <see cref="FirstOrDefault"/>) or throws <see cref="InvalidOperationException"/>.</summary>
     public BsonDocument First()
     {
         return FirstOrDefault()
