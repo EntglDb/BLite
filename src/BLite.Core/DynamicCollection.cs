@@ -46,7 +46,8 @@ public sealed class DynamicCollection : IDisposable
     private readonly BTreeIndex _primaryIndex;
     private readonly string _collectionName;
     private readonly BsonIdType _idType;
-    private readonly SemaphoreSlim _collectionLock = new(1, 1);
+    // Shared with every other object that writes to this collection (#304), see StorageEngine.GetCollectionWriteLock.
+    private readonly SemaphoreSlim _collectionLock;
     private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
     private readonly FreeSpaceIndex _fsi;
     // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.
@@ -116,6 +117,7 @@ public sealed class DynamicCollection : IDisposable
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _transactionHolder = transactionHolder ?? throw new ArgumentNullException(nameof(transactionHolder));
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
+        _collectionLock = _storage.GetCollectionWriteLock(_collectionName);
         _idType = idType;
         _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
         _fsi = freeSpaceIndex ?? new FreeSpaceIndex(_storage.PageSize);
@@ -2870,6 +2872,6 @@ public sealed class DynamicCollection : IDisposable
     {
         _retentionTimer?.Dispose();
         _retentionTimer = null;
-        _collectionLock.Dispose();
+        // The write lock belongs to the engine and is shared with other instances: not disposed here.
     }
 }

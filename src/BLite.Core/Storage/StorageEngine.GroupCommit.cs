@@ -115,6 +115,8 @@ public sealed partial class StorageEngine
     {
         bool needsCheckpoint = false;
         Exception? failure = null;
+        // Commits rejected because a commit before them changed one of their pages (#304).
+        Dictionary<PendingCommit, BLiteTransactionConflictException>? conflicts = null;
 
         // Acquire the commit lock once for the entire batch.
         // If this times out, signal all waiters with the exception so they don't hang.
@@ -171,8 +173,28 @@ public sealed partial class StorageEngine
                 wal.SeekToSharedEnd(_shm!.ReadWalEndOffset());
             }
 
+            // First committer wins (#304): a commit whose pages another commit has published since
+            // it read them, or that an earlier commit of this batch also writes, is rejected before
+            // any of its records reach the WAL. In batch order, so each commit sees the ones before it.
+            HashSet<uint>? writtenInBatch = null;
             foreach (var commit in batch)
             {
+                if (commit.Pages == null || commit.Pages.IsEmpty)
+                    continue;
+                if (FindConflict(commit.TransactionId, commit.Pages, writtenInBatch) is uint conflictPage)
+                {
+                    (conflicts ??= new()).Add(commit, new BLiteTransactionConflictException(commit.TransactionId, conflictPage));
+                    continue;
+                }
+                writtenInBatch ??= new HashSet<uint>();
+                foreach (var pageId in commit.Pages.Keys)
+                    writtenInBatch.Add(pageId);
+            }
+
+            foreach (var commit in batch)
+            {
+                if (conflicts != null && conflicts.ContainsKey(commit))
+                    continue;
                 if (commit.Pages == null || commit.Pages.IsEmpty)
                 {
                     // Read-only or empty transaction: just a commit tombstone.
@@ -204,12 +226,16 @@ public sealed partial class StorageEngine
             // Promote to WAL index (makes pages visible to readers).
             foreach (var commit in batch)
             {
+                if (conflicts != null && conflicts.ContainsKey(commit))
+                    continue;
                 if (commit.Pages != null)
                 {
                     // Index first, then drop the cache: a page must never be in neither
                     // (FreePage relies on finding its WAL image in one of them).
                     foreach (var kvp in commit.Pages)
                         _walIndex[kvp.Key] = kvp.Value;
+                    // Images first, then versions: a reader never pairs a new version with old data (#304).
+                    PublishPageVersions(commit.Pages.Keys);
                     _walCache.TryRemove(commit.TransactionId, out _);
                 }
             }
@@ -245,7 +271,12 @@ public sealed partial class StorageEngine
             // The batch is durable and published: release the pages its transactions stopped
             // using (#233). Last, so that a batch reported as failed never frees anything.
             foreach (var commit in batch)
-                FreePagesOfCommittedTransaction(commit.TransactionId);
+            {
+                if (conflicts == null || !conflicts.ContainsKey(commit))
+                    FreePagesOfCommittedTransaction(commit.TransactionId);
+            }
+
+            TryPrunePageVersions();
 
             // Check if checkpoint is needed, but defer until after releasing the lock
             needsCheckpoint = newWalEnd > MaxWalSize;
@@ -267,7 +298,9 @@ public sealed partial class StorageEngine
         // Signal all waiters outside the lock so their continuations run freely.
         foreach (var commit in batch)
         {
-            if (failure != null)
+            if (conflicts != null && conflicts.TryGetValue(commit, out var conflict))
+                commit.Completion.TrySetException(conflict);
+            else if (failure != null)
                 commit.Completion.TrySetException(failure);
             else
                 commit.Completion.TrySetResult(true);
