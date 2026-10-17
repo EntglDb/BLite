@@ -27,7 +27,7 @@ Three mechanisms, each in one file, plus two commit trailers.
 
 ### Oracle tests (`tests/BLite.Tests/Oracles/*Tests.cs`)
 
-A test that compares BLite against an exact reference. Three kinds exist today, in four tests.
+A test that compares BLite against an exact reference. Three kinds exist today, in six tests.
 
 - **Differential**, `DifferentialQueryTests.cs`: a catalogue of query shapes runs over the same seeded
   documents on a collection with a B-Tree index on every queried property
@@ -66,10 +66,30 @@ A test that compares BLite against an exact reference. Three kinds exist today, 
   crash states. Each mode times each check is a row; a failing row is shrunk to the shortest
   sequence that still fails at a crash in its last step. The record replayed in full must equal the
   files, so a write path that bypasses the wrappers fails the run instead of going unseen.
+- **Differential against two oracles**, `DynamicDifferentialTests.cs`: the catalogue of
+  `DifferentialQueryTests` (shared, not copied) runs over the same documents written as
+  `BsonDocument`s into a `DynamicCollection` with an index on every queried field (one of them a
+  nested path) and into one without, each through the collection's own methods (`QueryIndexAsync`,
+  `FindAsync`) and through BLQL: four ways. A small LINQ provider takes each catalogue query, hands the
+  part the way can express to BLite (filter, sort, window, `Count`/`Any`/`First`) and evaluates only
+  the rest in memory, and every row's output says what ran where. A shape BLQL cannot express is
+  listed with its reason and prints `INAPPLICABLE`, never skipped silently. New here is the second
+  oracle: besides LINQ-to-Objects, the typed collection over the same documents, compared by what
+  every correct answer has in common (`QueryCase.Determined`). Where the two oracles disagree, one of
+  them is wrong, and the typed collection's own candidates (#247, #248) show up as rows of their own.
+  A row is a way, an oracle and a query.
+- **Model-based, schema-less**, `DynamicStoreModelTests.cs`: the store model's sequences run against
+  a `DynamicCollection` with a non-unique and a unique index, mixed with dynamic-only steps:
+  `CreateIndexAsync` and `DropIndex` while documents exist, `VacuumAsync` with and without
+  `RebuildIndexes`, and runs of hundreds of documents sharing one indexed value, deleted again. After
+  every step the dictionary model (with the schema-less rules: an explicit null is a unique value,
+  README.md:880), every index through `QueryIndexAsync`, and the page accounting of
+  `WalCrashTests` after every commit, drop and vacuum. A row is a seed and a check. One more row
+  measures how the delete of N documents sharing a value grows from N to 8N and compares it with
+  N log N (#234), with no absolute time.
 
-Other kinds fit BLite and are not written yet: round trip (a document through the BSON writer and
-reader, a page through encryption and back), differential BLQL against LINQ on a `DynamicCollection`,
-and `DynamicCollection` against the typed collection for the same documents and queries.
+Another kind fits BLite and is not written yet: round trip (a document through the BSON writer and
+reader, a page through encryption and back).
 
 ### Seeds (`tests/BLite.Tests/Oracles/Seeds/*.patch`)
 
@@ -127,7 +147,10 @@ evaluator itself is wrong. A model-based failure names the seed, the step that f
 shortest failing sequence, one operation per line; replaying that sequence by hand is the repro.
 A fault-injection failure names the crash mode, the seed, the crash point (the write after which
 the files were cut, and the step it belongs to) and the shortest sequence that still fails at a
-crash in its last step.
+crash in its last step. A `DynamicDifferentialTests` row reads `indexed/blql linq: ratio < 0`: the
+way, the oracle, the query, and under the disagreement the line `ran as:` with what ran on the
+collection and what in memory. If only `typed` rows of a query fail, the typed collection is the one
+that is wrong; if `indexed` and `plain` disagree with each other, an index changes the answer.
 
 **Triage, in this order.**
 
@@ -168,7 +191,13 @@ expose an old defect.
 - **A new LINQ operator or terminal** is one more `QueryCase` in the `BuildCatalogue` method of
   `DifferentialQueryTests.cs` (a `W(...)` predicate, a sequence case or a scalar case). It runs at
   once against every existing document shape, on the indexed and the plain collection, sync and
-  async, with no new fixture.
+  async, with no new fixture. It runs on the `DynamicCollection` too, through BLQL and the
+  collection's methods, against LINQ and against the typed collection.
+- **A new BLQL operator or a new dynamic index kind** is one more case in the translator of
+  `DynamicDifferentialTests.cs` (`ToBlql` for an operator, `Bounds` for what `QueryIndexAsync` can
+  serve) or one more field in its documents with a `CreateIndexAsync`. Every catalogue row that can
+  use it then runs through it, on the indexed and the plain collection, against both oracles; a
+  shape it still cannot express stays listed in `s_blqlInapplicable` with the reason.
 - **A new indexable type or index kind** (composite, nested, descending, full-text, spatial) is one
   more property on `DiffDoc` with a `.HasIndex(...)` in `DiffIndexedDbContext`, plus the predicates
   that use it. Every existing predicate shape then also runs over the new index.
@@ -178,7 +207,8 @@ expose an old defect.
 - **A new collection operation or storage feature** (a transaction mode, a maintenance command, a
   multi-process behaviour) is one more `StoreOpKind` in `StoreModel.cs` with its effect on the model's
   committed and pending views. From then on it appears in every generated sequence, interleaved with
-  every other operation, in single- and multi-process mode.
+  every other operation, in single- and multi-process mode. A dynamic-only operation (an index
+  command, a maintenance call) is one more `DynOpKind` in `DynamicStoreModelTests.cs`.
 - **A new storage operation** (a vacuum, an index rebuild, a new checkpoint or truncation path) is,
   once it is a `StoreOpKind`, one more step the injector of `WalCrashTests.cs` interrupts: every
   page and WAL write it makes becomes a crash point in every mode, with no new fixture.
@@ -188,6 +218,8 @@ expose an old defect.
 What the tests do not see: targets other than `net10.0` (`netstandard2.1`, Unity, MAUI; the test
 project runs on `net10.0` only), real multi-process races beyond the alternation the model drives,
 crashes in multi-process mode, inside `Backup` and inside the engine's constructor on a reopen (the
-injector steps aside there, see `WalCrashTests`), torn page writes, performance, and anything whose
+injector steps aside there, see `WalCrashTests`), torn page writes, reads of a `DynamicCollection`
+through a transaction (it has none) and its vector, spatial and full-text indexes, performance
+beyond the growth check of duplicate deletes, and anything whose
 correct answer has no exact reference, such as API design and documentation drift. Those stay
 with review.

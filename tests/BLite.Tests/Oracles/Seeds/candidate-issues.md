@@ -742,3 +742,440 @@ that makes the stray header matter came with #238.
 head, so a crash leaves a non-free page off the list, which is only a leak); or, cheaper and more
 general, rebuild or check the free list on open after a crash (W2's walk); or make allocation and
 free WAL records.
+
+---
+
+# Candidate issues from the DynamicCollection tests
+
+Status: **filed 2026-10-17 as #264 (D1), #265 (D2), #266 (D3), #267 (D4), #268 (D5), #269 (D6 and
+D7), #270 (D8) and #271 (D9).** D6 and D7 are one issue: both come from the same two key switches
+(`BsonValueToIndexKey` and `CreateIndexKeyFromObject`), and one key encoding fixes both. D4 and D5 stay
+apart: D4 is `CompareFilter` applying range operators across the comparer's type order (a design
+question), D5 the comparer's numeric branch contradicting its own summary (a two-line fix). Triage of
+the rows that `DynamicDifferentialTests` and
+`DynamicStoreModelTests` report on upstream `0450b97` (v5.2.3; the oracle branches change no file
+under `src/`): 248 differential rows in eight families (D1 to D8) and 4 store-model rows in one
+(D9), next to reproductions of #254 (48 rows), #234 (the scaling row) and the typed oracle's own
+#247 and #248 (28 rows). Each repro below was run as a scratch Fact on that tree; the results
+quoted are that run's. The repros are not part of the suite, the rows listed under each draft are.
+
+A differential row is `"<way> <oracle>: <query>"`: the way is `indexed/api`, `indexed/blql`,
+`plain/api` or `plain/blql` (the collection with an index on every queried field or without, through
+`QueryIndexAsync`/`FindAsync` or through BLQL), the oracle `linq` or `typed`. A store-model row is
+`"seed <n> / <check>"`.
+
+What agrees, on all four ways and against both oracles: equality, ranges, `In`, `$mod`, `Or`,
+`Not`, windows, `Count` and `Any` on Int32, Int64 and string fields; `== null` and `!= null`
+through the null bucket (the dynamic index answers `nick == null` correctly, where the typed one
+does not, #247); ordinal `$startsWith`, `$endsWith`, `$contains`; `QueryIndexAsync` with `DBNull`
+bounds; the nested index through `QueryIndexAsync`. In the store model: every write, transaction,
+checkpoint, backup and reopen, `CreateIndexAsync` and `DropIndex` with documents present, `VacuumAsync`
+with and without `RebuildIndexes`, runs of 150 and 400 documents sharing one indexed value found and
+deleted completely (#213 holds), and the pages after every commit, `DropIndex` and vacuum (#211 holds:
+the old trees are freed).
+
+The difference README.md:880 documents ("`DynamicCollection` indexes an explicit BSON `null` and
+rejects a second one, whereas typed collections do not index `null` keys") changes which values a
+unique index accepts, not any query answer: no differential row disagrees because of it. The store
+model encodes it (a null code is an explicit null for ids that are multiples of 5 and a unique value).
+
+Open and closed issues checked on 2026-10-17 (`gh issue list --repo EntglDb/BLite --state all`,
+searched for BLQL nested, dot notation, nested path, ObjectId order, ObjectId sort, BLQL null,
+lte null, Int64 precision, long double comparison, FirstOrDefault sort, BLQL First, BLQL Sort,
+Decimal128 index, Boolean index, decimal DynamicCollection, QueryIndex DateTime, QueryIndexAsync,
+BLQL index, constant of another type, BsonValueComparer, CreateIndexAsync unique, unique index
+existing duplicates): none covers D1 to D9. The closest: #254 (open, the double key encoding; D6
+and D7 are its siblings in the same key switch), #222 (closed, the typed twin of D6), #190 (open,
+`OnIndexBuildFailure` for typed model indexes, the typed side of D9) and #213 and #211 (closed, hold).
+
+**Registry entries.** D1 to D8 are families of `s_candidates` in
+`tests/BLite.Tests/Oracles/DynamicDifferentialTests.cs`, D9 of the one in
+`tests/BLite.Tests/Oracles/DynamicStoreModelTests.cs`:
+
+| Draft | Registry family label | Rows |
+|---|---|---|
+| D1, #264 | `BLQL cannot reach a nested field` | 48 |
+| D2, #265 | `BLQL orders ObjectIds by their little-endian bytes` | 60 |
+| D3, #266 | `BLQL First and FirstOrDefault ignore Sort and Skip` | 16 |
+| D4, #267 | `BLQL range operators match fields of another BSON type` | 4 |
+| D5, #268 | `BLQL compares two Int64 values through double` | 4 |
+| D6, #269 | `a numeric bound of another type than the stored values misses keys of a dynamic index` | 24 |
+| D7, #269 | `a dynamic index keys no Decimal128 or Boolean value` | 76 |
+| D8, #270 | `QueryIndexAsync rejects a DateTime bound` | 16 |
+| D9, #271 | `a failed unique CreateIndexAsync leaves the half-filled index registered` | 4 |
+| #254 | `dynamic double keys are little-endian bytes` | 48 |
+| #234 | `deleting N documents that share an indexed value is quadratic` | 1 |
+| #247 | `the typed oracle: == null and a nullable top-N on an index find no null-keyed document` | 20 |
+| #248 | `the typed oracle: != excludes null values` | 8 |
+
+**Reproductions of filed issues.** #254: every range, sort and `== 0.0` on the indexed double field,
+through `QueryIndexAsync` and BLQL (`ratio < 0`: expected 102 documents, got 0; `orderby ratio`
+starts with `0, 0, ...` instead of `-1E+300`). For `ratio == 0.0` the typed collection misses the
+same `-0.0` documents (#249), so only the LINQ rows of that query fail. #234:
+`DuplicateDeletes_ScaleLikeNLogN` deletes 1,500 and 12,000 documents sharing one indexed value in
+one `DeleteBulkAsync` on 4 KB pages: 57 ms and 2,250 ms (x38 to x40 over five runs), against 19 ms
+and 200 ms (x10.5) for distinct values; N log N allows x10.3, the test fails above x20.6. #247 and
+#248 are rows where the typed oracle is the one that is wrong, the dynamic answer agrees with LINQ.
+
+---
+
+## D1 (#264). BLQL filters and sorts cannot reach a nested field, though a dynamic index can be built on one
+
+**Rows:** `indexed/blql` and `plain/blql`, both oracles: `(int)kind == 2`, `Count(kind == Blue)`,
+`flag and kind == Red`, `kind != Blue`, `kind < Blue`, `kind == Black`, `kind == Blue`,
+`kind == Red or kind == Black`, `kind >= Green`, `kind in list`, `three wheres`; `plain/blql`, both
+oracles: `orderby kind`, `orderby kind skip 10 take 10`. The kind is stored as `meta.kind`.
+
+**Repro:**
+
+```csharp
+var col = engine.GetOrCreateCollection("p");          // and once more after: await col.CreateIndexAsync("meta.kind");
+foreach (var (n, k) in new[] { ("a", 2), ("b", 0), ("c", 2) })
+    await col.InsertAsync(col.CreateDocument(["n", "meta", "kind"],
+        b => b.AddString("n", n).AddDocument("meta", m => m.AddInt32("kind", k))));
+
+col.Query(BlqlFilter.Eq("meta.kind", 2)).ToList();     // expected [a, c],    actual [] (indexed: [])
+col.Query("{\"meta.kind\": 2}").ToList();              // expected [a, c],    actual []
+col.Query(BlqlFilter.Ne("meta.kind", 2)).ToList();     // expected [b],       actual [a, b, c]
+col.Query().OrderBy("meta.kind").ToList();             // expected [b, a, c], actual [a, b, c] (indexed: [b, c, a])
+await col.QueryIndexAsync("idx_meta.kind", 2, 2).ToListAsync();   // [c, a], correct
+```
+
+**Expected:** a dotted path names the nested field in BLQL as it does in `CreateIndexAsync`
+("Nested path index (dot-notation)", README.md:861-862; "dot-notation strings (`"address.city"`)
+for schema-less collections", README.md:65) and in MQL.
+
+**Actual:** BLQL sees a missing field: `$eq`, `$gt`, `$in` match nothing, `$ne` and `$nin` match
+everything, and the in-memory sort keeps the scan order. With an index on the path, BLQL scans it
+and then drops every document in the residual filter; only the index-served sort is right.
+
+**Mechanism (confirmed):** every BLQL operator reads its field with `BsonDocument.TryGetValue`
+(`CompareFilter.Matches`, `src/BLite.Core/Query/Blql/BlqlFilter.cs:315`; `InFilter`, `:408`; the
+same for `$exists`, `$type`, `$regex`, the string and the array operators), and so does
+`BlqlSort.ToComparison` (`BlqlSort.cs:53-54`). `BsonDocument.TryGetValue`
+(`src/BLite.Bson/BsonDocument.cs:230`) looks up a top-level name. The dotted path is resolved only
+by `DynamicCollection.TryGetNestedValue` (`DynamicCollection.cs:2759`), which the index paths use.
+`GetScanSource` (`BlqlQuery.cs:302`) finds the nested index through `FindBTreeIndexForField`
+(`DynamicCollection.cs:1091`), which is why the sort fast path (`BlqlQuery.cs:241-258`) orders by
+it correctly while the filter does not match.
+
+**Affected versions:** BLQL has read fields this way since it was added (`a86d458`, 2026-02-24,
+v1.9.0). Reproduced on `0450b97` (v5.2.3).
+
+**Fix considerations:** one path lookup for BLQL (`TryGetNestedValue` made shared, or a
+`BsonDocument.TryGetPath`) used by every filter and by `BlqlSort`. MQL forbids dots in field names,
+so a dotted name can always mean a path.
+
+---
+
+## D2 (#265). BLQL orders and compares ObjectIds by their little-endian bytes, not as `ObjectId.CompareTo`
+
+**Rows:** `indexed/blql` and `plain/blql`, both oracles: `orderby id`, `orderby id desc`,
+`orderby id take 50 where count > 5`, `orderby id desc skip 10 take 50 where name startswith p1`,
+`OrderBy(id).Take(10).Sum(count)`, `Where(count > 5).OrderBy(id).Skip(2).Take(10).Sum(count)`, and
+every ordering that breaks ties by id: `orderby count thenby id`, `orderby count desc thenby id`,
+`orderby count thenby id take 7`, `orderby count thenby id take 20 where flag`,
+`where flag orderby when thenby id`, `where name startswith p1 orderby count thenby id take 10`,
+`OrderBy(count).ThenBy(id).ElementAt(10)`, `OrderBy(count).ThenBy(id).Take(5).Last()`,
+`OrderBy(count).ThenBy(id).Select(id) (ordered)`.
+
+**Repro:**
+
+```csharp
+var ids = new[] { new ObjectId(1, 0), new ObjectId(2, 0), new ObjectId(256, 0) };   // "t1", "t2", "t256"
+// inserted with b.AddId(new BsonId(id))
+
+ids[0].CompareTo(ids[2]) < 0;                                          // true
+col.Query().OrderBy("_id").ToList();                                   // expected [t1, t2, t256], actual [t256, t1, t2]
+col.Query(BlqlFilter.Gt("_id", BsonValue.FromObjectId(ids[0]))).ToList();  // expected [t2, t256], actual [t2]
+await col.FindAllAsync().ToListAsync();                                // [t256, t1, t2] (unordered by contract)
+```
+
+**Expected:** one order for ObjectIds: `ObjectId.CompareTo` (timestamp, then the remaining 8
+bytes, both unsigned; `src/BLite.Bson/ObjectId.cs:100-107`), which LINQ and the typed collection use
+and which is creation order, as in MongoDB.
+
+**Actual:** BLQL sorts and compares by bytes, and a little-endian timestamp makes timestamp 256
+(`00 01 00 00`) sort before timestamp 1 (`01 00 00 00`). `OrderBy(id).Take(10).Sum(count)` picks
+other documents and overflows.
+
+**Mechanism (confirmed):** `BsonValueComparer.CompareObjectIds`
+(`src/BLite.Core/Query/Blql/BsonValueComparer.cs:108-115`) compares what `ObjectId.WriteTo` writes,
+and `WriteTo` writes the timestamp with `BitConverter.TryWriteBytes` (`ObjectId.cs:63`),
+little-endian. `CompareTo` says "Compare timestamp (big-endian seconds)" and compares the value. The
+primary index keys ObjectIds with the same bytes (`IndexKey(ObjectId)`, `IndexKey.cs:69`), so scans
+come back in that order too; whether a typed range on an `ObjectId` key served by an index shows the
+same was not checked.
+
+**Affected versions:** the byte comparison since BLQL (`a86d458`, v1.9.0); the disagreement with
+`CompareTo` since it was added (`609cb8a`, "Support ObjectId ordering", v4.0.1).
+
+**Fix considerations:** compare ObjectIds with `ObjectId.CompareTo` in `BsonValueComparer`. That
+alone fixes BLQL. Making the stored bytes big-endian (so that index order is creation order) is a
+format change with a rebuild, and could join the v6 key-format bump (#212, #234).
+
+---
+
+## D3 (#266). BLQL `First` and `FirstOrDefault` ignore `Sort` and `Skip`
+
+**Rows:** `indexed/blql` and `plain/blql`, both oracles: `OrderBy(count).ThenBy(id).First()`,
+`OrderBy(count).ThenBy(id).Skip(3).First()`, `OrderByDescending(when).ThenBy(id).First()`,
+`Where(count > 5).OrderBy(name).ThenBy(id).FirstOrDefault()` (e.g. expected #2, got #256, the first
+document in storage order).
+
+**Repro:**
+
+```csharp
+foreach (var (n, v) in new[] { ("a", 3), ("b", 1), ("c", 2) })
+    await col.InsertAsync(col.CreateDocument(["n", "v"], b => b.AddString("n", n).AddInt32("v", v)));
+
+col.Query().OrderBy("v").ToList();               // [b, c, a]
+col.Query().OrderBy("v").FirstOrDefault();       // expected b, actual c (the first in storage order)
+col.Query().OrderBy("v").Skip(2).First();        // expected a, actual c
+```
+
+**Expected:** the first document of the query as `ToList` returns it, which is what a sorted
+`findOne` returns in MQL.
+
+**Actual / mechanism (confirmed):** `FirstOrDefaultAsync` (`BlqlQuery.cs:185-196`), which `First`,
+`FirstAsync` and `FirstOrDefault` call, iterates `GetScanSource` and returns the first match. It
+never looks at `_sort` or `_skip`. `Count`, `CountAsync`, `Any` and `AnyAsync` ignore `Skip` and
+`Take` as well; for `Count` the summary says so (`BlqlQuery.cs:165`), for `Any` nothing does. The
+test runs those only without a window.
+
+**Affected versions:** since BLQL (`a86d458`, v1.9.0: `FirstOrDefault` was a `Find` over the
+filter); the current body is from `6364585` (v3.8.1-preview.2).
+
+**Fix considerations:** with a sort or a skip set, `FirstOrDefaultAsync` takes the first item of
+`AsAsyncEnumerable()` (which keeps the index-served sort); document or fix `Any` with a window.
+
+---
+
+## D4 (#267). BLQL range operators match fields of another BSON type: `null` under `$lt`, strings under `$gt`
+
+**Rows:** `plain/blql`, both oracles: `maybe <= 0`, `maybe < 9.5 (double bound)` (e.g. expected 72
+documents, got 178: every document whose `maybecount` is null). The indexed rows agree.
+
+**Repro:**
+
+```csharp
+// m: null ("null"), -1 ("minus1"), 5 ("five"), "x" ("text")
+col.Query(BlqlFilter.Lte("m", 0)).ToList();    // expected [minus1],       actual [minus1, null]
+col.Query("{\"m\": {\"$lt\": 10}}").ToList();  // expected [minus1, five], actual [minus1, null, five]
+col.Query(BlqlFilter.Gt("m", 0)).ToList();     // expected [five],         actual [five, text]
+// after await col.CreateIndexAsync("m"): [minus1], [minus1, five], [five]
+```
+
+**Expected:** the same answer with and without an index, and MQL's type bracketing: `$lt`, `$gt`
+and their `e` forms only match values of the operand's kind (numbers with numbers), which is also
+what LINQ does with `int?` (`null <= 0` is false).
+
+**Actual:** without an index, a null field is below every number and a string above it.
+
+**Mechanism (confirmed):** `CompareFilter.CompareValues` (`BlqlFilter.cs:330`) applies the operator
+to `BsonValueComparer.Compare`, a total order across types: null first
+(`BsonValueComparer.cs:21-24`), then by `TypeOrder` (`:90`). With an index the scan stays within the
+bound's key type (`QueryIndexAsync(null, upper)` starts after the null bucket,
+`DynamicCollection.cs:1065`; string keys sort below the integer bound), and the residual filter can
+only drop documents, so the indexed collection answers like LINQ.
+
+**Affected versions:** the comparer since BLQL (`a86d458`, v1.9.0).
+
+**Fix considerations:** `$gt`, `$gte`, `$lt`, `$lte` are false unless both values are of one
+comparable kind (the numeric family, the date family, or the same type); `$eq`, `$ne` and sorting
+keep the total order.
+
+---
+
+## D5 (#268). BLQL compares two Int64 values through `double`
+
+**Rows:** `indexed/blql` and `plain/blql`, both oracles: `total > long.MaxValue - 1` (expected the
+one document with `long.MaxValue`, got none).
+
+**Repro:**
+
+```csharp
+// t: long.MaxValue ("max"), long.MaxValue - 1 ("max-1"), 2^53 + 1 ("2^53+1"), all Int64
+col.Query(BlqlFilter.Gt("t", long.MaxValue - 1)).ToList();   // expected [max],   actual []
+col.Query(BlqlFilter.Eq("t", long.MaxValue - 1)).ToList();   // expected [max-1], actual [max, max-1]
+col.Query(BlqlFilter.Eq("t", 1L << 53)).ToList();            // expected [],      actual [2^53+1]
+```
+
+**Expected:** exact comparison of integers, as the comparer's own summary says: "values are compared
+numerically: exactly (as `decimal`) when neither side is a Double, through `double` otherwise"
+(`BsonValueComparer.cs:11`).
+
+**Mechanism (confirmed):** the code takes the exact path only when one side is a Decimal128
+(`BsonValueComparer.cs:29-33`); Int32 and Int64 pairs go through `ToDouble` (`:35`), which rounds
+above 2^53. The index scan bounds are exact (`IndexKey(long)`), and the residual filter then drops
+the right document, so the indexed collection is wrong too.
+
+**Affected versions:** since BLQL (`a86d458`, v1.9.0).
+
+**Fix considerations:** compare as `decimal` (or `long`) whenever neither side is a Double, as the
+summary describes.
+
+---
+
+## D6 (#269). A numeric bound of another BSON type than the indexed values misses keys of a dynamic index
+
+**Rows:** `indexed/api` and `indexed/blql`, both oracles: `count < 9.5 (double bound)`,
+`count == 5.0 (double bound)`, `maybe < 9.5 (double bound)`, `total < 9.5 (double bound)`,
+`Count(count < 9.5)`, `Where(count < 9.5).Max(count)` (e.g. `count < 9.5`: expected 273 documents,
+got 1). The plain collection agrees with LINQ.
+
+**Repro:**
+
+```csharp
+await col.CreateIndexAsync("c");   // c: -3, 1, 5, 9, 12 as Int32
+col.Query(BlqlFilter.Lt("c", 9.5)).ToList();                   // expected [-3, 1, 5, 9], actual [] (no index: right)
+col.Query(BlqlFilter.Eq("c", 5.0)).ToList();                   // expected [5],           actual []
+col.Query(BlqlFilter.Lt("c", 5L)).ToList();                    // expected [-3, 1],       actual [-3]
+await col.QueryIndexAsync("idx_c", null, 9.5).ToListAsync();   // expected [-3, 1, 5, 9], actual []
+```
+
+**Expected:** an index never changes the answer; BLQL's comparer treats all numbers as one family,
+so `{c: 5.0}` matches `5` without the index.
+
+**Mechanism (confirmed):** the bound is keyed in its own type. `CompareFilter.ToIndexObject`
+(`BlqlFilter.cs:378`) passes a Double as `double` and an Int64 as `long`; `CreateIndexKeyFromObject`
+(`DynamicCollection.cs:2804-2816`) keys a `double` as `BitConverter` bytes and a `long` as the 9-byte
+`IndexKey(long)`, while the field's values are keyed as the 5-byte `IndexKey(int)` by
+`BsonValueToIndexKey` (`:2716-2732`). Byte order across these encodings has no numeric meaning
+(`$gte: 5L` happens to come out right in this data). The residual filter cannot add what the range
+skipped. A collection whose documents store one field as different numeric types is affected the
+same way without any cross-type bound.
+
+**Affected versions:** `QueryIndexAsync` since `39e6c89` (v1.4.0); BLQL since it uses the index
+(`6364585`, v3.8.1-preview.2).
+
+**Fix considerations:** one order-preserving key encoding for every numeric BSON type in dynamic
+indexes (`IndexKey(decimal)` covers Int32, Int64 and Decimal128 exactly; doubles would need a
+combined encoding), done in the rebuild that #254 already requires; or convert the bound to each
+numeric key type and scan each range. The typed collection solved its version by converting the bound
+to the property's type (#222, `7e37f33`, PR #228).
+
+---
+
+## D7 (#269). A dynamic index keys no Decimal128 or Boolean value: index-served sorts return nothing
+
+**Rows:** `indexed/api` and `indexed/blql`, both oracles: `orderby price`, `orderby price take 20`,
+`orderby flag` (expected 400 documents, got 0); `indexed/api`, both oracles, 32 queries with a
+`price` or `flag` bound (`QueryIndexAsync` throws): `price == 5m`, `price range [1, 10)`, `flag`,
+`not flag`, `flag and count > 5`, `Count(flag)`, `Where(price < 1e19m).Sum(price)` and the rest of
+the price and flag shapes.
+
+**Repro:**
+
+```csharp
+await col.CreateIndexAsync("price");
+await col.CreateIndexAsync("flag");
+// a: 5m / true, b: 1m / false, c: 9.99m / true
+
+col.Query().OrderBy("price").ToList();                              // expected [b, a, c], actual []
+col.Query().OrderBy("flag").ToList();                               // expected b first,   actual []
+await col.QueryIndexAsync("idx_price", null, null).ToListAsync();   // expected 3 documents, actual []
+await col.QueryIndexAsync("idx_price", 5m, 5m).ToListAsync();       // ArgumentException: Cannot create IndexKey from type Decimal
+await col.QueryIndexAsync("idx_flag", true, true).ToListAsync();    // ArgumentException: Cannot create IndexKey from type Boolean
+col.Query(BlqlFilter.Eq("price", BsonValue.FromDecimal(5m))).ToList();  // [a], right (no index candidate, full scan)
+```
+
+**Expected:** `CreateIndexAsync` indexes the field's values (README "Index Management",
+README.md:851) or refuses a type it cannot index; an index never makes a query return fewer documents.
+
+**Actual:** `CreateIndexAsync` succeeds and the index stays empty for these values. BLQL's single-key
+sort fast path (`BlqlQuery.cs:241-258`) iterates the empty index and returns nothing.
+
+**Mechanism (confirmed):** `BsonValueToIndexKey` (`DynamicCollection.cs:2716-2732`) has no case for
+Decimal128 or Boolean (`_ => null // Can't index this type as BTree key`), so `IndexInsert` skips
+the document; `CreateIndexKeyFromObject` (`:2804-2816`) throws for `decimal` and `bool`. BLQL filters
+escape only because `ToIndexObject` returns null for these types (`BlqlFilter.cs:378`).
+
+**Affected versions:** the key switch since `26caa5a` / `39e6c89` (v1.4.0); the sort fast path since
+`6364585` (v3.8.1-preview.2).
+
+**Fix considerations:** key Decimal128 with `IndexKey(decimal)` (exact and order-preserving, the
+typed encoding since #150) and Boolean as one byte; accept `decimal` and `bool` in
+`CreateIndexKeyFromObject`. Existing indexes on such fields hold no entries, so a backfill of the
+missing documents is enough. Until then the sort fast path should not use an index on a field whose
+values it may not hold.
+
+---
+
+## D8 (#270). `QueryIndexAsync` rejects a `DateTime` bound
+
+**Rows:** `indexed/api`, both oracles: `when == t5`, `when < t5`, `when <= T0`, `when > t20`,
+`when >= t10 and < t20`, `when == T0.AddMinutes(5) (call)`, `when == t5 and maybe == null`,
+`Count(when < t5)` (`ArgumentException`). BLQL on the same index agrees.
+
+**Repro:**
+
+```csharp
+await col.CreateIndexAsync("when");   // m0, m5, m10: t0 plus 0, 5, 10 minutes
+await col.QueryIndexAsync("idx_when", t0, t0.AddMinutes(5)).ToListAsync();
+    // expected [m0, m5], actual ArgumentException: Cannot create IndexKey from type DateTime
+await col.QueryIndexAsync("idx_when", new DateTimeOffset(t0).ToUnixTimeMilliseconds(),
+    new DateTimeOffset(t0.AddMinutes(5)).ToUnixTimeMilliseconds()).ToListAsync();   // [m0, m5]
+```
+
+**Expected:** README.md:801 shows a date range: `orders.QueryIndex("idx_placed_at", minDate, maxDate)`.
+
+**Mechanism (confirmed):** `CreateIndexKeyFromObject` (`DynamicCollection.cs:2804-2816`) has no
+`DateTime` or `DateTimeOffset` case, although `BsonValueToIndexKey` keys both as Unix milliseconds
+in an `IndexKey(long)` (`:2726-2730`) and BLQL converts its bounds the same way
+(`BlqlFilter.cs:378`). A `long` bound is taken as milliseconds, which works by accident.
+
+**Affected versions:** since `39e6c89` (v1.4.0).
+
+**Fix considerations:** `DateTime` and `DateTimeOffset` cases keyed like the stored values. The
+README sample also uses the old synchronous names (`QueryIndex`, `Near`, `Within`), now `*Async`.
+
+---
+
+## D9 (#271). A failed unique `CreateIndexAsync` leaves the half-filled index registered
+
+**Rows:** `seed 3 / Index.UniqueBackfill`, `seed 4 / ...`, `seed 5 / ...`, `seed 6 / ...` of
+`DynamicStoreModelTests`.
+
+**Repro (shortest sequence, seed 4):**
+
+```text
+    1. DropIndex(idx_code)
+    2. Insert(id=83, count=5, code=c31, payload=300 chars)
+    3. Insert(id=21, count=7, code=c31, payload=300 chars)
+    4. CreateIndex(code, unique)
+  CreateIndex(code, unique) threw for values that are not unique and left 'idx_code' registered
+```
+
+```csharp
+// a: code "x", b: code "y", c: code "x"
+await col.CreateIndexAsync("code", unique: true);              // InvalidOperationException: Duplicate key violation (right)
+col.ListIndexes();                                             // expected [], actual [idx_code]
+await col.QueryIndexAsync("idx_code", "x", "x").ToListAsync(); // [] while FindAsync finds [a, c]
+col.Query(BlqlFilter.Eq("code", "x")).ToList();                // [] (BLQL scans the empty index)
+await col.InsertAsync(/* d with code "y" */);                  // accepted: a second "y" under a unique index
+// dispose and reopen: ListIndexes() is [] again
+```
+
+**Expected:** a creation that fails leaves no index behind, so the caller can fix the data and
+retry, and queries keep scanning.
+
+**Actual:** until the next reopen the index is listed, answers nothing for the documents that
+existed (so every BLQL query on the field returns nothing) and enforces nothing for them;
+`CreateIndexAsync` on the field throws "already exists" until `DropIndex`.
+
+**Mechanism (confirmed):** `CreateIndexAsync` (`DynamicCollection.cs:1944-1969`) registers the
+index in `_secondaryIndexes` (`:1958`) before it fills it. The fill's `IndexInsert` (`:1964`) throws
+from `BTreeIndex.Insert` on the second `"x"`, and nothing catches it: the entry stays, the fill's
+transaction is neither committed nor rolled back, and `PersistIndexMetadata` (`:1968`) is never
+reached. `CreateVectorIndexAsync` and `CreateSpatialIndexAsync` have the same shape (`:1990`/`:1996`,
+`:2022`/`:2028`) but do not throw on duplicates. In the test, the page checks pass after the run
+drops the index, so the half tree's written pages are freed by `DropIndex`.
+
+**Affected versions:** the shape of `CreateIndexAsync` since `26caa5a` (v1.4.0).
+
+**Fix considerations:** fill the new tree in its transaction first, register and persist it after
+the commit; on failure roll the transaction back and free the tree's pages, as the rebuild in
+`VacuumAsync` does (`DynamicCollection.cs:1862-1880`). Checking for duplicates before writing would
+let it throw `BLiteValidationException` naming the duplicated value. #190 asks the same question for
+typed model indexes.

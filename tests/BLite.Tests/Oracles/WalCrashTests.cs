@@ -1049,13 +1049,13 @@ public class WalCrashTests
         }
     }
 
-    private static string Pages(List<uint> pages) => string.Join(", ", pages.Take(12)) + (pages.Count > 12 ? ", ..." : "");
+    internal static string Pages(List<uint> pages) => string.Join(", ", pages.Take(12)) + (pages.Count > 12 ? ", ..." : "");
 
     /// <summary>
     /// Walks a B-Tree from its root with a guard against every loop (the engine's own walk recurses
     /// without one), recording each page's owner and, for the primary index, the documents' locations.
     /// </summary>
-    private static string? Walk(StorageEngine storage, uint root, string name, Dictionary<uint, string> owner, List<DocumentLocation>? locations)
+    internal static string? Walk(StorageEngine storage, uint root, string name, Dictionary<uint, string> owner, List<DocumentLocation>? locations)
     {
         var count = storage.PageCount;
         var pageSize = storage.PageSize;
@@ -1095,7 +1095,7 @@ public class WalCrashTests
     }
 
     /// <summary>The data page a primary index entry points at, and the overflow chain of its document.</summary>
-    private static string? WalkDocument(StorageEngine storage, DocumentLocation location, Dictionary<uint, string> owner, HashSet<uint> dataPages)
+    internal static string? WalkDocument(StorageEngine storage, DocumentLocation location, Dictionary<uint, string> owner, HashSet<uint> dataPages)
     {
         var count = storage.PageCount;
         var page = new byte[storage.PageSize];
