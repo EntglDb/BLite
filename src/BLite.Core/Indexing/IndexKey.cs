@@ -97,7 +97,13 @@ public struct IndexKey : IEquatable<IndexKey>, IComparable<IndexKey>
         // Positive: flip sign bit only  → 1xxx…  (positive doubles sort after all negatives)
         // Negative: flip all bits        → sort from least-negative first
         // Result: lexicographic byte order == IEEE 754 numeric order for all finite and ±Inf.
-        var bits = BitConverter.DoubleToInt64Bits(value);
+        // A NaN's sign bit and payload are arbitrary (a computed NaN has the sign bit clear on Arm64,
+        // set on x64), which put NaNs both below -Inf and above +Inf. Every NaN takes one key, that of
+        // the bits of double.NaN (0xFFF8...), which sorts below -Inf, where double.CompareTo orders
+        // NaN (#257). The bits are spelled out so the key does not depend on how a NaN was produced.
+        var bits = double.IsNaN(value)
+            ? unchecked((long)0xFFF8_0000_0000_0000UL)
+            : BitConverter.DoubleToInt64Bits(value);
         ulong u = bits < 0 ? ~(ulong)bits : (ulong)bits | 0x8000_0000_0000_0000UL;
         _data = [KeyPrefix, (byte)(u >> 56), (byte)(u >> 48), (byte)(u >> 40), (byte)(u >> 32),
                  (byte)(u >> 24), (byte)(u >> 16), (byte)(u >>  8), (byte)u];
