@@ -58,6 +58,7 @@ var users = collection.AsQueryable()
 - **Optimized**: Uses B-Tree indexes for `=`, `>`, `<`, `Between`, and `StartsWith`.
 - **Hybrid Execution**: Combines storage-level optimization with in-memory LINQ to Objects.
 - **Advanced Features**: Full support for `GroupBy`, `Join`, `Select` (including anonymous types), and Aggregations (`Count`, `Sum`, `Min`, `Max`, `Average`).
+- **Ties**: documents with equal sort keys come back in no defined order, which can differ between a query served by an index and one sorted in memory. Add a tie-breaker such as `.ThenBy(x => x.Id)` when the order of ties matters.
 
 ### 🔍 Advanced Indexing
 - **B-Tree Indexes**: Logarithmic time complexity for lookups.
