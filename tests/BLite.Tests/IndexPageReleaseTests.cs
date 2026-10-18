@@ -374,7 +374,7 @@ public class IndexPageReleaseTests : IDisposable
     [Fact]
     public async Task DynamicCollection_DropIndex_WaitsForTheCollectionLock()
     {
-        using var engine = new BLiteEngine(_dbPath);
+        using var engine = new BLiteEngine(_dbPath, LoadTolerant);
         var col = engine.GetOrCreateCollection("docs");
         await InsertIndexableDocsAsync(col, 100);
         await col.CreateIndexAsync("value", "idx_value");
@@ -406,7 +406,7 @@ public class IndexPageReleaseTests : IDisposable
     [Fact]
     public async Task DynamicCollection_DropIndex_WhileInserting_KeepsCollectionAndOtherIndexConsistent()
     {
-        using var engine = new BLiteEngine(_dbPath);
+        using var engine = new BLiteEngine(_dbPath, LoadTolerant);
         var col = engine.GetOrCreateCollection("docs");
         await InsertIndexableDocsAsync(col, 500);
         await col.CreateIndexAsync("value", "idx_value");
@@ -438,6 +438,11 @@ public class IndexPageReleaseTests : IDisposable
     // ======================================================================
     //  Helpers
     // ======================================================================
+
+    // The concurrency tests check ordering and consistency, not lock latency: on a loaded CI
+    // runner the 500 ms default lets a writer time out behind its peers, which says nothing
+    // about the behaviour under test.
+    private static readonly PageFileConfig LoadTolerant = PageFileConfig.Default with { LockTimeout = LockTimeout.From(30_000, 30_000) };
 
     private static readonly System.Reflection.BindingFlags Flags =
         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
