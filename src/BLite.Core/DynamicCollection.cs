@@ -46,7 +46,8 @@ public sealed class DynamicCollection : IDisposable
     private readonly BTreeIndex _primaryIndex;
     private readonly string _collectionName;
     private readonly BsonIdType _idType;
-    private readonly SemaphoreSlim _collectionLock = new(1, 1);
+    // Shared with every other object that writes to this collection (#304), see StorageEngine.GetCollectionWriteLock.
+    private readonly SemaphoreSlim _collectionLock;
     private int WriteLockTimeoutMs => _storage.LockTimeout.WriteTimeoutMs;
     private readonly FreeSpaceIndex _fsi;
     // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.
@@ -116,6 +117,7 @@ public sealed class DynamicCollection : IDisposable
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _transactionHolder = transactionHolder ?? throw new ArgumentNullException(nameof(transactionHolder));
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
+        _collectionLock = _storage.GetCollectionWriteLock(_collectionName);
         _idType = idType;
         _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
         _fsi = freeSpaceIndex ?? new FreeSpaceIndex(_storage.PageSize);
@@ -862,30 +864,41 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Insert).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var result = await InsertCore(document, transaction);
-            if (autoCommit)
+            for (int attempt = 1; ; attempt++)
             {
-                await transaction.CommitAsync(ct);
-                // ── OnInsert retention trigger — runs AFTER commit within the lock ──
-                if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
-                    await ApplyRetentionPolicyCoreAsync(ct);
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    var result = await InsertCore(document, transaction);
+                    if (autoCommit)
+                    {
+                        await transaction.CommitAsync(ct);
+                        // ── OnInsert retention trigger — runs AFTER commit within the lock ──
+                        if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                            await ApplyRetentionPolicyCoreAsync(ct);
+                    }
+                    else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                             && transaction is Transaction concreteTx)
+                    {
+                        // For caller-managed transactions, fire retention in the background after commit.
+                        concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                    }
+                    success = true;
+                    return result;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex);
+                    throw;
+                }
             }
-            else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
-                     && transaction is Transaction concreteTx)
-            {
-                // For caller-managed transactions, fire retention in the background after commit.
-                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
-            }
-            success = true;
-            return result;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex);
-            throw;
         }
         finally
         {
@@ -952,6 +965,8 @@ public sealed class DynamicCollection : IDisposable
     public async ValueTask<List<BsonId>> InsertBulkAsync(IEnumerable<BsonDocument> documents, ITransaction? transaction, CancellationToken ct = default)
     {
         if (documents == null) throw new ArgumentNullException(nameof(documents));
+        // Read once: a write retried after a conflict (#304) runs over the same items.
+        var documentList = documents.ToList();
         bool autoCommit = transaction == null;
 
         WriteFailure.EnsureWritable(transaction);
@@ -959,34 +974,46 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (InsertBulk).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         var ids = new List<BsonId>();
         try
         {
-            foreach (var doc in documents)
+            for (int attempt = 1; ; attempt++)
             {
-                ct.ThrowIfCancellationRequested();
-                ids.Add(await InsertCore(doc, transaction));
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    foreach (var doc in documentList)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        ids.Add(await InsertCore(doc, transaction));
+                    }
+                    if (autoCommit)
+                    {
+                        await transaction.CommitAsync(ct);
+                        // ── OnInsert retention trigger — runs AFTER commit within the lock ──
+                        if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                            await ApplyRetentionPolicyCoreAsync(ct);
+                    }
+                    else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                             && transaction is Transaction concreteTx)
+                    {
+                        // For caller-managed transactions, fire retention in the background after commit.
+                        concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                    }
+                    return ids;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                    ids.Clear();
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex, callHasWritten: ids.Count > 0);
+                    throw;
+                }
             }
-            if (autoCommit)
-            {
-                await transaction.CommitAsync(ct);
-                // ── OnInsert retention trigger — runs AFTER commit within the lock ──
-                if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
-                    await ApplyRetentionPolicyCoreAsync(ct);
-            }
-            else if (_retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
-                     && transaction is Transaction concreteTx)
-            {
-                // For caller-managed transactions, fire retention in the background after commit.
-                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
-            }
-            return ids;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex, callHasWritten: ids.Count > 0);
-            throw;
         }
         finally
         {
@@ -1235,23 +1262,34 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Update).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var key = new IndexKey(id.ToBytes());
-            if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
-                return false;
+            for (int attempt = 1; ; attempt++)
+            {
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    var key = new IndexKey(id.ToBytes());
+                    if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+                        return false;
 
-            await UpdateAtLocationCore(id, key, newDocument, oldLocation, transaction);
+                    await UpdateAtLocationCore(id, key, newDocument, oldLocation, transaction);
 
-            if (autoCommit) await transaction.CommitAsync(ct);
-            success = true;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex);
-            throw;
+                    if (autoCommit) await transaction.CommitAsync(ct);
+                    success = true;
+                    return true;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex);
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -1349,29 +1387,40 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Upsert).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var result = await UpsertCore(document, transaction);
-            inserted = result.Inserted;
-            if (autoCommit)
+            for (int attempt = 1; ; attempt++)
             {
-                await transaction.CommitAsync(ct);
-                if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
-                    await ApplyRetentionPolicyCoreAsync(ct);
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    var result = await UpsertCore(document, transaction);
+                    inserted = result.Inserted;
+                    if (autoCommit)
+                    {
+                        await transaction.CommitAsync(ct);
+                        if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                            await ApplyRetentionPolicyCoreAsync(ct);
+                    }
+                    else if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                             && transaction is Transaction concreteTx)
+                    {
+                        concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                    }
+                    success = true;
+                    return result;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex);
+                    throw;
+                }
             }
-            else if (inserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
-                     && transaction is Transaction concreteTx)
-            {
-                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
-            }
-            success = true;
-            return result;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex);
-            throw;
         }
         finally
         {
@@ -1435,6 +1484,8 @@ public sealed class DynamicCollection : IDisposable
     public async ValueTask<List<UpsertResult<BsonId>>> UpsertBulkAsync(IEnumerable<BsonDocument> documents, ITransaction? transaction, CancellationToken ct = default)
     {
         if (documents == null) throw new ArgumentNullException(nameof(documents));
+        // Read once: a write retried after a conflict (#304) runs over the same items.
+        var documentList = documents.ToList();
         bool autoCommit = transaction == null;
 
         WriteFailure.EnsureWritable(transaction);
@@ -1442,36 +1493,48 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (UpsertBulk).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         var results = new List<UpsertResult<BsonId>>();
         try
         {
-            bool anyInserted = false;
-            foreach (var doc in documents)
+            for (int attempt = 1; ; attempt++)
             {
-                ct.ThrowIfCancellationRequested();
-                var result = await UpsertCore(doc, transaction);
-                anyInserted |= result.Inserted;
-                results.Add(result);
-            }
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    bool anyInserted = false;
+                    foreach (var doc in documentList)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var result = await UpsertCore(doc, transaction);
+                        anyInserted |= result.Inserted;
+                        results.Add(result);
+                    }
 
-            if (autoCommit)
-            {
-                await transaction.CommitAsync(ct);
-                if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
-                    await ApplyRetentionPolicyCoreAsync(ct);
+                    if (autoCommit)
+                    {
+                        await transaction.CommitAsync(ct);
+                        if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0)
+                            await ApplyRetentionPolicyCoreAsync(ct);
+                    }
+                    else if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
+                             && transaction is Transaction concreteTx)
+                    {
+                        concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
+                    }
+                    return results;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                    results.Clear();
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex, callHasWritten: results.Count > 0);
+                    throw;
+                }
             }
-            else if (anyInserted && _retentionPolicy != null && (_retentionPolicy.Triggers & RetentionTrigger.OnInsert) != 0
-                     && transaction is Transaction concreteTx)
-            {
-                concreteTx.OnCommit += () => _ = RunScheduledRetentionAsync();
-            }
-            return results;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex, callHasWritten: results.Count > 0);
-            throw;
         }
         finally
         {
@@ -1524,6 +1587,8 @@ public sealed class DynamicCollection : IDisposable
     public async ValueTask<int> UpdateBulkAsync(IEnumerable<(BsonId Id, BsonDocument Document)> updates, ITransaction? transaction, CancellationToken ct = default)
     {
         if (updates == null) throw new ArgumentNullException(nameof(updates));
+        // Read once: a write retried after a conflict (#304) runs over the same items.
+        var updateList = updates.ToList();
         bool autoCommit = transaction == null;
 
         WriteFailure.EnsureWritable(transaction);
@@ -1531,27 +1596,39 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (UpdateBulk).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         var count = 0;
         try
         {
-            foreach (var (id, doc) in updates)
+            for (int attempt = 1; ; attempt++)
             {
-                ct.ThrowIfCancellationRequested();
-                var key = new IndexKey(id.ToBytes());
-                if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
-                    continue;
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    foreach (var (id, doc) in updateList)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var key = new IndexKey(id.ToBytes());
+                        if (!_primaryIndex.TryFind(key, out var oldLocation, transaction.TransactionId))
+                            continue;
 
-                await UpdateAtLocationCore(id, key, doc, oldLocation, transaction);
-                count++;
+                        await UpdateAtLocationCore(id, key, doc, oldLocation, transaction);
+                        count++;
+                    }
+                    if (autoCommit) await transaction.CommitAsync(ct);
+                    return count;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                    count = 0;
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex, callHasWritten: count > 0);
+                    throw;
+                }
             }
-            if (autoCommit) await transaction.CommitAsync(ct);
-            return count;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex, callHasWritten: count > 0);
-            throw;
         }
         finally
         {
@@ -1587,32 +1664,43 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (Delete).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var key = new IndexKey(id.ToBytes());
-            if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
-                return false;
-
-            var doc = ReadDocumentAt(location, transaction.TransactionId);
-            _primaryIndex.Delete(key, location, transaction.TransactionId);
-
-            if (doc != null)
+            for (int attempt = 1; ; attempt++)
             {
-                foreach (var (_, idx) in _secondaryIndexes)
-                    IndexDelete(idx, doc, location, transaction);
-            }
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
+                {
+                    var key = new IndexKey(id.ToBytes());
+                    if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
+                        return false;
 
-            DeleteSlot(location, transaction);
-            await NotifyCdcAsync(OperationType.Delete, id, transaction);
-            if (autoCommit) await transaction.CommitAsync(ct);
-            success = true;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex);
-            throw;
+                    var doc = ReadDocumentAt(location, transaction.TransactionId);
+                    _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+                    if (doc != null)
+                    {
+                        foreach (var (_, idx) in _secondaryIndexes)
+                            IndexDelete(idx, doc, location, transaction);
+                    }
+
+                    DeleteSlot(location, transaction);
+                    await NotifyCdcAsync(OperationType.Delete, id, transaction);
+                    if (autoCommit) await transaction.CommitAsync(ct);
+                    success = true;
+                    return true;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex);
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -1645,6 +1733,8 @@ public sealed class DynamicCollection : IDisposable
     public async ValueTask<int> DeleteBulkAsync(IEnumerable<BsonId> ids, ITransaction? transaction, CancellationToken ct = default)
     {
         if (ids == null) throw new ArgumentNullException(nameof(ids));
+        // Read once: a write retried after a conflict (#304) runs over the same items.
+        var idList = ids.ToList();
         bool autoCommit = transaction == null;
 
         WriteFailure.EnsureWritable(transaction);
@@ -1652,37 +1742,48 @@ public sealed class DynamicCollection : IDisposable
         if (!await _collectionLock.WaitAsync(WriteLockTimeoutMs, ct))
             throw new TimeoutException("Timed out acquiring collection lock (DeleteBulk).");
 
-        transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
         try
         {
-            var count = 0;
-            foreach (var id in ids)
+            for (int attempt = 1; ; attempt++)
             {
-                ct.ThrowIfCancellationRequested();
-                var key = new IndexKey(id.ToBytes());
-                if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
-                    continue;
-
-                var doc = ReadDocumentAt(location, transaction.TransactionId);
-                _primaryIndex.Delete(key, location, transaction.TransactionId);
-
-                if (doc != null)
+                transaction ??= _storage.BeginTransaction(IsolationLevel.ReadCommitted);
+                try
                 {
-                    foreach (var (_, idx) in _secondaryIndexes)
-                        IndexDelete(idx, doc, location, transaction);
-                }
+                    var count = 0;
+                    foreach (var id in idList)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var key = new IndexKey(id.ToBytes());
+                        if (!_primaryIndex.TryFind(key, out var location, transaction.TransactionId))
+                            continue;
 
-                DeleteSlot(location, transaction);
-                await NotifyCdcAsync(OperationType.Delete, id, transaction);
-                count++;
+                        var doc = ReadDocumentAt(location, transaction.TransactionId);
+                        _primaryIndex.Delete(key, location, transaction.TransactionId);
+
+                        if (doc != null)
+                        {
+                            foreach (var (_, idx) in _secondaryIndexes)
+                                IndexDelete(idx, doc, location, transaction);
+                        }
+
+                        DeleteSlot(location, transaction);
+                        await NotifyCdcAsync(OperationType.Delete, id, transaction);
+                        count++;
+                    }
+                    if (autoCommit) await transaction.CommitAsync(ct);
+                    return count;
+                }
+                catch (Exception ex) when (WriteFailure.ShouldRetry(transaction, autoCommit, ex, attempt))
+                {
+                    // Rolled back and nothing written: run again in a new transaction (#304).
+                    transaction = null;
+                }
+                catch (Exception ex)
+                {
+                    await WriteFailure.HandleAsync(transaction, autoCommit, ex);
+                    throw;
+                }
             }
-            if (autoCommit) await transaction.CommitAsync(ct);
-            return count;
-        }
-        catch (Exception ex)
-        {
-            await WriteFailure.HandleAsync(transaction, autoCommit, ex);
-            throw;
         }
         finally
         {
@@ -2899,6 +3000,6 @@ public sealed class DynamicCollection : IDisposable
     {
         _retentionTimer?.Dispose();
         _retentionTimer = null;
-        _collectionLock.Dispose();
+        // The write lock belongs to the engine and is shared with other instances: not disposed here.
     }
 }

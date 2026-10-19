@@ -33,7 +33,7 @@ Most embedded databases for .NET are either wrappers around C libraries (SQLite,
 - **Zero Allocation**: I/O and interaction paths use `Span<byte>` and `stackalloc`. No heap allocations for reads/writes.
 - **Type-Safe**: No reflection. All serialization code is generated at compile-time.
 - **Developer Experience**: Full LINQ provider (`IQueryable`) that feels like Entity Framework but runs on bare metal.
-- **Reliable**: Full ACID transactions with Write-Ahead Logging (WAL) and Snapshot Isolation.
+- **Reliable**: ACID transactions with Write-Ahead Logging (WAL). Concurrent transactions never overwrite each other's commits: the first to commit wins.
 
 ---
 
@@ -393,7 +393,7 @@ using var dynSub = engine.GetOrCreateCollection("orders").Watch()
 ### 🛡️ Transactions & ACID
 - **Atomic**: Multi-document transactions.
 - **Durable**: WAL ensures data safety even in power loss.
-- **Isolated**: Snapshot isolation allowing concurrent readers and writers.
+- **Isolated**: Read committed: a transaction sees its own writes and what other transactions have committed. Two transactions that change the same page cannot both commit: the first one wins, the second one's `CommitAsync` throws `BLiteTransactionConflictException` and rolls it back, so run it again in a new transaction. A write made without a transaction (`InsertAsync(doc)`, `UpdateAsync`, `DeleteAsync`, …) commits on its own and, when a transaction committed one of its pages first, runs again by itself; it throws `BLiteTransactionConflictException` only after 10 rejected attempts. Index creation, `VacuumAsync` and retention commit without retrying and can throw it too.
 - **Thread-Safe**: Protected with `SemaphoreSlim` to prevent race conditions in concurrent scenarios.
 - **Async-Only**: All CRUD operations on `DocumentCollection<TId, T>` and `DynamicCollection` are exclusively async/await — no blocking synchronous methods. Eliminates accidental blocking calls on thread-pool threads.
 - **Implicit Transactions**: Use `SaveChangesAsync()` for automatic transaction management.
@@ -909,7 +909,7 @@ if (doc is not null)
 
 ## 🔌 BLiteSession — Per-Connection Isolation *(v3.8.0)*
 
-When a single `BLiteEngine` is shared across multiple concurrent clients (e.g. inside a custom server layer), `BLiteSession` provides **per-connection isolated transaction contexts**. Each session carries its own transaction state so independent callers cannot interfere with each other.
+When a single `BLiteEngine` is shared across multiple concurrent clients (e.g. inside a custom server layer), `BLiteSession` provides **per-connection isolated transaction contexts**. Each session carries its own transaction state. Sessions are not serialized against each other: when two sessions' open transactions change the same page, the first to commit wins and the other's `CommitAsync` throws `BLiteTransactionConflictException` (see Transactions & ACID above).
 
 Open a session with `engine.OpenSession()`. Disposing the session automatically rolls back any uncommitted transaction.
 
@@ -1165,7 +1165,7 @@ We are actively building the core. Here is where we stand:
 - ✅ **CDC Watch on `DynamicCollection` (v3.6.0)**: `DynamicCollection.Watch()` adds real-time change streams to the schema-less API — previously only available on typed `DocumentCollection<TId, T>`.
 - ✅ **HNSW Vector Search Correctness (v3.6.2)**: full correctness pass — fixes `AllocateNode` overflow, neighbor link integrity, `SelectNeighbors` heuristic, random level distribution (`mL = 1/ln(M)`), and index persistence across close/reopen. 12 dedicated edge-case tests added.
 - ✅ **OLAP GroupBy Push-down (v3.7.0)**: aggregate terminal operators (`Count`, `Sum`, `Min`, `Max`, `Average`) are pushed down to the storage layer via `BTreeQueryProvider.TryBsonAggregate<TResult>`, eliminating unnecessary document materialization for large scans.
-- ✅ **BLiteSession — Per-Connection Isolation (v3.8.0)**: `BLiteEngine.OpenSession()` returns a `BLiteSession` with its own isolated transaction context. Multiple sessions on the same engine run independent concurrent transactions. Disposing a session rolls back any uncommitted transaction automatically.
+- ✅ **BLiteSession — Per-Connection Isolation (v3.8.0)**: `BLiteEngine.OpenSession()` returns a `BLiteSession` with its own isolated transaction context. Multiple sessions on the same engine run independent concurrent transactions; when two change the same page, the first to commit wins and the other fails with `BLiteTransactionConflictException`. Disposing a session rolls back any uncommitted transaction automatically.
 - ✅ **Multi-File Storage Layout (v3.8.0)**: `PageFileConfig.Server(dbPath)` configures separate files for WAL, index data, and per-collection data. `BLiteMigration.ToMultiFile()` / `ToSingleFile()` migrate existing databases between layouts, preserving all documents, KV entries (including TTL), and index definitions.
 - ✅ **Non-Blocking Checkpoints (v3.8.0)**: checkpoint and metadata writes are deferred to avoid blocking the hot path. `PageFile` uses `Lazy<T>` for collection file initialization and `ReaderWriterLockSlim` to fix concurrent read/write races.
 - ✅ **Async-Only CRUD API (v4.0.0 — Breaking Change)**: Synchronous data methods (`Insert`, `Update`, `Delete`, `FindById`, `FindAll`, `Find`, and all bulk variants) have been **removed** from `DocumentCollection<TId, T>` and `DynamicCollection`. All data operations are now exclusively async — this eliminates accidental blocking calls on thread-pool threads, simplifies the internal code paths, and enforces correct async usage throughout the entire stack.

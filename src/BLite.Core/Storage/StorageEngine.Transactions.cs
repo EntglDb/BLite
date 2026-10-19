@@ -133,6 +133,11 @@ public sealed partial class StorageEngine
                 // GetMinReaderOffset() safe boundary for this page (Phase 6).
                 _walOffsets?[pid] = walOffset;
             }
+
+            // Other processes' commits move these pages on: a local transaction that read them
+            // before now conflicts at its commit (#304). Images first, then versions.
+            if (newPages.Count > 0)
+                PublishPageVersions(newPages.Select(p => p.pageId));
         }
 
         Volatile.Write(ref _lastKnownWalEndOffset, shmEnd);
@@ -265,6 +270,10 @@ public sealed partial class StorageEngine
             Volatile.Write(ref _knownWalGeneration, generation);
             Volatile.Write(ref _lastKnownWalEndOffset, 0);
         }
+
+        // Commits other processes made in the old WAL may never be replayed here: every page
+        // version moves on, so a local transaction that read a page before conflicts (#304).
+        RaisePageVersionFloor();
     }
 
     /// <summary>
@@ -310,7 +319,11 @@ public sealed partial class StorageEngine
     /// Forgets a transaction once it has committed or rolled back through the <c>ulong</c>
     /// overloads, which callers use directly without going through the <see cref="Transaction"/> ones.
     /// </summary>
-    private void CompleteTransaction(ulong transactionId) => _activeTransactions.TryRemove(transactionId, out _);
+    private void CompleteTransaction(ulong transactionId)
+    {
+        _activeTransactions.TryRemove(transactionId, out _);
+        _baseVersions.TryRemove(transactionId, out _);
+    }
 
     public async Task CommitTransactionAsync(Transaction transaction, CancellationToken ct = default)
     {
@@ -320,6 +333,13 @@ public sealed partial class StorageEngine
         try
         {
             await CommitTransactionAsync(transaction.TransactionId, ct);
+        }
+        catch (BLiteTransactionConflictException)
+        {
+            // Nothing was written (#304): roll back, as Transaction.CommitAsync does, so that its
+            // pages, base versions and the free-space index changes are not left behind.
+            await transaction.RollbackAsync().ConfigureAwait(false);
+            throw;
         }
         finally
         {
@@ -352,6 +372,10 @@ public sealed partial class StorageEngine
         ThrowIfMultiProcessAccess(nameof(PrepareTransactionAsync));
         try
         {
+            // A commit that would be rejected as a conflict (#304) votes no and writes nothing.
+            if (WouldConflict(transactionId))
+                return false;
+
             await _wal.WriteBeginRecordAsync(transactionId);
 
             foreach (var walEntry in _walCache[transactionId])
@@ -375,6 +399,10 @@ public sealed partial class StorageEngine
         ThrowIfMultiProcessAccess(nameof(PrepareTransactionAsync));
         try
         {
+            // A commit that would be rejected as a conflict (#304) votes no and writes nothing.
+            if (WouldConflict(transactionId))
+                return false;
+
             await _wal.WriteBeginRecordAsync(transactionId, ct);
 
             if (_walCache.TryGetValue(transactionId, out var changes))
@@ -432,6 +460,9 @@ public sealed partial class StorageEngine
                 goto Completed;
             }
 
+            // First committer wins (#304): nothing is written if another commit changed a page first.
+            ThrowIfConflicting(transactionId, pages);
+
             // 1. Write all changes to WAL (from cache, not writeSet!)
             await _wal.WriteBeginRecordAsync(transactionId);
 
@@ -450,6 +481,7 @@ public sealed partial class StorageEngine
             {
                 _walIndex[kvp.Key] = kvp.Value;
             }
+            PublishPageVersions(pages.Keys);
             _walCache.TryRemove(transactionId, out _);
 
             // The commit is durable: release the pages it stopped using (#233).
@@ -596,17 +628,22 @@ public sealed partial class StorageEngine
         _commitLock.Wait();
         try
         {
+            // First committer wins (#304): without a commit record the prepared records are never applied.
+            _walCache.TryGetValue(transactionId, out var pages);
+            ThrowIfConflicting(transactionId, pages);
+
             await _wal.WriteCommitRecordAsync(transactionId);
             await _wal.FlushAsync();
-            
+
             // Move from cache to WAL index. Index first, then drop the cache: a page must
             // never be in neither (FreePage relies on finding its WAL image).
-            if (_walCache.TryGetValue(transactionId, out var pages))
+            if (pages != null)
             {
                 foreach (var kvp in pages)
                 {
                     _walIndex[kvp.Key] = kvp.Value;
                 }
+                PublishPageVersions(pages.Keys);
                 _walCache.TryRemove(transactionId, out _);
             }
 

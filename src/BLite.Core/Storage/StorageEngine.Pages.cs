@@ -26,7 +26,11 @@ public sealed partial class StorageEngine
             uncommittedData.AsSpan(0, length).CopyTo(destination);
             return;
         }
-        
+
+        // From here on the page comes from the committed state: remember which version this
+        // transaction bases its view on (#304), captured before the copy.
+        RecordRead(transactionId, pageId, GetPageVersion(pageId));
+
         // 2. Check WAL index (committed but not checkpointed). In multi-process mode the image
         //    is served only if another process has not rewritten the page since (#241); the
         //    check comes first because catching up may replace the image.
@@ -47,7 +51,7 @@ public sealed partial class StorageEngine
             pageData.AsSpan(0, length).CopyTo(destination);
             return;
         }
-        
+
         // 3. Read committed baseline from PageFile
         GetPageFile(pageId, out var physId).ReadPage(physId, destination);
     }
@@ -76,6 +80,9 @@ public sealed partial class StorageEngine
             uncommittedData.AsSpan(0, length).CopyTo(destination);
             return;
         }
+
+        // Committed state from here on: record the version before the copy (#304), see ReadPage.
+        RecordRead(transactionId, pageId, GetPageVersion(pageId));
 
         // Multi-process: the image is served only if it is still current (#241), see ReadPage.
         if (LocalImageIsCurrent(pageId) && _walIndex.TryGetValue(pageId, out var committedData))
@@ -122,6 +129,9 @@ public sealed partial class StorageEngine
         }
         else
         {
+            // A page written without a read first (e.g. a newly allocated one) is based on the
+            // version current now; a page read first keeps the version of that read (#304).
+            RecordFirstWrite(transactionId, pageId);
             txnPages[pageId] = data.ToArray();
         }
     }
@@ -168,6 +178,9 @@ public sealed partial class StorageEngine
             return default;
 #endif
         }
+
+        // Committed state from here on: record the version before the copy (#304), see ReadPage.
+        RecordRead(transactionId, pageId, GetPageVersion(pageId));
 
         // 2. WAL index — committed but not yet checkpointed (synchronous, no I/O). Multi-process:
         //    the image is served only if it is still current (#241), see ReadPage.

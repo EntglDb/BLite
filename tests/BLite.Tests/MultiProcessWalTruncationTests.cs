@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BLite.Core;
 using BLite.Core.Storage;
 using BLite.Core.Transactions;
 
@@ -289,19 +290,25 @@ public class MultiProcessWalTruncationTests : IDisposable
         var p1 = a.AllocatePage();
         var p2 = a.AllocatePage();
         var p3 = a.AllocatePage();
+        var p4 = a.AllocatePage();
 
-        using (b.BeginTransaction()) { } // B's bookmark: the empty WAL
+        await WriteAndCommitAsync(b, p3, 0x33); // B's own page; B's bookmark: right after it
+        long firstRecordOfA = WalLength;
         await WriteAndCommitAsync(a, p1, 0x11);
         long secondRecord = WalLength;
         await WriteAndCommitAsync(a, p2, 0x22);
 
         // The first of A's records becomes unreadable for B.
-        CorruptWalByte(0);
+        CorruptWalByte(firstRecordOfA);
 
-        // B's replay stops at it, so it must not count A's records as replayed: committing and
-        // checkpointing its own page must leave the WAL, and with it A's records, in place.
-        await WriteAndCommitAsync(b, p3, 0x33);
+        // B cannot check a commit against records it cannot replay, so it rejects it and writes
+        // nothing (#304).
         long walBeforeCheckpoint = WalLength;
+        await Assert.ThrowsAsync<BLiteTransactionConflictException>(() => WriteAndCommitAsync(b, p4, 0x44));
+        Assert.Equal(walBeforeCheckpoint, WalLength);
+
+        // B's replay stops at it, so it must not count A's records as replayed: checkpointing its
+        // own page must leave the WAL, and with it A's records, in place.
         await b.CheckpointAsync();
         Assert.Equal(walBeforeCheckpoint, WalLength);
         Assert.True(walBeforeCheckpoint > secondRecord);
@@ -357,14 +364,15 @@ public class MultiProcessWalTruncationTests : IDisposable
         var p2 = a.AllocatePage();
         var p3 = a.AllocatePage();
 
+        long firstRecordOfA;
         var warnings = new WarningCollector(Path.ChangeExtension(_dbPath, ".wal"));
         Trace.Listeners.Add(warnings);
         try
         {
-            using (b.BeginTransaction()) { } // B's bookmark: the empty WAL
+            await WriteAndCommitAsync(b, p3, 0x33); // something for B to checkpoint; B's bookmark: right after it
+            firstRecordOfA = WalLength;
             await WriteAndCommitAsync(a, p1, 0x11);
-            CorruptWalByte(0); // A's record: unreadable for B, whose bookmark lies before it
-            await WriteAndCommitAsync(b, p3, 0x33); // something for B to checkpoint
+            CorruptWalByte(firstRecordOfA); // A's record: unreadable for B, whose bookmark lies before it
             await WriteAndCommitAsync(a, p2, 0x22);
 
             for (int i = 0; i < 2 * StorageEngine.CatchUpStallThreshold; i++)
@@ -380,7 +388,7 @@ public class MultiProcessWalTruncationTests : IDisposable
         var messages = warnings.Messages;
         Assert.NotEmpty(messages);
         Assert.InRange(messages.Count, 2, 7);
-        Assert.All(messages, m => Assert.Contains("the record at offset 0 is unreadable", m));
+        Assert.All(messages, m => Assert.Contains($"the record at offset {firstRecordOfA} is unreadable", m));
         Assert.Contains(messages, m => m.Contains("stalled"));
         Assert.DoesNotContain("stalled", messages[0]);
 

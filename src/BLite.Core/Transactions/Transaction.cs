@@ -84,7 +84,18 @@ public sealed class Transaction : ITransaction
             throw new InvalidOperationException($"Cannot commit transaction in state {_state}");
         
         // StorageEngine handles WAL writes and buffer management
-        await _storage.CommitTransactionAsync(_transactionId, ct);
+        try
+        {
+            await _storage.CommitTransactionAsync(_transactionId, ct);
+        }
+        catch (BLiteTransactionConflictException)
+        {
+            // Another transaction committed a change to one of this transaction's pages first
+            // (#304). Nothing was written: roll back so that the caches, the free-space index and
+            // the state are back in step, and let the caller retry in a new transaction.
+            await RollbackAsync().ConfigureAwait(false);
+            throw;
+        }
 
         _state = TransactionState.Committed;
 
