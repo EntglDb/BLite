@@ -92,6 +92,9 @@ public static class BLiteMigration
         // Target main .db is written to a temp path first so that we never
         // leave the source in a partially-overwritten state.
         var tempDbPath = sourcePath + ".migrating";
+        // The target's companion files (.idx, WAL, collection directory) are created at their
+        // final paths; remember which of them this call creates, so a failure removes only those.
+        var createdCompanions = CompanionPathsThatDoNotExist(targetConfig, tempDbPath);
         try
         {
             using (var source = new BLiteEngine(sourcePath, sourceConfig))
@@ -110,10 +113,12 @@ public static class BLiteMigration
         }
         catch
         {
-            // Best-effort cleanup of the half-written temp file.
+            // Best-effort cleanup of the half-written temp file and the companion files this
+            // call created; the source is untouched.
             SafeDelete(tempDbPath);
             var tempWal = Path.ChangeExtension(tempDbPath, ".wal");
             SafeDelete(tempWal);
+            DeletePaths(createdCompanions);
             throw;
         }
     }
@@ -169,6 +174,7 @@ public static class BLiteMigration
             StringComparison.OrdinalIgnoreCase);
 
         var actualTargetPath = isInPlace ? targetPath + ".migrating" : targetPath;
+        bool targetExistedBefore = !isInPlace && File.Exists(actualTargetPath);
 
         try
         {
@@ -190,7 +196,8 @@ public static class BLiteMigration
         }
         catch
         {
-            if (isInPlace)
+            // Remove the half-written target unless it is a file the caller already had.
+            if (isInPlace || !targetExistedBefore)
             {
                 SafeDelete(actualTargetPath);
                 SafeDelete(Path.ChangeExtension(actualTargetPath, ".wal"));
@@ -250,6 +257,18 @@ public static class BLiteMigration
             var batch = new List<BsonDocument>(BatchSize);
             await foreach (var doc in sourceColl.FindAllAsync())
             {
+                // A typed collection may hold a document larger than a page (overflow pages);
+                // the target is a DynamicCollection, which does not write those (#301). Say
+                // which document it is instead of failing inside InsertBulkAsync.
+                if (doc.RawData.Length > targetColl.MaxDocumentSize)
+                {
+                    doc.TryGetId(out var tooLargeId);
+                    throw new NotSupportedException(
+                        $"Collection '{collName}' holds a document of {doc.RawData.Length} bytes (_id {tooLargeId}), " +
+                        $"larger than the {targetColl.MaxDocumentSize} bytes a schema-less collection can store in one page. " +
+                        "BLiteMigration copies through the schema-less API and cannot migrate this database; the source is unchanged.");
+                }
+
                 batch.Add(doc);
                 if (batch.Count >= BatchSize)
                 {
@@ -347,5 +366,31 @@ public static class BLiteMigration
     {
         try { if (File.Exists(path)) File.Delete(path); }
         catch { /* best-effort */ }
+    }
+
+    /// <summary>The companion paths of <paramref name="config"/> that do not exist yet, i.e. the ones a migration to it will create.</summary>
+    private static List<string> CompanionPathsThatDoNotExist(PageFileConfig config, string mainDbPath)
+    {
+        var paths = new List<string>();
+        var walPath = config.WalPath ?? Path.ChangeExtension(mainDbPath, ".wal");
+        var walDir = Path.GetDirectoryName(walPath);
+        if (!string.IsNullOrEmpty(walDir) && !Directory.Exists(walDir)) paths.Add(walDir);   // e.g. the "wal/" directory of PageFileConfig.Server
+        else if (!File.Exists(walPath)) paths.Add(walPath);
+        if (config.IndexFilePath != null && !File.Exists(config.IndexFilePath)) paths.Add(config.IndexFilePath);
+        if (config.CollectionDataDirectory != null && !Directory.Exists(config.CollectionDataDirectory)) paths.Add(config.CollectionDataDirectory);
+        return paths;
+    }
+
+    private static void DeletePaths(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            try
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+                else if (File.Exists(path)) File.Delete(path);
+            }
+            catch { /* best-effort */ }
+        }
     }
 }

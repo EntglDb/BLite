@@ -52,6 +52,15 @@ public sealed class DynamicCollection : IDisposable
     // Cached delegate — avoids per-call closure allocation when passed to _fsi.FindPage.
     private readonly Func<uint, ulong, bool> _isPageLocked;
     private readonly int _maxDocumentSizeForSinglePage;
+
+    /// <summary>
+    /// The largest document, in BSON bytes, this collection writes: one page minus its header,
+    /// slot and reserve (about 16 KB with the default page size). A larger document is rejected
+    /// with <see cref="BLiteValidationException"/>. A typed <c>DocumentCollection</c> stores larger
+    /// documents across overflow pages, and this collection reads those (#301); it does not
+    /// write them, so such a document cannot be copied into a <c>DynamicCollection</c>.
+    /// </summary>
+    internal int MaxDocumentSize { get; }
     private uint _currentDataPage;
     private bool _isTimeSeries;
 
@@ -118,6 +127,7 @@ public sealed class DynamicCollection : IDisposable
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _idType = idType;
         _maxDocumentSizeForSinglePage = _storage.PageSize - 128;
+        MaxDocumentSize = _maxDocumentSizeForSinglePage - SlotEntry.Size;
         _fsi = freeSpaceIndex ?? new FreeSpaceIndex(_storage.PageSize);
         _isPageLocked = _storage.IsPageLocked;
 
@@ -777,7 +787,7 @@ public sealed class DynamicCollection : IDisposable
         else
         {
             // Unreachable: ValidateWrite rejects documents that do not fit in a page.
-            throw new BLiteValidationException($"Document size {docData.Length} exceeds maximum single page size. Overflow not yet supported in DynamicCollection.");
+            throw new BLiteValidationException($"Document size {docData.Length} exceeds the {_maxDocumentSizeForSinglePage - SlotEntry.Size} bytes a DynamicCollection document may occupy (one page). DynamicCollection does not write overflow pages; a typed DocumentCollection does.");
         }
 
         // Index the _id
@@ -1019,7 +1029,19 @@ public sealed class DynamicCollection : IDisposable
                 var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
                 if (slot.Flags.HasFlag(SlotFlags.Deleted)) continue;
 
-                var data = buffer.AsSpan(slot.Offset, slot.Length);
+                // A document a typed collection stored across overflow pages (#301) is
+                // reassembled before the predicate sees it; its slot holds only the first chunk.
+                ReadOnlySpan<byte> data;
+                if (slot.Flags.HasFlag(SlotFlags.HasOverflow))
+                {
+                    var full = OverflowChainReader.Read(_storage, buffer, slot, txnId);
+                    if (full == null) continue;
+                    data = full;
+                }
+                else
+                {
+                    data = buffer.AsSpan(slot.Offset, slot.Length);
+                }
                 var reader = new BsonSpanReader(data, _storage.GetKeyReverseMap());
 
                 if (predicate(reader))
@@ -2257,7 +2279,7 @@ public sealed class DynamicCollection : IDisposable
         var size = document.RawData.Length;
         if (!_isTimeSeries && size + SlotEntry.Size > _maxDocumentSizeForSinglePage)
             throw new BLiteValidationException(
-                $"Document size {size} exceeds maximum single page size. Overflow not yet supported in DynamicCollection.");
+                $"Document size {size} exceeds the {_maxDocumentSizeForSinglePage - SlotEntry.Size} bytes a DynamicCollection document may occupy (one page). DynamicCollection does not write overflow pages; a typed DocumentCollection does.");
 
         // An update keeps the id it was found by, so only a new id is checked: one stored before
         // MaxKeySize was lowered (#217) must not make its document impossible to update.
@@ -2487,6 +2509,14 @@ public sealed class DynamicCollection : IDisposable
             if (slot.Flags.HasFlag(SlotFlags.Deleted))
                 return null;
 
+            // A typed collection stores a document larger than a page across overflow pages;
+            // the slot then holds [length][first overflow page][first chunk] (#301).
+            if (slot.Flags.HasFlag(SlotFlags.HasOverflow))
+            {
+                var full = OverflowChainReader.Read(_storage, buffer, slot, txnId);
+                return full == null ? null : new BsonDocument(full, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
+            }
+
             // Copy document data (buffer is pooled, data must outlive it)
             var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
             return new BsonDocument(docData, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
@@ -2531,6 +2561,14 @@ public sealed class DynamicCollection : IDisposable
             var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
             var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
             if (slot.Flags.HasFlag(SlotFlags.Deleted)) return null;
+
+            if (slot.Flags.HasFlag(SlotFlags.HasOverflow))
+            {
+                // Overflow document of a typed collection (#301); the reader copies what it
+                // needs from the page buffer before it awaits.
+                var full = await OverflowChainReader.ReadAsync(_storage, buffer, slot, txnId, ct).ConfigureAwait(false);
+                return full == null ? null : new BsonDocument(full, _storage.GetKeyReverseMap(), _storage.GetKeyMap());
+            }
 
             // Span created after the only await — safe; ToArray() copies before buffer is returned
             var docData = buffer.AsSpan(slot.Offset, slot.Length).ToArray();
@@ -2707,6 +2745,16 @@ public sealed class DynamicCollection : IDisposable
             {
                 var slotOffset = SlottedPageHeader.Size + (location.SlotIndex * SlotEntry.Size);
                 var slot = SlotEntry.ReadFrom(buffer.AsSpan(slotOffset));
+
+                // A document a typed collection stored across overflow pages (#301): recycle
+                // its chain once the transaction commits, as DocumentCollection.FreeOverflowChain
+                // does; until then a rollback returns to the committed document, which uses them.
+                if (slot.Flags.HasFlag(SlotFlags.HasOverflow))
+                {
+                    foreach (var overflowPageId in OverflowChainReader.ChainPages(_storage, buffer, slot, transaction.TransactionId))
+                        _storage.FreePageOnCommit(overflowPageId, transaction.TransactionId);
+                }
+
                 slot.Flags |= SlotFlags.Deleted;
                 slot.WriteTo(buffer.AsSpan(slotOffset));
 
