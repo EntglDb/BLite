@@ -65,6 +65,7 @@ var users = collection.AsQueryable()
 - **Composite Indexes**: Support for multi-column keys.
 - **Nested Property Indexes**: Index on embedded sub-object fields using lambda expressions (`x => x.Address.City`) for typed collections, or dot-notation strings (`"address.city"`) for schema-less collections. Intermediate null values are safely skipped.
 - **Vector Search (HNSW)**: Fast similarity search for AI embeddings using Hierarchical Navigable Small World algorithm.
+- **Full-Text Search (BM25)**: Inverted index on string properties, with accent- and case-insensitive matching and BM25-ranked results.
 
 #### 🏷️ Secondary Indexes on Nested Properties (Typed Collections)
 
@@ -178,6 +179,43 @@ var area = db.Stores.AsQueryable()
     .Where(s => s.Location.Within((45.0, 9.0), (46.0, 10.0)))
     .ToList();
 ```
+
+### 🔤 Full-Text Search *(v5.3.0)*
+BLite can index string properties for full-text search: an inverted index that finds the documents containing every term of a query and ranks them with BM25.
+
+- **Accent- and Case-Insensitive**: text and queries are lowercased, accents are removed, and anything that is not a letter or digit separates terms, so `"Café, au lait!"` matches `"cafe LAIT"`.
+- **LINQ Integrated**: filter with `.FullTextMatch()`, or rank with `FullTextSearchAsync`.
+
+```csharp
+// 1. Configure a full-text index on a string property (default name: "idx_fts_Body")
+modelBuilder.Entity<Article>()
+    .HasFullTextIndex(x => x.Body);
+
+// 2. Filter: articles whose Body contains every term
+var hits = db.Articles.AsQueryable()
+    .Where(a => a.Body.FullTextMatch("quick fox"))
+    .ToList();
+
+// 3. Ranked search: the 10 best matches, best first, each with its BM25 score
+await foreach (var hit in db.Articles.FullTextSearchAsync("idx_fts_Body", "quick fox", k: 10))
+    Console.WriteLine($"{hit.Score:F2} {hit.Document.Title}");
+
+// matchAllTerms: false also returns documents that contain only some of the terms
+var anyTerm = db.Articles.FullTextSearchAsync("idx_fts_Body", "quick fox", k: 10, matchAllTerms: false);
+```
+
+An index can also be added at runtime with `CreateFullTextIndexAsync(x => x.Body)`; either way it is filled from the documents already in the collection. On a schema-less `DynamicCollection`, index a field by name (dot-notation for nested fields) and search it the same way:
+
+```csharp
+var notes = engine.GetOrCreateCollection("notes");
+await notes.CreateFullTextIndexAsync("text");   // default name: "idx_fts_text"
+
+await foreach (var hit in notes.FullTextSearchAsync("idx_fts_text", "quick fox", k: 10))
+    if (hit.Document.TryGetString("title", out var title))
+        Console.WriteLine($"{hit.Score:F2} {title}");
+```
+
+> **Ranking and limitations**: only `FullTextSearchAsync` ranks results (BM25 with k1 = 1.2, b = 0.75); its scores compare only within one search. `FullTextMatch` can use the index at the top level of a `Where` or under `&&`; under `||` or `!`, or without an index, it is evaluated per document with the same rules. Terms match whole: there is no stemming, phrase, prefix or fuzzy matching, and scripts written without spaces (Chinese, Japanese) are not split into words. BLQL has no full-text operator. Each write touches one index page per distinct term, so insert in batches where possible. Do not open a database that has a full-text index for writing with BLite < 5.3.
 
 ### 🆔 Custom ID Converters (ValueObjects)
 Native support for custom primary key types using `ValueConverter<TModel, TProvider>`. Configure them easily via the Fluent API.
