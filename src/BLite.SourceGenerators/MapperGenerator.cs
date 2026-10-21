@@ -295,8 +295,10 @@ public readonly struct BLiteDiagnostic
                         sb.AppendLine($"            public global::System.Threading.Tasks.ValueTask SaveChangesAsync(global::System.Threading.CancellationToken ct = default) => _session.CommitAsync(ct);");
                         sb.AppendLine($"            /// <summary>Begins a new transaction for this session or returns the active one.</summary>");
                         sb.AppendLine($"            public global::BLite.Core.Transactions.ITransaction BeginTransaction() => _session.BeginTransaction();");
-                        sb.AppendLine($"            /// <summary>Rolls back the active transaction, discarding uncommitted changes.</summary>");
+                        sb.AppendLine($"            /// <summary>Rolls back the active transaction, discarding uncommitted changes, and blocks until the rollback is complete.</summary>");
                         sb.AppendLine($"            public void Rollback() => _session.Rollback();");
+                        sb.AppendLine($"            /// <summary>Asynchronously rolls back the active transaction, discarding uncommitted changes.</summary>");
+                        sb.AppendLine($"            public global::System.Threading.Tasks.ValueTask RollbackAsync(global::System.Threading.CancellationToken ct = default) => _session.RollbackAsync(ct);");
                         sb.AppendLine($"            /// <summary>Disposes this session, rolling back any uncommitted transaction.</summary>");
                         sb.AppendLine($"            public void Dispose() => _session.Dispose();");
                         sb.AppendLine($"        }}");

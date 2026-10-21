@@ -121,6 +121,122 @@ public class BLiteSessionTests : IDisposable
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // 2b. Rollback completes before it returns (#307)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Runs <paramref name="rollback"/> on 300 transactions while another task keeps committing
+    /// to a second collection, and counts the transactions that are still
+    /// <see cref="BLite.Core.Transactions.TransactionState.Active"/> when the rollback call has
+    /// returned. Without the fix Rollback() dropped the ValueTask, and the WAL abort record,
+    /// the state change and the free-space-index restore ran later: 59–85 of 300 under load.
+    /// </summary>
+    private async Task<int> CountTransactionsStillActiveAfterRollback(Func<BLiteSession, Task> rollback)
+    {
+        var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "rolled back"));
+        using var stop = new System.Threading.CancellationTokenSource();
+        var load = Task.Run(async () =>
+        {
+            var other = _engine.GetOrCreateCollection("load");
+            while (!stop.IsCancellationRequested)
+            {
+                var txn = _engine.BeginTransaction();
+                await other.InsertAsync(_engine.CreateDocument(["n"], b => b.AddInt32("n", 1)), txn);
+                await txn.CommitAsync();
+            }
+        });
+
+        int stillActive = 0;
+        try
+        {
+            for (int i = 0; i < 300; i++)
+            {
+                using var session = _engine.OpenSession();
+                var txn = session.BeginTransaction();
+                await session.InsertAsync("orders", doc);
+                await rollback(session);
+                if (txn.State != BLite.Core.Transactions.TransactionState.Aborted) stillActive++;
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            await load;
+        }
+        return stillActive;
+    }
+
+    [Fact]
+    public async Task RollbackAsync_TransactionIsAborted_WhenItReturns()
+    {
+        var stillActive = await CountTransactionsStillActiveAfterRollback(s => s.RollbackAsync().AsTask());
+        Assert.Equal(0, stillActive);
+    }
+
+    [Fact]
+    public async Task Rollback_TransactionIsAborted_WhenItReturns()
+    {
+        var stillActive = await CountTransactionsStillActiveAfterRollback(s => { s.Rollback(); return Task.CompletedTask; });
+        Assert.Equal(0, stillActive);
+    }
+
+    [Fact]
+    public async Task RollbackAsync_DiscardsTheWrites_AndClearsCurrentTransaction()
+    {
+        using var session = _engine.OpenSession();
+        session.BeginTransaction();
+        var doc = _engine.CreateDocument(["name"], b => b.AddString("name", "gone"));
+        var id = await session.InsertAsync("orders", doc);
+
+        await session.RollbackAsync();
+
+        Assert.Null(session.CurrentTransaction);
+        Assert.Null(await session.FindByIdAsync("orders", id));
+        // The session is usable again: a new transaction can be started and committed.
+        session.BeginTransaction();
+        var id2 = await session.InsertAsync("orders", doc);
+        await session.CommitAsync();
+        Assert.NotNull(await session.FindByIdAsync("orders", id2));
+    }
+
+    [Fact]
+    public async Task RollbackAsync_WithoutTransaction_IsANoOp()
+    {
+        using var session = _engine.OpenSession();
+        await session.RollbackAsync();
+        session.Rollback();
+        Assert.Null(session.CurrentTransaction);
+    }
+
+    [Fact]
+    public async Task RollbackAsync_CalledTwice_RollsBackOnce()
+    {
+        using var session = _engine.OpenSession();
+        var txn = session.BeginTransaction();
+        var first = session.RollbackAsync();
+        var second = session.RollbackAsync();   // nothing left to roll back
+        await first;
+        await second;
+        Assert.Equal(BLite.Core.Transactions.TransactionState.Aborted, txn.State);
+    }
+
+    [Fact]
+    public async Task RollbackAsync_CancelledToken_Throws_AndLeavesTheTransactionActive()
+    {
+        using var session = _engine.OpenSession();
+        var txn = session.BeginTransaction();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.RollbackAsync(cts.Token).AsTask());
+
+        Assert.Same(txn, session.CurrentTransaction);
+        Assert.Equal(BLite.Core.Transactions.TransactionState.Active, txn.State);
+        await session.RollbackAsync();
+        Assert.Equal(BLite.Core.Transactions.TransactionState.Aborted, txn.State);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // 3. CRUD via sessions — Insert / FindById / UpdateAsync / Delete
     // ─────────────────────────────────────────────────────────────────────────
 

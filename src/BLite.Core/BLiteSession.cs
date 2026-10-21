@@ -102,17 +102,34 @@ public sealed class BLiteSession : ITransactionHolder, IDisposable
     }
 
     /// <summary>
-    /// Rolls back the active transaction, discarding all uncommitted changes.
+    /// Rolls back the active transaction, discarding all uncommitted changes. When the returned
+    /// task completes, the rollback is complete: the abort record is in the WAL, the transaction is
+    /// <see cref="TransactionState.Aborted"/> and its rollback handlers have run. A failure of that
+    /// work is thrown to the caller. Does nothing when no transaction is active.
     /// </summary>
-    public void Rollback()
+    /// <param name="ct">
+    /// Checked before the rollback starts: a cancelled token throws <see cref="OperationCanceledException"/>
+    /// and leaves the transaction active. A rollback that has started is not cancelled.
+    /// </param>
+    public ValueTask RollbackAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
-        if (CurrentTransaction != null)
-        {
-            try { CurrentTransaction.RollbackAsync(); }
-            finally { CurrentTransaction = null; }
-        }
+        ct.ThrowIfCancellationRequested();
+        var transaction = CurrentTransaction;
+        if (transaction == null)
+            return default;
+
+        // Forget the transaction before the rollback runs, so a second Rollback or a concurrent
+        // CommitAsync on this session cannot act on a transaction that is already rolling back.
+        CurrentTransaction = null;
+        return transaction.RollbackAsync();
     }
+
+    /// <summary>
+    /// Rolls back the active transaction, discarding all uncommitted changes, and blocks until the
+    /// rollback is complete. Prefer <see cref="RollbackAsync"/> in asynchronous code.
+    /// </summary>
+    public void Rollback() => RollbackAsync().GetAwaiter().GetResult();
 
     // ─────────────────────────────────────────────────────────────────────────
     // ITransactionHolder
