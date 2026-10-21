@@ -903,7 +903,8 @@ public class DocumentCollection<TId, T> : IDocumentCollection<TId, T>, IDisposab
     /// <summary>
     /// Decimal properties used to be indexed as <c>(double)value</c>. An index whose persisted
     /// <see cref="IndexMetadata.KeyFormat"/> predates the exact decimal encoding, a double-keyed
-    /// index holding a key of -0.0 from before -0.0 and +0.0 shared a key (#249), or a full-text
+    /// index holding a key of -0.0 from before -0.0 and +0.0 shared a key (#249) or of a NaN with the
+    /// sign bit clear from before every NaN shared one key (#257), or a full-text
     /// index written in another format or holding keys it did not write, is rebuilt from the
     /// documents into a copy that queries don't see, the first time the collection is opened. Only
     /// after the copy committed is it swapped in, with its target format, in one metadata save, and

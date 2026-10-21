@@ -824,21 +824,36 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     // IndexKey(double) gives -0.0 the key of +0.0 (#249). Earlier releases keyed -0.0 apart, just
     // below +0.0; such an entry is neither found by a query nor removed when its document is updated
     // or deleted, so a double- or float-keyed index that still holds one is rebuilt on open
-    // (NeedsKeyFormatMigration). Looking for it costs one seek per index and open.
+    // (NeedsKeyFormatMigration). The same holds for a NaN with the sign bit clear (what Arm64
+    // computes), which was keyed above +Infinity before every NaN took the key of double.NaN.
+    // Looking for them costs two seeks per index and open.
 
     // The former key of -0.0: every bit of 0x8000_0000_0000_0000 inverted, after KeyPrefix.
     private static readonly IndexKey s_legacyNegativeZeroKey =
         new IndexKey(new byte[] { 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF });
 
-    private bool HoldsLegacyNegativeZeroKey()
+    // The former keys of the NaNs with the sign bit clear, 0x7FF0_0000_0000_0001..0x7FFF_FFFF_FFFF_FFFF
+    // with the sign bit set, after KeyPrefix: every key above that of +Infinity.
+    private static readonly IndexKey s_legacyPositiveNaNMinKey =
+        new IndexKey(new byte[] { 0xFF, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 });
+    private static readonly IndexKey s_legacyPositiveNaNMaxKey =
+        new IndexKey(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF });
+
+    private bool HoldsLegacyDoubleKey()
     {
         if (_btreeIndex == null) return false;
         var keyType = SingleKeyType();
         if (keyType != typeof(double) && keyType != typeof(float)) return false;
 
-        foreach (var _ in _btreeIndex.Range(
-                     CreateCompositeKeyBoundary(s_legacyNegativeZeroKey, useMinObjectId: true),
-                     CreateCompositeKeyBoundary(s_legacyNegativeZeroKey, useMinObjectId: false),
+        return HoldsKeyBetween(s_legacyNegativeZeroKey, s_legacyNegativeZeroKey)
+            || HoldsKeyBetween(s_legacyPositiveNaNMinKey, s_legacyPositiveNaNMaxKey);
+    }
+
+    private bool HoldsKeyBetween(IndexKey minUserKey, IndexKey maxUserKey)
+    {
+        foreach (var _ in _btreeIndex!.Range(
+                     CreateCompositeKeyBoundary(minUserKey, useMinObjectId: true),
+                     CreateCompositeKeyBoundary(maxUserKey, useMinObjectId: false),
                      IndexDirection.Forward, null))
             return true;
         return false;
@@ -874,11 +889,12 @@ public sealed class CollectionSecondaryIndex<TId, T> : IDisposable, ICollectionI
     /// format, i.e. hold <c>(double)value</c> keys that the exact decimal encoding cannot match; or
     /// when this full-text index was written with another analyzer version or holds keys it did not
     /// write (e.g. from an older BLite that read it as a plain B-tree); or when this double- or
-    /// float-keyed B-tree index holds a key of -0.0 written before -0.0 and +0.0 shared a key.
+    /// float-keyed B-tree index holds a key of -0.0 written before -0.0 and +0.0 shared a key, or
+    /// a key of a NaN with the sign bit clear written before every NaN took the key of <see cref="double.NaN"/>.
     /// </summary>
     internal bool NeedsKeyFormatMigration =>
         (_btreeIndex != null && KeyFormat < IndexMetadata.CurrentKeyFormat && IsDecimalKeyed)
-        || HoldsLegacyNegativeZeroKey()
+        || HoldsLegacyDoubleKey()
         || (_fullTextIndex != null && (KeyFormat != FullTextIndex.FormatVersion || _fullTextIndex.HasForeignKeys()));
 
     /// <summary>The key format a rebuilt copy of this index is written in.</summary>
