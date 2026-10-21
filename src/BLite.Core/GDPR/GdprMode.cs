@@ -19,7 +19,7 @@ public enum GdprMode : byte
     ///   <item>Throws <see cref="InvalidOperationException"/> when encryption is absent.</item>
     ///   <item>Warns when no audit sink is registered.</item>
     ///   <item>Warns when a <c>[PersonalData]</c> collection has no retention policy.</item>
-    ///   <item>Warns when <c>SecureEraseOnDelete</c> cannot be enforced.</item>
+    ///   <item>Reminds that deleted documents are zero-filled on their page and reach the database file at the next checkpoint.</item>
     /// </list>
     /// Strict mode never deletes data, never rotates keys, never modifies stored documents.
     /// </summary>

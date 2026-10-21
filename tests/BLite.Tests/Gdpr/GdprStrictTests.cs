@@ -138,14 +138,15 @@ public class GdprStrictTests : IDisposable
         Assert.Equal(1, CountWarnings(GdprStrictValidator.GdprStrictAuditMissing));
     }
 
-    // ── Test 5: Strict forces SecureErase warning (not yet implemented) ────────
+    // ── Test 5: Strict reminds to checkpoint after erasure (#299) ──────────────
 
     /// <summary>
-    /// Strict mode warns that SecureEraseOnDelete is not yet available
-    /// (EventId <c>GdprStrictSecureEraseUnavailable</c>, 9006).
+    /// Strict mode emits the checkpoint reminder (EventId
+    /// <c>GdprStrictSecureEraseCheckpointHint</c>, 9006) and no longer claims that deleted
+    /// documents are not zeroed: every delete zero-fills them (see the test below).
     /// </summary>
     [Fact]
-    public void GdprStrict_SecureErase_EmitsUnavailableWarning()
+    public void GdprStrict_SecureErase_EmitsCheckpointHint_NotAnUnavailableWarning()
     {
         var path = TempDb();
         var crypto = new CryptoOptions("gdpr-strict-test-passphrase");
@@ -153,8 +154,53 @@ public class GdprStrictTests : IDisposable
 
         using var engine = new BLiteEngine(path, crypto, kvOpts);
 
-        Assert.True(HasWarning(GdprStrictValidator.GdprStrictSecureEraseUnavailable),
-            "Expected GdprStrictSecureEraseUnavailable (9006) warning when Strict mode is active.");
+        var message = Assert.Single(_listener.Messages, m => m.Contains($"EventId:{GdprStrictValidator.GdprStrictSecureEraseCheckpointHint}"));
+        Assert.Contains("CheckpointAsync", message);
+        Assert.Contains("zero-filled", message);
+        Assert.DoesNotContain("not currently zeroed", message);
+        Assert.DoesNotContain("not yet available", message);
+        Assert.DoesNotContain("MISSING_FEATURES", message);
+    }
+
+    /// <summary>
+    /// What the reminder describes: after a delete and a checkpoint, no byte of the deleted
+    /// document is left in the database file or the WAL. Plaintext, so the bytes are visible.
+    /// </summary>
+    [Fact]
+    public async Task Delete_ThenCheckpoint_LeavesNoBytesOfTheDocumentInTheFiles()
+    {
+        var path = TempDb();
+        var walPath = Path.ChangeExtension(path, ".wal");
+        var marker = System.Text.Encoding.UTF8.GetBytes("ZZ-PERSONAL-MARKER-7f3a9c-ZZ");
+
+        BLite.Bson.BsonId id;
+        using (var engine = new BLiteEngine(path))
+        {
+            var col = engine.GetOrCreateCollection("people");
+            var doc = engine.CreateDocument(["name"], b => b.AddString("name", "ZZ-PERSONAL-MARKER-7f3a9c-ZZ"));
+            id = await col.InsertAsync(doc);
+            await engine.CheckpointAsync();
+        }
+        Assert.True(CountOccurrences(File.ReadAllBytes(path), marker) >= 1, "the marker must be in the file before the delete");
+
+        using (var engine = new BLiteEngine(path))
+        {
+            var col = engine.GetOrCreateCollection("people");
+            Assert.True(await col.DeleteAsync(id));
+            await engine.CheckpointAsync();
+        }
+
+        Assert.Equal(0, CountOccurrences(File.ReadAllBytes(path), marker));
+        if (File.Exists(walPath))
+            Assert.Equal(0, CountOccurrences(File.ReadAllBytes(walPath), marker));
+    }
+
+    private static int CountOccurrences(byte[] haystack, byte[] needle)
+    {
+        int count = 0;
+        for (int i = 0; i <= haystack.Length - needle.Length; i++)
+            if (haystack.AsSpan(i, needle.Length).SequenceEqual(needle)) count++;
+        return count;
     }
 
     // ── Test 6: GdprMode enum values are correct ─────────────────────────────

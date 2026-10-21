@@ -37,8 +37,11 @@ internal static class GdprStrictValidator
     /// <summary>SecureEraseOnDelete was forced to <see langword="true"/>.</summary>
     internal const int GdprStrictSecureEraseEnabled = 9005;
 
-    /// <summary><c>SecureEraseOnDelete</c> is not yet implemented; noting the gap.</summary>
-    internal const int GdprStrictSecureEraseUnavailable = 9006;
+    /// <summary>
+    /// Deleted documents are zero-filled on their page, but the database file receives the
+    /// zeroed page only at the next checkpoint; reminds the operator to checkpoint after erasure.
+    /// </summary>
+    internal const int GdprStrictSecureEraseCheckpointHint = 9006;
 
     /// <summary>A CDC Watch was configured with <c>CapturePayload = true</c> under Strict.</summary>
     internal const int GdprStrictCdcCapturePayloadWarning = 9007;
@@ -98,13 +101,16 @@ internal static class GdprStrictValidator
                 "after construction to satisfy Art. 30 logging requirements.");
         }
 
-        // ── 3. Secure erase on delete — not yet a BLiteKvOptions setting ─────
-        // SecureEraseOnDelete as an engine-level toggle has not been implemented.
-        // Emit a single warning so the operator is aware of the gap.
-        TraceWarning(GdprStrictSecureEraseUnavailable,
-            "GdprMode.Strict: SecureEraseOnDelete is not yet available as an engine-level setting. " +
-            "Deleted document slots are not currently zeroed at the page layer. " +
-            "Track MISSING_FEATURES.md §3 for the planned implementation.");
+        // ── 3. Secure erase on delete — the checkpoint caveat ────────────────
+        // Every delete zero-fills the bytes the document occupied on its page
+        // (DocumentCollection.DeleteCore, SlottedPageUtils.CompactAndErase) and frees its
+        // overflow pages with a zeroed buffer (PageFile.FreePage), since #96. Like every write,
+        // the zeroed page reaches the database file at the next checkpoint; until then the file
+        // can still hold the old bytes. Emit a single reminder of that timing.
+        TraceWarning(GdprStrictSecureEraseCheckpointHint,
+            "GdprMode.Strict: deleted documents are zero-filled on their page, but the database file " +
+            "receives the zeroed page at the next checkpoint. Call CheckpointAsync() after deleting " +
+            "personal data; VacuumAsync(SecureErase = true) additionally zero-fills the free space of every page.");
 
         // ── 4. Retention — warn per [PersonalData] collection without policy ──
         try
