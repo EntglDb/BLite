@@ -140,16 +140,24 @@ internal static class IndexOptimizer
         var param = model.OrderByClause.Parameters[0];
 
         // The OrderBy key selector must be a simple property access on the entity parameter.
-        string? propName = body switch
+        MemberExpression? keyMember = body switch
         {
-            MemberExpression me when me.Expression == param => me.Member.Name,
+            MemberExpression me when me.Expression == param => me,
             // Handle Convert(property) — e.g. enum fields
             UnaryExpression { NodeType: ExpressionType.Convert } ue
-                when ue.Operand is MemberExpression me2 && me2.Expression == param => me2.Member.Name,
+                when ue.Operand is MemberExpression me2 && me2.Expression == param => me2,
             _ => null
         };
 
-        if (propName is null) return null;
+        if (keyMember is null) return null;
+
+        // Typed indexes do not hold null keys (CollectionSecondaryIndex.Insert skips them), so a
+        // window read from the index would leave out every document whose key is null, which LINQ
+        // orders first ascending and last descending (#247). Only a key that cannot be null is
+        // served from the index.
+        if (!keyMember.Type.IsValueType || Nullable.GetUnderlyingType(keyMember.Type) != null) return null;
+
+        var propName = keyMember.Member.Name;
 
         CollectionIndexInfo? index = null;
         foreach (var idx in indexes) { if (idx.Type == IndexType.BTree && Matches(idx, propName)) { index = idx; break; } }
@@ -290,18 +298,14 @@ internal static class IndexOptimizer
                 switch (op)
                 {
                     case ExpressionType.Equal:
+                        // Null equality: typed indexes do not hold null keys
+                        // (CollectionSecondaryIndex.Insert skips them), so the index has no
+                        // entry to find. Return null so the predicate is evaluated per document,
+                        // where a null and an absent field both match (#247).
                         if (value == null)
-                        {
-                            // Null equality: use DBNull.Value as sentinel so QueryIndexAsync
-                            // scans exactly the NullSentinel key (the null bucket in the B-tree).
-                            result.MinValue = DBNull.Value;
-                            result.MaxValue = DBNull.Value;
-                        }
-                        else
-                        {
-                            result.MinValue = value;
-                            result.MaxValue = value;
-                        }
+                            return null;
+                        result.MinValue = value;
+                        result.MaxValue = value;
                         result.IsRange = false;
                         result.FilterCompleteness = FilterCompleteness.Exact;   // equality on indexed field: scan is exact
                         result.StartInclusive = true;
@@ -889,12 +893,13 @@ internal static class IndexOptimizer
         foreach (var raw in enumerable)
         {
             var converted = TryApplyConverter(propertyPath, raw, registry);
-            if (!IsIndexableValue(converted))
+            // A null element would be looked up in the index, which holds no null keys (#247):
+            // leave the whole Contains to the per-document predicate.
+            if (converted == null || !IsIndexableValue(converted))
                 return false;
-            var normalized = converted ?? DBNull.Value;
-            if (seen.Add(normalized))
+            if (seen.Add(converted))
             {
-                list.Add(normalized);
+                list.Add(converted);
             }
         }
 
