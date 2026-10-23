@@ -117,6 +117,9 @@ public sealed partial class StorageEngine
                 foreach (var kvp in toCheckpoint)
                     _checkpointedWalPages.TryAdd(kvp.Key, 0);
 
+                // Normal mode: the commits being copied must be on disk before their pages are.
+                await SyncDeferredWalAsync().ConfigureAwait(false);
+
                 foreach (var kvp in toCheckpoint)
                     GetPageFile(kvp.Key, out var physId).WritePage(physId, kvp.Value);
             }

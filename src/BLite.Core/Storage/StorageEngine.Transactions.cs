@@ -427,6 +427,8 @@ public sealed partial class StorageEngine
                 // No writes for this transaction, just write commit record
                 await _wal.WriteCommitRecordAsync(transactionId);
                 await _wal.FlushAsync();
+                if (_freeOnCommit.ContainsKey(transactionId))
+                    await SyncDeferredWalAsync();
                 FreePagesOfCommittedTransaction(transactionId);
                 completed = true;
                 goto Completed;
@@ -453,6 +455,8 @@ public sealed partial class StorageEngine
             _walCache.TryRemove(transactionId, out _);
 
             // The commit is durable: release the pages it stopped using (#233).
+            if (_freeOnCommit.ContainsKey(transactionId))
+                await SyncDeferredWalAsync();
             FreePagesOfCommittedTransaction(transactionId);
 
             // Check if checkpoint is needed, but defer it until after releasing the lock
@@ -611,6 +615,8 @@ public sealed partial class StorageEngine
             }
 
             // The commit is durable: release the pages it stopped using (#233).
+            if (_freeOnCommit.ContainsKey(transactionId))
+                await SyncDeferredWalAsync();
             FreePagesOfCommittedTransaction(transactionId);
 
             // Check if checkpoint is needed, but defer it until after releasing the lock

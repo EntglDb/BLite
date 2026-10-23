@@ -390,7 +390,7 @@ using var dynSub = engine.GetOrCreateCollection("orders").Watch()
 
 ### 🛡️ Transactions & ACID
 - **Atomic**: Multi-document transactions.
-- **Durable**: WAL ensures data safety even in power loss.
+- **Durable**: a commit is synced to disk (once per group-commit batch) before it is acknowledged, so it survives a power loss. `PageFileConfig.WalSync = WalSyncMode.Normal` trades that for lower commit latency: the WAL is then synced only before a checkpoint, before the pages a commit stopped using are freed, and on truncation, and a power loss can lose the most recent commits (never corrupt older ones).
 - **Isolated**: Snapshot isolation allowing concurrent readers and writers.
 - **Thread-Safe**: Protected with `SemaphoreSlim` to prevent race conditions in concurrent scenarios.
 - **Async-Only**: All CRUD operations on `DocumentCollection<TId, T>` and `DynamicCollection` are exclusively async/await — no blocking synchronous methods. Eliminates accidental blocking calls on thread-pool threads.
