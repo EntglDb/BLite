@@ -46,7 +46,8 @@ public readonly struct PageFileConfig
     /// Lock acquisition timeouts for read and write operations.
     /// Controls how long the engine waits for a contended lock before throwing
     /// <see cref="System.TimeoutException"/> (analogous to SQLite's <c>SQLITE_BUSY</c>).
-    /// Defaults to <see cref="LockTimeout.Default"/> (500 ms read / 500 ms write).
+    /// Defaults to <see cref="LockTimeout.Default"/> (500 ms read / 500 ms write), also when
+    /// the config is built with an object initializer that does not set it.
     /// Use <see cref="LockTimeout.Immediate"/> for fail-fast behaviour.
     /// </summary>
     public LockTimeout LockTimeout { get; init; }
@@ -133,8 +134,9 @@ public readonly struct PageFileConfig
     public bool AllowMultiProcessAccess { get; init; }
 
     /// <summary>
-    /// Returns a copy of this config where any zero-valued numeric fields are replaced
-    /// with the corresponding values from <see cref="Default"/>.
+    /// Returns a copy of this config where any zero-valued numeric fields, and a
+    /// <see cref="LockTimeout"/> that was never set, are replaced with the corresponding
+    /// values from <see cref="Default"/>.
     /// This ensures that a partially-constructed <see cref="PageFileConfig"/>
     /// (e.g. <c>new PageFileConfig { AllowMultiProcessAccess = true }</c>) is always
     /// valid before being handed to the storage engine.
@@ -146,6 +148,7 @@ public readonly struct PageFileConfig
         {
             PageSize        = PageSize        > 0 ? PageSize        : defaults.PageSize,
             GrowthBlockSize = GrowthBlockSize > 0 ? GrowthBlockSize : defaults.GrowthBlockSize,
+            LockTimeout     = LockTimeout.IsSpecified ? LockTimeout : defaults.LockTimeout,
         };
     }
 
