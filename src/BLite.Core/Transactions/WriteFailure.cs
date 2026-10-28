@@ -44,4 +44,21 @@ internal static class WriteFailure
 
         await transaction.RollbackAsync().ConfigureAwait(false);
     }
+
+    /// <summary>Attempts a write without a caller-owned transaction makes before a conflict reaches its caller.</summary>
+    internal const int AutoCommitAttempts = 10;
+
+    /// <summary>
+    /// True if a write method that opened <paramref name="transaction"/> itself must run again after
+    /// <paramref name="error"/>: its commit was rejected because a caller-owned transaction committed one
+    /// of its pages first (#304). Such commits do not take the collection lock, so they can land between
+    /// the write's reads and its commit. <see cref="Transaction.CommitAsync"/> has rolled the transaction
+    /// back and nothing was written; the write method still holds the collection lock, so running it again
+    /// in a new transaction reads that commit's changes and cannot conflict with another such write.
+    /// </summary>
+    internal static bool ShouldRetry(ITransaction transaction, bool ownsTransaction, Exception error, int attempt)
+        => ownsTransaction
+           && attempt < AutoCommitAttempts
+           && error is BLiteTransactionConflictException conflict
+           && conflict.TransactionId == transaction.TransactionId;
 }

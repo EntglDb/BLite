@@ -152,13 +152,23 @@ public sealed partial class StorageEngine : IDisposable
     internal bool IsReadOnly => _config.Access == System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read;
 
     /// <summary>
-    /// Returns the semaphore a <see cref="Collections.DocumentCollection{TId,T}"/> must hold for
-    /// write operations. In single-file mode every collection of this engine gets the same
-    /// instance, because they share the free-space index and the page allocator
-    /// (see <see cref="_dataWriteLock"/>). In collection-per-file mode each collection gets its
-    /// own, preserving write concurrency between collections.
+    /// Returns the semaphore a collection must hold for write operations. In single-file mode
+    /// every collection of this engine gets the same instance, because they share the free-space
+    /// index and the page allocator (see <see cref="_dataWriteLock"/>). In collection-per-file
+    /// mode each collection name gets its own, preserving write concurrency between collections.
+    /// <para>
+    /// Every object that writes to the same collection gets the same instance: a typed
+    /// <see cref="Collections.DocumentCollection{TId,T}"/>, the engine's
+    /// <see cref="DynamicCollection"/> and a session's own <see cref="DynamicCollection"/> for
+    /// that name. Before, each <see cref="DynamicCollection"/> had a lock of its own, so writes
+    /// through a session and through the engine (or another session) ran concurrently on the same
+    /// pages, and all but one of them were lost (#304).
+    /// </para>
     /// </summary>
-    internal SemaphoreSlim CreateCollectionWriteLock() => _dataWriteLock ?? new SemaphoreSlim(1, 1);
+    internal SemaphoreSlim GetCollectionWriteLock(string collectionName)
+        => _dataWriteLock ?? _collectionWriteLocks.GetOrAdd(collectionName, _ => new SemaphoreSlim(1, 1));
+
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _collectionWriteLocks = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Multi-process WAL coordination sidecar; <c>null</c> when
