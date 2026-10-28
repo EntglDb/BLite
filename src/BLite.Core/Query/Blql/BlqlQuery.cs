@@ -207,7 +207,10 @@ public sealed class BlqlQuery
             ?? throw new InvalidOperationException("Sequence contains no matching documents.");
     }
 
-    /// <summary>Returns true if any document matches the filter.</summary>
+    /// <summary>
+    /// Returns true if the query returns at least one document, as <see cref="ToList"/> would return
+    /// them (skip and take applied).
+    /// </summary>
     public bool Any()
     {
         return AnyAsync().GetAwaiter().GetResult();
@@ -215,12 +218,19 @@ public sealed class BlqlQuery
 
     public async Task<bool> AnyAsync(CancellationToken cancellationToken = default)
     {
+        // Skip and Take narrow the result (#266); the sort cannot change whether one is left.
+        if (_take == 0) return false;
+        int toSkip = _skip;
         await foreach (var doc in GetScanSource(_filter, cancellationToken).WithCancellation(cancellationToken))
-            if (_filter.Matches(doc)) return true;
+        {
+            if (!_filter.Matches(doc)) continue;
+            if (toSkip == 0) return true;
+            toSkip--;
+        }
         return false;
     }
 
-    /// <summary>Returns true if no document matches the filter.</summary>
+    /// <summary>Returns true if the query returns no document (see <see cref="Any"/>).</summary>
     public bool None() => !Any();
 
     public async Task<bool> NoneAsync(CancellationToken cancellationToken = default) => !await AnyAsync(cancellationToken);

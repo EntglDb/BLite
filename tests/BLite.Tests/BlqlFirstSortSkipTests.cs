@@ -7,7 +7,8 @@ namespace BLite.Tests;
 /// <summary>
 /// BLQL <c>First</c>, <c>FirstOrDefault</c> and their async forms return the first document of the
 /// query as <c>ToList</c> returns it (#266). They used to return the first match in scan order,
-/// ignoring <c>OrderBy</c>/<c>Sort</c> and <c>Skip</c>.
+/// ignoring <c>OrderBy</c>/<c>Sort</c> and <c>Skip</c>. <c>Any</c>, <c>None</c> and their async forms
+/// honour <c>Skip</c> and <c>Take</c> the same way.
 /// </summary>
 public sealed class BlqlFirstSortSkipTests : IDisposable
 {
@@ -61,6 +62,29 @@ public sealed class BlqlFirstSortSkipTests : IDisposable
             // A filter, then a sort on another field.
             Assert.Equal("a", Name(col.Query(BlqlFilter.Gt("v", 1)).OrderBy("n").FirstOrDefault()));
             Assert.Equal("d", Name(col.Query(BlqlFilter.Gt("v", 1)).OrderByDescending("n").FirstOrDefault()));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Any_Honours_Skip_And_Take(bool indexed)
+    {
+        var (engine, col) = await OpenAsync(indexed);
+        using (engine)
+        {
+            Assert.True(col.Query().Skip(3).Any());
+            Assert.False(col.Query().Skip(4).Any());
+            Assert.False(await col.Query().OrderBy("v").Skip(4).AnyAsync());
+            Assert.True(col.Query().Skip(4).None());
+            Assert.True(await col.Query().Skip(4).NoneAsync());
+            Assert.False(col.Query().Take(0).Any());
+            Assert.True(col.Query().Skip(3).Take(1).Any());
+
+            // A filter served from the index when there is one: v > 1 matches a, c, d.
+            Assert.True(col.Query(BlqlFilter.Gt("v", 1)).Skip(2).Any());
+            Assert.False(col.Query(BlqlFilter.Gt("v", 1)).Skip(3).Any());
+            Assert.Equal(col.Query(BlqlFilter.Gt("v", 1)).Skip(3).ToList().Count > 0, col.Query(BlqlFilter.Gt("v", 1)).Skip(3).Any());
         }
     }
 }
