@@ -33,6 +33,7 @@ No breaking API. The new public surface is additive: `BLiteTransactionConflictEx
 The last *Publish to NuGet* run on `main` failed on timing tests (`MetricsTests.WatchMetrics_EmitsSnapshots`, a PageFile write-lock timeout in `HnswGraphQualityTests`), and every red PR check seen during triage was a timeout of the same kind.
 
 - [ ] Replace #302: one shared load-tolerant lock timeout for the test suite instead of per-test values; cover `WatchMetrics_EmitsSnapshots`, `VacuumTests` Spatial_FailedRebuild, `CrossCollectionWriteRaceTests`; the readers' "every reader did work" check must not pass on a single read after the writers finish.
+- [ ] Target frameworks after .NET 11 (released 2026-11-10; .NET 8 and .NET 9 left support the same day): `net11.0` added next to `net10.0` and `netstandard2.1` on BLite, BLite.Core and BLite.Bson; BLite.Caching from `net8.0` alone to `net10.0;net11.0;netstandard2.1` with Microsoft.Extensions.* 10.0.15; the netstandard2.1 test project runs on `net8.0`, the newest runtime that still picks that asset; CI builds with the .NET 11 SDK and publishes through NuGet Trusted Publishing (`NUGET_USER` secret and a nuget.org policy for this repository scoped to `BLite` and `BLite.*`, as EntglDb.Net already does). No API change.
 
 ### 2. Ready to merge (review points addressed 2026-10-19)
 
