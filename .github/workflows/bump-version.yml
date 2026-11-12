@@ -52,7 +52,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.x"
+          dotnet-version: "11.x"
 
       # ── 4. Installa Versionize e aggiunge il path degli strumenti globali ──────
       - name: Install versionize
