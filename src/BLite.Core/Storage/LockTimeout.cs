@@ -14,6 +14,11 @@ namespace BLite.Core.Storage;
 /// <c>busy_timeout</c> is 0) or specify custom values to give concurrent callers
 /// time to release contended locks.
 /// </para>
+/// <para>
+/// <c>default(LockTimeout)</c>, or <c>new LockTimeout()</c> with no property set, means
+/// "not specified": <see cref="PageFileConfig.Normalize"/> replaces it with
+/// <see cref="Default"/>. To fail fast, set <see cref="Immediate"/> explicitly.
+/// </para>
 /// </summary>
 public readonly struct LockTimeout : IEquatable<LockTimeout>
 {
@@ -25,7 +30,7 @@ public readonly struct LockTimeout : IEquatable<LockTimeout>
     ///   <item><c>&gt;0</c> — wait up to this many milliseconds.</item>
     /// </list>
     /// </summary>
-    public int ReadTimeoutMs { get; init; }
+    public int ReadTimeoutMs { get => _readTimeoutMs; init { _readTimeoutMs = value; _isSpecified = true; } }
 
     /// <summary>
     /// Timeout for acquiring write locks (milliseconds).
@@ -35,7 +40,7 @@ public readonly struct LockTimeout : IEquatable<LockTimeout>
     ///   <item><c>&gt;0</c> — wait up to this many milliseconds.</item>
     /// </list>
     /// </summary>
-    public int WriteTimeoutMs { get; init; }
+    public int WriteTimeoutMs { get => _writeTimeoutMs; init { _writeTimeoutMs = value; _isSpecified = true; } }
 
     /// <summary>
     /// Maximum number of threads that can simultaneously enter the commit path.
@@ -50,7 +55,18 @@ public readonly struct LockTimeout : IEquatable<LockTimeout>
     ///   <item><c>&gt;0</c> — at most this many concurrent commit operations.</item>
     /// </list>
     /// </summary>
-    public int MaxConcurrentWriters { get; init; }
+    public int MaxConcurrentWriters { get => _maxConcurrentWriters; init { _maxConcurrentWriters = value; _isSpecified = true; } }
+
+    private readonly int _readTimeoutMs;
+    private readonly int _writeTimeoutMs;
+    private readonly int _maxConcurrentWriters;
+    private readonly bool _isSpecified;
+
+    /// <summary>
+    /// <c>false</c> for <c>default(LockTimeout)</c>: no property was set, so the value is
+    /// indistinguishable from <see cref="Immediate"/> but was not chosen. Not part of equality.
+    /// </summary>
+    internal bool IsSpecified => _isSpecified;
 
     /// <summary>
     /// Immediate failure on contention — equivalent to SQLite's default
